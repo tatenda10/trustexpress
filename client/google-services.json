@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "482151241834",
+    "project_id": "trust-vehicles-app",
+    "storage_bucket": "trust-vehicles-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:482151241834:android:fae586a2d3a50821e71213",
+        "android_client_info": {
+          "package_name": "com.tatenda10.trustexpress"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBifacv33E0i3wkIAt07x7wi3ZUB4wEXvA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

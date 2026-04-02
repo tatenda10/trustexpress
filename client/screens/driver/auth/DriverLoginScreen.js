@@ -1,0 +1,428 @@
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+  ActivityIndicator,
+  Image,
+  Dimensions,
+} from 'react-native';
+import { useSignIn, useOAuth, useAuth, useClerk } from '@clerk/clerk-expo';
+import * as Linking from 'expo-linking';
+import { getMe, registerUser } from '../../../api';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AuthFeedbackModal from '../../../components/AuthFeedbackModal';
+import { getAuthErrorContent } from '../../../services/authFeedback';
+import { useAgentInvite } from '../../../context/AgentInviteContext';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const HEADER_IMAGE_HEIGHT = Dimensions.get('window').height * 0.36;
+const AUTH_HEADER_IMAGE = require('../../../assets/everyday-driving.jpg');
+
+const DriverLoginScreen = ({ navigation }) => {
+  const { signIn, setActive, isLoaded } = useSignIn();
+  const { getToken } = useAuth();
+  const { signOut } = useClerk();
+  const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
+  const { startOAuthFlow: startAppleOAuth } = useOAuth({ strategy: 'oauth_apple' });
+  const { inviteToken, inviteData } = useAgentInvite();
+  const insets = useSafeAreaInsets();
+
+  const getRedirectUrl = useCallback(() => Linking.createURL('oauth-callback', { scheme: 'trustexpress' }), []);
+  const [emailOrPhone, setEmailOrPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showEmailCode, setShowEmailCode] = useState(false);
+  const [code, setCode] = useState('');
+  const [modalState, setModalState] = useState({ visible: false, title: '', message: '', tone: 'error' });
+  const headerHeight = insets.top + 48;
+  const bottomPadding = Math.max(insets.bottom, 24);
+
+  const closeModal = () => setModalState((current) => ({ ...current, visible: false }));
+
+  const showErrorModal = (error, context = 'login') => {
+    const content = getAuthErrorContent(error, context);
+    setModalState({ visible: true, title: content.title, message: content.message, tone: 'error' });
+  };
+
+  const ensureDriverRole = async () => {
+    const token = await getToken();
+    if (!token) return true;
+    const profile = await getMe(token);
+    if (profile?.role && profile.role !== 'driver') {
+      await signOut().catch(() => {});
+      setModalState({
+        visible: true,
+        title: 'Wrong account type',
+        message: 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.',
+        tone: 'error',
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const handleLogin = async () => {
+    if (!isLoaded) return;
+    if (!emailOrPhone || !password) {
+      setModalState({
+        visible: true,
+        title: 'Missing details',
+        message: 'Enter both your email and password before you continue.',
+        tone: 'info',
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await signIn.create({
+        identifier: emailOrPhone,
+        password,
+      });
+
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId });
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+        return;
+      }
+
+      if (result.status === 'needs_second_factor') {
+        const emailFactor = result.supportedSecondFactors?.find((factor) => factor.strategy === 'email_code');
+        if (emailFactor?.emailAddressId) {
+          await signIn.prepareSecondFactor({ strategy: 'email_code', emailAddressId: emailFactor.emailAddressId });
+          setShowEmailCode(true);
+          return;
+        }
+      }
+
+      setModalState({
+        visible: true,
+        title: 'Login not completed',
+        message: 'We could not finish signing you in. Please try again in a moment.',
+        tone: 'error',
+      });
+    } catch (error) {
+      showErrorModal(error, 'login');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!isLoaded || !code.trim()) {
+      setModalState({
+        visible: true,
+        title: 'Missing code',
+        message: 'Enter the email verification code before you continue.',
+        tone: 'info',
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await signIn.attemptSecondFactor({ strategy: 'email_code', code: code.trim() });
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId });
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+      } else {
+        setModalState({
+          visible: true,
+          title: 'Verification not completed',
+          message: 'We still need a valid code before you can continue.',
+          tone: 'error',
+        });
+      }
+    } catch (error) {
+      showErrorModal(error, 'verify');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    if (!isLoaded || loading) return;
+    setLoading(true);
+    try {
+      const { createdSessionId, setActive: setActiveSession } = await startGoogleOAuth({
+        redirectUrl: getRedirectUrl(),
+      });
+      if (createdSessionId && setActiveSession) {
+        await setActiveSession({ session: createdSessionId });
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+      }
+    } catch (error) {
+      showErrorModal(error, 'login');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAppleSignIn = async () => {
+    if (!isLoaded || loading) return;
+    setLoading(true);
+    try {
+      const { createdSessionId, setActive: setActiveSession } = await startAppleOAuth({
+        redirectUrl: getRedirectUrl(),
+      });
+      if (createdSessionId && setActiveSession) {
+        await setActiveSession({ session: createdSessionId });
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+      }
+    } catch (error) {
+      showErrorModal(error, 'login');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (showEmailCode) {
+    return (
+      <View className="flex-1 bg-white">
+        <View
+          className="flex-row items-center border-b border-gray-100 bg-white"
+          style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12, minHeight: headerHeight }}
+        >
+          <TouchableOpacity
+            onPress={() => {
+              setShowEmailCode(false);
+              setCode('');
+            }}
+            className="p-2 -ml-2"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="arrow-back" size={24} color="#000" />
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 24, paddingBottom: bottomPadding }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text className="mb-1.5 text-2xl font-bold text-gray-900">Verify your email</Text>
+          <Text className="mb-6 text-sm text-gray-600">A verification code has been sent to your email.</Text>
+          <View className="mb-4">
+            <Text className="mb-2 text-sm font-medium text-gray-700">Verification code</Text>
+            <TextInput
+              className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+              placeholder="Enter code"
+              placeholderTextColor="#9ca3af"
+              value={code}
+              onChangeText={setCode}
+              keyboardType="numeric"
+              autoCapitalize="none"
+            />
+          </View>
+          <TouchableOpacity
+            className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
+            style={{ backgroundColor: '#374151' }}
+            onPress={handleVerifyCode}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text className="text-lg font-semibold text-white">Verify</Text>
+                <Ionicons name="checkmark-circle" size={20} color="white" />
+              </>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+        <AuthFeedbackModal
+          visible={modalState.visible}
+          title={modalState.title}
+          message={modalState.message}
+          tone={modalState.tone}
+          onPrimary={closeModal}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView className="flex-1 bg-white">
+      <TouchableOpacity
+        className="absolute left-4 z-10 h-10 w-10 items-center justify-center rounded-full"
+        style={{ top: Math.max(insets.top, 12) + 8, backgroundColor: 'rgba(255,255,255,0.85)' }}
+        onPress={() => navigation.goBack()}
+      >
+        <Ionicons name="close" size={22} color="#374151" />
+      </TouchableOpacity>
+
+      <ScrollView
+        contentContainerStyle={{ flexGrow: 1 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} className="relative overflow-hidden bg-gray-100">
+          <Image source={AUTH_HEADER_IMAGE} style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} resizeMode="cover" />
+        </View>
+
+        <View className="flex-1 bg-white px-6 pb-2 pt-8">
+          <Text className="mb-1 text-center text-sm tracking-[0.3em] text-gray-500">TRUST EXPRESS</Text>
+          <View className="mb-6">
+            <Text className="mb-1 text-2xl font-semibold text-gray-900">Welcome back</Text>
+            <Text className="text-sm text-gray-500">Log in to your driver account to continue.</Text>
+            {inviteData?.agentName ? (
+              <View className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Agent Invite</Text>
+                <Text className="mt-1 text-sm font-medium text-blue-900">
+                  This signup is linked to {inviteData.agentName}{inviteData.agentCode ? ` (${inviteData.agentCode})` : ''}.
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View className="mb-6 gap-4">
+            <View>
+              <Text className="mb-2 text-sm font-medium text-gray-700">Email</Text>
+              <TextInput
+                className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                placeholder="Enter your email"
+                placeholderTextColor="#9ca3af"
+                value={emailOrPhone}
+                onChangeText={setEmailOrPhone}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View>
+              <View className="mb-2 flex-row items-center justify-between">
+                <Text className="text-sm font-medium text-gray-700">Password</Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    setModalState({
+                      visible: true,
+                      title: 'Password reset coming soon',
+                      message: 'Forgot password is not wired up yet, but we can add that flow next.',
+                      tone: 'info',
+                    })
+                  }
+                >
+                  <Text className="text-sm font-medium text-primary">Forgot Password?</Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                placeholder="Enter your password"
+                placeholderTextColor="#9ca3af"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+            </View>
+
+            <TouchableOpacity
+              className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
+              style={{ backgroundColor: '#374151' }}
+              onPress={handleLogin}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Text className="text-base font-semibold text-white">Continue</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#fff" />
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <View className="mb-5 flex-row items-center">
+            <View className="h-px flex-1 bg-gray-200" />
+            <Text className="mx-3 text-xs text-gray-400">or</Text>
+            <View className="h-px flex-1 bg-gray-200" />
+          </View>
+
+          <View className="mb-6 gap-3">
+            <TouchableOpacity
+              className={`flex-row items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white p-4 ${loading ? 'opacity-60' : ''}`}
+              onPress={handleGoogleSignIn}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#4285F4" />
+              ) : (
+                <>
+                  <Ionicons name="logo-google" size={24} color="#4285F4" />
+                  <Text className="text-base font-medium text-gray-900">Continue with Google</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              className={`flex-row items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white p-4 ${loading ? 'opacity-60' : ''}`}
+              onPress={handleAppleSignIn}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#000" />
+              ) : (
+                <>
+                  <Ionicons name="logo-apple" size={24} color="#000" />
+                  <Text className="text-base font-medium text-gray-900">Continue with Apple</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <View className="items-center" style={{ paddingBottom: Math.max(insets.bottom, 32) }}>
+            <Text className="text-sm text-gray-600">
+              New to Trust Express?{' '}
+              <Text className="font-semibold text-primary" onPress={() => navigation.navigate('DriverCreateAccount')}>
+                Create Account
+              </Text>
+            </Text>
+          </View>
+        </View>
+      </ScrollView>
+
+      <AuthFeedbackModal
+        visible={modalState.visible}
+        title={modalState.title}
+        message={modalState.message}
+        tone={modalState.tone}
+        onPrimary={closeModal}
+      />
+    </SafeAreaView>
+  );
+};
+
+export default DriverLoginScreen;

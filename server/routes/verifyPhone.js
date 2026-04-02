@@ -1,0 +1,51 @@
+import { Router } from 'express';
+import { requireAuth } from '../middleware/auth.js';
+import { getClerkUserById, mergePrivateMetadata, normalizeRole } from '../lib/clerk-user.js';
+import { query } from '../db/connection.js';
+
+const router = Router();
+
+/**
+ * Temporary phone verification stub.
+ * For now we treat any provided phone number as verified and persist it on the user.
+ * We can plug real provider verification here later without changing the client.
+ * For drivers, also set phone_verified_at in driver_identity (MySQL).
+ */
+router.post('/confirm', requireAuth, async (req, res) => {
+  try {
+    const rawPhone =
+      (req.body?.phoneNumber ||
+        req.body?.firebaseIdToken || // backwards compatibility with older clients
+        req.body?.token ||
+        '').trim();
+
+    if (!rawPhone) {
+      return res.status(400).json({ error: 'phoneNumber required' });
+    }
+
+    const user = await getClerkUserById(req.userId); // Ensure user exists / 404 otherwise
+    const phoneNumber = rawPhone;
+
+    const meta = await mergePrivateMetadata(req.userId, {
+      phoneNumber,
+      phoneVerifiedAt: new Date().toISOString(),
+    });
+
+    const role = normalizeRole(user.publicMetadata?.role);
+    if (role === 'driver') {
+      const now = new Date();
+      await query(
+        `INSERT INTO driver_identity (driver_user_id, phone_verified_at) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE phone_verified_at = VALUES(phone_verified_at), updated_at = CURRENT_TIMESTAMP`,
+        [req.userId, now]
+      );
+    }
+
+    return res.json({ verified: true, phoneNumber: meta.phoneNumber || phoneNumber });
+  } catch (err) {
+    console.error('POST /api/verify-phone/confirm', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+export default router;

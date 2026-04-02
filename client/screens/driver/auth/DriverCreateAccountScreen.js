@@ -1,0 +1,460 @@
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+  ActivityIndicator,
+  Image,
+  Dimensions,
+} from 'react-native';
+import { KeyboardAwareScrollView, KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useSignUp, useOAuth, useAuth, useClerk } from '@clerk/clerk-expo';
+import * as Linking from 'expo-linking';
+import { getMe, registerUser } from '../../../api';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AuthFeedbackModal from '../../../components/AuthFeedbackModal';
+import { getAuthErrorContent } from '../../../services/authFeedback';
+import { useAgentInvite } from '../../../context/AgentInviteContext';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const HEADER_IMAGE_HEIGHT = Dimensions.get('window').height * 0.36;
+const AUTH_HEADER_IMAGE = require('../../../assets/everyday-driving.jpg');
+
+const DriverCreateAccountScreen = ({ navigation }) => {
+  const { signUp, setActive, isLoaded } = useSignUp();
+  const { getToken } = useAuth();
+  const { signOut } = useClerk();
+  const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
+  const { startOAuthFlow: startAppleOAuth } = useOAuth({ strategy: 'oauth_apple' });
+  const { inviteToken, inviteData } = useAgentInvite();
+  const insets = useSafeAreaInsets();
+
+  const getRedirectUrl = useCallback(() => Linking.createURL('oauth-callback', { scheme: 'trustexpress' }), []);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [pendingVerification, setPendingVerification] = useState(false);
+  const [code, setCode] = useState('');
+  const [modalState, setModalState] = useState({ visible: false, title: '', message: '', tone: 'error' });
+  const headerHeight = insets.top + 48;
+  const bottomPadding = Math.max(insets.bottom, 24);
+
+  const closeModal = () => setModalState((current) => ({ ...current, visible: false }));
+
+  const showErrorModal = (error, context = 'signup') => {
+    const content = getAuthErrorContent(error, context);
+    setModalState({ visible: true, title: content.title, message: content.message, tone: 'error' });
+  };
+
+  const ensureDriverRole = async () => {
+    const token = await getToken();
+    if (!token) return true;
+    const profile = await getMe(token);
+    if (profile?.role && profile.role !== 'driver') {
+      await signOut().catch(() => {});
+      setModalState({
+        visible: true,
+        title: 'Wrong account type',
+        message: 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.',
+        tone: 'error',
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const completeSignUp = async (sessionId) => {
+    await setActive({ session: sessionId });
+    const allowed = await ensureDriverRole();
+    if (!allowed) return;
+    try {
+      const token = await getToken();
+      if (token) {
+        await registerUser(token, { role: 'driver', email, inviteToken: inviteToken || undefined });
+      }
+    } catch (e) {}
+  };
+
+  const handleSignUp = async () => {
+    if (!isLoaded) return;
+
+    if (!firstName.trim() || !lastName.trim() || !email || !password || !confirmPassword) {
+      setModalState({
+        visible: true,
+        title: 'Missing details',
+        message: 'Fill in your first name, last name, email, password, and confirm password before creating your account.',
+        tone: 'info',
+      });
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setModalState({
+        visible: true,
+        title: 'Passwords do not match',
+        message: 'Your password and confirm password need to match exactly before we can create the account.',
+        tone: 'error',
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await signUp.create({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        emailAddress: email,
+        password,
+      });
+
+      if (result.status === 'complete') {
+        await completeSignUp(result.createdSessionId);
+        return;
+      }
+
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+      setPendingVerification(true);
+    } catch (error) {
+      showErrorModal(error, 'signup');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyPress = async () => {
+    if (!isLoaded || !code.trim()) {
+      setModalState({
+        visible: true,
+        title: 'Missing code',
+        message: 'Enter the verification code from your email before you continue.',
+        tone: 'info',
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const signUpAttempt = await signUp.attemptEmailAddressVerification({ code: code.trim() });
+      if (signUpAttempt.status === 'complete') {
+        await completeSignUp(signUpAttempt.createdSessionId);
+      } else {
+        setModalState({
+          visible: true,
+          title: 'Verification not completed',
+          message: 'We still need a valid email code before we can finish creating your account.',
+          tone: 'error',
+        });
+      }
+    } catch (error) {
+      showErrorModal(error, 'verify');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignUp = async () => {
+    if (!isLoaded || loading) return;
+    setLoading(true);
+    try {
+      const { createdSessionId, setActive: setActiveSession } = await startGoogleOAuth({
+        redirectUrl: getRedirectUrl(),
+      });
+      if (createdSessionId && setActiveSession) {
+        await setActiveSession({ session: createdSessionId });
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+      }
+    } catch (error) {
+      showErrorModal(error, 'signup');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAppleSignUp = async () => {
+    if (!isLoaded || loading) return;
+    setLoading(true);
+    try {
+      const { createdSessionId, setActive: setActiveSession } = await startAppleOAuth({
+        redirectUrl: getRedirectUrl(),
+      });
+      if (createdSessionId && setActiveSession) {
+        await setActiveSession({ session: createdSessionId });
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+      }
+    } catch (error) {
+      showErrorModal(error, 'signup');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (pendingVerification) {
+    return (
+      <View className="flex-1 bg-white">
+        <View
+          className="flex-row items-center border-b border-gray-100 bg-white"
+          style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12, minHeight: headerHeight }}
+        >
+          <TouchableOpacity
+            onPress={() => {
+              setPendingVerification(false);
+              setCode('');
+            }}
+            className="p-2 -ml-2"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="arrow-back" size={24} color="#000" />
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 24, paddingBottom: bottomPadding }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text className="mb-1.5 text-2xl font-bold text-gray-900">Verify your email</Text>
+          <Text className="mb-6 text-sm text-gray-600">A verification code has been sent to your email.</Text>
+          <View className="mb-4">
+            <Text className="mb-2 text-sm font-medium text-gray-700">Verification code</Text>
+            <TextInput
+              className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+              placeholder="Enter your verification code"
+              placeholderTextColor="#9ca3af"
+              value={code}
+              onChangeText={setCode}
+              keyboardType="numeric"
+              autoCapitalize="none"
+            />
+          </View>
+          <TouchableOpacity
+            className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
+            style={{ backgroundColor: '#374151' }}
+            onPress={handleVerifyPress}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text className="text-lg font-semibold text-white">Verify</Text>
+                <Ionicons name="checkmark-circle" size={20} color="white" />
+              </>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+        <AuthFeedbackModal
+          visible={modalState.visible}
+          title={modalState.title}
+          message={modalState.message}
+          tone={modalState.tone}
+          onPrimary={closeModal}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView className="flex-1 bg-white">
+      <TouchableOpacity
+        className="absolute left-4 z-10 h-10 w-10 items-center justify-center rounded-full"
+        style={{ top: Math.max(insets.top, 12) + 8, backgroundColor: 'rgba(255,255,255,0.85)' }}
+        onPress={() => navigation.goBack()}
+      >
+        <Ionicons name="close" size={22} color="#374151" />
+      </TouchableOpacity>
+
+      <KeyboardAvoidingView
+        behavior="padding"
+        keyboardVerticalOffset={0}
+        style={{ flex: 1 }}
+      >
+        <KeyboardAwareScrollView
+          bottomOffset={24}
+          extraKeyboardSpace={120}
+          disableScrollOnKeyboardHide
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} className="relative overflow-hidden bg-gray-100">
+            <Image source={AUTH_HEADER_IMAGE} style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} resizeMode="cover" />
+          </View>
+
+          <View className="flex-1 bg-white px-6 pb-2 pt-8">
+            <Text className="mb-1 text-center text-sm tracking-[0.3em] text-gray-500">TRUST EXPRESS</Text>
+            <View className="mb-6">
+              <Text className="mb-1 text-2xl font-semibold text-gray-900">Create account</Text>
+              <Text className="text-sm text-gray-500">Sign up to get started as a driver.</Text>
+              {inviteData?.agentName ? (
+                <View className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                  <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Agent Invite</Text>
+                  <Text className="mt-1 text-sm font-medium text-blue-900">
+                    You were invited by {inviteData.agentName}{inviteData.agentCode ? ` (${inviteData.agentCode})` : ''}.
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View className="mb-6 gap-4">
+              <View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">First name</Text>
+                <TextInput
+                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                  placeholder="Enter your first name"
+                  placeholderTextColor="#9ca3af"
+                  value={firstName}
+                  onChangeText={setFirstName}
+                  autoCapitalize="words"
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Last name</Text>
+                <TextInput
+                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                  placeholder="Enter your last name"
+                  placeholderTextColor="#9ca3af"
+                  value={lastName}
+                  onChangeText={setLastName}
+                  autoCapitalize="words"
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Email</Text>
+                <TextInput
+                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                  placeholder="Enter your email"
+                  placeholderTextColor="#9ca3af"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Password</Text>
+                <TextInput
+                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                  placeholder="Enter your password"
+                  placeholderTextColor="#9ca3af"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Confirm Password</Text>
+                <TextInput
+                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                  placeholder="Confirm your password"
+                  placeholderTextColor="#9ca3af"
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <TouchableOpacity
+                className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
+                style={{ backgroundColor: '#374151' }}
+                onPress={handleSignUp}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Text className="text-base font-semibold text-white">Create Account</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#fff" />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View className="mb-5 flex-row items-center">
+              <View className="h-px flex-1 bg-gray-200" />
+              <Text className="mx-3 text-xs text-gray-400">or</Text>
+              <View className="h-px flex-1 bg-gray-200" />
+            </View>
+
+            <View className="mb-6 gap-3">
+              <TouchableOpacity
+                className={`flex-row items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white p-4 ${loading ? 'opacity-60' : ''}`}
+                onPress={handleGoogleSignUp}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#4285F4" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={24} color="#4285F4" />
+                    <Text className="text-base font-medium text-gray-900">Continue with Google</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                className={`flex-row items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white p-4 ${loading ? 'opacity-60' : ''}`}
+                onPress={handleAppleSignUp}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-apple" size={24} color="#000" />
+                    <Text className="text-base font-medium text-gray-900">Continue with Apple</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View className="items-center" style={{ paddingBottom: Math.max(insets.bottom, 32) }}>
+              <Text className="text-sm text-gray-600">
+                Already have an account?{' '}
+                <Text className="font-semibold text-primary" onPress={() => navigation.navigate('DriverLogin')}>
+                  Login
+                </Text>
+              </Text>
+            </View>
+          </View>
+        </KeyboardAwareScrollView>
+      </KeyboardAvoidingView>
+
+      <AuthFeedbackModal
+        visible={modalState.visible}
+        title={modalState.title}
+        message={modalState.message}
+        tone={modalState.tone}
+        onPrimary={closeModal}
+      />
+    </SafeAreaView>
+  );
+};
+
+export default DriverCreateAccountScreen;

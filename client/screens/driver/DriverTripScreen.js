@@ -1,0 +1,824 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dimensions, TextInput } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '@clerk/clerk-expo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import * as Location from 'expo-location';
+import * as Speech from 'expo-speech';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import {
+  completeDriverCurrentRide,
+  getDriverCurrentRide,
+  markDriverCurrentRideArrived,
+  startDriverCurrentRide,
+  submitDriverPassengerRating,
+  updateDriverAvailability,
+} from '../../api';
+import { PRIMARY_BLUE } from '../../constants/colors';
+import { connectRealtime } from '../../realtime';
+
+const ROUTE_REFRESH_DISTANCE_METERS = 25;
+const LOCATION_UPDATE_DISTANCE_METERS = 35;
+const LOCATION_UPDATE_INTERVAL_MS = 12000;
+const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.38);
+const TRIP_STATUS_REFRESH_MS = 8000;
+const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
+const DEFAULT_LAT_DELTA = 0.03;
+const DEFAULT_LNG_DELTA = 0.03;
+const DRIVER_FOLLOW_LAT_DELTA = 0.012;
+const DRIVER_FOLLOW_LNG_DELTA = 0.012;
+
+function toRadians(value) {
+  return (value * Math.PI) / 180;
+}
+
+function calculateDistanceKm(start, end) {
+  if (!start || !end) return 0;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(end.latitude - start.latitude);
+  const dLng = toRadians(end.longitude - start.longitude);
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const a = (
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
+  );
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusKm * c;
+}
+
+function decodePolyline(encoded) {
+  if (!encoded) return [];
+  let index = 0;
+  let latitude = 0;
+  let longitude = 0;
+  const coordinates = [];
+
+  while (index < encoded.length) {
+    let shift = 0;
+    let result = 0;
+    let byte = null;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
+    latitude += deltaLat;
+
+    shift = 0;
+    result = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
+    longitude += deltaLng;
+
+    coordinates.push({
+      latitude: latitude / 1e5,
+      longitude: longitude / 1e5,
+    });
+  }
+
+  return coordinates;
+}
+
+function stripHtml(value) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getDirectionsApiKey() {
+  return (
+    Constants.expoConfig?.extra?.googleMapsDirectionsApiKey ||
+    Constants.expoConfig?.android?.config?.googleMaps?.apiKey ||
+    Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
+    ''
+  );
+}
+
+function buildRegionFromCoordinates(coordinates) {
+  const valid = coordinates.filter(Boolean);
+  const latitudes = valid.map((item) => item.latitude);
+  const longitudes = valid.map((item) => item.longitude);
+
+  return {
+    latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
+    longitude: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
+    latitudeDelta: Math.max((Math.max(...latitudes) - Math.min(...latitudes)) * 1.35, DEFAULT_LAT_DELTA),
+    longitudeDelta: Math.max((Math.max(...longitudes) - Math.min(...longitudes)) * 1.35, DEFAULT_LNG_DELTA),
+  };
+}
+
+function getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate) {
+  if (Array.isArray(routeCoordinates) && routeCoordinates.length > 1) {
+    return [driverCoordinate, ...routeCoordinates.slice(0, 18), targetCoordinate].filter(Boolean);
+  }
+  return [driverCoordinate, targetCoordinate].filter(Boolean);
+}
+
+async function fetchGoogleDirections(origin, destination) {
+  const apiKey = getDirectionsApiKey();
+  if (!apiKey || !origin || !destination) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    origin: `${origin.latitude},${origin.longitude}`,
+    destination: `${destination.latitude},${destination.longitude}`,
+    mode: 'driving',
+    departure_time: 'now',
+    key: apiKey,
+  });
+
+  const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(payload?.error_message || `Directions request failed (${response.status})`);
+  }
+
+  if (payload?.status !== 'OK' || !Array.isArray(payload?.routes) || !payload.routes[0]) {
+    throw new Error(payload?.error_message || 'No Google route found');
+  }
+
+  const route = payload.routes[0];
+  const leg = route.legs?.[0];
+
+  return {
+    coordinates: decodePolyline(route.overview_polyline?.points),
+    distanceMeters: Number(leg?.distance?.value || 0),
+    durationSeconds: Number(leg?.duration_in_traffic?.value || leg?.duration?.value || 0),
+    nextInstruction: stripHtml(leg?.steps?.[0]?.html_instructions || ''),
+  };
+}
+
+export default function DriverTripScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
+  const { getToken } = useAuth();
+  const mapRef = useRef(null);
+  const lastRouteOriginRef = useRef(null);
+  const locationSubscriptionRef = useRef(null);
+  const routeRequestIdRef = useRef(0);
+  const availabilitySyncInFlightRef = useRef(false);
+  const rideLoadInFlightRef = useRef(false);
+  const hasAutoFocusedRef = useRef(false);
+  const lastAutoFocusStageRef = useRef('');
+  const lastSpokenInstructionRef = useRef('');
+  const lastArrivalAnnouncementStageRef = useRef('');
+  const [ride, setRide] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [voiceGuidanceEnabled, setVoiceGuidanceEnabled] = useState(true);
+  const [realtimeSignal, setRealtimeSignal] = useState(0);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState('');
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
+  const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
+  const [nextInstruction, setNextInstruction] = useState('');
+  const [liveDriverCoordinate, setLiveDriverCoordinate] = useState(null);
+  const [showPassengerRating, setShowPassengerRating] = useState(false);
+  const [completedRideId, setCompletedRideId] = useState(null);
+  const [completedRideSnapshot, setCompletedRideSnapshot] = useState(null);
+  const [passengerRating, setPassengerRating] = useState(0);
+  const [passengerReview, setPassengerReview] = useState('');
+  const [submittingRating, setSubmittingRating] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    AsyncStorage.getItem(DRIVER_VOICE_GUIDANCE_KEY)
+      .then((value) => {
+        if (!active) return;
+        setVoiceGuidanceEnabled(value !== 'false');
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadRide = async () => {
+      if (rideLoadInFlightRef.current) return;
+      rideLoadInFlightRef.current = true;
+      try {
+        const token = await getToken();
+        if (!token) throw new Error('Not signed in');
+        const data = await getDriverCurrentRide(token);
+        if (!active) return;
+        if (data?.ride || !showPassengerRating) {
+          setRide(data?.ride || null);
+        }
+        if (data?.ride?.driverCoordinate) {
+          setLiveDriverCoordinate(data.ride.driverCoordinate);
+        }
+      } catch {
+        if (!active) return;
+        setRide(null);
+      } finally {
+        rideLoadInFlightRef.current = false;
+        if (active) setLoading(false);
+      }
+    };
+
+    loadRide();
+    const interval = setInterval(loadRide, TRIP_STATUS_REFRESH_MS);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [getToken, realtimeSignal, showPassengerRating]);
+
+  useEffect(() => {
+    let active = true;
+    let localSocket = null;
+
+    const initRealtime = async () => {
+      try {
+        const token = await getToken();
+        if (!active || !token) return;
+        localSocket = connectRealtime(token);
+        if (!localSocket) return;
+
+        const handleRideUpdate = () => {
+          if (!active) return;
+          setRealtimeSignal((current) => current + 1);
+        };
+
+        localSocket.on('driver_ride:updated', handleRideUpdate);
+
+        localSocket.__driverTripCleanup = () => {
+          localSocket.off('driver_ride:updated', handleRideUpdate);
+        };
+      } catch {
+        // Polling remains the fallback.
+      }
+    };
+
+    initRealtime();
+
+    return () => {
+      active = false;
+      localSocket?.__driverTripCleanup?.();
+      Speech.stop();
+    };
+  }, [getToken]);
+
+  useEffect(() => {
+    const normalizedInstruction = String(nextInstruction || '').trim();
+    if (!voiceGuidanceEnabled) return undefined;
+    if (!normalizedInstruction || ride?.stage === 'waiting_for_customer') return undefined;
+    if (normalizedInstruction === lastSpokenInstructionRef.current) return undefined;
+
+    lastSpokenInstructionRef.current = normalizedInstruction;
+    Speech.stop();
+    Speech.speak(normalizedInstruction, {
+      rate: 0.95,
+      pitch: 1.0,
+      language: 'en',
+    });
+
+    return undefined;
+  }, [nextInstruction, ride?.stage, voiceGuidanceEnabled]);
+
+  useEffect(() => {
+    if (!voiceGuidanceEnabled) return undefined;
+    if (ride?.stage !== 'waiting_for_customer') return undefined;
+    if (lastArrivalAnnouncementStageRef.current === ride.stage) return undefined;
+
+    lastArrivalAnnouncementStageRef.current = ride.stage;
+    Speech.stop();
+    Speech.speak('You have arrived at the pickup point.', {
+      rate: 0.95,
+      pitch: 1.0,
+      language: 'en',
+    });
+
+    return undefined;
+  }, [ride?.stage, voiceGuidanceEnabled]);
+
+  useEffect(() => {
+    if (!ride) return undefined;
+    let active = true;
+
+    const startLocationTracking = async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== 'granted') return;
+
+        const currentPosition = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.BestForNavigation,
+        });
+        if (active) {
+          const currentCoordinate = {
+            latitude: currentPosition.coords.latitude,
+            longitude: currentPosition.coords.longitude,
+          };
+          setLiveDriverCoordinate(currentCoordinate);
+          try {
+            const token = await getToken();
+            if (token && !availabilitySyncInFlightRef.current) {
+              availabilitySyncInFlightRef.current = true;
+              await updateDriverAvailability(token, {
+                isOnline: true,
+                latitude: currentCoordinate.latitude,
+                longitude: currentCoordinate.longitude,
+              });
+            }
+          } catch {
+            // Ignore bootstrap location sync errors and continue with live routing.
+          } finally {
+            availabilitySyncInFlightRef.current = false;
+          }
+        }
+
+        locationSubscriptionRef.current = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: LOCATION_UPDATE_INTERVAL_MS,
+            distanceInterval: LOCATION_UPDATE_DISTANCE_METERS,
+          },
+          async (position) => {
+            if (!active) return;
+
+            const nextCoordinate = {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            };
+
+            setLiveDriverCoordinate(nextCoordinate);
+
+            try {
+              const token = await getToken();
+              if (!token || availabilitySyncInFlightRef.current) return;
+              availabilitySyncInFlightRef.current = true;
+              await updateDriverAvailability(token, {
+                isOnline: true,
+                latitude: nextCoordinate.latitude,
+                longitude: nextCoordinate.longitude,
+              });
+            } catch {
+              // Keep the route screen responsive even if the backend write fails.
+            } finally {
+              availabilitySyncInFlightRef.current = false;
+            }
+          }
+        );
+      } catch {
+        // Ignore location tracking startup failures and keep server-fed coordinates.
+      }
+    };
+
+    startLocationTracking();
+
+    return () => {
+      active = false;
+      if (locationSubscriptionRef.current) {
+        locationSubscriptionRef.current.remove();
+        locationSubscriptionRef.current = null;
+      }
+      availabilitySyncInFlightRef.current = false;
+    };
+  }, [getToken, ride]);
+
+  const driverCoordinate = liveDriverCoordinate || ride?.driverCoordinate || ride?.pickupCoordinate || ride?.dropoffCoordinate;
+  const targetCoordinate = ride?.dropoffCoordinate || ride?.pickupCoordinate;
+
+  useEffect(() => {
+    if (!driverCoordinate || !targetCoordinate) return undefined;
+
+    const previousOrigin = lastRouteOriginRef.current;
+    const movedDistanceMeters = previousOrigin
+      ? calculateDistanceKm(previousOrigin, driverCoordinate) * 1000
+      : Infinity;
+
+    if (movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS && routeCoordinates.length > 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const currentRequestId = routeRequestIdRef.current + 1;
+    routeRequestIdRef.current = currentRequestId;
+    lastRouteOriginRef.current = driverCoordinate;
+
+    const loadDirections = async () => {
+      try {
+        setRouteLoading(true);
+        setRouteError('');
+        const route = await fetchGoogleDirections(driverCoordinate, targetCoordinate);
+        if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
+
+        setRouteCoordinates(Array.isArray(route?.coordinates) && route.coordinates.length > 1
+          ? route.coordinates
+          : [driverCoordinate, targetCoordinate].filter(Boolean));
+        setRouteDistanceMeters(route?.distanceMeters || 0);
+        setRouteDurationSeconds(route?.durationSeconds || 0);
+        setNextInstruction(route?.nextInstruction || '');
+      } catch (error) {
+        if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
+        setRouteCoordinates([driverCoordinate, targetCoordinate].filter(Boolean));
+        setRouteDistanceMeters(Math.round(calculateDistanceKm(driverCoordinate, targetCoordinate) * 1000));
+        setRouteDurationSeconds(0);
+        setNextInstruction('');
+        setRouteError(error?.message || 'Could not load Google road directions.');
+      } finally {
+        if (!cancelled && routeRequestIdRef.current === currentRequestId) {
+          setRouteLoading(false);
+        }
+      }
+    };
+
+    loadDirections();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [driverCoordinate, ride?.stage, routeCoordinates.length, targetCoordinate]);
+
+  useEffect(() => {
+    const coordinatesToFit = getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate);
+
+    if (!mapRef.current || coordinatesToFit.length < 2) return;
+
+    const stageChanged = lastAutoFocusStageRef.current !== String(ride?.stage || '');
+    if (hasAutoFocusedRef.current && !stageChanged) return;
+
+    const timeout = setTimeout(() => {
+      mapRef.current?.fitToCoordinates(coordinatesToFit, {
+        edgePadding: { top: 90, right: 28, bottom: 180, left: 28 },
+        animated: true,
+      });
+      hasAutoFocusedRef.current = true;
+      lastAutoFocusStageRef.current = String(ride?.stage || '');
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [driverCoordinate, ride?.stage, routeCoordinates, targetCoordinate]);
+
+  // Live distance from current position to destination so it updates every location tick
+  const distanceKmText = useMemo(() => {
+    const kilometers = calculateDistanceKm(driverCoordinate, targetCoordinate);
+    return `${Math.max(0, kilometers).toFixed(1)} km left`;
+  }, [driverCoordinate, targetCoordinate]);
+
+  const etaText = useMemo(() => {
+    if (routeDurationSeconds > 0) {
+      return `${Math.max(1, Math.round(routeDurationSeconds / 60))} min away`;
+    }
+    const fallbackMinutes = Math.max(1, Math.round(calculateDistanceKm(driverCoordinate, targetCoordinate) * 4));
+    return `${fallbackMinutes} min away`;
+  }, [driverCoordinate, routeDurationSeconds, targetCoordinate]);
+
+  const handleMarkArrived = async () => {
+    try {
+      if (!ride?.id) return;
+      setSubmitting(true);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      await markDriverCurrentRideArrived(token, ride.id);
+      const data = await getDriverCurrentRide(token);
+      setRide(data?.ride || null);
+    } catch (error) {
+      Alert.alert('Arrive failed', error?.message || 'Could not update ride status.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleStartRide = async () => {
+    try {
+      if (!ride?.id) return;
+      setSubmitting(true);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      await startDriverCurrentRide(token, ride.id);
+      const data = await getDriverCurrentRide(token);
+      setRide(data?.ride || null);
+    } catch (error) {
+      Alert.alert('Start ride failed', error?.message || 'Could not start the ride.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCompleteRide = async () => {
+    try {
+      if (!ride?.id) return;
+      setSubmitting(true);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      await completeDriverCurrentRide(token, ride.id, {
+        completedRoutePolyline: null,
+      });
+      setCompletedRideSnapshot(ride);
+      setCompletedRideId(ride.id);
+      setShowPassengerRating(true);
+    } catch (error) {
+      Alert.alert('Complete ride failed', error?.message || 'Could not complete the ride.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSubmitPassengerRating = async () => {
+    if (passengerRating < 1 || passengerRating > 5) {
+      Alert.alert('Choose a rating', 'Select between 1 and 5 stars.');
+      return;
+    }
+    try {
+      setSubmittingRating(true);
+      const token = await getToken();
+      if (!token || !completedRideId) throw new Error('Not signed in');
+      await submitDriverPassengerRating(token, completedRideId, { rating: passengerRating, review: passengerReview.trim() || undefined });
+      navigation.goBack();
+    } catch (error) {
+      Alert.alert('Rating failed', error?.message || 'Could not submit rating.');
+    } finally {
+      setSubmittingRating(false);
+    }
+  };
+
+  const handleSkipPassengerRating = () => {
+    navigation.goBack();
+  };
+
+  const handleToggleVoiceGuidance = async () => {
+    const nextValue = !voiceGuidanceEnabled;
+    setVoiceGuidanceEnabled(nextValue);
+    if (!nextValue) {
+      Speech.stop();
+    } else if (ride?.stage === 'waiting_for_customer') {
+      Speech.speak('You have arrived at the pickup point.', {
+        rate: 0.95,
+        pitch: 1.0,
+        language: 'en',
+      });
+    } else if (nextInstruction) {
+      Speech.speak(nextInstruction, {
+        rate: 0.95,
+        pitch: 1.0,
+        language: 'en',
+      });
+    }
+    try {
+      await AsyncStorage.setItem(DRIVER_VOICE_GUIDANCE_KEY, nextValue ? 'true' : 'false');
+    } catch {
+      // Keep the toggle working even if persistence fails.
+    }
+  };
+
+  if (loading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white px-5">
+        <ActivityIndicator size="large" color={PRIMARY_BLUE} />
+        <Text className="mt-4 text-base text-gray-500">Loading live trip route...</Text>
+      </View>
+    );
+  }
+
+  const ratingRide = ride || completedRideSnapshot;
+
+  if (showPassengerRating && completedRideId && ratingRide) {
+    return (
+      <View className="flex-1 bg-white px-5" style={{ paddingTop: insets.top + 24 }}>
+        <Text className="text-xl font-bold text-gray-900">Rate your passenger</Text>
+        <Text className="mt-1 text-base text-gray-500">{ratingRide.passengerName}</Text>
+        <View className="mt-6 flex-row items-center justify-between">
+          {[1, 2, 3, 4, 5].map((value) => (
+            <TouchableOpacity
+              key={value}
+              onPress={() => setPassengerRating(value)}
+              activeOpacity={0.8}
+              className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
+            >
+              <Ionicons
+                name={value <= passengerRating ? 'star' : 'star-outline'}
+                size={30}
+                color={value <= passengerRating ? '#f59e0b' : '#9ca3af'}
+              />
+            </TouchableOpacity>
+          ))}
+        </View>
+        <TextInput
+          className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-4 text-base text-gray-900"
+          placeholder="Optional review"
+          placeholderTextColor="#9ca3af"
+          value={passengerReview}
+          onChangeText={setPassengerReview}
+          multiline
+          numberOfLines={3}
+        />
+        <TouchableOpacity
+          onPress={handleSubmitPassengerRating}
+          disabled={submittingRating || passengerRating < 1}
+          className="mt-6 h-14 items-center justify-center rounded-xl bg-[#2f73c9]"
+          style={{ opacity: passengerRating < 1 ? 0.6 : 1 }}
+        >
+          {submittingRating ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Done</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleSkipPassengerRating} className="mt-4 items-center py-3">
+          <Text className="text-base text-gray-500">Skip</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!ride) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white px-5">
+        <Text className="text-xl font-bold text-gray-900">No active trip</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} className="mt-6 rounded-[18px] bg-[#2f73c9] px-6 py-4">
+          <Text className="text-base font-bold text-white">Back to Home</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const mapRegion = buildRegionFromCoordinates([
+    driverCoordinate,
+    targetCoordinate,
+  ].filter(Boolean));
+
+  const initialCamera = driverCoordinate ? {
+    center: driverCoordinate,
+    pitch: 0,
+    heading: 0,
+    altitude: 1200,
+    zoom: 16,
+  } : null;
+
+  return (
+    <View className="flex-1 bg-white">
+      <View className="flex-row items-center justify-between bg-white px-5 pb-3" style={{ paddingTop: insets.top + 8 }}>
+        <TouchableOpacity onPress={() => navigation.goBack()} className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f6fb]">
+          <Ionicons name="arrow-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text className="text-lg font-bold text-gray-900">
+          {ride.stage === 'on_trip' ? 'Google Trip Route' : ride.stage === 'waiting_for_customer' ? 'Waiting for Customer' : 'Google Pickup Route'}
+        </Text>
+        <View className="w-11" />
+      </View>
+
+      <MapView
+        ref={mapRef}
+        style={{ flex: 1 }}
+        initialRegion={mapRegion}
+        initialCamera={initialCamera || undefined}
+        showsCompass={false}
+        toolbarEnabled={false}
+        rotateEnabled={true}
+        showsTraffic={true}
+      >
+        {driverCoordinate ? (
+          <Marker coordinate={driverCoordinate} title="Driver">
+            <View className="h-12 w-12 items-center justify-center rounded-full border-4 border-white" style={{ backgroundColor: PRIMARY_BLUE }}>
+              <Ionicons name="car-sport" size={22} color="#fff" />
+            </View>
+          </Marker>
+        ) : null}
+        <Marker coordinate={ride.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" />
+        <Marker coordinate={ride.dropoffCoordinate} title="Drop-off" pinColor="#111827" />
+        {routeCoordinates.length > 1 ? (
+          <>
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="rgba(32,110,255,0.22)"
+              strokeWidth={12}
+            />
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor={PRIMARY_BLUE}
+              strokeWidth={6}
+            />
+          </>
+        ) : null}
+      </MapView>
+
+      <View
+        className="absolute bottom-0 left-0 right-0 rounded-t-[30px] bg-[#f8fafc]"
+        style={{ maxHeight: TRIP_PANEL_MAX_HEIGHT }}
+      >
+        <ScrollView
+          bounces={false}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 }}
+        >
+          <Text className="text-sm font-semibold uppercase tracking-wide text-[#2f73c9]">
+            {ride.stage === 'on_trip' ? 'Destination' : ride.stage === 'waiting_for_customer' ? 'Pickup reached' : 'Pickup'}
+          </Text>
+          <Text className="mt-1 text-[30px] font-bold text-gray-900">
+            {ride.stage === 'waiting_for_customer' ? 'You are here' : distanceKmText}
+          </Text>
+          <Text className="mt-1 text-base text-gray-500">
+            {ride.stage === 'waiting_for_customer' ? ride.pickupLabel : etaText}
+          </Text>
+
+          <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-sm font-semibold uppercase tracking-wide text-gray-400">Directions</Text>
+              {routeLoading ? <ActivityIndicator size="small" color={PRIMARY_BLUE} /> : null}
+            </View>
+            <Text className="mt-2 text-base font-semibold text-gray-900">
+              {ride.stage === 'waiting_for_customer'
+                ? 'Passenger pickup point reached.'
+                : nextInstruction || 'Following the live Google Maps road route.'}
+            </Text>
+            {routeError ? (
+              <Text className="mt-2 text-sm text-amber-600">{routeError}</Text>
+            ) : null}
+          </View>
+
+          <View className="mt-4 rounded-[24px] bg-white p-5">
+            <Text className="text-xl font-bold text-gray-900">{ride.passengerName}</Text>
+            <Text className="mt-1 text-sm text-gray-500">{ride.passengerPhone || 'Phone not shared yet'}</Text>
+            <Text className="mt-4 text-sm font-semibold uppercase text-gray-400">Pickup</Text>
+            <Text className="mt-1 text-base font-bold text-gray-900">{ride.pickupLabel}</Text>
+            <Text className="mt-4 text-sm font-semibold uppercase text-gray-400">Destination</Text>
+            <Text className="mt-1 text-base font-bold text-gray-900">{ride.dropoffLabel}</Text>
+
+            <TouchableOpacity
+              onPress={() => navigation.navigate('RideChat', {
+                rideRequestId: ride.id,
+                role: 'driver',
+                chatTitle: ride.passengerName || 'Passenger chat',
+              })}
+              className="mt-5 h-12 items-center justify-center rounded-[18px] border border-blue-200 bg-white"
+            >
+              <Text style={{ color: PRIMARY_BLUE }} className="text-base font-bold">Message passenger</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View className="mt-4 rounded-[20px] border border-[#d7d9df] bg-white px-4 py-4">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-sm font-semibold uppercase tracking-wide text-gray-400">Voice guidance</Text>
+              <TouchableOpacity
+                onPress={handleToggleVoiceGuidance}
+                className={`rounded-full px-3 py-1.5 ${voiceGuidanceEnabled ? 'bg-[#dbeafe]' : 'bg-gray-100'}`}
+              >
+                <Text className={`text-xs font-bold uppercase ${voiceGuidanceEnabled ? 'text-[#1d4ed8]' : 'text-gray-500'}`}>
+                  {voiceGuidanceEnabled ? 'On' : 'Off'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text className="mt-2 text-base font-semibold text-gray-900">
+              {!voiceGuidanceEnabled
+                ? 'Voice guidance is paused. Turn it back on anytime.'
+                : ride.stage === 'waiting_for_customer'
+                ? 'Voice guidance will continue when the trip starts moving again.'
+                : nextInstruction || 'Turn-by-turn voice guidance is active inside the app.'}
+            </Text>
+          </View>
+
+          {ride.stage === 'to_pickup' ? (
+            <TouchableOpacity
+              onPress={handleMarkArrived}
+              disabled={submitting}
+              className="mt-4 h-14 items-center justify-center rounded-[20px]"
+              style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
+            >
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Mark Arrived</Text>}
+            </TouchableOpacity>
+          ) : null}
+
+          {ride.stage === 'waiting_for_customer' ? (
+            <TouchableOpacity
+              onPress={handleStartRide}
+              disabled={submitting}
+              className="mt-4 h-14 items-center justify-center rounded-[20px]"
+              style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
+            >
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Start Ride</Text>}
+            </TouchableOpacity>
+          ) : null}
+
+          {ride.stage === 'on_trip' ? (
+            <TouchableOpacity
+              onPress={handleCompleteRide}
+              disabled={submitting}
+              className="mt-4 h-14 items-center justify-center rounded-[20px]"
+              style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
+            >
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Complete Ride</Text>}
+            </TouchableOpacity>
+          ) : null}
+        </ScrollView>
+      </View>
+    </View>
+  );
+}

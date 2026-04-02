@@ -1,0 +1,1245 @@
+import crypto from 'crypto';
+import { Router } from 'express';
+import { query } from '../db/connection.js';
+import { requireAuth } from '../middleware/auth.js';
+import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { sendExpoPushNotifications } from '../lib/push.js';
+import {
+  emitRideRequestRemovedFromDriver,
+  emitRideChatMessageToUser,
+  emitRideRequestToDriver,
+  emitRideStatusToDriver,
+  emitRideStatusToPassenger,
+  emitTripRatingToDriver,
+} from '../lib/realtime.js';
+
+const router = Router();
+
+function toRadians(value) {
+  return (value * Math.PI) / 180;
+}
+
+function calculateDistanceKm(start, end) {
+  if (!start || !end) return 0;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(end.latitude - start.latitude);
+  const dLng = toRadians(end.longitude - start.longitude);
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const a = (
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
+  );
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusKm * c;
+}
+
+function createPublicRideId() {
+  return `TR-${crypto.randomInt(100000, 999999)}`;
+}
+
+const OPEN_REQUEST_TTL_MINUTES = 2;
+const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
+const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
+const DRIVER_REQUEST_RADIUS_KM = 20;
+const MAX_DRIVER_OFFERS = 8;
+const DRIVER_ONLINE_STALE_DAYS = 1;
+
+async function requirePassenger(req, res) {
+  const user = await getClerkUserById(req.userId);
+  const appUser = toAppUser(user);
+  const role = normalizeRole(appUser.role);
+  // Allow both passengers and drivers to create and manage ride requests
+  // when they are using the consumer (passenger) side of the app.
+  if (role !== 'passenger' && role !== 'driver') {
+    res.status(403).json({ error: 'Not allowed to perform passenger ride actions' });
+    return null;
+  }
+  return user;
+}
+
+async function loadPassengerTier(selectedTierKey) {
+  const normalizedTierKey = String(selectedTierKey || '').trim().toLowerCase();
+  const rows = await query(
+    `SELECT
+       t.tier_key,
+       t.tier_name,
+       t.price_per_km,
+       t.base_fare,
+       t.per_minute_rate,
+       t.minimum_fare
+     FROM operating_region_pricing_tiers t
+     INNER JOIN operating_regions r ON r.id = t.region_id
+     WHERE t.is_active = 1 AND r.is_active = 1
+     ORDER BY
+       CASE WHEN LOWER(t.tier_key) = ? THEN 0 ELSE 1 END,
+       t.sort_order ASC,
+       t.id ASC`,
+    [normalizedTierKey]
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    tier_key: row.tier_key,
+    tier_name: row.tier_name,
+    price_per_km: Number(row.price_per_km || 0),
+    base_fare: Number(row.base_fare || 0),
+    per_minute_rate: Number(row.per_minute_rate || 0),
+    minimum_fare: Number(row.minimum_fare || 0),
+  };
+}
+
+function mapDriverAvailability(row, pickupCoordinate) {
+  const coordinate = {
+    latitude: Number(row.current_lat),
+    longitude: Number(row.current_lng),
+  };
+  const driverDistanceKm = calculateDistanceKm(pickupCoordinate, coordinate);
+  return {
+    id: row.driver_user_id,
+    tierName: row.vehicle_tier_name,
+    carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
+    plate: row.number_plate || 'Unknown plate',
+    driverName: row.driver_name || 'Driver',
+    etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
+    driverDistanceKm,
+    amount: Number(row.estimated_amount || 0),
+    rating: 4.9,
+    trips: 0,
+    phoneNumber: row.phone_number || null,
+    coordinate,
+    tier: {
+      tierKey: row.vehicle_tier_key,
+      tierName: row.vehicle_tier_name,
+    },
+    carImage: row.car_photo_url || null,
+  };
+}
+
+function mapPassengerRideStatus(status) {
+  if (status === 'completed') return 'Completed';
+  if (status === 'cancelled' || status === 'expired') return 'Cancelled';
+  return 'Requested';
+}
+
+function mapPassengerTripStage(status) {
+  if (status === 'driver_arrived') return 'waiting_at_pickup';
+  if (status === 'in_progress') return 'on_trip';
+  if (status === 'completed') return 'completed';
+  return 'driver_on_the_way';
+}
+
+function toIsoOrNull(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function computeExpiresAt(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  date.setMinutes(date.getMinutes() + OPEN_REQUEST_TTL_MINUTES);
+  return date.toISOString();
+}
+
+function isOpenRideRequest(status) {
+  return status === 'requested' || status === 'driver_found';
+}
+
+function mapRideMessage(row) {
+  return {
+    id: row.id,
+    rideRequestId: row.ride_request_id,
+    senderUserId: row.sender_user_id,
+    recipientUserId: row.recipient_user_id,
+    senderRole: row.sender_role,
+    message: row.message,
+    createdAt: toIsoOrNull(row.created_at),
+    readAt: toIsoOrNull(row.read_at),
+  };
+}
+
+async function loadAuthorizedRideChat(rideRequestId, userId) {
+  if (!rideRequestId || !userId) return null;
+
+  const rows = await query(
+    `SELECT
+       id,
+       passenger_user_id,
+       driver_user_id,
+       passenger_name,
+       driver_name,
+       status
+     FROM ride_requests
+     WHERE id = ?
+       AND (passenger_user_id = ? OR driver_user_id = ?)
+     LIMIT 1`,
+    [rideRequestId, userId, userId]
+  );
+
+  const ride = rows[0];
+  if (!ride) return null;
+
+  const isPassenger = String(ride.passenger_user_id || '') === String(userId);
+  const senderRole = isPassenger ? 'passenger' : 'driver';
+  const recipientUserId = isPassenger ? ride.driver_user_id : ride.passenger_user_id;
+  const chatTitle = isPassenger ? (ride.driver_name || 'Driver') : (ride.passenger_name || 'Passenger');
+
+  return {
+    ride,
+    senderRole,
+    recipientUserId: recipientUserId || null,
+    chatTitle,
+  };
+}
+
+async function expireRideRequestIfTimedOut(rideId, passengerUserId = null) {
+  if (!rideId) return false;
+
+  const params = [rideId];
+  let passengerClause = '';
+  if (passengerUserId) {
+    passengerClause = ' AND passenger_user_id = ?';
+    params.push(passengerUserId);
+  }
+
+  const result = await query(
+    `UPDATE ride_requests
+     SET status = 'expired',
+         cancellation_reason = 'No driver accepted the request in time',
+         cancelled_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       ${passengerClause}
+       AND status IN ('requested', 'driver_found')
+       AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)`,
+    params
+  );
+
+  return Number(result?.affectedRows || 0) > 0;
+}
+
+async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKey }) {
+  await query(
+    `UPDATE ride_requests
+     SET status = 'cancelled',
+         cancellation_reason = 'Ride expired because the trip became stale',
+         cancelled_at = CURRENT_TIMESTAMP
+     WHERE status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+       AND COALESCE(updated_at, arrived_at, assigned_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${STALE_ACTIVE_RIDE_TTL_MINUTES} MINUTE)`
+  );
+
+  const availabilityRows = await query(
+    `SELECT da.*
+     FROM driver_availability da
+     LEFT JOIN ride_requests active_ride
+       ON active_ride.driver_user_id = da.driver_user_id
+      AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+     WHERE da.is_online = 1
+       AND da.current_lat IS NOT NULL
+       AND da.current_lng IS NOT NULL
+       AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+       AND active_ride.id IS NULL
+     ORDER BY da.updated_at DESC`
+  );
+
+  const eligibleDrivers = availabilityRows
+    .map((row) => mapDriverAvailability({ ...row, estimated_amount: estimatedAmount }, pickupPoint))
+    .filter((item) => item.driverDistanceKm <= DRIVER_REQUEST_RADIUS_KM)
+    .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
+    .slice(0, MAX_DRIVER_OFFERS);
+
+  console.log('[rides.findDriver] eligible drivers', {
+    requestedTierKey: String(tierKey || '').trim().toLowerCase(),
+    pickupPoint,
+    totalAvailabilityRows: availabilityRows.length,
+    eligibleCount: eligibleDrivers.length,
+    eligibleDrivers: eligibleDrivers.map((driver) => ({
+      id: driver.id,
+      tierKey: driver.tier?.tierKey || null,
+      tierName: driver.tier?.tierName || null,
+      driverDistanceKm: Number(driver.driverDistanceKm.toFixed(2)),
+      etaMinutes: driver.etaMinutes,
+      coordinate: driver.coordinate,
+    })),
+  });
+
+  return eligibleDrivers;
+}
+
+async function createPendingDriverOffers(rideRequestId, drivers) {
+  if (!rideRequestId || !Array.isArray(drivers) || !drivers.length) return;
+
+  const placeholders = drivers.map(() => '(?, ?, \'pending\', CURRENT_TIMESTAMP)').join(', ');
+  const params = drivers.flatMap((driver) => [rideRequestId, driver.id]);
+  await query(
+    `INSERT INTO ride_request_driver_responses (
+       ride_request_id,
+       driver_user_id,
+       status,
+       responded_at
+     ) VALUES ${placeholders}
+     ON DUPLICATE KEY UPDATE
+       status = VALUES(status),
+       responded_at = VALUES(responded_at)`,
+    params
+  );
+}
+
+async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, rideRequestId, publicId, tierName }) {
+  if (!Array.isArray(drivers) || !drivers.length) return;
+
+  const tokens = (
+    await Promise.all(
+      drivers.map(async (driver) => {
+        try {
+          const driverUser = await getClerkUserById(driver.id);
+          return String(driverUser?.privateMetadata?.pushToken || '').trim() || null;
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter(Boolean);
+
+  console.log('[rides.findDriver] push notification targets', {
+    rideRequestId,
+    driverCount: drivers.length,
+    tokenCount: tokens.length,
+    driverIds: drivers.map((driver) => driver.id),
+  });
+
+  if (!tokens.length) return;
+
+  await sendExpoPushNotifications(
+    tokens.map((token) => ({
+      to: token,
+      title: 'New ride request',
+      body: `${pickupLabel} to ${dropoffLabel}`,
+      data: {
+        type: 'driver_new_ride_request',
+        rideRequestId,
+        publicId,
+        passengerName,
+        pickupLabel,
+        dropoffLabel,
+        tierName,
+      },
+    }))
+  );
+}
+
+router.get('/passenger/history', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
+    const requestedLimit = Number.parseInt(String(req.query?.limit || '10'), 10);
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const limit = Number.isInteger(requestedLimit) && requestedLimit > 0
+      ? Math.min(requestedLimit, 50)
+      : 10;
+    const offset = (page - 1) * limit;
+
+    const [countRow] = await query(
+      `SELECT COUNT(*) AS total
+       FROM ride_requests
+       WHERE passenger_user_id = ?`,
+      [req.userId]
+    );
+    const total = Number(countRow?.total || 0);
+
+    const rows = await query(
+      `SELECT
+         id,
+         public_id,
+         pickup_label,
+         dropoff_label,
+         estimated_amount,
+         requested_tier_name,
+         driver_name,
+         status,
+         passenger_driver_rating,
+         passenger_driver_review,
+         passenger_driver_rated_at,
+         driver_passenger_rating,
+         driver_passenger_review,
+         driver_passenger_rated_at,
+         requested_at,
+        completed_at,
+        cancelled_at
+       FROM ride_requests
+       WHERE passenger_user_id = ?
+       ORDER BY requested_at DESC, id DESC
+       LIMIT ${limit} OFFSET ${offset}`,
+      [req.userId]
+    );
+
+    return res.json({
+      rides: rows.map((row) => ({
+        id: row.id,
+        publicId: row.public_id,
+        pickupLabel: row.pickup_label,
+        dropoffLabel: row.dropoff_label,
+        estimatedAmount: Number(row.estimated_amount || 0),
+        tierName: row.requested_tier_name,
+        driverName: row.driver_name || null,
+        status: mapPassengerRideStatus(row.status),
+        rawStatus: row.status,
+        passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
+        passengerDriverReview: row.passenger_driver_review || '',
+        passengerDriverRatedAt: row.passenger_driver_rated_at || null,
+        driverPassengerRating: row.driver_passenger_rating === null ? null : Number(row.driver_passenger_rating),
+        driverPassengerReview: row.driver_passenger_review || '',
+        driverPassengerRatedAt: row.driver_passenger_rated_at || null,
+        canRateDriver: row.status === 'completed' && !!row.driver_name,
+        requestedAt: row.requested_at,
+        completedAt: row.completed_at,
+        cancelledAt: row.cancelled_at,
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        hasNextPage: offset + rows.length < total,
+        hasPreviousPage: page > 1,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/rides/passenger/history', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/passenger/find-driver', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const {
+      pickupCoordinate,
+      dropoffCoordinate,
+      pickupLabel,
+      dropoffLabel,
+      distanceKm,
+      estimatedMinutes,
+      estimatedAmount,
+      routePolyline,
+      routeDistanceKm,
+      routeDurationMinutes,
+      selectedTier,
+    } = req.body || {};
+
+    const pickupLat = Number(pickupCoordinate?.latitude);
+    const pickupLng = Number(pickupCoordinate?.longitude);
+    const dropoffLat = Number(dropoffCoordinate?.latitude);
+    const dropoffLng = Number(dropoffCoordinate?.longitude);
+    const tier = await loadPassengerTier(selectedTier?.tierKey);
+
+    if (!pickupLabel || !dropoffLabel || !tier) {
+      return res.status(400).json({ error: 'pickup, drop-off, and pricing configuration are required' });
+    }
+    if (![pickupLat, pickupLng, dropoffLat, dropoffLng].every(Number.isFinite)) {
+      return res.status(400).json({ error: 'Valid pickup and drop-off coordinates are required' });
+    }
+
+    const pickupPoint = { latitude: pickupLat, longitude: pickupLng };
+    const passenger = toAppUser(user);
+    const passengerFullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+    const passengerName = passengerFullName || 'Passenger';
+    const passengerPhoneForDrivers = user?.privateMetadata?.phoneVisibleToDrivers === true
+      && !!user?.privateMetadata?.phoneVerifiedAt
+      ? passenger.phone_number
+      : null;
+    const publicId = createPublicRideId();
+
+    const result = await query(
+      `INSERT INTO ride_requests (
+        public_id,
+        passenger_user_id,
+        passenger_name,
+        passenger_phone,
+        requested_tier_key,
+        requested_tier_name,
+        pickup_label,
+        pickup_lat,
+        pickup_lng,
+        dropoff_label,
+        dropoff_lat,
+        dropoff_lng,
+        route_polyline,
+        route_distance_km,
+        route_duration_minutes,
+        estimated_distance_km,
+        estimated_minutes,
+        estimated_amount,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
+      [
+        publicId,
+        req.userId,
+        passengerName,
+        passengerPhoneForDrivers,
+        tier.tier_key,
+        tier.tier_name,
+        String(pickupLabel).trim(),
+        pickupLat,
+        pickupLng,
+        String(dropoffLabel).trim(),
+        dropoffLat,
+        dropoffLng,
+        String(routePolyline || '').trim() || null,
+        Number.isFinite(Number(routeDistanceKm)) ? Number(routeDistanceKm) : Number(distanceKm || 0),
+        Number.isFinite(Number(routeDurationMinutes)) ? Number(routeDurationMinutes) : Number(estimatedMinutes || 0),
+        Number(distanceKm || 0),
+        Number(estimatedMinutes || 0),
+        Number(estimatedAmount || 0),
+      ]
+    );
+
+    const rideRequestId = result.insertId;
+
+    const nearbyDrivers = await loadEligibleDriversForRide({
+      pickupPoint,
+      estimatedAmount,
+      tierKey: tier.tier_key,
+    });
+
+    console.log('[rides.findDriver] request created', {
+      rideRequestId,
+      publicId,
+      passengerUserId: req.userId,
+      requestedTierKey: tier.tier_key,
+      requestedTierName: tier.tier_name,
+      pickupPoint,
+      dropoffPoint: { latitude: dropoffLat, longitude: dropoffLng },
+      nearbyDriverIds: nearbyDrivers.map((driver) => driver.id),
+    });
+
+    await createPendingDriverOffers(rideRequestId, nearbyDrivers);
+    await notifyDriversAboutRideRequest({
+      drivers: nearbyDrivers,
+      passengerName,
+      pickupLabel: String(pickupLabel).trim(),
+      dropoffLabel: String(dropoffLabel).trim(),
+      rideRequestId,
+      publicId,
+      tierName: tier.tier_name,
+    });
+
+    nearbyDrivers.forEach((driver) => {
+      emitRideRequestToDriver(driver.id, {
+        rideRequestId,
+        publicId,
+        passengerUserId: req.userId,
+        passengerName,
+        pickupLabel: String(pickupLabel).trim(),
+        dropoffLabel: String(dropoffLabel).trim(),
+        requestedTierKey: tier.tier_key,
+        requestedTierName: tier.tier_name,
+      });
+    });
+
+    console.log('[rides.findDriver] pending offers created', {
+      rideRequestId,
+      offeredDriverIds: nearbyDrivers.map((driver) => driver.id),
+      offeredCount: nearbyDrivers.length,
+    });
+
+    const requestedAt = new Date().toISOString();
+
+    return res.status(201).json({
+      rideRequest: {
+        id: rideRequestId,
+        publicId,
+        status: 'requested',
+        requestedAt,
+        expiresAt: computeExpiresAt(requestedAt),
+      },
+      nearbyDrivers,
+    });
+  } catch (err) {
+    console.error('POST /api/rides/passenger/find-driver', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT *
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    if (isOpenRideRequest(ride.status)) {
+      const expired = await expireRideRequestIfTimedOut(ride.id, req.userId);
+      if (expired) {
+        const [nextRide] = await query(
+          `SELECT *
+           FROM ride_requests
+           WHERE id = ? AND passenger_user_id = ?
+           LIMIT 1`,
+          [rideRequestId, req.userId]
+        );
+        if (nextRide) Object.assign(ride, nextRide);
+      }
+    }
+
+    const pickupCoordinate = {
+      latitude: Number(ride.pickup_lat),
+      longitude: Number(ride.pickup_lng),
+    };
+
+    const respondingDrivers = await query(
+      `SELECT
+         rr.driver_user_id,
+         rr.status AS response_status,
+         da.driver_name,
+         da.phone_number,
+         da.vehicle_tier_key,
+         da.vehicle_tier_name,
+         da.vehicle_make,
+         da.vehicle_model,
+         da.number_plate,
+         da.car_photo_url,
+         da.current_lat,
+         da.current_lng,
+         da.is_online
+       FROM ride_request_driver_responses rr
+       INNER JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
+       WHERE rr.ride_request_id = ?
+         AND rr.status IN ('accepted', 'selected')
+       ORDER BY rr.responded_at ASC`,
+      [rideRequestId]
+    );
+
+    const acceptedDrivers = respondingDrivers.map((row) => mapDriverAvailability({
+      ...row,
+      estimated_amount: ride.estimated_amount,
+    }, pickupCoordinate));
+
+    const assignedDriver = ride.driver_user_id
+      ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || (() => {
+          const selectedRow = respondingDrivers.find((item) => item.driver_user_id === ride.driver_user_id);
+          if (!selectedRow) return null;
+          return mapDriverAvailability({
+            ...selectedRow,
+            estimated_amount: ride.estimated_amount,
+          }, pickupCoordinate);
+        })()
+      : null;
+
+    const driverCoordinate = assignedDriver?.coordinate || null;
+
+    let driversViewingCount = 0;
+    if (ride.status === 'requested' || ride.status === 'driver_found') {
+      const [countRow] = await query(
+        `SELECT COUNT(*) AS total
+         FROM ride_request_driver_responses rr
+         INNER JOIN driver_availability da
+           ON da.driver_user_id = rr.driver_user_id
+          AND da.is_online = 1
+          AND da.current_lat IS NOT NULL
+          AND da.current_lng IS NOT NULL
+          AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+         LEFT JOIN ride_requests active_ride
+           ON active_ride.driver_user_id = rr.driver_user_id
+          AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+         WHERE rr.ride_request_id = ?
+           AND rr.status IN ('pending', 'accepted', 'selected')
+           AND active_ride.id IS NULL`,
+        [rideRequestId]
+      );
+      driversViewingCount = Number(countRow?.total || 0);
+    }
+
+    return res.json({
+      rideRequest: {
+        id: ride.id,
+        publicId: ride.public_id,
+        status: ride.status,
+        stage: mapPassengerTripStage(ride.status),
+        pickupLabel: ride.pickup_label,
+        pickupCoordinate,
+        dropoffLabel: ride.dropoff_label,
+        dropoffCoordinate: {
+          latitude: Number(ride.dropoff_lat),
+          longitude: Number(ride.dropoff_lng),
+        },
+        estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
+        estimatedMinutes: Number(ride.estimated_minutes || 0),
+        estimatedAmount: Number(ride.estimated_amount || 0),
+        requestedTierKey: ride.requested_tier_key,
+        requestedTierName: ride.requested_tier_name,
+        requestedAt: toIsoOrNull(ride.requested_at),
+        expiresAt: computeExpiresAt(ride.requested_at),
+        driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
+        driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
+        driverCoordinate,
+        passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
+        passengerDriverReview: ride.passenger_driver_review || '',
+        passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
+        driversViewingCount,
+      },
+      acceptedDrivers,
+      assignedDriver,
+    });
+  } catch (err) {
+    console.error('GET /api/rides/passenger/:rideRequestId/status', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT *
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    return res.json({
+      ride: {
+        id: ride.id,
+        publicId: ride.public_id,
+        pickupLabel: ride.pickup_label,
+        dropoffLabel: ride.dropoff_label,
+        estimatedAmount: Number(ride.estimated_amount || 0),
+        tierName: ride.requested_tier_name,
+        driverName: ride.driver_name || null,
+        driverPhone: ride.driver_phone || null,
+        rawStatus: ride.status,
+        status: mapPassengerRideStatus(ride.status),
+        requestedAt: ride.requested_at,
+        completedAt: ride.completed_at,
+        cancelledAt: ride.cancelled_at,
+        passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
+        passengerDriverReview: ride.passenger_driver_review || '',
+        passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
+        driverPassengerRating: ride.driver_passenger_rating === null ? null : Number(ride.driver_passenger_rating),
+        driverPassengerReview: ride.driver_passenger_review || '',
+        driverPassengerRatedAt: ride.driver_passenger_rated_at || null,
+        canRateDriver: ride.status === 'completed' && !!ride.driver_user_id,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/rides/passenger/:rideRequestId/details', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    const rating = Number(req.body?.rating);
+    const review = String(req.body?.review || '').trim();
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Rating must be an integer from 1 to 5' });
+    }
+
+    const [ride] = await query(
+      `SELECT id, driver_user_id, status
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+    if (ride.status !== 'completed' || !ride.driver_user_id) {
+      return res.status(409).json({ error: 'Driver can only be rated after a completed ride' });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET passenger_driver_rating = ?,
+           passenger_driver_review = ?,
+           passenger_driver_rated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND passenger_user_id = ?`,
+      [rating, review || null, rideRequestId, req.userId]
+    );
+
+    try {
+      const driverUser = await getClerkUserById(ride.driver_user_id);
+      const pushToken = driverUser?.privateMetadata?.pushToken;
+      if (pushToken) {
+        await sendExpoPushNotifications({
+          to: pushToken,
+          title: 'New passenger rating',
+          body: `You were rated ${rating} star${rating === 1 ? '' : 's'}.`,
+          data: {
+            type: 'driver_rating',
+            rating,
+            review,
+            rideRequestId,
+          },
+        });
+      }
+    } catch (pushError) {
+      console.error('Failed to send driver rating push', pushError);
+    }
+
+    emitTripRatingToDriver(ride.driver_user_id, {
+      rideRequestId,
+      rating,
+      review,
+      from: 'passenger',
+    });
+
+    return res.json({
+      ok: true,
+      rating,
+      review,
+    });
+  } catch (err) {
+    console.error('POST /api/rides/passenger/:rideRequestId/rate-driver', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    const driverUserId = String(req.body?.driverUserId || '').trim();
+    if (!Number.isInteger(rideRequestId) || !driverUserId) {
+      return res.status(400).json({ error: 'rideRequestId and driverUserId are required' });
+    }
+
+    const [ride] = await query(
+      'SELECT * FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const [driverResponse] = await query(
+      `SELECT status
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?
+         AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, driverUserId]
+    );
+    if (!driverResponse || driverResponse.status !== 'accepted') {
+      return res.status(409).json({ error: 'Selected driver has not accepted this request' });
+    }
+
+    const [driverAvailability] = await query(
+      `SELECT *
+       FROM driver_availability
+       WHERE driver_user_id = ?
+         AND is_online = 1
+         AND last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+       LIMIT 1`,
+      [driverUserId]
+    );
+    if (!driverAvailability) {
+      return res.status(404).json({ error: 'Selected driver is no longer online' });
+    }
+
+    const pickupPoint = { latitude: Number(ride.pickup_lat), longitude: Number(ride.pickup_lng) };
+    const driverPoint = { latitude: Number(driverAvailability.current_lat), longitude: Number(driverAvailability.current_lng) };
+    const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
+    const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
+
+    await query(
+      `UPDATE ride_requests
+       SET driver_user_id = ?,
+           driver_name = ?,
+           driver_phone = ?,
+           driver_distance_km = ?,
+           driver_eta_minutes = ?,
+           status = 'driver_assigned',
+           assigned_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND passenger_user_id = ? AND status IN ('requested', 'driver_found')`,
+      [
+        driverUserId,
+        driverAvailability.driver_name,
+        driverAvailability.phone_number,
+        Number(driverDistanceKm.toFixed(2)),
+        driverEtaMinutes,
+        rideRequestId,
+        req.userId,
+      ]
+    );
+
+    await query(
+      `UPDATE ride_request_driver_responses
+       SET status = CASE WHEN driver_user_id = ? THEN 'selected' ELSE status END,
+           selected_at = CASE WHEN driver_user_id = ? THEN CURRENT_TIMESTAMP ELSE selected_at END
+       WHERE ride_request_id = ?`,
+      [driverUserId, driverUserId, rideRequestId]
+    );
+
+    await query(
+      `UPDATE driver_availability
+       SET is_online = 0,
+           last_seen_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [driverUserId]
+    );
+
+    emitRideStatusToPassenger(req.userId, {
+      rideRequestId,
+      status: 'driver_assigned',
+      driverUserId,
+    });
+    emitRideStatusToDriver(driverUserId, {
+      rideRequestId,
+      status: 'driver_assigned',
+      passengerUserId: req.userId,
+    });
+
+    const otherDriverIds = await query(
+      `SELECT driver_user_id
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?
+         AND driver_user_id <> ?`,
+      [rideRequestId, driverUserId]
+    );
+
+    otherDriverIds.forEach((row) => {
+      emitRideRequestRemovedFromDriver(row.driver_user_id, {
+        rideRequestId,
+        reason: 'selected_by_passenger',
+      });
+    });
+
+    return res.json({
+      rideRequest: {
+        id: rideRequestId,
+        status: 'driver_assigned',
+        driverDistanceKm: Number(driverDistanceKm.toFixed(2)),
+        driverEtaMinutes,
+      },
+    });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/select-driver', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/passenger/:rideRequestId/cancel', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET status = 'cancelled',
+           cancellation_reason = ?,
+           cancelled_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND passenger_user_id = ?`,
+      [String(req.body?.reason || 'Passenger cancelled').trim(), rideRequestId, req.userId]
+    );
+
+    const affectedDrivers = await query(
+      `SELECT driver_user_id
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?`,
+      [rideRequestId]
+    );
+
+    affectedDrivers.forEach((row) => {
+      emitRideRequestRemovedFromDriver(row.driver_user_id, {
+        rideRequestId,
+        reason: 'passenger_cancelled',
+      });
+      emitRideStatusToDriver(row.driver_user_id, {
+        rideRequestId,
+        status: 'cancelled',
+        passengerUserId: req.userId,
+      });
+    });
+
+    emitRideStatusToPassenger(req.userId, {
+      rideRequestId,
+      status: 'cancelled',
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/cancel', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/passenger/:rideRequestId/arrived', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET status = 'driver_arrived', arrived_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND passenger_user_id = ? AND status IN ('driver_assigned', 'driver_found')`,
+      [rideRequestId, req.userId]
+    );
+
+    const [ride] = await query(
+      'SELECT driver_user_id FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
+      [rideRequestId, req.userId]
+    );
+    if (ride?.driver_user_id) {
+      emitRideStatusToDriver(ride.driver_user_id, {
+        rideRequestId,
+        status: 'driver_arrived',
+        passengerUserId: req.userId,
+      });
+    }
+    emitRideStatusToPassenger(req.userId, {
+      rideRequestId,
+      status: 'driver_arrived',
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/arrived', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/passenger/:rideRequestId/complete', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET status = 'completed',
+           completed_at = CURRENT_TIMESTAMP,
+           actual_distance_km = COALESCE(actual_distance_km, route_distance_km, estimated_distance_km),
+           actual_minutes = GREATEST(
+             1,
+             TIMESTAMPDIFF(
+               MINUTE,
+               COALESCE(started_at, assigned_at, requested_at),
+               CURRENT_TIMESTAMP
+             )
+           )
+       WHERE id = ? AND passenger_user_id = ? AND status IN ('driver_arrived', 'in_progress', 'driver_assigned')`,
+      [rideRequestId, req.userId]
+    );
+
+    const [ride] = await query(
+      'SELECT driver_user_id FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
+      [rideRequestId, req.userId]
+    );
+    if (ride?.driver_user_id) {
+      emitRideStatusToDriver(ride.driver_user_id, {
+        rideRequestId,
+        status: 'completed',
+        passengerUserId: req.userId,
+      });
+    }
+    emitRideStatusToPassenger(req.userId, {
+      rideRequestId,
+      status: 'completed',
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/complete', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/:rideRequestId/messages', requireAuth, async (req, res) => {
+  try {
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const chat = await loadAuthorizedRideChat(rideRequestId, req.userId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Ride chat not found' });
+    }
+
+    const rows = await query(
+      `SELECT
+         id,
+         ride_request_id,
+         sender_user_id,
+         recipient_user_id,
+         sender_role,
+         message,
+         created_at,
+         read_at
+       FROM ride_messages
+       WHERE ride_request_id = ?
+       ORDER BY created_at ASC, id ASC`,
+      [rideRequestId]
+    );
+
+    await query(
+      `UPDATE ride_messages
+       SET read_at = CURRENT_TIMESTAMP
+       WHERE ride_request_id = ?
+         AND recipient_user_id = ?
+         AND read_at IS NULL`,
+      [rideRequestId, req.userId]
+    );
+
+    return res.json({
+      rideRequestId,
+      chatTitle: chat.chatTitle,
+      messages: rows.map(mapRideMessage),
+    });
+  } catch (err) {
+    console.error('GET /api/rides/:rideRequestId/messages', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/:rideRequestId/messages', requireAuth, async (req, res) => {
+  try {
+    const rideRequestId = Number(req.params.rideRequestId);
+    const message = String(req.body?.message || '').trim();
+
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    if (message.length > 1000) {
+      return res.status(400).json({ error: 'Message is too long' });
+    }
+
+    const chat = await loadAuthorizedRideChat(rideRequestId, req.userId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Ride chat not found' });
+    }
+    if (!chat.recipientUserId) {
+      return res.status(409).json({ error: 'Chat is not available until a driver has been assigned' });
+    }
+    if (['cancelled', 'expired'].includes(String(chat.ride?.status || ''))) {
+      return res.status(409).json({ error: 'Chat is not available for this ride anymore' });
+    }
+
+    const insertResult = await query(
+      `INSERT INTO ride_messages (
+         ride_request_id,
+         sender_user_id,
+         recipient_user_id,
+         sender_role,
+         message
+       ) VALUES (?, ?, ?, ?, ?)`,
+      [rideRequestId, req.userId, chat.recipientUserId, chat.senderRole, message]
+    );
+
+    const messageId = Number(insertResult?.insertId || 0);
+    const [row] = await query(
+      `SELECT
+         id,
+         ride_request_id,
+         sender_user_id,
+         recipient_user_id,
+         sender_role,
+         message,
+         created_at,
+         read_at
+       FROM ride_messages
+       WHERE id = ?
+       LIMIT 1`,
+      [messageId]
+    );
+
+    const messageRecord = row ? mapRideMessage(row) : null;
+    const senderUser = await getClerkUserById(req.userId).catch(() => null);
+    const senderName = [senderUser?.firstName, senderUser?.lastName].filter(Boolean).join(' ').trim() || (chat.senderRole === 'driver' ? 'Driver' : 'Passenger');
+    const recipientUser = await getClerkUserById(chat.recipientUserId).catch(() => null);
+    const recipientPushToken = String(recipientUser?.privateMetadata?.pushToken || '').trim();
+
+    emitRideChatMessageToUser(chat.recipientUserId, {
+      rideRequestId,
+      messageId,
+      senderUserId: req.userId,
+      senderRole: chat.senderRole,
+    });
+    emitRideChatMessageToUser(req.userId, {
+      rideRequestId,
+      messageId,
+      senderUserId: req.userId,
+      senderRole: chat.senderRole,
+    });
+
+    if (recipientPushToken) {
+      sendExpoPushNotifications({
+        to: recipientPushToken,
+        title: senderName,
+        body: message,
+        data: {
+          type: 'ride_chat_message',
+          rideRequestId,
+        },
+      }).catch((pushError) => {
+        console.error('POST /api/rides/:rideRequestId/messages push', pushError);
+      });
+    }
+
+    return res.status(201).json({
+      messageRecord,
+    });
+  } catch (err) {
+    console.error('POST /api/rides/:rideRequestId/messages', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+export default router;

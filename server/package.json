@@ -1,0 +1,51 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "Trust Express API - Node.js + MySQL, Clerk auth",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "db:migrate:admin": "node scripts/run-migration.js",
+    "admin:bootstrap": "node scripts/bootstrap-first-admin.js",
+    "admin:bootstrap:db": "node scripts/bootstrap-first-admin-db.js",
+    "clerk:set-driver-role": "node scripts/set-clerk-role-driver.js",
+    "db:migrate:rbac": "node scripts/run-migration.js sql/migrations/005_add_rbac_tables.sql",
+    "rbac:seed": "node scripts/seed-rbac.js",
+    "db:migrate:pricing": "node scripts/run-migration.js sql/migrations/006_add_pricing_zones.sql",
+    "db:migrate:pricing:patch": "node scripts/run-migration.js sql/migrations/007_patch_operating_regions_geo_and_tiers.sql",
+    "db:migrate:vehicle-tiers": "node scripts/run-migration.js sql/migrations/008_add_vehicle_tier_rules.sql",
+    "db:migrate:rides": "node scripts/run-migration.js sql/migrations/009_add_ride_requests_and_driver_availability.sql",
+    "db:migrate:ride-responses": "node scripts/run-migration.js sql/migrations/010_add_ride_request_driver_responses.sql",
+    "db:migrate:ride-ratings": "node scripts/run-migration.js sql/migrations/011_add_passenger_driver_ratings.sql",
+    "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",
+    "db:migrate:agent-profile": "node scripts/run-migration.js sql/migrations/023_add_agent_profile_fields.sql",
+    "db:migrate:agent-invites": "node scripts/run-migration.js sql/migrations/024_add_agent_invites_and_driver_referrals.sql",
+    "db:migrate:agent-invite-events": "node scripts/run-migration.js sql/migrations/025_add_agent_invite_events.sql",
+    "vehicle-tiers:seed": "node scripts/seed-vehicle-tiers.js",
+    "vehicle-tiers:count": "node scripts/check-car-tiers.js",
+    "pricing-tiers:seed-missing": "node scripts/seed-missing-pricing-tiers.js",
+    "rides:simulate-passenger": "node scripts/simulate-passenger-request.js",
+    "db:migrate:driver-verification": "node scripts/migrate-driver-verification-to-mysql.js",
+    "db:migrate:ride-route-actuals": "node scripts/run-migration.js sql/migrations/021_add_ride_route_and_actuals.sql",
+    "recovery:sync-users": "node scripts/sync-clerk-users-to-db.js",
+    "recovery:mark-drivers-verified": "node scripts/mark-all-drivers-verified.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "dependencies": {
+    "@clerk/backend": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "firebase-admin": "^13.0.0",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.11.0",
+    "socket.io": "^4.8.3"
+  }
+}
