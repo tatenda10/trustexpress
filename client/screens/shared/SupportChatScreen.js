@@ -54,6 +54,7 @@ export default function SupportChatScreen({ navigation, route }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [threadId, setThreadId] = useState(null);
+  const composerBottomInset = Math.max(insets.bottom, 10);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -155,11 +156,11 @@ export default function SupportChatScreen({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-white">
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} className="flex-1 bg-white">
       <KeyboardAvoidingView
         className="flex-1"
         behavior="padding"
-        keyboardVerticalOffset={0}
+        keyboardVerticalOffset={8}
       >
         <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
           <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
@@ -197,7 +198,7 @@ export default function SupportChatScreen({ navigation, route }) {
               contentContainerStyle={{
                 paddingHorizontal: 20,
                 paddingTop: 20,
-                paddingBottom: 28,
+                paddingBottom: 18,
                 flexGrow: sortedMessages.length ? 0 : 1,
               }}
               onRefresh={() => loadMessages(true)}
@@ -215,7 +216,7 @@ export default function SupportChatScreen({ navigation, route }) {
 
             <View
               className="border-t border-gray-100 bg-white px-4 pt-3"
-              style={{ paddingBottom: 6 }}
+              style={{ paddingBottom: composerBottomInset }}
             >
               <View className="flex-row items-end rounded-[26px] border border-gray-200 bg-[#f8fafc] px-3 py-2">
                 <TextInput

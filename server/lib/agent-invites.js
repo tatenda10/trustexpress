@@ -107,3 +107,47 @@ export async function attachDriverToAgentInvite({ driverUserId, inviteToken }) {
     };
   });
 }
+
+export async function attachPassengerToAgentInvite({ passengerUserId, inviteToken }) {
+  const token = String(inviteToken || '').trim();
+  if (!passengerUserId || !token) return null;
+
+  const invite = await findInviteByToken(token);
+  if (!invite) {
+    const error = new Error('Invalid or inactive invite link');
+    error.status = 400;
+    throw error;
+  }
+
+  return withTransaction(async (connection) => {
+    const [existingRows] = await connection.execute(
+      `SELECT id, passenger_user_id, agent_user_id, invite_id, source
+       FROM agent_passenger_referrals
+       WHERE passenger_user_id = ?
+       LIMIT 1`,
+      [passengerUserId]
+    );
+
+    if (existingRows[0]) {
+      return {
+        passengerUserId: existingRows[0].passenger_user_id,
+        agentUserId: existingRows[0].agent_user_id,
+        inviteId: existingRows[0].invite_id,
+        source: existingRows[0].source,
+      };
+    }
+
+    await connection.execute(
+      `INSERT INTO agent_passenger_referrals (passenger_user_id, agent_user_id, invite_id, source)
+       VALUES (?, ?, ?, 'agent_deep_link')`,
+      [passengerUserId, invite.agentUserId, invite.id]
+    );
+
+    return {
+      passengerUserId,
+      agentUserId: invite.agentUserId,
+      inviteId: invite.id,
+      source: 'agent_deep_link',
+    };
+  });
+}

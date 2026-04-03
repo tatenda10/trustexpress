@@ -151,7 +151,11 @@ export default function RideChatScreen({ navigation, route }) {
 
   return (
     <SafeAreaView className="flex-1 bg-white">
-      <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={8}
+      >
         <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
           <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
             <Ionicons name="arrow-back" size={20} color="#111827" />
@@ -178,6 +182,8 @@ export default function RideChatScreen({ navigation, route }) {
               data={sortedMessages}
               keyExtractor={(item) => String(item.id)}
               renderItem={({ item }) => <MessageBubble item={item} isMine={String(item.senderUserId) === String(user?.id)} />}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, flexGrow: sortedMessages.length ? 0 : 1 }}
               onRefresh={() => loadMessages(true)}
               refreshing={refreshing}

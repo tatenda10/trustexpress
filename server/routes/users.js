@@ -3,7 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getClerkClient } from '../lib/clerk-client.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getClerkUserById, mergePrivateMetadata, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
-import { attachDriverToAgentInvite } from '../lib/agent-invites.js';
+import { attachDriverToAgentInvite, attachPassengerToAgentInvite } from '../lib/agent-invites.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
 import {
   createSupportMessage,
@@ -40,18 +40,24 @@ router.post('/register', requireAuth, async (req, res) => {
     const { role, inviteToken } = req.body || {};
     await setRoleForUser(req.userId, role);
 
+    let referral = null;
     if (role === 'driver' && inviteToken) {
-      const referral = await attachDriverToAgentInvite({
+      referral = await attachDriverToAgentInvite({
         driverUserId: req.userId,
         inviteToken,
       });
+    } else if (role === 'passenger' && inviteToken) {
+      referral = await attachPassengerToAgentInvite({
+        passengerUserId: req.userId,
+        inviteToken,
+      });
+    }
 
-      if (referral) {
-        await mergePrivateMetadata(req.userId, {
-          referredByAgentId: referral.agentUserId,
-          recruitmentSource: referral.source,
-        });
-      }
+    if (referral) {
+      await mergePrivateMetadata(req.userId, {
+        referredByAgentId: referral.agentUserId,
+        recruitmentSource: referral.source,
+      });
     }
 
     const user = await getClerkUserById(req.userId);
@@ -74,14 +80,20 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
 
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
-    if (appUser.role !== 'driver') {
-      return res.status(400).json({ error: 'Only driver accounts can be linked to an agent invite' });
+    let referral = null;
+    if (appUser.role === 'driver') {
+      referral = await attachDriverToAgentInvite({
+        driverUserId: req.userId,
+        inviteToken,
+      });
+    } else if (appUser.role === 'passenger') {
+      referral = await attachPassengerToAgentInvite({
+        passengerUserId: req.userId,
+        inviteToken,
+      });
+    } else {
+      return res.status(400).json({ error: 'Only driver or passenger accounts can be linked to an agent invite' });
     }
-
-    const referral = await attachDriverToAgentInvite({
-      driverUserId: req.userId,
-      inviteToken,
-    });
 
     if (referral) {
       await mergePrivateMetadata(req.userId, {
@@ -92,6 +104,7 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
 
     return res.status(201).json({
       ok: true,
+      role: appUser.role,
       referral,
     });
   } catch (err) {

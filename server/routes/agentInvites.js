@@ -8,8 +8,10 @@ const router = Router();
 function shapeInvitePayload(invite) {
   if (!invite) return null;
 
-  const appUrl = `trustexpress://driver-signup?invite=${encodeURIComponent(invite.token)}`;
-  const universalUrl = `https://trustexpress.co.zw/driver-signup?invite=${encodeURIComponent(invite.token)}`;
+  const driverAppUrl = `trustexpress://driver-signup?invite=${encodeURIComponent(invite.token)}`;
+  const driverUniversalUrl = `https://trustexpress.co.zw/driver-signup?invite=${encodeURIComponent(invite.token)}`;
+  const passengerAppUrl = `trustexpress://passenger-signup?invite=${encodeURIComponent(invite.token)}`;
+  const passengerUniversalUrl = `https://trustexpress.co.zw/passenger-signup?invite=${encodeURIComponent(invite.token)}`;
 
   return {
     id: invite.id,
@@ -17,8 +19,12 @@ function shapeInvitePayload(invite) {
     agentUserId: invite.agentUserId,
     agentName: invite.fullName,
     agentCode: invite.employeeCode,
-    appUrl,
-    universalUrl,
+    appUrl: driverAppUrl,
+    universalUrl: driverUniversalUrl,
+    driverAppUrl,
+    driverUniversalUrl,
+    passengerAppUrl,
+    passengerUniversalUrl,
   };
 }
 

@@ -105,7 +105,7 @@ const getDriverStatusCacheKey = (userId) => `trust_express_driver_status:${userI
 function AppStack() {
   const { getToken } = useAuth();
   const { user } = useUser();
-  const { inviteToken, attachedDriverUserId, markInviteAttached, clearInvite } = useAgentInvite();
+  const { inviteToken, attachedUserId, markInviteAttached, clearInvite } = useAgentInvite();
   const getTokenRef = useRef(getToken);
   const roleBootstrapUserRef = useRef(null);
   const pushSyncKeyRef = useRef('');
@@ -125,6 +125,20 @@ function AppStack() {
   const [passengerSkippedLocation, setPassengerSkippedLocation] = useState(false);
   const [passengerSkippedPhoneVerify, setPassengerSkippedPhoneVerify] = useState(false);
   const [roleBootstrapped, setRoleBootstrapped] = useState(false);
+
+  const openDriverIncomingRequest = useCallback(() => {
+    if (!navigationRef.isReady()) return;
+    navigationRef.navigate('DriverTabs', {
+      screen: 'DriverHome',
+      params: {
+        screen: 'DriverHomeMain',
+        params: {
+          openIncomingRideOverlay: true,
+          notificationTs: Date.now(),
+        },
+      },
+    });
+  }, []);
 
   useEffect(() => {
     setDriverStatus(null);
@@ -221,26 +235,31 @@ function AppStack() {
 
   useEffect(() => {
     const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification?.request?.content?.data || {};
       console.log('[notifications] received', {
         requestId: notification?.request?.identifier || null,
         title: notification?.request?.content?.title || null,
-        data: notification?.request?.content?.data || {},
+        data,
       });
     });
 
     const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response?.notification?.request?.content?.data || {};
       console.log('[notifications] tapped', {
         actionIdentifier: response?.actionIdentifier || null,
         title: response?.notification?.request?.content?.title || null,
-        data: response?.notification?.request?.content?.data || {},
+        data,
       });
+      if (data?.type === 'driver_new_ride_request') {
+        openDriverIncomingRequest();
+      }
     });
 
     return () => {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, []);
+  }, [openDriverIncomingRequest]);
 
   useEffect(() => {
     let cancelled = false;
@@ -306,10 +325,10 @@ function AppStack() {
               registerUser(t, {
                 role: fallbackRole,
                 email: user?.primaryEmailAddress?.emailAddress,
-                inviteToken: fallbackRole === 'driver' ? inviteToken || undefined : undefined,
+                inviteToken: inviteToken || undefined,
               })
                 .then(() => {
-                  if (fallbackRole === 'driver' && inviteToken) {
+                  if (inviteToken) {
                     clearInvite().catch(() => {});
                   }
                 })
@@ -392,8 +411,9 @@ function AppStack() {
   useEffect(() => {
     async function ensureAgentReferralAttached() {
       try {
-        if (!user?.id || !roleBootstrapped || roleLoading || userRole !== 'driver' || !inviteToken) return;
-        if (attachedDriverUserId && attachedDriverUserId === user.id) return;
+        if (!user?.id || !roleBootstrapped || roleLoading || !inviteToken) return;
+        if (userRole !== 'driver' && userRole !== 'passenger') return;
+        if (attachedUserId && attachedUserId === user.id) return;
 
         const attachKey = `${user.id}:${inviteToken}`;
         if (referralAttachKeyRef.current === attachKey) return;
@@ -415,7 +435,7 @@ function AppStack() {
     }
 
     ensureAgentReferralAttached();
-  }, [user?.id, userRole, roleBootstrapped, roleLoading, inviteToken, attachedDriverUserId, markInviteAttached, clearInvite]);
+  }, [user?.id, userRole, roleBootstrapped, roleLoading, inviteToken, attachedUserId, markInviteAttached, clearInvite]);
 
   // Refetch driver status when app comes to foreground so approval from admin shows without reopening Account
   useEffect(() => {
@@ -600,10 +620,10 @@ function AppStack() {
     return <SplashScreen />;
   }
 
-  const initialRoute = needDriverProfileCompletion
-        ? 'DriverCompleteProfile'
-      : canGoOnline
+  const initialRoute = canGoOnline
         ? 'DriverTabs'
+      : needDriverProfileCompletion
+        ? 'DriverCompleteProfile'
       : needDriverEnhancedSelfie
         ? 'DriverEnhancedSelfie'
         : needProfile
@@ -637,7 +657,7 @@ function AppStack() {
               onCompleted={async () => {
                 const profileData = await refetchUserProfile();
                 const profileStillMissing = !String(profileData?.first_name || '').trim() || !String(profileData?.last_name || '').trim();
-                if (profileStillMissing) return;
+                if (profileStillMissing && !canGoOnline) return;
                 props.navigation.replace(
                   canGoOnline
                     ? 'DriverTabs'
@@ -709,16 +729,17 @@ function AppContent() {
     const inviteToken = Array.isArray(queryInvite) ? queryInvite[0] : String(queryInvite || '').trim();
 
     const looksLikeDriverSignup = path.includes('driver-signup') || path.includes('driver-onboarding');
-    if (!inviteToken || !looksLikeDriverSignup) {
+    const looksLikePassengerSignup = path.includes('passenger-signup') || path.includes('passenger-onboarding');
+    if (!inviteToken || (!looksLikeDriverSignup && !looksLikePassengerSignup)) {
       return false;
     }
 
     try {
       await setInviteFromToken(inviteToken);
       if (navigationRef.isReady() && !isSignedIn) {
-        navigationRef.navigate('DriverOnboarding');
+        navigationRef.navigate(looksLikePassengerSignup ? 'PassengerOnboarding' : 'DriverOnboarding');
       } else if (!isSignedIn) {
-        pendingInviteNavigationRef.current = true;
+        pendingInviteNavigationRef.current = looksLikePassengerSignup ? 'passenger' : 'driver';
       }
       return true;
     } catch {
@@ -768,8 +789,9 @@ function AppContent() {
       ref={navigationRef}
       onReady={() => {
         if (pendingInviteNavigationRef.current && !isSignedIn) {
+          const pendingTarget = pendingInviteNavigationRef.current;
           pendingInviteNavigationRef.current = false;
-          navigationRef.navigate('DriverOnboarding');
+          navigationRef.navigate(pendingTarget === 'passenger' ? 'PassengerOnboarding' : 'DriverOnboarding');
         }
       }}
     >

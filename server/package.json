@@ -24,6 +24,7 @@
     "db:migrate:agent-profile": "node scripts/run-migration.js sql/migrations/023_add_agent_profile_fields.sql",
     "db:migrate:agent-invites": "node scripts/run-migration.js sql/migrations/024_add_agent_invites_and_driver_referrals.sql",
     "db:migrate:agent-invite-events": "node scripts/run-migration.js sql/migrations/025_add_agent_invite_events.sql",
+    "db:migrate:agent-passenger-referrals": "node scripts/run-migration.js sql/migrations/026_add_agent_passenger_referrals.sql",
     "vehicle-tiers:seed": "node scripts/seed-vehicle-tiers.js",
     "vehicle-tiers:count": "node scripts/check-car-tiers.js",
     "pricing-tiers:seed-missing": "node scripts/seed-missing-pricing-tiers.js",

@@ -67,6 +67,20 @@ async function fetchAgentApplications(token, { search = '', status = 'all' } = {
   return data?.applications || []
 }
 
+async function checkDriverEligibility(token, vehicleNumber) {
+  const params = new URLSearchParams({ vehicleNumber: String(vehicleNumber || '').trim() })
+  const response = await fetch(`${BASE_URL}/api/agent/driver-eligibility?${params.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data?.error || 'Failed to check vehicle number')
+  }
+  return data
+}
+
 function LogoIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
@@ -382,9 +396,14 @@ function DashboardContent({ agent, summary, applications }) {
           <p className="mt-2 text-sm leading-6 text-slate-500">How many times drivers opened your invite link or QR.</p>
         </section>
         <section className="border border-slate-200 bg-white p-5">
-          <SectionEyebrow>Accounts Created</SectionEyebrow>
-          <h3 className="mt-2 text-[28px] font-semibold text-slate-950">{summary?.accountCreated ?? 0}</h3>
+          <SectionEyebrow>Drivers Recruited</SectionEyebrow>
+          <h3 className="mt-2 text-[28px] font-semibold text-slate-950">{summary?.driverAccountsCreated ?? 0}</h3>
           <p className="mt-2 text-sm leading-6 text-slate-500">Drivers who finished signup through your invite.</p>
+        </section>
+        <section className="border border-slate-200 bg-white p-5">
+          <SectionEyebrow>Passengers Recruited</SectionEyebrow>
+          <h3 className="mt-2 text-[28px] font-semibold text-slate-950">{summary?.passengerAccountsCreated ?? 0}</h3>
+          <p className="mt-2 text-sm leading-6 text-slate-500">Passengers who finished signup through your invite.</p>
         </section>
         <section className="border border-slate-200 bg-white p-5">
           <SectionEyebrow>Pending Approval</SectionEyebrow>
@@ -403,7 +422,7 @@ function DashboardContent({ agent, summary, applications }) {
           <div className="flex items-center justify-between gap-3">
             <div>
               <SectionEyebrow>Recent Recruits</SectionEyebrow>
-              <h3 className="mt-2 text-2xl font-semibold text-slate-950">Driver progress overview</h3>
+              <h3 className="mt-2 text-2xl font-semibold text-slate-950">Recruitment progress overview</h3>
             </div>
             <StatusBadge tone="rose">{summary?.rejected ?? 0} rejected</StatusBadge>
           </div>
@@ -418,6 +437,7 @@ function DashboardContent({ agent, summary, applications }) {
                 <thead>
                   <tr className="bg-[#16213a] text-white">
                     <th className="rounded-tl-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Driver</th>
+                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Type</th>
                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Stage</th>
                     <th className="rounded-tr-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Vehicle</th>
                   </tr>
@@ -426,14 +446,17 @@ function DashboardContent({ agent, summary, applications }) {
                   {recent.map((item) => (
                     <tr key={item.id} className="bg-white">
                       <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-800">
-                        <p className="font-semibold text-slate-900">{item.driver.fullName || 'Driver account created'}</p>
-                        <p className="mt-1 text-xs text-slate-500">{item.driver.email || item.driver.phoneNumber || item.driverUserId}</p>
+                        <p className="font-semibold text-slate-900">{item.driver.fullName || `${item.type === 'passenger' ? 'Passenger' : 'Driver'} account created`}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.driver.email || item.driver.phoneNumber || item.driverUserId || item.passengerUserId}</p>
+                      </td>
+                      <td className="border-b border-slate-200 px-4 py-3">
+                        <StatusBadge tone={item.type === 'passenger' ? 'blue' : 'slate'}>{item.type}</StatusBadge>
                       </td>
                       <td className="border-b border-slate-200 px-4 py-3">
                         <StatusBadge tone={item.status.tone}>{item.status.label}</StatusBadge>
                       </td>
                       <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">
-                        {item.vehicle.make || item.vehicle.model ? `${item.vehicle.make || ''} ${item.vehicle.model || ''}`.trim() : '-'}
+                        {item.type === 'passenger' ? 'Passenger account' : item.vehicle.make || item.vehicle.model ? `${item.vehicle.make || ''} ${item.vehicle.model || ''}`.trim() : '-'}
                       </td>
                     </tr>
                   ))}
@@ -465,10 +488,22 @@ function DashboardContent({ agent, summary, applications }) {
   )
 }
 
-function RegisterDriverSection({ invite, inviteLoading, inviteError, onCopyInvite }) {
+function RegisterDriverSection({
+  invite,
+  inviteLoading,
+  inviteError,
+  onCopyInvite,
+  vehicleNumberInput,
+  onVehicleNumberInputChange,
+  onCheckVehicleNumber,
+  checkingVehicleNumber,
+  vehicleEligibility,
+  vehicleEligibilityError,
+}) {
   const qrCodeUrl = invite?.appUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(invite.appUrl)}`
     : ''
+  const canShowInvite = !!invite && vehicleEligibility?.available === true
 
   return (
     <div className="grid gap-5">
@@ -499,17 +534,71 @@ function RegisterDriverSection({ invite, inviteLoading, inviteError, onCopyInvit
       </section>
 
       <section className="border border-slate-200 bg-white p-5">
+        <SectionEyebrow>Vehicle Check</SectionEyebrow>
+        <h3 className="mt-2 text-2xl font-semibold text-slate-950">Check the vehicle number first</h3>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
+          Enter the driver&apos;s licence plate or vehicle number before showing the QR code. If the vehicle is already registered,
+          the system will stop the process here.
+        </p>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr),180px]">
+          <label className="grid gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Vehicle Number / Plate</span>
+            <input
+              value={vehicleNumberInput}
+              onChange={(event) => onVehicleNumberInputChange(event.target.value)}
+              placeholder="e.g. AET9976 or ABC1234"
+              className="h-11 border border-slate-300 bg-white px-3.5 text-sm text-slate-900 outline-none transition focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
+            />
+          </label>
+
+          <div className="grid gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-transparent">Check</span>
+            <button
+              type="button"
+              onClick={onCheckVehicleNumber}
+              disabled={checkingVehicleNumber || !vehicleNumberInput.trim()}
+              className="h-11 rounded-sm bg-[#16213a] px-4 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {checkingVehicleNumber ? 'Checking...' : 'Check Vehicle'}
+            </button>
+          </div>
+        </div>
+
+        {vehicleEligibilityError ? (
+          <div className="mt-4 border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{vehicleEligibilityError}</div>
+        ) : null}
+
+        {vehicleEligibility?.available === true ? (
+          <div className="mt-4 border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            Vehicle number <span className="font-semibold">{vehicleEligibility.vehicleNumber}</span> is available. You can now show the QR code to the driver.
+          </div>
+        ) : null}
+
+        {vehicleEligibility?.alreadyRegistered ? (
+          <div className="mt-4 border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            This driver is already registered under vehicle number <span className="font-semibold">{vehicleEligibility.vehicleNumber}</span>.
+            {vehicleEligibility.vehicleLabel ? ` (${vehicleEligibility.vehicleLabel})` : ''}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="border border-slate-200 bg-white p-5">
         <SectionEyebrow>Driver Invite</SectionEyebrow>
         <h3 className="mt-2 text-2xl font-semibold text-slate-950">Share this with the driver</h3>
         <p className="mt-3 text-sm leading-6 text-slate-500">
           Use the QR code for in-person recruitment, or copy the invite link if you want to send it by WhatsApp or SMS.
         </p>
 
-        {inviteLoading ? (
+        {!vehicleEligibility?.available ? (
+          <div className="mt-4 border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Check the vehicle number first. The QR code will only appear when the vehicle is not already registered.
+          </div>
+        ) : inviteLoading ? (
           <div className="mt-4 border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">Loading invite link...</div>
         ) : inviteError ? (
           <div className="mt-4 border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{inviteError}</div>
-        ) : invite ? (
+        ) : canShowInvite ? (
           <div className="mt-4 grid gap-4 lg:grid-cols-[280px,1fr] lg:items-start">
             <div className="border border-slate-200 bg-slate-50 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Scan QR</p>
@@ -564,6 +653,82 @@ function RegisterDriverSection({ invite, inviteLoading, inviteError, onCopyInvit
   )
 }
 
+function RegisterPassengerSection({ invite, inviteLoading, inviteError, onCopyInvite }) {
+  const qrCodeUrl = invite?.passengerAppUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(invite.passengerAppUrl)}`
+    : ''
+
+  return (
+    <div className="grid gap-5">
+      <section className="border border-slate-200 bg-white p-5">
+        <SectionEyebrow>Passenger Recruitment</SectionEyebrow>
+        <h2 className="mt-2 text-[28px] font-semibold text-slate-950">Register a passenger through the real mobile app</h2>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
+          Let the passenger scan your QR code or open your invite link on their phone. It opens the actual Trust Express app,
+          takes them into passenger signup, and attributes the registration back to your agent account automatically.
+        </p>
+      </section>
+
+      <section className="border border-slate-200 bg-white p-5">
+        <SectionEyebrow>Passenger Invite</SectionEyebrow>
+        <h3 className="mt-2 text-2xl font-semibold text-slate-950">Share this with the passenger</h3>
+        <p className="mt-3 text-sm leading-6 text-slate-500">
+          Use the QR code for in-person recruitment, or copy the passenger invite link if you want to send it by WhatsApp or SMS.
+        </p>
+
+        {inviteLoading ? (
+          <div className="mt-4 border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">Loading invite link...</div>
+        ) : inviteError ? (
+          <div className="mt-4 border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{inviteError}</div>
+        ) : invite ? (
+          <div className="mt-4 grid gap-4 lg:grid-cols-[280px,1fr] lg:items-start">
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Scan QR</p>
+              <div className="mt-3 flex justify-center">
+                <img
+                  src={qrCodeUrl}
+                  alt="Passenger invite QR code"
+                  className="h-[230px] w-[230px] border border-slate-200 bg-white p-2"
+                />
+              </div>
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                The passenger scans this code and is taken into the Trust Express passenger signup flow with your referral already attached.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">App Deep Link</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.passengerAppUrl}</p>
+              </div>
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Fallback Link</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.passengerUniversalUrl}</p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => onCopyInvite(invite.passengerUniversalUrl)}
+                  className="h-10 rounded-sm bg-[#16213a] px-4 text-sm font-semibold text-white transition hover:bg-slate-900"
+                >
+                  Copy Passenger Link
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCopyInvite(invite.passengerAppUrl)}
+                  className="h-10 rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  Copy App Link
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  )
+}
+
 function ApplicationsSection({ applications, loading, error, filters, onFilterChange, onSearch }) {
   const statuses = [
     { value: 'all', label: 'All' },
@@ -579,9 +744,9 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
     <div className="grid gap-5">
       <section className="border border-slate-200 bg-white p-5">
         <SectionEyebrow>My Applications</SectionEyebrow>
-        <h2 className="mt-2 text-[28px] font-semibold text-slate-950">Track drivers linked to your invite</h2>
+        <h2 className="mt-2 text-[28px] font-semibold text-slate-950">Track accounts linked to your invite</h2>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
-          This list shows drivers who created their account through your invite and how far they have moved through signup,
+          This list shows drivers and passengers who created their account through your invite and how far they have moved through signup,
           documentation, and admin approval.
         </p>
       </section>
@@ -595,7 +760,7 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
               <input
                 value={filters.search}
                 onChange={(event) => onFilterChange('search', event.target.value)}
-                placeholder="Search driver, phone, email, car, or plate"
+                placeholder="Search driver or passenger, phone, email, car, or plate"
                 className="h-11 w-full bg-transparent px-3 text-sm text-slate-900 outline-none"
               />
             </div>
@@ -634,6 +799,7 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
             <thead>
               <tr className="bg-[#16213a] text-white">
                 <th className="rounded-tl-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Driver</th>
+                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Type</th>
                 <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Status</th>
                 <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Identity</th>
                 <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Vehicle</th>
@@ -644,22 +810,22 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="6" className="px-4 py-8 text-sm text-slate-500">Loading applications...</td>
+                  <td colSpan="7" className="px-4 py-8 text-sm text-slate-500">Loading applications...</td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan="6" className="px-4 py-8 text-sm text-rose-600">{error}</td>
+                  <td colSpan="7" className="px-4 py-8 text-sm text-rose-600">{error}</td>
                 </tr>
               ) : applications.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-4 py-8 text-sm text-slate-500">No driver applications found for this filter yet.</td>
+                  <td colSpan="7" className="px-4 py-8 text-sm text-slate-500">No applications found for this filter yet.</td>
                 </tr>
               ) : (
                 applications.map((item) => (
                   <tr key={item.id} className="bg-white">
                     <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-800">
-                      <p className="font-semibold text-slate-900">{item.driver.fullName || 'Driver account created'}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.driver.email || item.driver.phoneNumber || item.driverUserId}</p>
+                      <p className="font-semibold text-slate-900">{item.driver.fullName || `${item.type === 'passenger' ? 'Passenger' : 'Driver'} account created`}</p>
+                      <p className="mt-1 text-xs text-slate-500">{item.driver.email || item.driver.phoneNumber || item.driverUserId || item.passengerUserId}</p>
                       {item.vehicle.make || item.vehicle.model || item.vehicle.numberPlate ? (
                         <p className="mt-1 text-xs text-slate-500">
                           {[item.vehicle.make, item.vehicle.model, item.vehicle.numberPlate].filter(Boolean).join(' • ')}
@@ -667,10 +833,13 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
                       ) : null}
                     </td>
                     <td className="border-b border-slate-200 px-4 py-3">
+                      <StatusBadge tone={item.type === 'passenger' ? 'blue' : 'slate'}>{item.type}</StatusBadge>
+                    </td>
+                    <td className="border-b border-slate-200 px-4 py-3">
                       <StatusBadge tone={item.status.tone}>{item.status.label}</StatusBadge>
                     </td>
-                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">{item.status.identityUploadedCount}/5 docs</td>
-                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">{item.status.vehicleUploadedCount}/5 docs</td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">{item.type === 'passenger' ? `${item.status.identityUploadedCount}/2 docs` : `${item.status.identityUploadedCount}/5 docs`}</td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">{item.type === 'passenger' ? '-' : `${item.status.vehicleUploadedCount}/5 docs`}</td>
                     <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">
                       {item.submittedAt ? new Date(item.submittedAt).toLocaleString() : '-'}
                     </td>
@@ -723,6 +892,10 @@ function DashboardShell() {
   const [invite, setInvite] = useState(null)
   const [inviteLoading, setInviteLoading] = useState(false)
   const [inviteError, setInviteError] = useState('')
+  const [vehicleNumberInput, setVehicleNumberInput] = useState('')
+  const [checkingVehicleNumber, setCheckingVehicleNumber] = useState(false)
+  const [vehicleEligibility, setVehicleEligibility] = useState(null)
+  const [vehicleEligibilityError, setVehicleEligibilityError] = useState('')
   const [dashboardData, setDashboardData] = useState({ summary: null, applications: [] })
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [dashboardError, setDashboardError] = useState('')
@@ -843,6 +1016,27 @@ function DashboardShell() {
     }
   }
 
+  const handleCheckVehicleNumber = async () => {
+    if (!token) return
+    if (!vehicleNumberInput.trim()) {
+      setVehicleEligibility(null)
+      setVehicleEligibilityError('Enter a vehicle number first.')
+      return
+    }
+
+    setCheckingVehicleNumber(true)
+    setVehicleEligibilityError('')
+    try {
+      const result = await checkDriverEligibility(token, vehicleNumberInput)
+      setVehicleEligibility(result)
+    } catch (error) {
+      setVehicleEligibility(null)
+      setVehicleEligibilityError(error?.message || 'Failed to check vehicle number')
+    } finally {
+      setCheckingVehicleNumber(false)
+    }
+  }
+
   const handleApplicationFilterChange = (key, value) => {
     setApplicationFilters((current) => ({ ...current, [key]: value }))
   }
@@ -927,6 +1121,23 @@ function DashboardShell() {
             )
           ) : currentSection === 'register-driver' ? (
             <RegisterDriverSection
+              invite={invite}
+              inviteLoading={inviteLoading}
+              inviteError={inviteError}
+              onCopyInvite={handleCopyInvite}
+              vehicleNumberInput={vehicleNumberInput}
+              onVehicleNumberInputChange={(value) => {
+                setVehicleNumberInput(value)
+                setVehicleEligibility(null)
+                setVehicleEligibilityError('')
+              }}
+              onCheckVehicleNumber={handleCheckVehicleNumber}
+              checkingVehicleNumber={checkingVehicleNumber}
+              vehicleEligibility={vehicleEligibility}
+              vehicleEligibilityError={vehicleEligibilityError}
+            />
+          ) : currentSection === 'register-passenger' ? (
+            <RegisterPassengerSection
               invite={invite}
               inviteLoading={inviteLoading}
               inviteError={inviteError}

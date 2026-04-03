@@ -1,8 +1,17 @@
 import { Router } from 'express';
 import { requireAgentAuth } from '../middleware/agentAuth.js';
 import { getAgentRecruitmentDashboard, listAgentRecruitmentApplications } from '../lib/agent-recruitment.js';
+import { query } from '../db/connection.js';
 
 const router = Router();
+
+function normalizeVehicleNumber(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/-/g, '');
+}
 
 router.get('/dashboard', requireAgentAuth, async (req, res) => {
   try {
@@ -10,6 +19,44 @@ router.get('/dashboard', requireAgentAuth, async (req, res) => {
     return res.json(data);
   } catch (err) {
     console.error('GET /api/agent/dashboard', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/driver-eligibility', requireAgentAuth, async (req, res) => {
+  try {
+    const rawVehicleNumber = String(req.query.vehicleNumber || req.query.numberPlate || '').trim();
+    const vehicleNumber = normalizeVehicleNumber(rawVehicleNumber);
+
+    if (!vehicleNumber) {
+      return res.status(400).json({ error: 'vehicleNumber is required' });
+    }
+
+    const rows = await query(
+      `SELECT driver_user_id, number_plate, make, model, vehicle_status
+       FROM driver_vehicle`,
+    );
+
+    const match = rows.find((row) => normalizeVehicleNumber(row.number_plate) === vehicleNumber) || null;
+
+    if (match) {
+      return res.json({
+        vehicleNumber,
+        available: false,
+        alreadyRegistered: true,
+        driverUserId: match.driver_user_id,
+        vehicleStatus: match.vehicle_status || null,
+        vehicleLabel: [match.make, match.model, match.number_plate].filter(Boolean).join(' ').trim() || match.number_plate || vehicleNumber,
+      });
+    }
+
+    return res.json({
+      vehicleNumber,
+      available: true,
+      alreadyRegistered: false,
+    });
+  } catch (err) {
+    console.error('GET /api/agent/driver-eligibility', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

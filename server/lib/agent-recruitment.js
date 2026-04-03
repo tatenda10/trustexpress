@@ -89,7 +89,71 @@ function buildApplicationStatus({ identity, vehicle }) {
   };
 }
 
-export async function listAgentRecruitmentApplications(agentUserId) {
+function buildPassengerApplicationStatus({ identity }) {
+  const identityDocs = [
+    hasValue(identity?.national_id_front_url),
+    hasValue(identity?.national_id_back_url),
+  ];
+
+  const identityUploadedCount = countTruthy(identityDocs);
+  const identityStatus = String(identity?.identity_status || '').toLowerCase();
+
+  if (identityStatus === 'rejected') {
+    return {
+      key: 'rejected',
+      label: 'Rejected',
+      tone: 'rose',
+      totalUploadedCount: identityUploadedCount,
+      identityUploadedCount,
+      vehicleUploadedCount: 0,
+    };
+  }
+
+  if (identityStatus === 'approved') {
+    return {
+      key: 'approved',
+      label: 'Approved',
+      tone: 'emerald',
+      totalUploadedCount: identityUploadedCount,
+      identityUploadedCount,
+      vehicleUploadedCount: 0,
+    };
+  }
+
+  if (identityStatus === 'pending') {
+    const pendingKey = identityUploadedCount === identityDocs.length ? 'pending_review' : 'partially_submitted';
+    return {
+      key: pendingKey,
+      label: pendingKey === 'pending_review' ? 'Pending Review' : 'Partially Submitted',
+      tone: pendingKey === 'pending_review' ? 'amber' : 'blue',
+      totalUploadedCount: identityUploadedCount,
+      identityUploadedCount,
+      vehicleUploadedCount: 0,
+    };
+  }
+
+  if (identityUploadedCount > 0) {
+    return {
+      key: 'documents_started',
+      label: 'Documents Started',
+      tone: 'blue',
+      totalUploadedCount: identityUploadedCount,
+      identityUploadedCount,
+      vehicleUploadedCount: 0,
+    };
+  }
+
+  return {
+    key: 'account_created',
+    label: 'Account Created',
+    tone: 'slate',
+    totalUploadedCount: identityUploadedCount,
+    identityUploadedCount,
+    vehicleUploadedCount: 0,
+  };
+}
+
+async function listAgentDriverRecruitmentApplications(agentUserId) {
   const rows = await query(
     `SELECT
       r.id,
@@ -146,6 +210,7 @@ export async function listAgentRecruitmentApplications(agentUserId) {
 
       return {
         id: row.id,
+        type: 'driver',
         driverUserId: row.driver_user_id,
         agentUserId: row.agent_user_id,
         inviteId: row.invite_id,
@@ -175,6 +240,87 @@ export async function listAgentRecruitmentApplications(agentUserId) {
   return applications;
 }
 
+async function listAgentPassengerRecruitmentApplications(agentUserId) {
+  const rows = await query(
+    `SELECT
+      r.id,
+      r.passenger_user_id,
+      r.agent_user_id,
+      r.invite_id,
+      r.source,
+      r.created_at AS referral_created_at,
+      i.created_at AS invite_created_at,
+      pi.identity_status,
+      pi.identity_submitted_at,
+      pi.identity_reviewed_at,
+      pi.identity_rejection_reason,
+      pi.national_id_front_url,
+      pi.national_id_back_url
+    FROM agent_passenger_referrals r
+    INNER JOIN agent_invites i ON i.id = r.invite_id
+    LEFT JOIN passenger_identity pi ON pi.passenger_user_id = r.passenger_user_id
+    WHERE r.agent_user_id = ?
+    ORDER BY r.created_at DESC, r.id DESC`,
+    [agentUserId]
+  );
+
+  const applications = await Promise.all(
+    rows.map(async (row) => {
+      let clerkUser = null;
+      try {
+        clerkUser = await getClerkUserById(row.passenger_user_id, { skipCache: true });
+      } catch {
+        clerkUser = null;
+      }
+
+      const fullName = [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(' ').trim();
+      const applicationStatus = buildPassengerApplicationStatus({ identity: row });
+
+      return {
+        id: row.id,
+        type: 'passenger',
+        passengerUserId: row.passenger_user_id,
+        agentUserId: row.agent_user_id,
+        inviteId: row.invite_id,
+        source: row.source,
+        referredAt: row.referral_created_at,
+        inviteCreatedAt: row.invite_created_at,
+        driver: {
+          fullName: fullName || null,
+          email: clerkUser ? getPrimaryEmail(clerkUser) : null,
+          phoneNumber: clerkUser?.privateMetadata?.phoneNumber || (clerkUser ? getPrimaryPhone(clerkUser) : null),
+        },
+        vehicle: {
+          make: null,
+          model: null,
+          numberPlate: null,
+        },
+        identityStatus: row.identity_status || null,
+        vehicleStatus: null,
+        submittedAt: row.identity_submitted_at || null,
+        reviewedAt: row.identity_reviewed_at || null,
+        rejectionReason: row.identity_rejection_reason || null,
+        status: applicationStatus,
+      };
+    })
+  );
+
+  return applications;
+}
+
+export async function listAgentRecruitmentApplications(agentUserId) {
+  const [driverApplications, passengerApplications] = await Promise.all([
+    listAgentDriverRecruitmentApplications(agentUserId),
+    listAgentPassengerRecruitmentApplications(agentUserId),
+  ]);
+
+  return [...driverApplications, ...passengerApplications].sort((a, b) => {
+    const aTime = new Date(a.referredAt || a.inviteCreatedAt || 0).getTime();
+    const bTime = new Date(b.referredAt || b.inviteCreatedAt || 0).getTime();
+    return bTime - aTime;
+  });
+}
+
 export async function getAgentRecruitmentDashboard(agentUserId) {
   const [applications, inviteOpenRows] = await Promise.all([
     listAgentRecruitmentApplications(agentUserId),
@@ -194,6 +340,8 @@ export async function getAgentRecruitmentDashboard(agentUserId) {
     pendingReview: applications.filter((item) => item.status.key === 'pending_review').length,
     approved: applications.filter((item) => item.status.key === 'approved').length,
     rejected: applications.filter((item) => item.status.key === 'rejected').length,
+    driverAccountsCreated: applications.filter((item) => item.type === 'driver').length,
+    passengerAccountsCreated: applications.filter((item) => item.type === 'passenger').length,
   };
 
   return { summary, applications };

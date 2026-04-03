@@ -205,8 +205,8 @@ const DriverAccountScreen = ({ navigation, route }) => {
         : profile?.status === 'rejected'
           ? 'Needs resubmission'
           : 'Uploaded';
-  const profileApproved = profile?.status === 'approved';
-  const vehicleApproved = vehicle?.status === 'approved';
+  const profileApproved = ['approved', 'verified'].includes(String(profile?.status || '').trim().toLowerCase());
+  const vehicleApproved = ['approved', 'verified'].includes(String(vehicle?.status || '').trim().toLowerCase());
 
   const allVerified = phoneVerified && profileApproved && vehicleApproved;
   const driverName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.firstName || 'Driver';

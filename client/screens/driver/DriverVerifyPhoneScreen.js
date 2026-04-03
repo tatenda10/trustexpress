@@ -32,6 +32,11 @@ export const DRIVER_SKIP_PHONE_VERIFY_KEY = 'trust_express_driver_skip_phone_ver
 const STEP_CURRENT = 5;
 const STEP_TOTAL = 6;
 
+function isApprovedStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'approved' || normalized === 'verified';
+}
+
 const DriverVerifyPhoneScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -54,7 +59,7 @@ const DriverVerifyPhoneScreen = ({ navigation, route }) => {
       if (!token) throw new Error('Not signed in');
       await confirmPhoneVerification(token, normalizedPhone);
       const latestStatus = await refetchDriverStatus();
-      const needVehicle = latestStatus?.vehicle?.status !== 'approved';
+      const needVehicle = !isApprovedStatus(latestStatus?.vehicle?.status);
       if (needVehicle) {
         navigation.replace('DriverRegisterCar');
       } else {
@@ -72,7 +77,7 @@ const DriverVerifyPhoneScreen = ({ navigation, route }) => {
       await AsyncStorage.setItem(DRIVER_SKIP_PHONE_VERIFY_KEY, 'true');
       onSkippedPhoneVerify?.();
       const latestStatus = await refetchDriverStatus();
-      const needVehicle = latestStatus?.vehicle?.status !== 'approved';
+      const needVehicle = !isApprovedStatus(latestStatus?.vehicle?.status);
       if (needVehicle) {
         navigation.replace('DriverRegisterCar');
       } else {

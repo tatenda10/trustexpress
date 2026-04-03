@@ -11,7 +11,7 @@ import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReas
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 
-const TRACKING_STATUS_REFRESH_MS = 2000;
+const TRACKING_STATUS_REFRESH_MS = 5000;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -90,6 +90,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
+  const lastRatingModalStateRef = useRef(false);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -181,7 +182,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
   useEffect(() => {
     const shouldOpen = stage === 'completed' && !rideStatus?.passengerDriverRating;
-    setShowDriverRatingModal(shouldOpen);
+    if (lastRatingModalStateRef.current !== shouldOpen) {
+      lastRatingModalStateRef.current = shouldOpen;
+      setShowDriverRatingModal(shouldOpen);
+    }
     if (!shouldOpen) {
       ratingDraftTouchedRef.current = false;
     }
@@ -373,12 +377,27 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           keyboardVerticalOffset={insets.top + 80}
           style={{ flex: 1, justifyContent: 'flex-end' }}
         >
-          <View className="mt-auto rounded-t-[30px] bg-[#f8fafc] px-5 pt-4 pb-8" style={{ minHeight: '68%', maxHeight: '84%' }}>
+          <View className="mt-auto rounded-t-[30px] bg-[#f8fafc] px-5 pt-4" style={{ height: '78%' }}>
             <View className="items-center">
               <View className="h-2 w-16 rounded-full bg-gray-300" />
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+            {stage === 'on_trip' ? (
+              <View className="mt-4 rounded-[22px] border border-blue-100 bg-[#eff5ff] px-4 py-3">
+                <Text className="text-xs font-semibold uppercase tracking-[2px]" style={{ color: PRIMARY_BLUE }}>
+                  You are on a ride
+                </Text>
+                <Text className="mt-1 text-sm text-gray-600">
+                  Stay connected with your driver while you are on the way to your drop-off.
+                </Text>
+              </View>
+            ) : null}
+
+            <ScrollView
+              className="flex-1"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 24 }}
+            >
               <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
               <View className="flex-row items-center">
                 <Image
@@ -425,47 +444,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               </View>
               </View>
 
-              {stage !== 'on_trip' && !isCompleted ? (
-                <View className="mt-5 flex-row items-center gap-3">
-                  <TouchableOpacity
-                    onPress={handleCancelRide}
-                    className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
-                  >
-                    <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => navigation.navigate('RideChat', {
-                      rideRequestId,
-                      role: 'passenger',
-                      chatTitle: driver?.driverName || 'Driver chat',
-                    })}
-                    className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
-                  >
-                    <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
-                    className="h-14 w-14 rounded-[22px] items-center justify-center"
-                    style={{ backgroundColor: PRIMARY_BLUE }}
-                  >
-                    <Ionicons name="call" size={22} color="#fff" />
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-
-              {(stage === 'on_trip' && !isCompleted) ? (
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('RideChat', {
-                    rideRequestId,
-                    role: 'passenger',
-                    chatTitle: driver?.driverName || 'Driver chat',
-                  })}
-                  className="mt-5 h-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
-                >
-                  <Text style={{ color: PRIMARY_BLUE }} className="text-lg font-bold">Message driver</Text>
-                </TouchableOpacity>
-              ) : null}
-
               {stage === 'completed' ? (
                 <>
                   <TouchableOpacity
@@ -478,6 +456,61 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 </>
               ) : null}
             </ScrollView>
+
+            {!isCompleted ? (
+              <View
+                className="border-t border-gray-200 bg-[#f8fafc] pt-4"
+                style={{ paddingBottom: Math.max(insets.bottom + 6, 14) }}
+              >
+                {stage === 'on_trip' ? (
+                  <View className="flex-row items-center gap-3">
+                    <TouchableOpacity
+                      onPress={() => navigation.navigate('RideChat', {
+                        rideRequestId,
+                        role: 'passenger',
+                        chatTitle: driver?.driverName || 'Driver chat',
+                      })}
+                      className="flex-1 h-14 rounded-[22px] items-center justify-center"
+                      style={{ backgroundColor: PRIMARY_BLUE }}
+                    >
+                      <Text className="text-lg font-bold text-white">Message driver</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
+                      className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
+                    >
+                      <Ionicons name="call" size={22} color={PRIMARY_BLUE} />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View className="flex-row items-center gap-3">
+                    <TouchableOpacity
+                      onPress={handleCancelRide}
+                      className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                    >
+                      <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => navigation.navigate('RideChat', {
+                        rideRequestId,
+                        role: 'passenger',
+                        chatTitle: driver?.driverName || 'Driver chat',
+                      })}
+                      className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
+                    >
+                      <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
+                      className="h-14 w-14 rounded-[22px] items-center justify-center"
+                      style={{ backgroundColor: PRIMARY_BLUE }}
+                    >
+                      <Ionicons name="call" size={22} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            ) : null}
           </View>
         </KeyboardAvoidingView>
       </View>

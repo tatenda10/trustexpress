@@ -205,9 +205,7 @@ async function fetchGeocodedSuggestions(query, originCoordinate, locationContext
   const normalized = String(query || '').trim();
   if (!normalized) return [];
 
-  const geocodeQuery = broadSearch
-    ? `${normalized}, Zimbabwe`
-    : `${normalized}, ${locationContext?.city || locationContext?.district || locationContext?.region || 'Zimbabwe'}`;
+  const geocodeQuery = `${normalized}, Zimbabwe`;
 
   const params = new URLSearchParams({
     address: geocodeQuery,
@@ -531,7 +529,7 @@ async function searchZimbabweFirst(query, locationContext, originCoordinate, ses
   try {
     const apiKey = getDirectionsApiKey();
     if (!apiKey) return [];
-    const broadSearch = isExplicitIntercityQuery(normalized, locationContext) || looksLikeSpecificStreetAddress(normalized);
+    const broadSearch = isExplicitIntercityQuery(normalized, locationContext);
     const params = new URLSearchParams({
       input: normalized,
       components: 'country:zw',
@@ -540,10 +538,7 @@ async function searchZimbabweFirst(query, locationContext, originCoordinate, ses
 
     if (originCoordinate?.latitude && originCoordinate?.longitude) {
       params.append('location', `${originCoordinate.latitude},${originCoordinate.longitude}`);
-      params.append('radius', broadSearch ? '50000' : '18000');
-      if (!broadSearch) {
-        params.append('strictbounds', 'true');
-      }
+      params.append('radius', broadSearch ? '50000' : '35000');
     }
 
     if (sessionToken) {
@@ -569,25 +564,18 @@ async function searchZimbabweFirst(query, locationContext, originCoordinate, ses
         distanceKm: 0,
       }));
 
-      if (!broadSearch) {
-        return autocompleteSuggestions;
-      }
-
-      const geocodedSuggestions = await fetchGeocodedSuggestions(normalized, originCoordinate, locationContext, broadSearch);
-      return [...geocodedSuggestions, ...autocompleteSuggestions].slice(0, 6);
+      return autocompleteSuggestions;
     }
 
     const fallbackCoords = [];
     const textSearchParams = new URLSearchParams({
-      query: broadSearch
-        ? `${normalized}, Zimbabwe`
-        : `${normalized}, ${locationContext?.city || locationContext?.district || locationContext?.region || 'Zimbabwe'}`,
+      query: `${normalized}, Zimbabwe`,
       key: apiKey,
     });
 
     if (originCoordinate?.latitude && originCoordinate?.longitude) {
       textSearchParams.append('location', `${originCoordinate.latitude},${originCoordinate.longitude}`);
-      textSearchParams.append('radius', broadSearch ? '50000' : '18000');
+      textSearchParams.append('radius', broadSearch ? '50000' : '35000');
     }
     const textSearchResponse = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?${textSearchParams.toString()}`);
     const textSearchPayload = await textSearchResponse.json().catch(() => ({}));

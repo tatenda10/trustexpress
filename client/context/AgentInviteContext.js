@@ -21,14 +21,14 @@ export function AgentInviteProvider({ children }) {
   const [inviteToken, setInviteToken] = useState('');
   const [inviteData, setInviteData] = useState(null);
   const [loadingInvite, setLoadingInvite] = useState(false);
-  const [attachedDriverUserId, setAttachedDriverUserId] = useState('');
+  const [attachedUserId, setAttachedUserId] = useState('');
 
   const hydrateStoredInvite = useCallback(async () => {
     const stored = await readStoredInvite();
     if (!stored?.token) return null;
 
     setInviteToken(stored.token);
-    setAttachedDriverUserId(String(stored.attachedDriverUserId || ''));
+    setAttachedUserId(String(stored.attachedUserId || stored.attachedDriverUserId || ''));
     if (stored.invite) {
       setInviteData(stored.invite);
       return stored;
@@ -39,7 +39,7 @@ export function AgentInviteProvider({ children }) {
       const payload = {
         token: stored.token,
         invite: data?.invite || null,
-        attachedDriverUserId: stored.attachedDriverUserId || '',
+        attachedUserId: stored.attachedUserId || stored.attachedDriverUserId || '',
       };
       setInviteData(payload.invite);
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -59,11 +59,11 @@ export function AgentInviteProvider({ children }) {
       const payload = {
         token: nextToken,
         invite: data?.invite || null,
-        attachedDriverUserId: '',
+        attachedUserId: '',
       };
       setInviteToken(nextToken);
       setInviteData(payload.invite);
-      setAttachedDriverUserId('');
+      setAttachedUserId('');
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       return payload;
     } finally {
@@ -71,23 +71,23 @@ export function AgentInviteProvider({ children }) {
     }
   }, []);
 
-  const markInviteAttached = useCallback(async (driverUserId) => {
-    const nextDriverUserId = String(driverUserId || '').trim();
-    if (!inviteToken || !nextDriverUserId) return;
+  const markInviteAttached = useCallback(async (userId) => {
+    const nextUserId = String(userId || '').trim();
+    if (!inviteToken || !nextUserId) return;
 
     const payload = {
       token: inviteToken,
       invite: inviteData,
-      attachedDriverUserId: nextDriverUserId,
+      attachedUserId: nextUserId,
     };
-    setAttachedDriverUserId(nextDriverUserId);
+    setAttachedUserId(nextUserId);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   }, [inviteToken, inviteData]);
 
   const clearInvite = useCallback(async () => {
     setInviteToken('');
     setInviteData(null);
-    setAttachedDriverUserId('');
+    setAttachedUserId('');
     await AsyncStorage.removeItem(STORAGE_KEY);
   }, []);
 
@@ -96,12 +96,12 @@ export function AgentInviteProvider({ children }) {
     inviteData,
     loadingInvite,
     hasInvite: !!inviteToken,
-    attachedDriverUserId,
+    attachedUserId,
     setInviteFromToken,
     hydrateStoredInvite,
     markInviteAttached,
     clearInvite,
-  }), [inviteToken, inviteData, loadingInvite, attachedDriverUserId, setInviteFromToken, hydrateStoredInvite, markInviteAttached, clearInvite]);
+  }), [inviteToken, inviteData, loadingInvite, attachedUserId, setInviteFromToken, hydrateStoredInvite, markInviteAttached, clearInvite]);
 
   return (
     <AgentInviteContext.Provider value={value}>

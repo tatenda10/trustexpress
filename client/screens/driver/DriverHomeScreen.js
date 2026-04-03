@@ -258,7 +258,7 @@ async function fetchGoogleRouteCoordinates(origin, destination) {
   return decodePolyline(route.overview_polyline?.points);
 }
 
-const DriverHomeScreen = ({ navigation }) => {
+const DriverHomeScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -282,6 +282,7 @@ const DriverHomeScreen = ({ navigation }) => {
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [cancellingCurrentRide, setCancellingCurrentRide] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
+  const [showIncomingRideOverlay, setShowIncomingRideOverlay] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [mapRegion, setMapRegion] = useState(INITIAL_REGION);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
@@ -353,6 +354,16 @@ const DriverHomeScreen = ({ navigation }) => {
       localSocket?.__driverHomeCleanup?.();
     };
   }, [isFocused]);
+
+  useEffect(() => {
+    if (route?.params?.openIncomingRideOverlay) {
+      setShowIncomingRideOverlay(true);
+      navigation.setParams?.({
+        openIncomingRideOverlay: false,
+        notificationTs: route?.params?.notificationTs || undefined,
+      });
+    }
+  }, [navigation, route?.params?.notificationTs, route?.params?.openIncomingRideOverlay]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -522,6 +533,7 @@ const DriverHomeScreen = ({ navigation }) => {
       setShowNewRequestBadge(false);
       setActiveRequest(null);
       setAvailableRequests([]);
+      setShowIncomingRideOverlay(false);
       setDismissedRequestIds((current) => (current.length ? [] : current));
       prevRequestCountRef.current = 0;
       return undefined;
@@ -578,12 +590,16 @@ const DriverHomeScreen = ({ navigation }) => {
           }
           return nextRequest;
         });
+        if (!nextRequest) {
+          setShowIncomingRideOverlay(false);
+        }
         setShowNewRequestBadge(!!nextRequest);
         setIsListening(!nextRequest);
       } catch (error) {
         if (!active) return;
         setActiveRequest(null);
         setAvailableRequests([]);
+        setShowIncomingRideOverlay(false);
         setShowNewRequestBadge(false);
         setIsListening(true);
       } finally {
@@ -1071,6 +1087,7 @@ const DriverHomeScreen = ({ navigation }) => {
       const nextRide = await getDriverCurrentRide(token);
       setActiveRequest(null);
       setAvailableRequests([]);
+      setShowIncomingRideOverlay(false);
       setShowNewRequestBadge(false);
       setIsListening(true);
       setCurrentRide(nextRide?.ride || null);
@@ -1090,6 +1107,7 @@ const DriverHomeScreen = ({ navigation }) => {
     const nextList = availableRequests.filter((r) => r.id !== req.id);
     setAvailableRequests(nextList);
     setActiveRequest(nextList[0] || null);
+    setShowIncomingRideOverlay(nextList.length > 0);
     setShowNewRequestBadge(nextList.length > 0);
     setIsListening(nextList.length === 0);
   };
@@ -1421,6 +1439,113 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         )}
       </View>
+
+      <Modal
+        visible={showIncomingRideOverlay && !currentRide && availableRequests.length > 0}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowIncomingRideOverlay(false)}
+      >
+        <View className="flex-1 bg-black/55">
+          <SafeAreaView className="flex-1 bg-transparent">
+            <View className="flex-1 justify-end px-5 pb-6">
+              <View className="rounded-[30px] bg-white px-5 pt-5 pb-6">
+                <View className="items-center">
+                  <View className="h-1.5 w-16 rounded-full bg-gray-300" />
+                </View>
+
+                <View className="mt-5 flex-row items-start justify-between">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-xs font-bold uppercase tracking-[2px] text-[#2f73c9]">
+                      Incoming ride request
+                    </Text>
+                    <Text className="mt-2 text-2xl font-bold text-[#111111]">
+                      {activeRequest?.passengerName || 'Passenger'}
+                    </Text>
+                    <Text className="mt-2 text-sm text-[#5a6474]">
+                      Review the trip details and accept fast before it expires.
+                    </Text>
+                  </View>
+                  <View className="rounded-[20px] bg-[#111827] px-4 py-3">
+                    <Text className="text-xs font-bold uppercase tracking-[1px] text-white">Expires in</Text>
+                    <Text className="mt-1 text-xl font-extrabold text-white">
+                      {formatCountdown(getRemainingSeconds(activeRequest?.expiresAt))}
+                    </Text>
+                  </View>
+                </View>
+
+                <View className="mt-5 rounded-[24px] bg-[#f8fafc] px-4 py-4">
+                  <View className="flex-row items-center justify-between">
+                    <View>
+                      <Text className="text-xs font-semibold uppercase tracking-[1px] text-[#5a6474]">Fare</Text>
+                      <Text className="mt-1 text-3xl font-extrabold text-[#111111]">
+                        ${Number(activeRequest?.estimatedAmount || 0).toFixed(2)}
+                      </Text>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-xs font-semibold uppercase tracking-[1px] text-[#5a6474]">Tier</Text>
+                      <Text className="mt-1 text-base font-bold text-[#2f73c9]">
+                        {activeRequest?.tierName || 'Ride'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View className="mt-4 flex-row items-center gap-6">
+                    <View className="flex-row items-center">
+                      <Ionicons name="navigate" size={15} color="#2f73c9" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Number(activeRequest?.driverDistanceKm || 0).toFixed(1)} km away
+                      </Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      <Ionicons name="time" size={15} color="#2f73c9" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {activeRequest?.etaMinutes || 0} min away
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View className="mt-5 rounded-[24px] border border-[#d7dfec] bg-white px-4 py-4">
+                  <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
+                  <Text className="mt-1 text-base font-semibold text-[#111111]">{activeRequest?.pickup}</Text>
+                  <Text className="mt-4 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
+                  <Text className="mt-1 text-base font-semibold text-[#111111]">{activeRequest?.dropoff}</Text>
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => handleAcceptRequest(activeRequest)}
+                  disabled={acceptingRideId === activeRequest?.id}
+                  className="mt-6 h-14 items-center justify-center rounded-[20px] bg-[#2f73c9]"
+                >
+                  {acceptingRideId === activeRequest?.id ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-base font-bold uppercase text-white">Accept ride</Text>
+                  )}
+                </TouchableOpacity>
+
+                <View className="mt-3 flex-row items-center gap-3">
+                  <TouchableOpacity
+                    onPress={() => handleDeclineRequest(activeRequest)}
+                    className="h-14 flex-1 items-center justify-center rounded-[18px] border border-[#d7d9df] bg-white"
+                  >
+                    <Text className="text-sm font-bold uppercase text-[#5d6470]">Decline</Text>
+                  </TouchableOpacity>
+                  {availableRequests.length > 1 ? (
+                    <TouchableOpacity
+                      onPress={() => setShowIncomingRideOverlay(false)}
+                      className="h-14 flex-1 items-center justify-center rounded-[18px] bg-[#eef2ff]"
+                    >
+                      <Text className="text-sm font-bold uppercase text-[#2f73c9]">View queue</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
+            </View>
+          </SafeAreaView>
+        </View>
+      </Modal>
 
       <Modal visible={showCancelReasonModal} transparent animationType="fade">
         <TouchableOpacity
