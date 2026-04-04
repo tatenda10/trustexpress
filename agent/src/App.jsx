@@ -1,7 +1,7 @@
+import axios from 'axios'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentAuth } from './auth/AgentAuthContext.jsx'
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+import BASE_URL from './context/Api'
 
 const agentSections = [
   {
@@ -25,29 +25,29 @@ function SectionEyebrow({ children }) {
 }
 
 async function fetchAgentInvite(token) {
-  const response = await fetch(`${BASE_URL}/api/agent/invites/me`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data?.error || 'Failed to load invite link');
+  try {
+    const response = await axios.get(`${BASE_URL}/api/agent/invites/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+    return response?.data?.invite || null
+  } catch (error) {
+    throw new Error(error?.response?.data?.error || 'Failed to load invite link')
   }
-  return data?.invite || null;
 }
 
 async function fetchAgentDashboard(token) {
-  const response = await fetch(`${BASE_URL}/api/agent/dashboard`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data?.error || 'Failed to load dashboard')
+  try {
+    const response = await axios.get(`${BASE_URL}/api/agent/dashboard`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+    return response.data
+  } catch (error) {
+    throw new Error(error?.response?.data?.error || 'Failed to load dashboard')
   }
-  return data
 }
 
 async function fetchAgentApplications(token, { search = '', status = 'all' } = {}) {
@@ -55,30 +55,30 @@ async function fetchAgentApplications(token, { search = '', status = 'all' } = {
   if (search.trim()) params.set('search', search.trim())
   if (status && status !== 'all') params.set('status', status)
 
-  const response = await fetch(`${BASE_URL}/api/agent/applications${params.toString() ? `?${params.toString()}` : ''}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data?.error || 'Failed to load applications')
+  try {
+    const response = await axios.get(`${BASE_URL}/api/agent/applications${params.toString() ? `?${params.toString()}` : ''}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+    return response?.data?.applications || []
+  } catch (error) {
+    throw new Error(error?.response?.data?.error || 'Failed to load applications')
   }
-  return data?.applications || []
 }
 
 async function checkDriverEligibility(token, vehicleNumber) {
   const params = new URLSearchParams({ vehicleNumber: String(vehicleNumber || '').trim() })
-  const response = await fetch(`${BASE_URL}/api/agent/driver-eligibility?${params.toString()}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data?.error || 'Failed to check vehicle number')
+  try {
+    const response = await axios.get(`${BASE_URL}/api/agent/driver-eligibility?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+    return response.data
+  } catch (error) {
+    throw new Error(error?.response?.data?.error || 'Failed to check vehicle number')
   }
-  return data
 }
 
 function LogoIcon() {

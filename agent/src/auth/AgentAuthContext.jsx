@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import axios from 'axios'
+import BASE_URL from '../context/Api'
 
 const STORAGE_KEY = 'trust_agent_session'
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 const AgentAuthContext = createContext(null)
 
 function parseStoredSession() {
@@ -17,35 +18,28 @@ function parseStoredSession() {
 }
 
 async function apiFetch(path, options = {}, token = '') {
-  const headers = { ...(options.headers || {}) }
-  if (options.body === undefined || typeof options.body === 'string') {
-    headers['Content-Type'] = 'application/json'
-  }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`
-  }
-
-  let response
-  let data = {}
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
-      ...options,
-      headers,
+    const response = await axios({
+      url: `${BASE_URL}${path}`,
+      method: options.method || 'GET',
+      data: options.body ? JSON.parse(options.body) : undefined,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
     })
-    data = await response.json().catch(() => ({}))
-  } catch {
-    const error = new Error('Network error. Please check your connection and try again.')
-    error.status = 0
-    throw error
-  }
+    return response.data || {}
+  } catch (error) {
+    if (!error?.response) {
+      const networkError = new Error('Network error. Please check your connection and try again.')
+      networkError.status = 0
+      throw networkError
+    }
 
-  if (!response.ok) {
-    const error = new Error(data?.error || 'Request failed')
-    error.status = response.status
-    throw error
+    const requestError = new Error(error?.response?.data?.error || 'Request failed')
+    requestError.status = error.response.status
+    throw requestError
   }
-
-  return data
 }
 
 export function AgentAuthProvider({ children }) {
@@ -86,6 +80,28 @@ export function AgentAuthProvider({ children }) {
       active = false
     }
   }, [token, agent?.id])
+
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        const status = error?.response?.status
+        const requestUrl = String(error?.config?.url || '')
+        const isAgentRequest = requestUrl.includes('/api/agent/')
+        const isAgentLoginRequest = requestUrl.includes('/api/agent/auth/login')
+
+        if ((status === 401 || status === 403) && isAgentRequest && !isAgentLoginRequest) {
+          clearSession()
+        }
+
+        return Promise.reject(error)
+      }
+    )
+
+    return () => {
+      axios.interceptors.response.eject(interceptor)
+    }
+  }, [])
 
   const login = async ({ email, password }) => {
     const data = await apiFetch('/api/agent/auth/login', {
