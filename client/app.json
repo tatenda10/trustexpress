@@ -16,6 +16,9 @@
     "name": "Trust Express",
     "slug": "trust-express",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "orientation": "portrait",
     "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
@@ -49,6 +52,11 @@
     "web": {
       "favicon": "./assets/logo.png",
       "bundler": "metro"
+    },
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
     },
     "extra": {
       "eas": {

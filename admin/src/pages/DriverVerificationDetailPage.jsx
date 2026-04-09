@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
-import { resolveMediaUrl } from '../utils/media'
+import { resolveMediaCandidates, resolveMediaUrl } from '../utils/media'
 
 function Field({ label, value }) {
   return (
@@ -53,6 +53,98 @@ function requiredDocumentEntries(driver) {
       url,
     })),
   }
+}
+
+function getDocumentKind(url) {
+  const value = String(url || '').toLowerCase()
+  if (!value) return 'unknown'
+  if (value.includes('.pdf')) return 'pdf'
+  if (/\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?|#|$)/.test(value)) return 'image'
+  return 'file'
+}
+
+function DocumentPreview({ url, label }) {
+  if (!url) {
+    return <div className="px-3 py-6 text-sm text-slate-500">No file uploaded yet.</div>
+  }
+
+  const kind = getDocumentKind(url)
+  const candidates = resolveMediaCandidates(url)
+  const [activeUrlIndex, setActiveUrlIndex] = useState(0)
+  const activeUrl = candidates[activeUrlIndex] || url
+  const fallbackOpenUrl = candidates[candidates.length - 1] || url
+
+  useEffect(() => {
+    setActiveUrlIndex(0)
+  }, [url])
+
+  if (kind === 'image') {
+    return (
+      <>
+        <a href={fallbackOpenUrl} target="_blank" rel="noreferrer" className="block bg-slate-100">
+          <img
+            src={activeUrl}
+            alt={label}
+            className="h-64 w-full object-contain bg-slate-100"
+            onError={() => {
+              setActiveUrlIndex((current) => {
+                if (current >= candidates.length - 1) return current
+                return current + 1
+              })
+            }}
+          />
+        </a>
+        <div className="border-t border-slate-200 px-3 py-2">
+          <a
+            href={fallbackOpenUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
+          >
+            Open full image
+          </a>
+        </div>
+      </>
+    )
+  }
+
+  if (kind === 'pdf') {
+    return (
+      <>
+        <div className="bg-slate-100 p-3">
+          <iframe
+            src={activeUrl}
+            title={label}
+            className="h-64 w-full rounded-sm border border-slate-200 bg-white"
+          />
+        </div>
+        <div className="border-t border-slate-200 px-3 py-2">
+          <a
+            href={fallbackOpenUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
+          >
+            Open PDF
+          </a>
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <div className="space-y-3 bg-slate-100 px-3 py-6">
+      <p className="text-sm text-slate-600">Preview is not available for this file type in the admin panel.</p>
+      <a
+        href={fallbackOpenUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
+      >
+        Open uploaded file
+      </a>
+    </div>
+  )
 }
 
 function formatAdminDateTime(value) {
@@ -198,6 +290,20 @@ export default function DriverVerificationDetailPage() {
         'Name mismatch',
         'Expired identity document',
       ]
+
+  useEffect(() => {
+    if (!driver) return
+
+    console.log('[DriverVerificationDetailPage] document payload', {
+      driverId: driver?.id,
+      profileDocs: driver?.profileDocs || null,
+      vehicleDocs: driver?.vehicleDocs || null,
+      identityDocuments,
+      vehicleDocuments,
+      carPhotos: documentGroups.carPhotos,
+      profileImageUrl,
+    })
+  }, [driver, identityDocuments, vehicleDocuments, documentGroups, profileImageUrl])
 
   function itemStatusLabel(url, sectionStatus) {
     if (!url) return 'Missing'
@@ -439,29 +545,7 @@ export default function DriverVerificationDetailPage() {
                           {statusLabel}
                         </span>
                       </div>
-                      {doc.url ? (
-                        <>
-                          <a href={doc.url} target="_blank" rel="noreferrer" className="block bg-slate-100">
-                            <img
-                              src={doc.url}
-                              alt={doc.label}
-                              className="h-64 w-full object-contain bg-slate-100"
-                            />
-                          </a>
-                          <div className="border-t border-slate-200 px-3 py-2">
-                            <a
-                              href={doc.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
-                            >
-                              Open full image
-                            </a>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="px-3 py-6 text-sm text-slate-500">No file uploaded yet.</div>
-                      )}
+                      <DocumentPreview url={doc.url} label={doc.label} />
                     </article>
                   )
                 })}
@@ -544,29 +628,7 @@ export default function DriverVerificationDetailPage() {
                           {statusLabel}
                         </span>
                       </div>
-                      {doc.url ? (
-                        <>
-                          <a href={doc.url} target="_blank" rel="noreferrer" className="block bg-slate-100">
-                            <img
-                              src={doc.url}
-                              alt={doc.label}
-                              className="h-64 w-full object-contain bg-slate-100"
-                            />
-                          </a>
-                          <div className="border-t border-slate-200 px-3 py-2">
-                            <a
-                              href={doc.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
-                            >
-                              Open full image
-                            </a>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="px-3 py-6 text-sm text-slate-500">No file uploaded yet.</div>
-                      )}
+                      <DocumentPreview url={doc.url} label={doc.label} />
                     </article>
                   )
                 })}

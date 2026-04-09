@@ -46,6 +46,8 @@ const tabs = [
 function statusStyle(status) {
   if (status === 'incoming') return 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
   if (status === 'partial') return 'bg-sky-50 text-sky-700 ring-1 ring-sky-200'
+  if (status === 'verified') return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+  if (status === 'all') return 'bg-slate-100 text-slate-700 ring-1 ring-slate-200'
   return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
 }
 
@@ -59,14 +61,15 @@ function deriveVerificationRow(driver) {
   const vehicleStatus = driver.vehicle?.status || null
   const hasIncomingProfile = profileStatus === 'pending' && !!driver.profile?.submittedAt && !!driver.profile?.hasDocuments
   const hasIncomingVehicle = vehicleStatus === 'pending' && !!driver.vehicle?.submittedAt && !!driver.vehicle?.hasDocuments
+  const hasApprovedProfile = profileStatus === 'approved' && !!driver.profile?.hasDocuments
+  const hasApprovedVehicle = vehicleStatus === 'approved' && !!driver.vehicle?.hasDocuments
   const hasIncoming = hasIncomingProfile || hasIncomingVehicle
   const isPartial =
     (driver.profile?.hasDocuments && Number(driver.profile?.missingRequiredCount || 0) > 0) ||
     (driver.vehicle?.hasDocuments && Number(driver.vehicle?.missingRequiredCount || 0) > 0)
-  // Match app: "Verified" only when both profile and vehicle are approved (same as Clerk source)
-  const isVerified = profileStatus === 'approved' && vehicleStatus === 'approved'
+  const isVerified = hasApprovedProfile || hasApprovedVehicle
   const verificationType =
-    hasIncomingVehicle || (vehicleStatus === 'approved' && !hasIncoming)
+    hasIncomingVehicle || hasApprovedVehicle
       ? 'vehicle'
       : 'identity'
   const verificationLabel = verificationType === 'vehicle' ? 'Vehicle Verification' : 'Identity Verification'
@@ -83,6 +86,13 @@ function deriveVerificationRow(driver) {
     status: hasIncoming ? 'incoming' : isVerified ? 'verified' : isPartial ? 'partial' : 'all',
     raw: driver,
   }
+}
+
+function statusLabel(status) {
+  if (status === 'incoming') return 'Incoming'
+  if (status === 'partial') return 'Partially submitted'
+  if (status === 'verified') return 'Verified'
+  return 'Not submitted'
 }
 
 export default function DriverVerificationPage() {
@@ -227,7 +237,7 @@ export default function DriverVerificationPage() {
                 </td>
                 <td className="px-4 py-3">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusStyle(row.status)}`}>
-                    {row.status === 'incoming' ? 'Incoming' : row.status === 'partial' ? 'Partially submitted' : 'Verified'}
+                    {statusLabel(row.status)}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right">

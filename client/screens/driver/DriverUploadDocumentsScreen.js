@@ -241,9 +241,11 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           <Ionicons name="time-outline" size={64} color={PRIMARY_BLUE} />
           <Text className="mt-4 text-xl font-bold text-gray-900">Under review</Text>
           <Text className="mt-2 text-center text-gray-600">Your documents are being verified. We&apos;ll notify you once approved.</Text>
+          {/*
           <TouchableOpacity className="mt-6 py-3" onPress={handleSkip}>
             <Text className="text-base text-gray-500">Skip to dashboard</Text>
           </TouchableOpacity>
+          */}
         </View>
       </View>
     );
@@ -269,9 +271,11 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               <Text className="mt-1 text-sm text-red-700">{profile.rejectionReason}</Text>
             </View>
           ) : null}
+          {/*
           <TouchableOpacity className="mt-6 py-3" onPress={handleSkip}>
             <Text className="text-base text-gray-500">Back to dashboard</Text>
           </TouchableOpacity>
+          */}
         </View>
       </View>
     );
@@ -411,9 +415,11 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
 
         <Text className="mb-2 text-center text-xs text-gray-400">Reviewing usually takes less than 24 hours.</Text>
 
+        {/*
         <TouchableOpacity className="items-center py-3" onPress={handleSkip}>
           <Text className="text-base text-gray-500">Skip for now</Text>
         </TouchableOpacity>
+        */}
       </ScrollView>
     </View>
   );

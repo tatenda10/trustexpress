@@ -7,15 +7,22 @@ import { query } from '../db/connection.js';
 export function normalizeUploadPath(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
-  if (raw.startsWith('/uploads/')) return raw;
+  const normalized = raw.replace(/\\/g, '/');
+  if (normalized.startsWith('/uploads/')) return normalized;
 
   try {
-    const parsed = new URL(raw);
+    const parsed = new URL(normalized);
     if (parsed.pathname.startsWith('/uploads/')) return parsed.pathname;
-    return raw;
+    return normalized;
   } catch {
-    if (raw.startsWith('uploads/')) return `/${raw}`;
-    return raw;
+    if (normalized.startsWith('uploads/')) return `/${normalized}`;
+
+    const uploadsIndex = normalized.toLowerCase().lastIndexOf('/uploads/');
+    if (uploadsIndex >= 0) {
+      return normalized.slice(uploadsIndex);
+    }
+
+    return normalized;
   }
 }
 

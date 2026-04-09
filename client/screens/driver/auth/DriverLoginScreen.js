@@ -10,6 +10,8 @@ import {
   Image,
   Dimensions,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { KeyboardAwareScrollView, KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSignIn, useOAuth, useAuth, useClerk } from '@clerk/clerk-expo';
 import * as Linking from 'expo-linking';
 import { getMe, registerUser } from '../../../api';
@@ -22,6 +24,7 @@ import { useAgentInvite } from '../../../context/AgentInviteContext';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HEADER_IMAGE_HEIGHT = Dimensions.get('window').height * 0.36;
 const AUTH_HEADER_IMAGE = require('../../../assets/everyday-driving.jpg');
+const ROLE_STORAGE_KEY = 'trust_express_role';
 
 const DriverLoginScreen = ({ navigation }) => {
   const { signIn, setActive, isLoaded } = useSignIn();
@@ -35,6 +38,7 @@ const DriverLoginScreen = ({ navigation }) => {
   const getRedirectUrl = useCallback(() => Linking.createURL('oauth-callback', { scheme: 'trustexpress' }), []);
   const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showEmailCode, setShowEmailCode] = useState(false);
   const [code, setCode] = useState('');
@@ -86,6 +90,7 @@ const DriverLoginScreen = ({ navigation }) => {
       });
 
       if (result.status === 'complete') {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActive({ session: result.createdSessionId });
         const allowed = await ensureDriverRole();
         if (!allowed) return;
@@ -135,6 +140,7 @@ const DriverLoginScreen = ({ navigation }) => {
     try {
       const result = await signIn.attemptSecondFactor({ strategy: 'email_code', code: code.trim() });
       if (result.status === 'complete') {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActive({ session: result.createdSessionId });
         const allowed = await ensureDriverRole();
         if (!allowed) return;
@@ -167,6 +173,7 @@ const DriverLoginScreen = ({ navigation }) => {
         redirectUrl: getRedirectUrl(),
       });
       if (createdSessionId && setActiveSession) {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
         const allowed = await ensureDriverRole();
         if (!allowed) return;
@@ -192,6 +199,7 @@ const DriverLoginScreen = ({ navigation }) => {
         redirectUrl: getRedirectUrl(),
       });
       if (createdSessionId && setActiveSession) {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
         const allowed = await ensureDriverRole();
         if (!allowed) return;
@@ -283,88 +291,102 @@ const DriverLoginScreen = ({ navigation }) => {
         <Ionicons name="close" size={22} color="#374151" />
       </TouchableOpacity>
 
-      <ScrollView
-        contentContainerStyle={{ flexGrow: 1 }}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        behavior="padding"
+        keyboardVerticalOffset={0}
+        style={{ flex: 1 }}
       >
-        <View style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} className="relative overflow-hidden bg-gray-100">
-          <Image source={AUTH_HEADER_IMAGE} style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} resizeMode="cover" />
-        </View>
-
-        <View className="flex-1 bg-white px-6 pb-2 pt-8">
-          <Text className="mb-1 text-center text-sm tracking-[0.3em] text-gray-500">TRUST EXPRESS</Text>
-          <View className="mb-6">
-            <Text className="mb-1 text-2xl font-semibold text-gray-900">Welcome back</Text>
-            <Text className="text-sm text-gray-500">Log in to your driver account to continue.</Text>
-            {inviteData?.agentName ? (
-              <View className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-                <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Agent Invite</Text>
-                <Text className="mt-1 text-sm font-medium text-blue-900">
-                  This signup is linked to {inviteData.agentName}{inviteData.agentCode ? ` (${inviteData.agentCode})` : ''}.
-                </Text>
-              </View>
-            ) : null}
+        <KeyboardAwareScrollView
+          bottomOffset={24}
+          extraKeyboardSpace={120}
+          disableScrollOnKeyboardHide
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} className="relative overflow-hidden bg-gray-100">
+            <Image source={AUTH_HEADER_IMAGE} style={{ width: SCREEN_WIDTH, height: HEADER_IMAGE_HEIGHT }} resizeMode="cover" />
           </View>
 
-          <View className="mb-6 gap-4">
-            <View>
-              <Text className="mb-2 text-sm font-medium text-gray-700">Email</Text>
-              <TextInput
-                className="rounded-xl border border-gray-200 bg-white p-4 text-base"
-                placeholder="Enter your email"
-                placeholderTextColor="#9ca3af"
-                value={emailOrPhone}
-                onChangeText={setEmailOrPhone}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
+          <View className="flex-1 bg-white px-6 pb-2 pt-8">
+            <Text className="mb-1 text-center text-sm tracking-[0.3em] text-gray-500">TRUST EXPRESS</Text>
+            <View className="mb-6">
+              <Text className="mb-1 text-2xl font-semibold text-gray-900">Welcome back</Text>
+              <Text className="text-sm text-gray-500">Log in to your driver account to continue.</Text>
+              {inviteData?.agentName ? (
+                <View className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                  <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Agent Invite</Text>
+                  <Text className="mt-1 text-sm font-medium text-blue-900">
+                    This signup is linked to {inviteData.agentName}{inviteData.agentCode ? ` (${inviteData.agentCode})` : ''}.
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
-            <View>
-              <View className="mb-2 flex-row items-center justify-between">
-                <Text className="text-sm font-medium text-gray-700">Password</Text>
-                <TouchableOpacity
-                  onPress={() =>
-                    setModalState({
-                      visible: true,
-                      title: 'Password reset coming soon',
-                      message: 'Forgot password is not wired up yet, but we can add that flow next.',
-                      tone: 'info',
-                    })
-                  }
-                >
-                  <Text className="text-sm font-medium text-primary">Forgot Password?</Text>
-                </TouchableOpacity>
+            <View className="mb-6 gap-4">
+              <View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Email</Text>
+                <TextInput
+                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+                  placeholder="Enter your email"
+                  placeholderTextColor="#9ca3af"
+                  value={emailOrPhone}
+                  onChangeText={setEmailOrPhone}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
               </View>
-              <TextInput
-                className="rounded-xl border border-gray-200 bg-white p-4 text-base"
-                placeholder="Enter your password"
-                placeholderTextColor="#9ca3af"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-              />
+
+              <View>
+                <View className="mb-2 flex-row items-center justify-between">
+                  <Text className="text-sm font-medium text-gray-700">Password</Text>
+                  <TouchableOpacity
+                    onPress={() =>
+                      setModalState({
+                        visible: true,
+                        title: 'Password reset coming soon',
+                        message: 'Forgot password is not wired up yet, but we can add that flow next.',
+                        tone: 'info',
+                      })
+                    }
+                  >
+                    <Text className="text-sm font-medium text-primary">Forgot Password?</Text>
+                  </TouchableOpacity>
+                </View>
+                <View className="flex-row items-center rounded-xl border border-gray-200 bg-white px-4">
+                  <TextInput
+                    className="flex-1 py-4 text-base"
+                    placeholder="Enter your password"
+                    placeholderTextColor="#9ca3af"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity onPress={() => setShowPassword((current) => !current)} className="pl-3">
+                    <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color="#6b7280" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
+                style={{ backgroundColor: '#374151' }}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Text className="text-base font-semibold text-white">Continue</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#fff" />
+                  </>
+                )}
+              </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
-              style={{ backgroundColor: '#374151' }}
-              onPress={handleLogin}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <>
-                  <Text className="text-base font-semibold text-white">Continue</Text>
-                  <Ionicons name="arrow-forward" size={18} color="#fff" />
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-
+          {/*
           <View className="mb-5 flex-row items-center">
             <View className="h-px flex-1 bg-gray-200" />
             <Text className="mx-3 text-xs text-gray-400">or</Text>
@@ -402,17 +424,19 @@ const DriverLoginScreen = ({ navigation }) => {
               )}
             </TouchableOpacity>
           </View>
+          */}
 
-          <View className="items-center" style={{ paddingBottom: Math.max(insets.bottom, 32) }}>
-            <Text className="text-sm text-gray-600">
-              New to Trust Express?{' '}
-              <Text className="font-semibold text-primary" onPress={() => navigation.navigate('DriverCreateAccount')}>
-                Create Account
+            <View className="items-center" style={{ paddingBottom: Math.max(insets.bottom, 32) }}>
+              <Text className="text-sm text-gray-600">
+                New to Trust Express?{' '}
+                <Text className="font-semibold text-primary" onPress={() => navigation.navigate('DriverCreateAccount')}>
+                  Create Account
+                </Text>
               </Text>
-            </Text>
+            </View>
           </View>
-        </View>
-      </ScrollView>
+        </KeyboardAwareScrollView>
+      </KeyboardAvoidingView>
 
       <AuthFeedbackModal
         visible={modalState.visible}

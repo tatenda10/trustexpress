@@ -10,6 +10,7 @@ import {
   Image,
   Dimensions,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { KeyboardAwareScrollView, KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSignUp, useOAuth, useAuth, useClerk } from '@clerk/clerk-expo';
 import * as Linking from 'expo-linking';
@@ -23,6 +24,7 @@ import { useAgentInvite } from '../../../context/AgentInviteContext';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HEADER_IMAGE_HEIGHT = Dimensions.get('window').height * 0.36;
 const AUTH_HEADER_IMAGE = require('../../../assets/everyday-driving.jpg');
+const ROLE_STORAGE_KEY = 'trust_express_role';
 
 const DriverCreateAccountScreen = ({ navigation }) => {
   const { signUp, setActive, isLoaded } = useSignUp();
@@ -39,6 +41,8 @@ const DriverCreateAccountScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pendingVerification, setPendingVerification] = useState(false);
   const [code, setCode] = useState('');
@@ -71,6 +75,7 @@ const DriverCreateAccountScreen = ({ navigation }) => {
   };
 
   const completeSignUp = async (sessionId) => {
+    await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
     await setActive({ session: sessionId });
     const allowed = await ensureDriverRole();
     if (!allowed) return;
@@ -167,6 +172,7 @@ const DriverCreateAccountScreen = ({ navigation }) => {
         redirectUrl: getRedirectUrl(),
       });
       if (createdSessionId && setActiveSession) {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
         const allowed = await ensureDriverRole();
         if (!allowed) return;
@@ -192,6 +198,7 @@ const DriverCreateAccountScreen = ({ navigation }) => {
         redirectUrl: getRedirectUrl(),
       });
       if (createdSessionId && setActiveSession) {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
         const allowed = await ensureDriverRole();
         if (!allowed) return;
@@ -355,28 +362,38 @@ const DriverCreateAccountScreen = ({ navigation }) => {
 
               <View>
                 <Text className="mb-2 text-sm font-medium text-gray-700">Password</Text>
-                <TextInput
-                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
-                  placeholder="Enter your password"
-                  placeholderTextColor="#9ca3af"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry
-                  autoCapitalize="none"
-                />
+                <View className="flex-row items-center rounded-xl border border-gray-200 bg-white px-4">
+                  <TextInput
+                    className="flex-1 py-4 text-base"
+                    placeholder="Enter your password"
+                    placeholderTextColor="#9ca3af"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity onPress={() => setShowPassword((current) => !current)} className="pl-3">
+                    <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color="#6b7280" />
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <View>
                 <Text className="mb-2 text-sm font-medium text-gray-700">Confirm Password</Text>
-                <TextInput
-                  className="rounded-xl border border-gray-200 bg-white p-4 text-base"
-                  placeholder="Confirm your password"
-                  placeholderTextColor="#9ca3af"
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                  secureTextEntry
-                  autoCapitalize="none"
-                />
+                <View className="flex-row items-center rounded-xl border border-gray-200 bg-white px-4">
+                  <TextInput
+                    className="flex-1 py-4 text-base"
+                    placeholder="Confirm your password"
+                    placeholderTextColor="#9ca3af"
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    secureTextEntry={!showConfirmPassword}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity onPress={() => setShowConfirmPassword((current) => !current)} className="pl-3">
+                    <Ionicons name={showConfirmPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color="#6b7280" />
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <TouchableOpacity
@@ -396,6 +413,7 @@ const DriverCreateAccountScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
+            {/*
             <View className="mb-5 flex-row items-center">
               <View className="h-px flex-1 bg-gray-200" />
               <Text className="mx-3 text-xs text-gray-400">or</Text>
@@ -433,6 +451,7 @@ const DriverCreateAccountScreen = ({ navigation }) => {
                 )}
               </TouchableOpacity>
             </View>
+            */}
 
             <View className="items-center" style={{ paddingBottom: Math.max(insets.bottom, 32) }}>
               <Text className="text-sm text-gray-600">

@@ -126,6 +126,18 @@ function AppStack() {
   const [passengerSkippedPhoneVerify, setPassengerSkippedPhoneVerify] = useState(false);
   const [roleBootstrapped, setRoleBootstrapped] = useState(false);
 
+  const resolveExplicitRole = useCallback((profile) => {
+    const metaRole = String(profile?.publicMetadata?.role || '').trim().toLowerCase();
+    if (metaRole === 'driver' || metaRole === 'passenger') return metaRole;
+
+    const directRole = String(profile?.role || '').trim().toLowerCase();
+    if ((directRole === 'driver' || directRole === 'passenger') && profile?.publicMetadata?.role) {
+      return directRole;
+    }
+
+    return null;
+  }, []);
+
   const openDriverIncomingRequest = useCallback(() => {
     if (!navigationRef.isReady()) return;
     navigationRef.navigate('DriverTabs', {
@@ -220,8 +232,9 @@ function AppStack() {
     syncPushToken();
   }, [user?.id, isDriver, storageLoaded, roleLoading, roleBootstrapped, userRole]);
 
-  // Role: backend first, then stored choice (from role selection), then default passenger after bootstrap
-  const userRole = userProfile?.role || storedRole || (roleLoading ? null : 'passenger');
+  // Role: backend first, then stored choice from the auth flow. Never default an authenticated
+  // user to passenger here, otherwise fresh driver signups can be mis-registered during bootstrap.
+  const userRole = userProfile?.role || storedRole || null;
   const isDriver = userRole === 'driver';
 
   useEffect(() => {
@@ -302,15 +315,28 @@ function AppStack() {
       })
       .then((profile) => {
         if (cancelled) return;
-        if (profile?.role) {
-          setUserProfile(profile);
-          if (storedRole !== profile.role) {
-            setStoredRole(profile.role);
-            AsyncStorage.setItem(ROLE_STORAGE_KEY, profile.role).catch(() => {});
+        const explicitRole = resolveExplicitRole(profile);
+        if (explicitRole) {
+          setUserProfile({
+            ...profile,
+            role: explicitRole,
+          });
+          if (storedRole !== explicitRole) {
+            setStoredRole(explicitRole);
+            AsyncStorage.setItem(ROLE_STORAGE_KEY, explicitRole).catch(() => {});
           }
         }
         else {
-          const fallbackRole = storedRole || 'passenger';
+          const fallbackRole = storedRole || null;
+          if (!fallbackRole) {
+            setUserProfile((prev) => ({
+              ...(prev || {}),
+              first_name: prev?.first_name || user?.firstName || null,
+              last_name: prev?.last_name || user?.lastName || null,
+              role: null,
+            }));
+            return;
+          }
           setUserProfile((prev) => ({
             ...(prev || {}),
             first_name: prev?.first_name || user?.firstName || null,
@@ -339,14 +365,14 @@ function AppStack() {
       })
       .catch(() => {
         if (cancelled) return;
-        const fallbackRole = storedRole || 'passenger';
+        const fallbackRole = storedRole || null;
         setUserProfile((prev) => ({
           ...(prev || {}),
           first_name: prev?.first_name || user?.firstName || null,
           last_name: prev?.last_name || user?.lastName || null,
-          role: prev?.role || fallbackRole,
+          role: prev?.role || fallbackRole || null,
         }));
-        if (storedRole !== fallbackRole) {
+        if (fallbackRole && storedRole !== fallbackRole) {
           setStoredRole(fallbackRole);
         }
       })
@@ -357,7 +383,7 @@ function AppStack() {
         }
       });
     return () => { cancelled = true; };
-  }, [storageLoaded, user?.id]);
+  }, [resolveExplicitRole, storageLoaded, storedRole, user?.firstName, user?.id, user?.lastName, inviteToken, clearInvite]);
 
   const refetchDriverStatus = useCallback(async () => {
     if (!isDriver) return;

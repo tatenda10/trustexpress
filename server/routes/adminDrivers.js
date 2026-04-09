@@ -173,8 +173,10 @@ function deriveVerificationBucket(item) {
   const vehicleStatus = item.vehicle?.status || null;
   const hasIncomingProfile = profileStatus === 'pending' && !!item.profile?.submittedAt && !!item.profile?.hasDocuments;
   const hasIncomingVehicle = vehicleStatus === 'pending' && !!item.vehicle?.submittedAt && !!item.vehicle?.hasDocuments;
+  const hasApprovedProfile = profileStatus === 'approved' && !!item.profile?.hasDocuments;
+  const hasApprovedVehicle = vehicleStatus === 'approved' && !!item.vehicle?.hasDocuments;
   const hasIncoming = hasIncomingProfile || hasIncomingVehicle;
-  const isVerified = profileStatus === 'approved' && vehicleStatus === 'approved';
+  const isVerified = hasApprovedProfile || hasApprovedVehicle;
 
   if (hasIncoming) return 'incoming';
   if (isVerified) return 'verified';
@@ -186,10 +188,15 @@ function deriveVerificationType(item) {
   const vehicleStatus = item.vehicle?.status || null;
   const hasIncomingProfile = profileStatus === 'pending' && !!item.profile?.submittedAt && !!item.profile?.hasDocuments;
   const hasIncomingVehicle = vehicleStatus === 'pending' && !!item.vehicle?.submittedAt && !!item.vehicle?.hasDocuments;
-  const hasIncoming = hasIncomingProfile || hasIncomingVehicle;
+  const hasApprovedProfile = profileStatus === 'approved' && !!item.profile?.hasDocuments;
+  const hasApprovedVehicle = vehicleStatus === 'approved' && !!item.vehicle?.hasDocuments;
 
-  if (hasIncomingVehicle || (vehicleStatus === 'approved' && !hasIncoming)) {
+  if (hasIncomingVehicle || hasApprovedVehicle) {
     return 'vehicle';
+  }
+
+  if (hasIncomingProfile || hasApprovedProfile) {
+    return 'identity';
   }
 
   return 'identity';
@@ -555,7 +562,17 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
     const referral = mapReferralRow(referralRows?.[0] || null);
 
     const { _role, ...driver } = mapped;
-    return res.json({ driver: { ...driver, profileDocs, vehicleDocs, vehicleSpecs, tierAssessment, trips, reviews, referral } });
+    const responseDriver = { ...driver, profileDocs, vehicleDocs, vehicleSpecs, tierAssessment, trips, reviews, referral };
+
+    console.log('[GET /api/admin/drivers/:driverId] document payload', {
+      driverId: user.id,
+      profileDocs,
+      vehicleDocs,
+      profileStatus: responseDriver?.profile?.status || null,
+      vehicleStatus: responseDriver?.vehicle?.status || null,
+    });
+
+    return res.json({ driver: responseDriver });
   } catch (err) {
     console.error('GET /api/admin/drivers/:driverId', err);
     return res.status(500).json({ error: 'Server error' });
