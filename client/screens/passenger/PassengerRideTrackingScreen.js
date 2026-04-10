@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, SafeAreaView, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Speech from 'expo-speech';
@@ -66,6 +67,7 @@ function normalizeVehicleImageUrl(url) {
 
 export default function PassengerRideTrackingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const mapRef = useRef(null);
   const lastArrivalAnnouncementRef = useRef('');
@@ -91,6 +93,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
+  const bottomActionInset = Math.max(insets.bottom + tabBarHeight - 8, 20);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -396,7 +399,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             <ScrollView
               className="flex-1"
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: 24 }}
+              contentContainerStyle={{ paddingBottom: bottomActionInset + 20 }}
             >
               <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
               <View className="flex-row items-center">
@@ -460,7 +463,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             {!isCompleted ? (
               <View
                 className="border-t border-gray-200 bg-[#f8fafc] pt-4"
-                style={{ paddingBottom: Math.max(insets.bottom + 6, 14) }}
+                style={{ paddingBottom: bottomActionInset }}
               >
                 {stage === 'on_trip' ? (
                   <View className="flex-row items-center gap-3">

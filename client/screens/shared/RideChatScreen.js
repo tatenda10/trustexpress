@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, ActivityIndicator, FlatList, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { connectRealtime } from '../../realtime';
 import { getRideMessages, sendRideMessage } from '../../api';
@@ -33,6 +34,7 @@ function MessageBubble({ item, isMine }) {
 
 export default function RideChatScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const { user } = useUser();
   const getTokenRef = useRef(getToken);
@@ -43,6 +45,7 @@ export default function RideChatScreen({ navigation, route }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
+  const composerBottomInset = Math.max(insets.bottom + tabBarHeight - 8, 18);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -184,7 +187,7 @@ export default function RideChatScreen({ navigation, route }) {
               renderItem={({ item }) => <MessageBubble item={item} isMine={String(item.senderUserId) === String(user?.id)} />}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, flexGrow: sortedMessages.length ? 0 : 1 }}
+              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: composerBottomInset + 12, flexGrow: sortedMessages.length ? 0 : 1 }}
               onRefresh={() => loadMessages(true)}
               refreshing={refreshing}
               ListEmptyComponent={
@@ -200,7 +203,7 @@ export default function RideChatScreen({ navigation, route }) {
 
             <View
               className="border-t border-gray-100 px-4 pt-3"
-              style={{ paddingBottom: Math.max(insets.bottom + 10, 16) }}
+              style={{ paddingBottom: composerBottomInset }}
             >
               <View className="flex-row items-end rounded-2xl border border-gray-200 bg-white px-3 py-2">
                 <TextInput

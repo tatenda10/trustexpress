@@ -627,6 +627,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [activeField, setActiveField] = useState('destination');
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [loadingLocation, setLoadingLocation] = useState(true);
+  const [locationError, setLocationError] = useState('');
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSearchingSuggestions, setIsSearchingSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
@@ -659,23 +660,15 @@ export default function PassengerHomeScreen({ navigation, route }) {
         setPickupLabel(label);
         setPickupQuery(label.replace('Pickup: ', ''));
         setPickupContext(context);
+        setLocationError('');
       } catch (error) {
         if (!active) return;
-        const fallbackCoordinate = {
-          latitude: HARARE_FALLBACK.latitude,
-          longitude: HARARE_FALLBACK.longitude,
-        };
-        setCurrentLocationCoordinate(fallbackCoordinate);
-        setPickupCoordinate(fallbackCoordinate);
-        setMapRegion(buildRouteRegion(fallbackCoordinate, null));
-        setPickupLabel('Pickup: Harare CBD');
-        setPickupQuery('Harare CBD');
-        setPickupContext({
-          district: null,
-          city: 'Harare',
-          region: 'Harare Province',
-          country: 'Zimbabwe',
-        });
+        setCurrentLocationCoordinate(null);
+        setPickupCoordinate(null);
+        setPickupLabel('Pickup location unavailable');
+        setPickupQuery('');
+        setPickupContext(null);
+        setLocationError(error?.message || 'We could not detect your location.');
       } finally {
         if (active) setLoadingLocation(false);
       }
@@ -1084,7 +1077,16 @@ export default function PassengerHomeScreen({ navigation, route }) {
               </TouchableOpacity>
             </View>
           ) : (
-            <View className="pb-5" />
+            <View className="pb-5">
+              {locationError ? (
+                <View className="mt-4 rounded-[20px] border border-amber-200 bg-amber-50 px-4 py-3">
+                  <Text className="text-sm font-semibold text-amber-900">Location unavailable</Text>
+                  <Text className="mt-1 text-sm text-amber-800">
+                    Enable location and retry, or set your pickup manually from the route sheet.
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           )}
         </View>
 
@@ -1327,7 +1329,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                   showsVerticalScrollIndicator={false}
                   style={{ maxHeight: 520 }}
                 >
-                  {activeField === 'pickup' ? (
+                  {activeField === 'pickup' && pickupCoordinate ? (
                     <TouchableOpacity
                       onPress={async () => {
                         if (!pickupCoordinate) return;

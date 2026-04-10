@@ -57,12 +57,16 @@ const DriverLoginScreen = ({ navigation }) => {
     const token = await getToken();
     if (!token) return true;
     const profile = await getMe(token);
-    if (profile?.role && profile.role !== 'driver') {
+    if (profile?.role !== 'driver') {
+      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
       await signOut().catch(() => {});
       setModalState({
         visible: true,
-        title: 'Wrong account type',
-        message: 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.',
+        title: 'This account is not registered as a driver',
+        message:
+          profile?.role === 'passenger'
+            ? 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.'
+            : 'This account is not registered as a driver. Please create a driver account first.',
         tone: 'error',
       });
       return false;

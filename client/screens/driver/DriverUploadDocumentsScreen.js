@@ -54,6 +54,18 @@ function showSuccessMessage(message) {
   Alert.alert('Success', message);
 }
 
+function formatUploadErrorMessage(error, fallback) {
+  const apiMessage = String(
+    error?.response?.data?.error ||
+    error?.response?.data?.message ||
+    error?.message ||
+    ''
+  ).trim();
+
+  if (!apiMessage) return fallback;
+  return apiMessage;
+}
+
 export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -113,14 +125,6 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     } catch {}
   };
 
-  const handleBack = () => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigation.replace('DriverTabs');
-  };
-
   const pickImage = async (key) => {
     try {
       const imagePicker = await import('expo-image-picker');
@@ -160,11 +164,22 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     }
   };
 
-  const uploadUri = async (token, uri) => {
+  const uploadUri = async (token, uri, label) => {
     const formData = new FormData();
     formData.append('file', { uri, name: 'photo.jpg', type: 'image/jpeg' });
-    const { url } = await uploadFile(token, formData);
-    return url;
+    try {
+      const { url } = await uploadFile(token, formData);
+      console.log('[DriverUploadDocumentsScreen] upload success', { label, url });
+      return url;
+    } catch (error) {
+      console.log('[DriverUploadDocumentsScreen] upload failed', {
+        label,
+        uri,
+        error: error?.message || null,
+        apiError: error?.response?.data || null,
+      });
+      throw new Error(formatUploadErrorMessage(error, `${label} upload failed. Please try again.`));
+    }
   };
 
   const handleSubmit = async () => {
@@ -190,24 +205,47 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       if (!token) throw new Error('Not signed in');
 
       if (enhancedSelfieOnly) {
-        const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard);
-        await submitDriverDocuments(token, { selfieWithIdCardUrl });
+        const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard, 'Selfie with national ID');
+        try {
+          await submitDriverDocuments(token, { selfieWithIdCardUrl });
+        } catch (error) {
+          console.log('[DriverUploadDocumentsScreen] submit documents failed', {
+            mode: 'enhancedSelfieOnly',
+            error: error?.message || null,
+            apiError: error?.response?.data || null,
+          });
+          throw new Error(formatUploadErrorMessage(error, 'Could not submit your selfie with national ID. Please try again.'));
+        }
       } else {
-        const [nationalIdFrontUrl, nationalIdBackUrl, driverLicenceUrl, selfieUrl, selfieWithIdCardUrl] = await Promise.all([
-          uploadUri(token, nationalIdFront),
-          uploadUri(token, nationalIdBack),
-          uploadUri(token, driverLicence),
-          uploadUri(token, selfie),
-          uploadUri(token, selfieWithIdCard),
-        ]);
+        const nationalIdFrontUrl = await uploadUri(token, nationalIdFront, 'National ID front');
+        const nationalIdBackUrl = await uploadUri(token, nationalIdBack, 'National ID back');
+        const driverLicenceUrl = await uploadUri(token, driverLicence, "Driver's license");
+        const selfieUrl = await uploadUri(token, selfie, 'Selfie');
+        const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard, 'Selfie with national ID');
 
-        await submitDriverDocuments(token, {
-          nationalIdFrontUrl,
-          nationalIdBackUrl,
-          driverLicenceUrl,
-          selfieUrl,
-          selfieWithIdCardUrl,
-        });
+        try {
+          await submitDriverDocuments(token, {
+            nationalIdFrontUrl,
+            nationalIdBackUrl,
+            driverLicenceUrl,
+            selfieUrl,
+            selfieWithIdCardUrl,
+          });
+        } catch (error) {
+          console.log('[DriverUploadDocumentsScreen] submit documents failed', {
+            mode: 'full',
+            error: error?.message || null,
+            apiError: error?.response?.data || null,
+            payload: {
+              nationalIdFrontUrl,
+              nationalIdBackUrl,
+              driverLicenceUrl,
+              selfieUrl,
+              selfieWithIdCardUrl,
+            },
+          });
+          throw new Error(formatUploadErrorMessage(error, 'Could not submit your documents for verification. Please try again.'));
+        }
       }
 
       await refetchDriverStatus();
@@ -233,9 +271,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     return (
       <View className="flex-1 bg-white">
         <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}>
-          <TouchableOpacity onPress={handleBack} className="p-2 -ml-2">
-            <Ionicons name="arrow-back" size={24} color="#000" />
-          </TouchableOpacity>
+          <View className="h-10 w-10" />
         </View>
         <View className="flex-1 px-5 justify-center items-center">
           <Ionicons name="time-outline" size={64} color={PRIMARY_BLUE} />
@@ -255,9 +291,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     return (
       <View className="flex-1 bg-white">
         <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}>
-          <TouchableOpacity onPress={handleBack} className="p-2 -ml-2">
-            <Ionicons name="arrow-back" size={24} color="#000" />
-          </TouchableOpacity>
+          <View className="h-10 w-10" />
         </View>
         <View className="flex-1 px-5 justify-center items-center">
           <Ionicons name="lock-closed-outline" size={64} color="#6b7280" />
@@ -287,9 +321,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         className="flex-row items-center justify-between border-b border-gray-100 bg-white"
         style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}
       >
-        <TouchableOpacity onPress={handleBack} className="p-2 -ml-2">
-          <Ionicons name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
+        <View className="h-10 w-10" />
         <Text className="text-lg font-bold text-gray-900">Registration</Text>
         <TouchableOpacity className="p-2">
           <Ionicons name="help-circle-outline" size={24} color="#6b7280" />

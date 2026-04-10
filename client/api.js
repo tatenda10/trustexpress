@@ -49,11 +49,7 @@ export async function apiFetch(path, options = {}, token) {
     const err = new Error(message);
     err.status = res.status;
     // If the backend reports an auth problem, trigger the global handler so the app can log out.
-    if (
-      res.status === 401 &&
-      authErrorHandler &&
-      (message.toLowerCase().includes('invalid or expired token') || message.toLowerCase().includes('missing or invalid authorization'))
-    ) {
+    if (res.status === 401 && authErrorHandler) {
       try {
         authErrorHandler();
       } catch {
@@ -172,6 +168,13 @@ export async function acceptDriverRideRequest(token, rideRequestId) {
 
 export async function getPassengerRideOptions(token) {
   return apiFetch('/api/passengers/ride-options', {}, token);
+}
+
+export async function submitPassengerIdentity(token, payload) {
+  return apiFetch('/api/passengers/identity', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
 }
 
 export async function getNearbyPassengerDrivers(token, { latitude, longitude, radiusKm = 8 }) {

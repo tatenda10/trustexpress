@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
@@ -43,6 +44,7 @@ function MessageBubble({ item, isMine }) {
 
 export default function SupportChatScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const { user } = useUser();
   const getTokenRef = useRef(getToken);
@@ -54,7 +56,7 @@ export default function SupportChatScreen({ navigation, route }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [threadId, setThreadId] = useState(null);
-  const composerBottomInset = Math.max(insets.bottom, 10);
+  const composerBottomInset = Math.max(insets.bottom + tabBarHeight - 8, 18);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -198,7 +200,7 @@ export default function SupportChatScreen({ navigation, route }) {
               contentContainerStyle={{
                 paddingHorizontal: 20,
                 paddingTop: 20,
-                paddingBottom: 18,
+                paddingBottom: composerBottomInset + 12,
                 flexGrow: sortedMessages.length ? 0 : 1,
               }}
               onRefresh={() => loadMessages(true)}

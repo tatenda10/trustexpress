@@ -9,9 +9,14 @@ const GOOGLE_MAPS_DIRECTIONS_API_KEY =
 
 module.exports = () => {
   const expo = appJson.expo || {};
+  const projectId = expo.extra?.eas?.projectId || 'ea348ba3-a2a2-4924-882c-6fbc5eb8384c';
 
   return {
     ...expo,
+    updates: {
+      ...(expo.updates || {}),
+      url: `https://u.expo.dev/${projectId}`,
+    },
     ios: {
       ...(expo.ios || {}),
       infoPlist: {
