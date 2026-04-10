@@ -80,17 +80,20 @@ router.get('/', requireAdminAuth, requirePermission('overview.read'), async (_re
       query(
         `SELECT COUNT(*) AS total
          FROM driver_identity
-         WHERE profile_status = 'pending'`
+         WHERE profile_status = 'pending'
+           AND profile_submitted_at IS NOT NULL`
       ),
       query(
         `SELECT COUNT(*) AS total
          FROM driver_vehicle
-         WHERE vehicle_status = 'pending'`
+         WHERE vehicle_status = 'pending'
+           AND vehicle_submitted_at IS NOT NULL`
       ),
       query(
         `SELECT COUNT(*) AS total
          FROM passenger_identity
-         WHERE identity_status = 'pending'`
+         WHERE identity_status = 'pending'
+           AND identity_submitted_at IS NOT NULL`
       ),
       query(
         `SELECT
