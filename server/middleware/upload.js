@@ -20,6 +20,6 @@ export const upload = multer({
   fileFilter: (req, file, cb) => {
     const allowed = /image\/(jpeg|jpg|png|webp)|application\/pdf/;
     if (allowed.test(file.mimetype)) cb(null, true);
-    else cb(null, false);
+    else cb(new Error('Unsupported file type. Use JPG, PNG, WEBP, or PDF.'));
   },
 });
