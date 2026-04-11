@@ -118,6 +118,62 @@ function getDirectionsApiKey() {
   );
 }
 
+/** Open Location Code style names Android often returns from reverse geocode (e.g. 428R+4V9). */
+function looksLikePlusCode(value) {
+  const text = String(value || '').trim().replace(/\s+/g, '');
+  if (!text || !text.includes('+')) return false;
+  return /^[0-9A-Z]{4,}\+[0-9A-Z]{2,}$/i.test(text);
+}
+
+function stripLeadingPlusCodeFromLabel(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  let prev;
+  do {
+    prev = s;
+    const m = s.match(/^([0-9A-Z]{4,}\+[0-9A-Z]{2,})\s*,?\s*/i);
+    if (m) s = s.slice(m[0].length).trim();
+  } while (s !== prev);
+  return s;
+}
+
+/** Remove OLC tokens that appear inside a segment (e.g. "Mall, 428R+4V9" or "Stop near 428R+4V9"). */
+function stripEmbeddedOpenLocationCodes(raw) {
+  let s = String(raw || '')
+    .replace(/\b[0-9A-Z]{4,}\+[0-9A-Z]{2,}\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s*(,\s*)+/g, ', ')
+    .trim();
+  s = s.replace(/^,\s*|\s*,$/g, '').trim();
+  return s;
+}
+
+/** Drop / trim plus-code garbage so we never show "428R+4V9" as the primary location name. */
+function cleanLocationLabelCandidate(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (looksLikePlusCode(s.replace(/\s+/g, ''))) return null;
+
+  const parts = s.split(',').map((p) => p.trim()).filter(Boolean);
+  const kept = parts.filter((p) => !looksLikePlusCode(p));
+  s = kept.join(', ');
+  s = stripLeadingPlusCodeFromLabel(s);
+  s = stripEmbeddedOpenLocationCodes(s);
+  s = s.trim();
+  if (!s) return null;
+  const firstSeg = s.split(',')[0].trim().replace(/\s+/g, '');
+  if (looksLikePlusCode(firstSeg)) {
+    s = stripLeadingPlusCodeFromLabel(s);
+    s = stripEmbeddedOpenLocationCodes(s).trim();
+  }
+  if (!s) return null;
+  const first2 = s.split(',')[0].trim().replace(/\s+/g, '');
+  if (looksLikePlusCode(first2)) return null;
+  return s.trim();
+}
+
 function getAvailabilityErrorMessage(nextOnline, error) {
   if (error?.status === 429) {
     return 'Too many requests right now. Please wait a moment and try again.';
@@ -159,6 +215,7 @@ async function fetchNicePlaceLabel(coordinate) {
       const poi = nearbyJson.results.find((place) => {
         const name = place?.name || '';
         if (!name) return false;
+        if (looksLikePlusCode(name)) return false;
         const lower = name.toLowerCase();
         if (lower.includes('unnamed') || lower.includes('unknown')) return false;
         return true;
@@ -166,11 +223,11 @@ async function fetchNicePlaceLabel(coordinate) {
 
       if (poi) {
         const name = poi.name;
-        const vicinity = poi.vicinity || poi.plus_code?.compound_code || '';
-        const cleanedVicinity = vicinity
-          ? vicinity.replace(/^[^ ]+\s/, '').trim()
-          : '';
-        return cleanedVicinity ? `${name}, ${cleanedVicinity}` : name;
+        const vicinityRaw = (poi.vicinity || '').trim();
+        const cleanedVicinity = stripLeadingPlusCodeFromLabel(vicinityRaw) || vicinityRaw;
+        const candidate = cleanedVicinity ? `${name}, ${cleanedVicinity}` : name;
+        const nice = cleanLocationLabelCandidate(candidate);
+        if (nice) return nice;
       }
     }
   } catch {
@@ -218,9 +275,13 @@ async function fetchNicePlaceLabel(coordinate) {
       if (locality) parts.push(locality);
 
       const label = parts.filter(Boolean).join(', ');
-      if (label) return label;
+      const niceLabel = cleanLocationLabelCandidate(label);
+      if (niceLabel) return niceLabel;
 
-      if (result.formatted_address) return result.formatted_address;
+      if (result.formatted_address) {
+        const niceFormatted = cleanLocationLabelCandidate(result.formatted_address);
+        if (niceFormatted) return niceFormatted;
+      }
     }
   } catch {
     // Final fallback will be coordinates.
@@ -419,7 +480,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
           longitude: pos.coords.longitude,
           ...DRIVER_IDLE_REGION,
         });
-        const pretty = await fetchNicePlaceLabel({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        const pretty = cleanLocationLabelCandidate(
+          await fetchNicePlaceLabel({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+        );
         if (!cancelled && pretty) setLocationLabel(pretty);
       } catch {
         // ignore
@@ -458,9 +521,15 @@ const DriverHomeScreen = ({ navigation, route }) => {
           // Ensure we show a name instead of raw coordinates.
           const cacheKey = `${coords.latitude.toFixed(3)},${coords.longitude.toFixed(3)}`;
           const cached = placeLabelCacheRef.current.get(cacheKey);
-          if (cached) setLocationLabel(cached);
-          else {
-            fetchNicePlaceLabel(coords).then((pretty) => {
+          const cachedGood = cleanLocationLabelCandidate(cached);
+          if (cachedGood) {
+            setLocationLabel(cachedGood);
+          } else if (cached) {
+            placeLabelCacheRef.current.delete(cacheKey);
+          }
+          if (!cachedGood) {
+            fetchNicePlaceLabel(coords).then((raw) => {
+              const pretty = cleanLocationLabelCandidate(raw);
               if (pretty) {
                 placeLabelCacheRef.current.set(cacheKey, pretty);
                 setLocationLabel(pretty);
@@ -911,10 +980,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
               lastLabelFetchRef.current = { coordinate: nextCoordinate, at: labelNow };
 
-              if (cachedLabel) {
-                setLocationLabel(cachedLabel);
-              } else {
-                const pretty = await fetchNicePlaceLabel(nextCoordinate);
+              const cachedGood = cleanLocationLabelCandidate(cachedLabel);
+              if (cachedGood) {
+                setLocationLabel(cachedGood);
+              } else if (cachedLabel) {
+                cache.delete(cacheKey);
+              }
+              if (!cachedGood) {
+                const pretty = cleanLocationLabelCandidate(await fetchNicePlaceLabel(nextCoordinate));
                 if (pretty) {
                   cache.set(cacheKey, pretty);
                   setLocationLabel(pretty);
@@ -995,9 +1068,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
             const cachedLabel = cache.get(cacheKey);
             lastLabelFetchRef.current = { coordinate: nextCoordinate, at: labelNow };
 
-            if (cachedLabel) setLocationLabel(cachedLabel);
-            else {
-              const pretty = await fetchNicePlaceLabel(nextCoordinate);
+            const cachedGood = cleanLocationLabelCandidate(cachedLabel);
+            if (cachedGood) {
+              setLocationLabel(cachedGood);
+            } else if (cachedLabel) {
+              cache.delete(cacheKey);
+            }
+            if (!cachedGood) {
+              const pretty = cleanLocationLabelCandidate(await fetchNicePlaceLabel(nextCoordinate));
               if (pretty) {
                 cache.set(cacheKey, pretty);
                 setLocationLabel(pretty);
@@ -1021,60 +1099,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
       idleLocationWatcherRef.current = null;
     };
   }, [isFocused, isOnline]);
-
-  // On entering the driver home, try to grab the current location so the map
-  // marker and label start from the real position after login (even before going online).
-  useEffect(() => {
-    let cancelled = false;
-
-    const initDriverCoordinateFromDevice = async () => {
-      try {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (permission.status !== 'granted') {
-          return;
-        }
-        const current = await Location.getCurrentPositionAsync({});
-        if (cancelled) return;
-        setDriverCoordinate({
-          latitude: current.coords.latitude,
-          longitude: current.coords.longitude,
-        });
-        try {
-          const [place] = await Location.reverseGeocodeAsync({
-            latitude: current.coords.latitude,
-            longitude: current.coords.longitude,
-          });
-          if (!cancelled && place) {
-            const parts = [
-              place.name || place.street || null,
-              place.city || place.subregion || null,
-            ].filter(Boolean);
-            if (parts.length) {
-              setLocationLabel(parts.join(', '));
-            } else {
-              setLocationLabel(
-                `${current.coords.latitude.toFixed(4)}, ${current.coords.longitude.toFixed(4)}`
-              );
-            }
-          }
-        } catch {
-          if (!cancelled) {
-            setLocationLabel(
-              `${current.coords.latitude.toFixed(4)}, ${current.coords.longitude.toFixed(4)}`
-            );
-          }
-        }
-      } catch {
-        if (cancelled) return;
-      }
-    };
-
-    initDriverCoordinateFromDevice();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const handleAcceptRequest = async (request) => {
     const req = request || activeRequest;

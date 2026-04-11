@@ -13,6 +13,7 @@ function normalizePhone(phone) {
   if (digits.length < 9) return null;
   if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
   if (digits.startsWith('263')) return `+${digits}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
   return `+${digits}`;
 }
 

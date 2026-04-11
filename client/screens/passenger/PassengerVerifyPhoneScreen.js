@@ -16,15 +16,17 @@ import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
+/** Normalize to E.164 for Zimbabwe (e.g. +263771234567). */
 function normalizePhone(phone) {
   const digits = (phone || '').replace(/\D/g, '');
   if (digits.length < 9) return null;
   if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
   if (digits.startsWith('263')) return `+${digits}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
   return `+${digits}`;
 }
 
-const PassengerVerifyPhoneScreen = ({ onVerified, onSkip }) => {
+const PassengerVerifyPhoneScreen = ({ navigation, onVerified }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const [phone, setPhone] = useState('');
@@ -42,7 +44,20 @@ const PassengerVerifyPhoneScreen = ({ onVerified, onSkip }) => {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
       await confirmPhoneVerification(token, normalizedPhone);
-      onVerified?.();
+      Alert.alert('Phone verified', 'Your phone number is now verified.', [
+        {
+          text: 'Continue',
+          onPress: () => {
+            void (async () => {
+              try {
+                await onVerified?.();
+              } finally {
+                navigation.replace('PassengerTabs');
+              }
+            })();
+          },
+        },
+      ]);
     } catch (error) {
       Alert.alert('Error', error?.message || 'Could not verify phone number right now.');
     } finally {
@@ -67,7 +82,7 @@ const PassengerVerifyPhoneScreen = ({ onVerified, onSkip }) => {
       >
         <Text className="mt-8 text-3xl font-bold text-gray-900">Verify your phone number</Text>
         <Text className="mt-3 text-base leading-7 text-gray-500">
-          Add a verified number for ride updates and easier contact. You can skip this for now and we will ask again next time.
+          Add a verified number for ride updates and account security. Verification is required before you can use the app.
         </Text>
 
         <Text className="mb-2 mt-8 text-sm font-medium text-gray-700">Phone number</Text>
@@ -108,10 +123,6 @@ const PassengerVerifyPhoneScreen = ({ onVerified, onSkip }) => {
           ) : (
             <Text className="text-lg font-bold text-white">Verify phone</Text>
           )}
-        </TouchableOpacity>
-
-        <TouchableOpacity className="mt-4 items-center py-2" onPress={onSkip} disabled={loading}>
-          <Text className="text-base text-gray-500">Skip for now</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>

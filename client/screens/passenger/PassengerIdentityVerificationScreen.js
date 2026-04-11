@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Platform,
-  ToastAndroid,
+  BackHandler,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
@@ -22,14 +21,6 @@ const DOCS = [
   { key: 'nationalIdBack', label: 'National ID back', subtitle: 'Back side of your ID card', icon: 'document-outline' },
 ];
 
-function showSuccessMessage(message) {
-  if (Platform.OS === 'android') {
-    ToastAndroid.show(message, ToastAndroid.SHORT);
-    return;
-  }
-  Alert.alert('Success', message);
-}
-
 export default function PassengerIdentityVerificationScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
@@ -37,12 +28,15 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
   const getTokenRef = useRef(getToken);
 
   const [loading, setLoading] = useState(true);
+  const [identityLoadFailed, setIdentityLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [profile, setProfile] = useState(null);
   const [uris, setUris] = useState({
     nationalIdFront: null,
     nationalIdBack: null,
   });
+  /** After successful submit — show alert before goBack; blocks auto goBack from pending state. */
+  const pendingSubmitAlertRef = useRef(false);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -55,6 +49,7 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
     const loadProfile = async () => {
       try {
         setLoading(true);
+        setIdentityLoadFailed(false);
         const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await getMe(token);
@@ -62,7 +57,10 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
         setProfile(data?.passengerIdentity || null);
       } catch (error) {
         if (!active) return;
-        Alert.alert('Verification unavailable', error?.message || 'Could not load your ID verification details.');
+        setIdentityLoadFailed(true);
+        Alert.alert('Verification unavailable', error?.message || 'Could not load your ID verification details.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
       } finally {
         if (active) setLoading(false);
       }
@@ -80,6 +78,27 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
   const isBlocked = isRejected && profile?.canResubmit === false;
   const isApproved = status === 'approved';
   const isPending = status === 'pending' && hasSubmittedDocs;
+
+  /** No leaving without submitting while ID is still required (rejected-with-resubmit counts as required). */
+  const mustCompleteIdentity =
+    !loading && !identityLoadFailed && !isApproved && !isBlocked && !isPending;
+
+  useEffect(() => {
+    if (!mustCompleteIdentity) return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [mustCompleteIdentity]);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({ gestureEnabled: !mustCompleteIdentity });
+  }, [navigation, mustCompleteIdentity]);
+
+  // Status lives under Account → Identity documents; no blocking "under review" screen here.
+  useLayoutEffect(() => {
+    if (!isPending || isBlocked) return;
+    if (pendingSubmitAlertRef.current) return;
+    navigation.goBack();
+  }, [isPending, isBlocked, navigation]);
 
   const pickImage = async (key) => {
     try {
@@ -124,13 +143,30 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
       const data = await submitPassengerIdentity(token, { nationalIdFrontUrl, nationalIdBackUrl });
       setProfile(data?.passengerIdentity || null);
       setUris({ nationalIdFront: null, nationalIdBack: null });
-      showSuccessMessage('Passenger ID documents submitted for review.');
+      pendingSubmitAlertRef.current = true;
+      let finishedAfterSubmit = false;
+      const finishAfterSubmit = () => {
+        if (finishedAfterSubmit) return;
+        finishedAfterSubmit = true;
+        pendingSubmitAlertRef.current = false;
+        navigation.goBack();
+      };
+      Alert.alert(
+        'Documents under review',
+        'We are reviewing your ID submission. You will be notified when there is an update. Status is also shown under Account → Identity documents.',
+        [{ text: 'OK', onPress: finishAfterSubmit }],
+        { onDismiss: finishAfterSubmit }
+      );
     } catch (error) {
       Alert.alert('Submit failed', error?.message || 'Could not submit your ID documents.');
     } finally {
       setSubmitting(false);
     }
   };
+
+  if (isPending && !isBlocked && !pendingSubmitAlertRef.current) {
+    return <View className="flex-1 bg-[#f6f7f3]" />;
+  }
 
   const statusTone = isApproved
     ? { bg: '#dcfce7', text: '#166534', label: 'Approved' }
@@ -146,9 +182,13 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
         className="flex-row items-center justify-between bg-[#f6f7f3]"
         style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
       >
-        <TouchableOpacity onPress={() => navigation.goBack()} className="h-10 w-10 items-center justify-center rounded-full bg-white">
-          <Ionicons name="chevron-back" size={22} color="#111827" />
-        </TouchableOpacity>
+        {mustCompleteIdentity ? (
+          <View className="h-10 w-10" />
+        ) : (
+          <TouchableOpacity onPress={() => navigation.goBack()} className="h-10 w-10 items-center justify-center rounded-full bg-white">
+            <Ionicons name="chevron-back" size={22} color="#111827" />
+          </TouchableOpacity>
+        )}
         <Text className="text-[18px] font-bold text-gray-900">ID verification</Text>
         <View className="h-10 w-10" />
       </View>

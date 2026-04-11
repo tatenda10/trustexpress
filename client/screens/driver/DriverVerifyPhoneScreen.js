@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,14 +9,16 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  InteractionManager,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CommonActions } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
+import { navigationRef } from '../../navigationRef';
 
 /** Normalize to E.164 (e.g. +263771234567) */
 function normalizePhone(phone) {
@@ -24,24 +26,51 @@ function normalizePhone(phone) {
   if (digits.length < 9) return null;
   if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
   if (digits.startsWith('263')) return `+${digits}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
   return `+${digits}`;
 }
 
 export const DRIVER_SKIP_PHONE_VERIFY_KEY = 'trust_express_driver_skip_phone_verify';
 
+/** Mirrors `App.js` driver onboarding: next stack screen after phone is verified. */
+function getNextDriverOnboardingRouteAfterPhoneVerified(driverMe) {
+  if (!driverMe || typeof driverMe !== 'object') return 'DriverTabs';
+  const profile = driverMe.driverProfile;
+  const vehicle = driverMe.vehicle;
+  const profileStatus = String(profile?.status || '').trim().toLowerCase();
+  const profileApproved = profileStatus === 'approved' || profileStatus === 'verified';
+  const vehicleStatus = String(vehicle?.status || '').trim().toLowerCase();
+  const vehicleApproved = vehicleStatus === 'approved' || vehicleStatus === 'verified';
+  const needVehicle =
+    profileApproved &&
+    (!vehicle || (!vehicleApproved && vehicleStatus !== 'pending'));
+  return needVehicle ? 'DriverRegisterCar' : 'DriverTabs';
+}
+
+function resetRootToDriverRoute(routeName) {
+  if (!navigationRef.isReady()) return;
+  try {
+    navigationRef.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [{ name: routeName }],
+      }),
+    );
+  } catch {
+    // Root may still be swapping Auth/App — ignore.
+  }
+}
+
 const STEP_CURRENT = 5;
 const STEP_TOTAL = 6;
 
-function isApprovedStatus(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized === 'approved' || normalized === 'verified';
-}
-
-const DriverVerifyPhoneScreen = ({ navigation, route }) => {
+const DriverVerifyPhoneScreen = () => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
-  const { driverStatus: contextDriverStatus, refetchDriverStatus, onSkippedPhoneVerify } = useDriverStatus();
-  const driverStatus = contextDriverStatus ?? route.params?.driverStatus ?? null;
+  const { driverStatus, refetchDriverStatus, patchDriverStatus } = useDriverStatus();
+  const continueHandledRef = useRef(false);
+  const driverStatusRef = useRef(driverStatus);
+  driverStatusRef.current = driverStatus;
 
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
@@ -58,32 +87,41 @@ const DriverVerifyPhoneScreen = ({ navigation, route }) => {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
       await confirmPhoneVerification(token, normalizedPhone);
-      const latestStatus = await refetchDriverStatus();
-      const needVehicle = !isApprovedStatus(latestStatus?.vehicle?.status);
-      if (needVehicle) {
-        navigation.replace('DriverRegisterCar');
-      } else {
-        navigation.replace('DriverTabs');
-      }
+      // Do not refetch before this Alert: refetch updates App's driver stack `key` and remounts the
+      // navigator, which invalidates this screen's `navigation` object.
+      // After Continue: merge `phoneVerified` (confirm already succeeded), then root `reset` — survives
+      // nested stack remounts; `navigation.replace` from this screen often no-ops on Android.
+      continueHandledRef.current = false;
+      const continueAfterVerify = () => {
+        if (continueHandledRef.current) return;
+        continueHandledRef.current = true;
+        void (async () => {
+          try {
+            const latest = await refetchDriverStatus();
+            patchDriverStatus({ phoneVerified: true });
+            const snap = driverStatusRef.current && typeof driverStatusRef.current === 'object' ? driverStatusRef.current : {};
+            const merged = { ...snap, ...(latest && typeof latest === 'object' ? latest : {}), phoneVerified: true };
+            const next = getNextDriverOnboardingRouteAfterPhoneVerified(merged);
+            InteractionManager.runAfterInteractions(() => {
+              requestAnimationFrame(() => resetRootToDriverRoute(next));
+            });
+          } catch {
+            continueHandledRef.current = false;
+            Alert.alert(
+              'Could not refresh',
+              'Your phone was verified, but we could not reload your driver profile. Tap Continue again to retry.',
+            );
+          }
+        })();
+      };
+      Alert.alert('Phone verified', 'Your phone number was verified successfully.', [
+        { text: 'Continue', onPress: continueAfterVerify },
+      ], { onDismiss: continueAfterVerify });
     } catch (e) {
       Alert.alert('Error', e?.message || 'Invalid or expired code');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleSkip = async () => {
-    try {
-      await AsyncStorage.setItem(DRIVER_SKIP_PHONE_VERIFY_KEY, 'true');
-      onSkippedPhoneVerify?.();
-      const latestStatus = await refetchDriverStatus();
-      const needVehicle = !isApprovedStatus(latestStatus?.vehicle?.status);
-      if (needVehicle) {
-        navigation.replace('DriverRegisterCar');
-      } else {
-        navigation.replace('DriverTabs');
-      }
-    } catch (e) {}
   };
 
   return (
@@ -92,14 +130,10 @@ const DriverVerifyPhoneScreen = ({ navigation, route }) => {
       className="flex-1 bg-white"
     >
       <View
-        className="flex-row items-center justify-between bg-white border-b border-gray-100"
-        style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}
+        className="items-center justify-center border-b border-gray-100 bg-white"
+        style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 14 }}
       >
-        <TouchableOpacity onPress={() => navigation.goBack()} className="p-2 -ml-2">
-          <Ionicons name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
         <Text className="text-lg font-bold text-gray-900">Verify phone</Text>
-        <View className="w-10" />
       </View>
 
       <ScrollView
@@ -154,10 +188,6 @@ const DriverVerifyPhoneScreen = ({ navigation, route }) => {
           )}
           </TouchableOpacity>
         </>
-
-        <TouchableOpacity className="py-3 items-center mt-2" onPress={handleSkip} disabled={loading}>
-          <Text className="text-gray-500 text-base">Skip for now</Text>
-        </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
   );

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
-const PassengerEnableLocationScreen = ({ onGranted, onSkip }) => {
+const PassengerEnableLocationScreen = ({ onGranted }) => {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
 
@@ -17,7 +17,14 @@ const PassengerEnableLocationScreen = ({ onGranted, onSkip }) => {
         onGranted?.();
         return;
       }
-      Alert.alert('Location not enabled', 'You can keep using the app, but we will ask again next time.');
+      Alert.alert(
+        'Location required',
+        'TrustCars needs your location to set pickups, match you with drivers, and estimate fares. Allow location access in Settings, then tap Enable location again.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ],
+      );
     } catch (error) {
       Alert.alert('Location failed', error?.message || 'Could not request location permission.');
     } finally {
@@ -33,7 +40,8 @@ const PassengerEnableLocationScreen = ({ onGranted, onSkip }) => {
         </View>
         <Text className="mt-8 text-center text-3xl font-bold text-gray-900">Enable location</Text>
         <Text className="mt-4 text-center text-base leading-7 text-gray-500">
-          We use your location to set pickup points, show nearby drivers, and calculate fares more accurately.
+          We use your location to set pickup points, show nearby drivers, and calculate fares. Foreground access is
+          required before you can continue — you can enable it here or in system Settings.
         </Text>
       </View>
 
@@ -48,10 +56,6 @@ const PassengerEnableLocationScreen = ({ onGranted, onSkip }) => {
         ) : (
           <Text className="text-lg font-bold text-white">Enable location</Text>
         )}
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={onSkip} className="mt-4 h-12 items-center justify-center">
-        <Text className="text-base font-medium text-gray-500">Skip for now</Text>
       </TouchableOpacity>
     </View>
   );

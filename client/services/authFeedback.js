@@ -4,6 +4,20 @@ export function getAuthErrorContent(error, context = 'auth') {
   const rawMessage = clerkError?.longMessage || clerkError?.message || error?.message || '';
   const message = String(rawMessage).toLowerCase();
 
+  if (
+    message.includes('verification strategy is not valid') ||
+    message.includes('strategy is not valid for this account')
+  ) {
+    const resetHint =
+      context === 'forgot-password'
+        ? ' Password reset by email may be turned off in Clerk, or this account may not use a password.'
+        : ' If you signed up with Google or Apple, use that button instead. Otherwise ask support to enable email + password for this app in Clerk.';
+    return {
+      title: context === 'forgot-password' ? 'Reset not available' : 'Sign-in method not available',
+      message: `Clerk rejected this flow for this account.${resetHint}`,
+    };
+  }
+
   if (code === 'form_identifier_not_found' || message.includes("couldn't find")) {
     return {
       title: 'Account not found',

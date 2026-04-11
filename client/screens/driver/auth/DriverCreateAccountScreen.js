@@ -81,14 +81,19 @@ const DriverCreateAccountScreen = ({ navigation }) => {
   const completeSignUp = async (sessionId) => {
     await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
     await setActive({ session: sessionId });
-    const allowed = await ensureDriverRole();
-    if (!allowed) return;
     try {
       const token = await getToken();
       if (token) {
         await registerUser(token, { role: 'driver', email, inviteToken: inviteToken || undefined });
       }
-    } catch (e) {}
+    } catch (e) {
+      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
+      await signOut().catch(() => {});
+      showErrorModal(e, 'signup');
+      return;
+    }
+    const allowed = await ensureDriverRole();
+    if (!allowed) return;
   };
 
   const handleSignUp = async () => {
@@ -178,14 +183,14 @@ const DriverCreateAccountScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) {
             await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
           }
         } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
       }
     } catch (error) {
       showErrorModal(error, 'signup');
@@ -204,14 +209,14 @@ const DriverCreateAccountScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) {
             await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
           }
         } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
       }
     } catch (error) {
       showErrorModal(error, 'signup');

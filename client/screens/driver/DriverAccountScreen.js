@@ -201,7 +201,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
       : profile?.status === 'pending'
         ? missingProfileDocCount > 0
           ? 'Partially submitted'
-          : 'Sent for review'
+          : 'Under review'
         : profile?.status === 'rejected'
           ? 'Needs resubmission'
           : 'Uploaded';
@@ -224,6 +224,12 @@ const DriverAccountScreen = ({ navigation, route }) => {
     ? { bg: '#dcfce7', text: '#166534' }
     : { bg: '#fef3c7', text: '#92400e' };
 
+  /** Full identity pack submitted and awaiting admin — no separate documentation screen. */
+  const documentationAwaitingReviewOnly =
+    profile?.status === 'pending' && hasSubmittedProfileDocs && missingProfileDocCount === 0;
+
+  const vehicleRegistrationAwaitingReviewOnly = vehicle?.status === 'pending';
+
   const verificationRows = [
     {
       key: 'phone',
@@ -238,16 +244,36 @@ const DriverAccountScreen = ({ navigation, route }) => {
       title: 'Documentation',
       subtitle: docsSubtitle,
       verified: profile?.status === 'approved' || onlyEnhancedSelfieMissing,
-      onPress: () => navigation.getParent()?.getParent()?.navigate?.('DriverUploadDocuments'),
       icon: 'document-text-outline',
+      documentationReviewOnly: documentationAwaitingReviewOnly,
+      onPress: () => {
+        if (documentationAwaitingReviewOnly) {
+          Alert.alert(
+            'Documents under review',
+            'We are reviewing your submission. You will be notified when there is an update. Status is also shown above on this screen.',
+          );
+          return;
+        }
+        navigation.navigate('DriverDocumentation', { driverStatus });
+      },
     },
     {
       key: 'car',
       title: 'Car registration',
       subtitle: !vehicle ? 'Not registered' : vehicle.status === 'approved' ? 'Verified' : vehicle.status === 'pending' ? 'Under review' : 'Rejected',
       verified: vehicle?.status === 'approved',
-      screen: 'DriverCarRegistration',
       icon: 'car-outline',
+      vehicleRegistrationReviewOnly: vehicleRegistrationAwaitingReviewOnly,
+      onPress: () => {
+        if (vehicleRegistrationAwaitingReviewOnly) {
+          Alert.alert(
+            'Vehicle under review',
+            'We are reviewing your registration. You will be notified when there is an update. Status is also shown above on this screen.',
+          );
+          return;
+        }
+        navigation.navigate('DriverCarRegistration', { driverStatus });
+      },
     },
   ];
 
@@ -481,6 +507,8 @@ const DriverAccountScreen = ({ navigation, route }) => {
                     <View className="h-8 w-8 items-center justify-center rounded-full bg-green-100">
                       <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
                     </View>
+                  ) : row.documentationReviewOnly || row.vehicleRegistrationReviewOnly ? (
+                    <Ionicons name="information-circle-outline" size={22} color="#9ca3af" />
                   ) : (
                     <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
                   )}

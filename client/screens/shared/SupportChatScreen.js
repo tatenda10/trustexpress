@@ -7,12 +7,13 @@ import {
   FlatList,
   TextInput,
   Platform,
+  Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 import { getSupportMessages, sendSupportMessage } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -56,11 +57,25 @@ export default function SupportChatScreen({ navigation, route }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [threadId, setThreadId] = useState(null);
-  const composerBottomInset = Math.max(insets.bottom + tabBarHeight - 8, 18);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  /** When keyboard is hidden, keep the composer on the visual bottom (home indicator + tab bar). When open, only home indicator — KeyboardStickyView moves the bar above the keys. */
+  const composerBottomInset = Math.max(insets.bottom + tabBarHeight, 12);
+  const composerPaddingBottom = keyboardVisible ? Math.max(insets.bottom, 8) : composerBottomInset;
 
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const subShow = Keyboard.addListener(showEvt, () => setKeyboardVisible(true));
+    const subHide = Keyboard.addListener(hideEvt, () => setKeyboardVisible(false));
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, []);
 
   const loadMessages = useCallback(async (isRefresh = false) => {
     try {
@@ -158,12 +173,8 @@ export default function SupportChatScreen({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} className="flex-1 bg-white">
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior="padding"
-        keyboardVerticalOffset={8}
-      >
+    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-white">
+      <View className="flex-1">
         <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
           <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
             <Ionicons name="arrow-back" size={20} color="#111827" />
@@ -187,6 +198,7 @@ export default function SupportChatScreen({ navigation, route }) {
             )}
 
             <FlatList
+              style={{ flex: 1 }}
               data={sortedMessages}
               keyExtractor={(item) => String(item.id)}
               renderItem={({ item }) => (
@@ -200,7 +212,7 @@ export default function SupportChatScreen({ navigation, route }) {
               contentContainerStyle={{
                 paddingHorizontal: 20,
                 paddingTop: 20,
-                paddingBottom: composerBottomInset + 12,
+                paddingBottom: (keyboardVisible ? Math.max(insets.bottom, 12) : composerBottomInset) + 8,
                 flexGrow: sortedMessages.length ? 0 : 1,
               }}
               onRefresh={() => loadMessages(true)}
@@ -216,38 +228,41 @@ export default function SupportChatScreen({ navigation, route }) {
               }
             />
 
-            <View
+            <KeyboardStickyView
+              offset={{ closed: 0, opened: 0 }}
               className="border-t border-gray-100 bg-white px-4 pt-3"
-              style={{ paddingBottom: composerBottomInset }}
+              style={{ width: '100%' }}
             >
-              <View className="flex-row items-end rounded-[26px] border border-gray-200 bg-[#f8fafc] px-3 py-2">
-                <TextInput
-                  className="flex-1 px-2 py-3 text-[15px] text-gray-900"
-                  placeholder="Type your message"
-                  placeholderTextColor="#9ca3af"
-                  multiline
-                  value={draft}
-                  onChangeText={setDraft}
-                  maxLength={1000}
-                  textAlignVertical="top"
-                />
-                <TouchableOpacity
-                  onPress={handleSend}
-                  disabled={sending || !String(draft || '').trim()}
-                  className="mb-1 ml-2 h-11 w-11 items-center justify-center rounded-full"
-                  style={{ backgroundColor: sending || !String(draft || '').trim() ? '#93c5fd' : PRIMARY_BLUE }}
-                >
-                  {sending ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Ionicons name="send" size={18} color="#fff" />
-                  )}
-                </TouchableOpacity>
+              <View style={{ paddingBottom: composerPaddingBottom }}>
+                <View className="flex-row items-end rounded-[26px] border border-gray-200 bg-[#f8fafc] px-3 py-2">
+                  <TextInput
+                    className="flex-1 px-2 py-3 text-[15px] text-gray-900"
+                    placeholder="Type your message"
+                    placeholderTextColor="#9ca3af"
+                    multiline
+                    value={draft}
+                    onChangeText={setDraft}
+                    maxLength={1000}
+                    textAlignVertical="top"
+                  />
+                  <TouchableOpacity
+                    onPress={handleSend}
+                    disabled={sending || !String(draft || '').trim()}
+                    className="mb-1 ml-2 h-11 w-11 items-center justify-center rounded-full"
+                    style={{ backgroundColor: sending || !String(draft || '').trim() ? '#93c5fd' : PRIMARY_BLUE }}
+                  >
+                    {sending ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Ionicons name="send" size={18} color="#fff" />
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
+            </KeyboardStickyView>
           </>
         )}
-      </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }

@@ -90,7 +90,8 @@ const PassengerEmailLoginScreen = ({ navigation }) => {
     setLoading(true);
     try {
       const result = await signIn.create({
-        identifier: email,
+        strategy: 'password',
+        identifier: email.trim(),
         password,
       });
 

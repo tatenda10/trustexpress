@@ -79,12 +79,17 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
   const completeSignUp = async (sessionId) => {
     await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'passenger');
     await setActive({ session: sessionId });
-    const allowed = await ensurePassengerRole();
-    if (!allowed) return;
     try {
       const token = await getToken();
       if (token) await registerUser(token, { role: 'passenger', email });
-    } catch (e) {}
+    } catch (e) {
+      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
+      await signOut().catch(() => {});
+      showErrorModal(e, 'signup');
+      return;
+    }
+    const allowed = await ensurePassengerRole();
+    if (!allowed) return;
   };
 
   const handleSignUp = async () => {
@@ -174,12 +179,12 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'passenger');
         await setActiveSession({ session: createdSessionId });
-        const allowed = await ensurePassengerRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) await registerUser(token, { role: 'passenger', email: null });
         } catch (e) {}
+        const allowed = await ensurePassengerRole();
+        if (!allowed) return;
       }
     } catch (error) {
       showErrorModal(error, 'signup');
@@ -198,12 +203,12 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'passenger');
         await setActiveSession({ session: createdSessionId });
-        const allowed = await ensurePassengerRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) await registerUser(token, { role: 'passenger', email: null });
         } catch (e) {}
+        const allowed = await ensurePassengerRole();
+        if (!allowed) return;
       }
     } catch (error) {
       showErrorModal(error, 'signup');

@@ -139,6 +139,8 @@ const PassengerAccountScreen = ({ navigation }) => {
   const identityApproved = identityStatus === 'approved';
   const identityPending = identityStatus === 'pending' && identityDocsSubmitted;
   const identityRejected = identityStatus === 'rejected';
+  /** Full ID pack submitted and awaiting admin — same pattern as driver documentation row. */
+  const identityAwaitingReviewOnly = identityPending;
   const verificationHeadline = phoneVerified ? 'Phone verified' : 'Verification in progress';
   const verificationTone = phoneVerified
     ? { bg: '#dcfce7', text: '#166534' }
@@ -158,12 +160,22 @@ const PassengerAccountScreen = ({ navigation }) => {
       subtitle: identityApproved
         ? 'Approved'
         : identityPending
-          ? 'Sent for review'
+          ? 'Under review'
           : identityRejected
             ? 'Needs resubmission'
             : 'Upload your national ID',
       icon: 'card-outline',
-      onPress: () => navigation.navigate('PassengerIdentityVerification'),
+      identityReviewOnly: identityAwaitingReviewOnly,
+      onPress: () => {
+        if (identityAwaitingReviewOnly) {
+          Alert.alert(
+            'Documents under review',
+            'We are reviewing your submission. You will be notified when there is an update. Status is also shown above on this screen.',
+          );
+          return;
+        }
+        navigation.navigate('PassengerIdentityVerification');
+      },
     },
   ];
 
@@ -335,6 +347,8 @@ const PassengerAccountScreen = ({ navigation }) => {
                       <View className="h-8 w-8 items-center justify-center rounded-full bg-green-100">
                         <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
                       </View>
+                    ) : row.identityReviewOnly ? (
+                      <Ionicons name="information-circle-outline" size={22} color="#9ca3af" />
                     ) : (
                       <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
                     )

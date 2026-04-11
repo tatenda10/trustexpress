@@ -42,6 +42,10 @@ const DriverLoginScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [showEmailCode, setShowEmailCode] = useState(false);
   const [code, setCode] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [modalState, setModalState] = useState({ visible: false, title: '', message: '', tone: 'error' });
   const headerHeight = insets.top + 48;
   const bottomPadding = Math.max(insets.bottom, 24);
@@ -89,21 +93,22 @@ const DriverLoginScreen = ({ navigation }) => {
     setLoading(true);
     try {
       const result = await signIn.create({
-        identifier: emailOrPhone,
+        strategy: 'password',
+        identifier: emailOrPhone.trim(),
         password,
       });
 
       if (result.status === 'complete') {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActive({ session: result.createdSessionId });
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) {
             await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
           }
         } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
         return;
       }
 
@@ -146,14 +151,14 @@ const DriverLoginScreen = ({ navigation }) => {
       if (result.status === 'complete') {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActive({ session: result.createdSessionId });
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) {
             await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
           }
         } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
       } else {
         setModalState({
           visible: true,
@@ -169,6 +174,106 @@ const DriverLoginScreen = ({ navigation }) => {
     }
   };
 
+  const handleForgotPassword = async () => {
+    if (!isLoaded) return;
+    const identifier = emailOrPhone.trim();
+    if (!identifier) {
+      setModalState({
+        visible: true,
+        title: 'Email required',
+        message: 'Enter your email first, then tap Forgot Password.',
+        tone: 'info',
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await signIn.create({
+        strategy: 'reset_password_email_code',
+        identifier,
+      });
+      setShowResetPassword(true);
+      setResetCode('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setModalState({
+        visible: true,
+        title: 'Reset code sent',
+        message: 'Check your email for the reset code, then enter it with your new password.',
+        tone: 'info',
+      });
+    } catch (error) {
+      showErrorModal(error, 'forgot-password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!isLoaded) return;
+    const trimmedCode = resetCode.trim();
+    if (!trimmedCode || !newPassword || !confirmNewPassword) {
+      setModalState({
+        visible: true,
+        title: 'Missing details',
+        message: 'Enter reset code, new password, and confirmation.',
+        tone: 'info',
+      });
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setModalState({
+        visible: true,
+        title: 'Passwords do not match',
+        message: 'New password and confirmation must match.',
+        tone: 'error',
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await signIn.attemptFirstFactor({
+        strategy: 'reset_password_email_code',
+        code: trimmedCode,
+        password: newPassword,
+      });
+
+      if (result.status === 'complete') {
+        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
+        await setActive({ session: result.createdSessionId });
+        try {
+          const token = await getToken();
+          if (token) {
+            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+          }
+        } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
+        setShowResetPassword(false);
+        setModalState({
+          visible: true,
+          title: 'Password updated',
+          message: 'Your password has been reset successfully.',
+          tone: 'info',
+        });
+        return;
+      }
+
+      setModalState({
+        visible: true,
+        title: 'Reset not completed',
+        message: 'We could not complete the password reset. Please verify the code and try again.',
+        tone: 'error',
+      });
+    } catch (error) {
+      showErrorModal(error, 'forgot-password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     if (!isLoaded || loading) return;
     setLoading(true);
@@ -179,14 +284,14 @@ const DriverLoginScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) {
             await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
           }
         } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
       }
     } catch (error) {
       showErrorModal(error, 'login');
@@ -205,14 +310,14 @@ const DriverLoginScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
         try {
           const token = await getToken();
           if (token) {
             await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
           }
         } catch (e) {}
+        const allowed = await ensureDriverRole();
+        if (!allowed) return;
       }
     } catch (error) {
       showErrorModal(error, 'login');
@@ -270,6 +375,95 @@ const DriverLoginScreen = ({ navigation }) => {
               <>
                 <Text className="text-lg font-semibold text-white">Verify</Text>
                 <Ionicons name="checkmark-circle" size={20} color="white" />
+              </>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+        <AuthFeedbackModal
+          visible={modalState.visible}
+          title={modalState.title}
+          message={modalState.message}
+          tone={modalState.tone}
+          onPrimary={closeModal}
+        />
+      </View>
+    );
+  }
+
+  if (showResetPassword) {
+    return (
+      <View className="flex-1 bg-white">
+        <View
+          className="flex-row items-center border-b border-gray-100 bg-white"
+          style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12, minHeight: headerHeight }}
+        >
+          <TouchableOpacity
+            onPress={() => {
+              setShowResetPassword(false);
+              setResetCode('');
+              setNewPassword('');
+              setConfirmNewPassword('');
+            }}
+            className="p-2 -ml-2"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="arrow-back" size={24} color="#000" />
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 24, paddingBottom: bottomPadding }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text className="mb-1.5 text-2xl font-bold text-gray-900">Reset password</Text>
+          <Text className="mb-6 text-sm text-gray-600">Enter the reset code sent to your email and choose a new password.</Text>
+          <View className="mb-3">
+            <Text className="mb-2 text-sm font-medium text-gray-700">Reset code</Text>
+            <TextInput
+              className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+              placeholder="Enter reset code"
+              placeholderTextColor="#9ca3af"
+              value={resetCode}
+              onChangeText={setResetCode}
+              autoCapitalize="none"
+            />
+          </View>
+          <View className="mb-3">
+            <Text className="mb-2 text-sm font-medium text-gray-700">New password</Text>
+            <TextInput
+              className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+              placeholder="Enter new password"
+              placeholderTextColor="#9ca3af"
+              value={newPassword}
+              onChangeText={setNewPassword}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+          </View>
+          <View className="mb-4">
+            <Text className="mb-2 text-sm font-medium text-gray-700">Confirm new password</Text>
+            <TextInput
+              className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+              placeholder="Confirm new password"
+              placeholderTextColor="#9ca3af"
+              value={confirmNewPassword}
+              onChangeText={setConfirmNewPassword}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+          </View>
+          <TouchableOpacity
+            className={`flex-row items-center justify-center gap-2 rounded-xl p-4 ${loading ? 'opacity-90' : ''}`}
+            style={{ backgroundColor: '#374151' }}
+            onPress={handleResetPassword}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text className="text-base font-semibold text-white">Reset Password</Text>
+                <Ionicons name="checkmark-circle" size={18} color="#fff" />
               </>
             )}
           </TouchableOpacity>
@@ -344,16 +538,7 @@ const DriverLoginScreen = ({ navigation }) => {
               <View>
                 <View className="mb-2 flex-row items-center justify-between">
                   <Text className="text-sm font-medium text-gray-700">Password</Text>
-                  <TouchableOpacity
-                    onPress={() =>
-                      setModalState({
-                        visible: true,
-                        title: 'Password reset coming soon',
-                        message: 'Forgot password is not wired up yet, but we can add that flow next.',
-                        tone: 'info',
-                      })
-                    }
-                  >
+                  <TouchableOpacity onPress={handleForgotPassword}>
                     <Text className="text-sm font-medium text-primary">Forgot Password?</Text>
                   </TouchableOpacity>
                 </View>

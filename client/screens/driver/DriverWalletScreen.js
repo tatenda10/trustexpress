@@ -116,9 +116,7 @@ const DriverWalletScreen = () => {
       >
         <View className="w-10" />
         <Text className="text-lg font-bold text-gray-900">Wallet</Text>
-        <TouchableOpacity className="p-2" disabled>
-          <Ionicons name="settings-outline" size={24} color="#9ca3af" />
-        </TouchableOpacity>
+        <View className="w-10" />
       </View>
 
       {loading ? (

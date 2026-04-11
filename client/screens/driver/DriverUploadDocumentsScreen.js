@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Platform,
-  ToastAndroid,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -46,12 +44,9 @@ function askCropPreference() {
   });
 }
 
-function showSuccessMessage(message) {
-  if (Platform.OS === 'android') {
-    ToastAndroid.show(message, ToastAndroid.SHORT);
-    return;
-  }
-  Alert.alert('Success', message);
+function nextRouteAfterDocumentsSubmit(driverMe) {
+  if (driverMe?.phoneVerified === true) return 'DriverTabs';
+  return 'DriverVerifyPhone';
 }
 
 function formatUploadErrorMessage(error, fallback) {
@@ -88,6 +83,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     selfieWithIdCard: null,
   });
   const [loading, setLoading] = useState(false);
+  /** True while showing post-submit alert so useLayoutEffect does not replace before the user taps Continue. */
+  const pendingSubmitAlertRef = useRef(false);
 
   const hasSubmittedDocs = !!(
     profile?.driverLicenceUrl ||
@@ -107,6 +104,13 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       navigation.replace('DriverTabs');
     }
   }, [navigation, profileApproved, vehicleApproved]);
+
+  // Pending review: leave upload screen — phone verify next if needed, otherwise tabs (matches App onboarding order).
+  useLayoutEffect(() => {
+    if (!isPending || enhancedSelfieOnly) return;
+    if (pendingSubmitAlertRef.current) return;
+    navigation.replace(nextRouteAfterDocumentsSubmit(driverStatus));
+  }, [isPending, enhancedSelfieOnly, navigation, driverStatus]);
 
   const getExistingDocUrl = (key) => {
     if (key === 'driverLicence') return profile?.driverLicenceUrl || null;
@@ -248,41 +252,43 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         }
       }
 
-      await refetchDriverStatus();
+      pendingSubmitAlertRef.current = true;
+      const latest = await refetchDriverStatus();
+      const target = nextRouteAfterDocumentsSubmit(latest ?? driverStatus);
+      const needsPhone = latest?.phoneVerified !== true;
+      let finishedAfterSubmit = false;
+      const finishAfterSubmit = () => {
+        if (finishedAfterSubmit) return;
+        finishedAfterSubmit = true;
+        pendingSubmitAlertRef.current = false;
+        if (enhancedSelfieOnly) {
+          AsyncStorage.removeItem(DRIVER_SKIP_ENHANCED_SELFIE_KEY).catch(() => {});
+        }
+        navigation.replace(target);
+      };
 
-      showSuccessMessage(
+      Alert.alert(
+        enhancedSelfieOnly ? 'Submitted' : 'Documents under review',
         enhancedSelfieOnly
-          ? 'Selfie with national ID submitted successfully.'
-          : 'Documents submitted successfully for review.',
+          ? 'Your selfie with national ID was submitted successfully.'
+          : needsPhone
+            ? 'We are reviewing your documents. You will be notified when there is an update. Next, verify your phone number to continue.'
+            : 'We are reviewing your documents. You will be notified when there is an update. Continue to your dashboard.',
+        [{ text: 'Continue', onPress: finishAfterSubmit }],
+        { onDismiss: finishAfterSubmit }
       );
-
-      if (enhancedSelfieOnly) {
-        await AsyncStorage.removeItem(DRIVER_SKIP_ENHANCED_SELFIE_KEY).catch(() => {});
-        navigation.replace('DriverTabs');
-      }
     } catch (error) {
+      pendingSubmitAlertRef.current = false;
       Alert.alert('Error', error?.message || 'Failed to submit');
     } finally {
       setLoading(false);
     }
   };
 
-  if (isPending && !enhancedSelfieOnly) {
+  if (isPending && !enhancedSelfieOnly && !pendingSubmitAlertRef.current) {
     return (
-      <View className="flex-1 bg-white">
-        <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}>
-          <View className="h-10 w-10" />
-        </View>
-        <View className="flex-1 px-5 justify-center items-center">
-          <Ionicons name="time-outline" size={64} color={PRIMARY_BLUE} />
-          <Text className="mt-4 text-xl font-bold text-gray-900">Under review</Text>
-          <Text className="mt-2 text-center text-gray-600">Your documents are being verified. We&apos;ll notify you once approved.</Text>
-          {/*
-          <TouchableOpacity className="mt-6 py-3" onPress={handleSkip}>
-            <Text className="text-base text-gray-500">Skip to dashboard</Text>
-          </TouchableOpacity>
-          */}
-        </View>
+      <View className="flex-1 items-center justify-center bg-white">
+        <ActivityIndicator size="large" color={PRIMARY_BLUE} />
       </View>
     );
   }

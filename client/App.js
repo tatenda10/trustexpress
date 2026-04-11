@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ClerkProvider, useAuth, useUser } from '@clerk/clerk-expo';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -48,9 +48,8 @@ import DriverEmailLoginScreen from './screens/driver/auth/DriverEmailLoginScreen
 import DriverPhoneLoginScreen from './screens/driver/auth/DriverPhoneLoginScreen';
 import { DriverStatusProvider } from './context/DriverStatusContext';
 import { AgentInviteProvider, useAgentInvite } from './context/AgentInviteContext';
+import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
-
-const navigationRef = createNavigationContainerRef();
 
 const Stack = createNativeStackNavigator();
 
@@ -122,8 +121,6 @@ function AppStack() {
   const [driverStatusHydrated, setDriverStatusHydrated] = useState(false);
   const [passengerLocationGranted, setPassengerLocationGranted] = useState(null);
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
-  const [passengerSkippedLocation, setPassengerSkippedLocation] = useState(false);
-  const [passengerSkippedPhoneVerify, setPassengerSkippedPhoneVerify] = useState(false);
   const [roleBootstrapped, setRoleBootstrapped] = useState(false);
 
   const resolveExplicitRole = useCallback((profile) => {
@@ -385,6 +382,11 @@ function AppStack() {
     return () => { cancelled = true; };
   }, [resolveExplicitRole, storageLoaded, storedRole, user?.firstName, user?.id, user?.lastName, inviteToken, clearInvite]);
 
+  const patchDriverStatus = useCallback((patch) => {
+    if (!patch || typeof patch !== 'object') return;
+    setDriverStatus((prev) => ({ ...(prev && typeof prev === 'object' ? prev : {}), ...patch }));
+  }, []);
+
   const refetchDriverStatus = useCallback(async () => {
     if (!isDriver) return;
     try {
@@ -559,8 +561,8 @@ function AppStack() {
 
     const passengerPhoneVerified = userProfile?.phoneVerified === true;
     const needPassengerProfile = needsProfileCompletion;
-    const needPassengerLocation = passengerLocationGranted !== true && !passengerSkippedLocation;
-    const needPassengerPhoneVerify = !passengerPhoneVerified && !passengerSkippedPhoneVerify;
+    const needPassengerLocation = passengerLocationGranted !== true;
+    const needPassengerPhoneVerify = !passengerPhoneVerified;
     const passengerInitialRoute = needPassengerProfile
       ? 'PassengerCompleteProfile'
       : needPassengerLocation
@@ -601,10 +603,6 @@ function AppStack() {
                 // Move forward immediately instead of waiting for navigator key reset.
                 props.navigation.replace(needPassengerPhoneVerify ? 'PassengerVerifyPhone' : 'PassengerTabs');
               }}
-              onSkip={() => {
-                setPassengerSkippedLocation(true);
-                props.navigation.replace(needPassengerPhoneVerify ? 'PassengerVerifyPhone' : 'PassengerTabs');
-              }}
             />
           )}
         </Stack.Screen>
@@ -614,11 +612,6 @@ function AppStack() {
               {...props}
               onVerified={async () => {
                 await refetchUserProfile();
-                setPassengerSkippedPhoneVerify(false);
-              }}
-              onSkip={() => {
-                setPassengerSkippedPhoneVerify(true);
-                props.navigation.replace('PassengerTabs');
               }}
             />
           )}
@@ -637,9 +630,36 @@ function AppStack() {
   const profileApproved = profileStatus === 'approved' || profileStatus === 'verified';
   const vehicleApproved = vehicleStatus === 'approved' || vehicleStatus === 'verified';
   const needDriverEnhancedSelfie = profileApproved && !vehicleApproved && !profile?.selfieWithIdCardUrl && !driverSkippedEnhancedSelfie;
-  const needProfile = !profile || !profileApproved;
-  const needPhoneVerify = profileApproved && !phoneVerified && !driverSkippedPhoneVerify;
-  const needVehicle = profileApproved && (!vehicle || !vehicleApproved);
+
+  const hasDriverSubmittedIdentityDocs = !!(
+    profile &&
+    (profile.nationalIdFrontUrl ||
+      profile.nationalIdBackUrl ||
+      profile.driverLicenceUrl ||
+      profile.selfieUrl ||
+      profile.selfieWithIdCardUrl)
+  );
+  const identityAwaitingAdminReview =
+    !!profile && profileStatus === 'pending' && hasDriverSubmittedIdentityDocs;
+
+  // Only force the document upload screen when the driver still needs to submit or resubmit — not when docs are already in review.
+  const needDriverDocumentUpload =
+    !profile ||
+    (!profileApproved &&
+      !identityAwaitingAdminReview &&
+      (profileStatus === 'rejected' ||
+        profileStatus === 'not_submitted' ||
+        !String(profileStatus || '').trim() ||
+        !hasDriverSubmittedIdentityDocs));
+
+  const needPhoneVerify =
+    !phoneVerified &&
+    !driverSkippedPhoneVerify &&
+    (profileApproved || identityAwaitingAdminReview);
+  // Do not park drivers on the register screen while the vehicle is pending admin review (same idea as identity docs in review).
+  const needVehicle =
+    profileApproved &&
+    (!vehicle || (!vehicleApproved && vehicleStatus !== 'pending'));
   const canGoOnline = profileApproved && vehicleApproved;
 
   if (!driverStatusHydrated || driverLoading) {
@@ -652,7 +672,7 @@ function AppStack() {
         ? 'DriverCompleteProfile'
       : needDriverEnhancedSelfie
         ? 'DriverEnhancedSelfie'
-        : needProfile
+        : needDriverDocumentUpload
           ? 'DriverUploadDocuments'
           : needPhoneVerify
             ? 'DriverVerifyPhone'
@@ -665,6 +685,7 @@ function AppStack() {
       value={{
         driverStatus,
         refetchDriverStatus,
+        patchDriverStatus,
         onSkippedPhoneVerify: () => setDriverSkippedPhoneVerify(true),
       }}
     >
@@ -689,7 +710,7 @@ function AppStack() {
                     ? 'DriverTabs'
                     : needDriverEnhancedSelfie
                       ? 'DriverEnhancedSelfie'
-                      : needProfile
+                      : needDriverDocumentUpload
                         ? 'DriverUploadDocuments'
                         : needPhoneVerify
                           ? 'DriverVerifyPhone'

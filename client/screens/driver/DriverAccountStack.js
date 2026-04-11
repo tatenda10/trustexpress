@@ -5,7 +5,7 @@ import DriverPhoneVerificationPage from './DriverPhoneVerificationPage';
 import DriverReviewsScreen from './DriverReviewsScreen';
 import SupportChatScreen from '../shared/SupportChatScreen';
 import LegalDocumentScreen from '../shared/LegalDocumentScreen';
-// import DriverDocumentationPage from './DriverDocumentationPage';
+import DriverDocumentationPage from './DriverDocumentationPage';
 import DriverCarRegistrationPage from './DriverCarRegistrationPage';
 
 const Stack = createNativeStackNavigator();
@@ -39,11 +39,11 @@ export default function DriverAccountStack({ route }) {
         name="DriverLegalDocument"
         component={LegalDocumentScreen}
       />
-      {/* <Stack.Screen
+      <Stack.Screen
         name="DriverDocumentation"
         component={DriverDocumentationPage}
         initialParams={{ driverStatus }}
-      /> */}
+      />
       <Stack.Screen
         name="DriverCarRegistration"
         component={DriverCarRegistrationPage}

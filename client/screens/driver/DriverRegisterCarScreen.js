@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Modal,
+  InteractionManager,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,12 +17,26 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { getDriverVehicleOptions, submitVehicle, uploadFile } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';
+import { navigationRef } from '../../navigationRef';
+
+function navigateToDriverAccountTab() {
+  if (!navigationRef.isReady()) return;
+  try {
+    navigationRef.navigate('DriverTabs', {
+      screen: 'DriverAccount',
+      params: { screen: 'DriverAccountMain' },
+    });
+  } catch {
+    try {
+      navigationRef.navigate('DriverTabs');
+    } catch {
+      // ignore
+    }
+  }
+}
 
 const MIN_CAR_PHOTOS = 3;
 const MAX_CAR_PHOTOS = 6;
-const YEAR_OPTIONS = Array.from({ length: new Date().getFullYear() - 1989 }, (_, index) => String(new Date().getFullYear() - index));
-const SEAT_OPTIONS = ['2', '4', '5', '6', '7', '8', '10', '14', '18'];
-const DOOR_OPTIONS = ['2', '3', '4', '5'];
 const UPLOAD_RETRY_COUNT = 2;
 
 async function prepareImageForUpload(uri, { maxWidth = 1600, compress = 0.7 } = {}) {
@@ -55,23 +69,6 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
   await Promise.all(workers);
   return results;
-}
-
-function SelectField({ label, value, placeholder, onPress }) {
-  return (
-    <>
-      <Text className="text-sm font-medium text-gray-700 mb-2">{label} <Text className="text-red-500">*</Text></Text>
-      <TouchableOpacity
-        onPress={onPress}
-        className="mb-4 flex-row items-center justify-between rounded-xl border border-gray-200 p-4"
-      >
-        <Text className={`text-base ${value ? 'text-gray-900' : 'text-gray-400'}`}>
-          {value || placeholder}
-        </Text>
-        <Ionicons name="chevron-down" size={20} color="#6b7280" />
-      </TouchableOpacity>
-    </>
-  );
 }
 
 function askCropPreference() {
@@ -121,7 +118,17 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [tiers, setTiers] = useState([]);
   const [tiersLoading, setTiersLoading] = useState(true);
   const [selectedTierKey, setSelectedTierKey] = useState(vehicle?.vehicleTierKey || '');
-  const [activeSelectField, setActiveSelectField] = useState(null);
+  /** When true, vehicle is pending after a successful submit — show alert before auto-redirect skips this. */
+  const pendingSubmitAlertRef = useRef(false);
+
+  // Pending vehicle (e.g. reopened app): go to Account — use root ref so it still works after stack remounts.
+  useLayoutEffect(() => {
+    if (!isPending || isVehicleBlocked) return;
+    if (pendingSubmitAlertRef.current) return;
+    InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => navigateToDriverAccountTab());
+    });
+  }, [isPending, isVehicleBlocked]);
 
   useEffect(() => {
     let active = true;
@@ -249,6 +256,23 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       return;
     }
 
+    const yearNum = Number(year);
+    const currentYear = new Date().getFullYear();
+    if (!Number.isInteger(yearNum) || yearNum < 1950 || yearNum > currentYear + 1) {
+      Alert.alert('Invalid year', `Enter a year between 1950 and ${currentYear + 1}.`);
+      return;
+    }
+    const seatsNum = Number(seatCount);
+    const doorsNum = Number(doorCount);
+    if (!Number.isInteger(seatsNum) || seatsNum < 1 || seatsNum > 50) {
+      Alert.alert('Invalid seats', 'Enter a whole number of passenger seats between 1 and 50.');
+      return;
+    }
+    if (!Number.isInteger(doorsNum) || doorsNum < 1 || doorsNum > 10) {
+      Alert.alert('Invalid doors', 'Enter a whole number of doors between 1 and 10.');
+      return;
+    }
+
     setLoading(true);
     try {
       const token = await getToken({ skipCache: true });
@@ -273,10 +297,10 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         numberPlate: numberPlate.trim(),
         make: make.trim(),
         model: model.trim(),
-        year: Number(year),
+        year: yearNum,
         color: color.trim() || null,
-        seatCount: Number(seatCount),
-        doorCount: Number(doorCount),
+        seatCount: seatsNum,
+        doorCount: doorsNum,
         vehicleCategory,
         hasAirConditioning,
         hasChargingPorts,
@@ -293,8 +317,33 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         vehicleTierName: selectedTier?.tierName || null,
       });
 
-      await refetchDriverStatus();
-      Alert.alert('Submitted', 'Your vehicle registration has been submitted for review.');
+      pendingSubmitAlertRef.current = true;
+      // Do not refetch before this alert: it remounts the driver stack (`key={initialRoute}`) and invalidates
+      // `navigation.replace`, which then leaves `isPending && !pendingSubmitAlertRef` → blank white view.
+      let finishedAfterSubmit = false;
+      const finishAfterSubmit = () => {
+        if (finishedAfterSubmit) return;
+        finishedAfterSubmit = true;
+        void (async () => {
+          try {
+            await refetchDriverStatus();
+          } catch {
+            // User already submitted — still send them to Account.
+          }
+          InteractionManager.runAfterInteractions(() => {
+            requestAnimationFrame(() => {
+              navigateToDriverAccountTab();
+              pendingSubmitAlertRef.current = false;
+            });
+          });
+        })();
+      };
+      Alert.alert(
+        'Vehicle under review',
+        'We are reviewing your registration. You will be notified when there is an update. Status is also shown under Account → Car registration.',
+        [{ text: 'OK', onPress: finishAfterSubmit }],
+        { onDismiss: finishAfterSubmit }
+      );
     } catch (error) {
       Alert.alert('Error', error?.message || 'Failed to submit');
     } finally {
@@ -302,19 +351,11 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
     }
   };
 
-  if (isPending) {
+  if (isPending && !isVehicleBlocked && !pendingSubmitAlertRef.current) {
     return (
-      <View className="flex-1 bg-white">
-        <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}>
-          <TouchableOpacity onPress={() => navigation.goBack()} className="p-2 -ml-2">
-            <Ionicons name="arrow-back" size={24} color="#000" />
-          </TouchableOpacity>
-        </View>
-        <View className="flex-1 px-5 justify-center items-center">
-          <Ionicons name="time-outline" size={64} color="#206EFF" />
-          <Text className="text-xl font-bold text-gray-900 mt-4">Under review</Text>
-          <Text className="text-gray-600 text-center mt-2">Your vehicle registration is being verified. We&apos;ll notify you once approved.</Text>
-        </View>
+      <View className="flex-1 bg-white items-center justify-center px-6">
+        <ActivityIndicator size="large" color="#206EFF" />
+        <Text className="text-base text-gray-600 text-center mt-4">Opening your account…</Text>
       </View>
     );
   }
@@ -433,25 +474,34 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Toyota" value={make} onChangeText={setMake} />
         <Text className="text-sm font-medium text-gray-700 mb-2">Model <Text className="text-red-500">*</Text></Text>
         <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Corolla" value={model} onChangeText={setModel} />
-        <SelectField
-          label="Year"
+        <Text className="text-sm font-medium text-gray-700 mb-2">Year <Text className="text-red-500">*</Text></Text>
+        <TextInput
+          className="border border-gray-200 rounded-xl p-4 text-base mb-4"
+          placeholder="e.g. 2019"
           value={year}
-          placeholder="Select year"
-          onPress={() => setActiveSelectField('year')}
+          onChangeText={(text) => setYear(text.replace(/[^\d]/g, '').slice(0, 4))}
+          keyboardType="number-pad"
+          maxLength={4}
         />
         <Text className="text-sm font-medium text-gray-700 mb-2">Color</Text>
         <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Silver" value={color} onChangeText={setColor} />
-        <SelectField
-          label="Passenger seats"
+        <Text className="text-sm font-medium text-gray-700 mb-2">Passenger seats <Text className="text-red-500">*</Text></Text>
+        <TextInput
+          className="border border-gray-200 rounded-xl p-4 text-base mb-4"
+          placeholder="e.g. 5"
           value={seatCount}
-          placeholder="Select seats"
-          onPress={() => setActiveSelectField('seatCount')}
+          onChangeText={(text) => setSeatCount(text.replace(/[^\d]/g, '').slice(0, 2))}
+          keyboardType="number-pad"
+          maxLength={2}
         />
-        <SelectField
-          label="Doors"
+        <Text className="text-sm font-medium text-gray-700 mb-2">Doors <Text className="text-red-500">*</Text></Text>
+        <TextInput
+          className="border border-gray-200 rounded-xl p-4 text-base mb-4"
+          placeholder="e.g. 4"
           value={doorCount}
-          placeholder="Select doors"
-          onPress={() => setActiveSelectField('doorCount')}
+          onChangeText={(text) => setDoorCount(text.replace(/[^\d]/g, '').slice(0, 2))}
+          keyboardType="number-pad"
+          maxLength={2}
         />
 
         <Text className="text-sm font-medium text-gray-700 mb-2">Vehicle category</Text>
@@ -549,37 +599,6 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-white text-lg font-semibold">Submit for review</Text>}
         </TouchableOpacity>
       </ScrollView>
-
-      <Modal visible={!!activeSelectField} transparent animationType="slide" onRequestClose={() => setActiveSelectField(null)}>
-        <TouchableOpacity className="flex-1 justify-end bg-black/40" activeOpacity={1} onPress={() => setActiveSelectField(null)}>
-          <TouchableOpacity activeOpacity={1} onPress={(event) => event.stopPropagation()} className="rounded-t-[24px] bg-white px-5 pt-4">
-            <Text className="text-lg font-bold text-gray-900 mb-4">
-              {activeSelectField === 'year' ? 'Select year' : activeSelectField === 'seatCount' ? 'Select passenger seats' : 'Select doors'}
-            </Text>
-            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 12, 24) }}>
-              {(activeSelectField === 'year' ? YEAR_OPTIONS : activeSelectField === 'seatCount' ? SEAT_OPTIONS : DOOR_OPTIONS).map((option) => (
-                <TouchableOpacity
-                  key={option}
-                  onPress={() => {
-                    if (activeSelectField === 'year') setYear(option);
-                    if (activeSelectField === 'seatCount') setSeatCount(option);
-                    if (activeSelectField === 'doorCount') setDoorCount(option);
-                    setActiveSelectField(null);
-                  }}
-                  className="flex-row items-center justify-between border-b border-gray-100 py-4"
-                >
-                  <Text className="text-base text-gray-900">{option}</Text>
-                  {(activeSelectField === 'year' && year === option)
-                    || (activeSelectField === 'seatCount' && seatCount === option)
-                    || (activeSelectField === 'doorCount' && doorCount === option) ? (
-                    <Ionicons name="checkmark" size={20} color="#206EFF" />
-                  ) : null}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 };
