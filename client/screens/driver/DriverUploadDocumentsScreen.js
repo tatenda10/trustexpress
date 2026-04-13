@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { submitDriverDocuments, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
@@ -59,6 +60,16 @@ function formatUploadErrorMessage(error, fallback) {
 
   if (!apiMessage) return fallback;
   return apiMessage;
+}
+
+async function prepareImageForUpload(uri, { maxWidth = 1280, compress = 0.7 } = {}) {
+  if (!uri || /^https?:\/\//i.test(uri) || String(uri).startsWith('/uploads/')) return uri;
+  const result = await ImageManipulator.manipulateAsync(
+    uri,
+    [{ resize: { width: maxWidth } }],
+    { compress, format: ImageManipulator.SaveFormat.JPEG }
+  );
+  return result?.uri || uri;
 }
 
 export default function DriverUploadDocumentsScreen({ navigation, route }) {
@@ -169,8 +180,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   };
 
   const uploadUri = async (token, uri, label) => {
+    const uploadReadyUri = await prepareImageForUpload(uri);
     const formData = new FormData();
-    formData.append('file', { uri, name: 'photo.jpg', type: 'image/jpeg' });
+    formData.append('file', { uri: uploadReadyUri, name: 'photo.jpg', type: 'image/jpeg' });
     try {
       const { url } = await uploadFile(token, formData);
       console.log('[DriverUploadDocumentsScreen] upload success', { label, url });
@@ -179,6 +191,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       console.log('[DriverUploadDocumentsScreen] upload failed', {
         label,
         uri,
+        uploadReadyUri,
         error: error?.message || null,
         apiError: error?.response?.data || null,
       });

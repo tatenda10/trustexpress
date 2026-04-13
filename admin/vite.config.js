@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-
+import BASE_URL from './src/context/Api'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -9,11 +9,11 @@ export default defineConfig({
     allowedHosts: ['.ngrok-free.app'],
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: BASE_URL,
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:5000',
+        target: BASE_URL,
         changeOrigin: true,
       },
     },
