@@ -10,10 +10,15 @@ export function resolveMediaUrl(value) {
   if (/^https?:\/\//i.test(collapsed)) return collapsed
 
   if (/^\/?uploads\//i.test(collapsed)) {
-    return collapsed.startsWith('/') ? collapsed : `/${collapsed}`
+    const path = collapsed.startsWith('/') ? collapsed : `/${collapsed}`
+    if (BASE_URL) return `${BASE_URL}${path}`
+    return path
   }
 
-  if (collapsed.startsWith('/')) return collapsed
+  if (collapsed.startsWith('/')) {
+    if (BASE_URL) return `${BASE_URL}${collapsed}`
+    return collapsed
+  }
 
   return collapsed
 }
