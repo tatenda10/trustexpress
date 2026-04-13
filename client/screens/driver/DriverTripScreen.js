@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -125,6 +126,15 @@ function getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCo
     return [driverCoordinate, ...routeCoordinates.slice(0, 18), targetCoordinate].filter(Boolean);
   }
   return [driverCoordinate, targetCoordinate].filter(Boolean);
+}
+
+function toGoogleMapsLink(label, coordinate) {
+  if (!coordinate) return '';
+  const lat = Number(coordinate.latitude);
+  const lng = Number(coordinate.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+  const query = encodeURIComponent(label ? `${label} (${lat},${lng})` : `${lat},${lng}`);
+  return `https://www.google.com/maps/search/?api=1&query=${query}`;
 }
 
 async function fetchGoogleDirections(origin, destination) {
@@ -663,6 +673,27 @@ export default function DriverTripScreen({ navigation }) {
     zoom: 16,
   } : null;
 
+  const destinationForMaps = ride.stage === 'on_trip' ? ride.dropoffCoordinate : ride.pickupCoordinate;
+  const destinationLabelForMaps = ride.stage === 'on_trip' ? ride.dropoffLabel : ride.pickupLabel;
+
+  const handleOpenGoogleMaps = async () => {
+    try {
+      const url = toGoogleMapsLink(destinationLabelForMaps, destinationForMaps);
+      if (!url) {
+        Alert.alert('Navigation unavailable', 'Could not open navigation for this trip.');
+        return;
+      }
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('Google Maps unavailable', 'Install Google Maps or use another maps app on this device.');
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Navigation unavailable', 'Could not open Google Maps right now.');
+    }
+  };
+
   return (
     <View className="flex-1 bg-white">
       <View className="flex-row items-center justify-between bg-white px-5 pb-3" style={{ paddingTop: insets.top + 8 }}>
@@ -753,12 +784,19 @@ export default function DriverTripScreen({ navigation }) {
             <Text className="mt-1 text-base font-bold text-gray-900">{ride.dropoffLabel}</Text>
 
             <TouchableOpacity
+              onPress={handleOpenGoogleMaps}
+              className="mt-5 h-12 items-center justify-center rounded-[18px] border border-blue-200 bg-white"
+            >
+              <Text style={{ color: PRIMARY_BLUE }} className="text-base font-bold">Open in Google Maps</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               onPress={() => navigation.navigate('RideChat', {
                 rideRequestId: ride.id,
                 role: 'driver',
                 chatTitle: ride.passengerName || 'Passenger chat',
               })}
-              className="mt-5 h-12 items-center justify-center rounded-[18px] border border-blue-200 bg-white"
+              className="mt-3 h-12 items-center justify-center rounded-[18px] border border-blue-200 bg-white"
             >
               <Text style={{ color: PRIMARY_BLUE }} className="text-base font-bold">Message passenger</Text>
             </TouchableOpacity>

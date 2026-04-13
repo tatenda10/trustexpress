@@ -130,24 +130,10 @@ async function queryWithDeadlockRetry(sql, params = [], attempts = DEADLOCK_RETR
 }
 
 async function cleanupStaleActiveRides(driverUserId = null) {
-  const params = [];
-  let driverClause = '';
-
-  if (driverUserId) {
-    driverClause = ' AND driver_user_id = ?';
-    params.push(driverUserId);
-  }
-
-  await query(
-    `UPDATE ride_requests
-     SET status = 'cancelled',
-         cancellation_reason = 'Ride expired because the trip became stale',
-         cancelled_at = CURRENT_TIMESTAMP
-     WHERE status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-       AND COALESCE(updated_at, arrived_at, assigned_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${STALE_SIM_ACTIVE_RIDE_TTL_MINUTES} MINUTE)
-       ${driverClause}`,
-    params
-  );
+  // Intentionally no-op: active rides must survive app/background/network disconnects.
+  // Auto-cancelling stale active trips caused mid-trip cancellations while users were still driving.
+  // We keep this hook for future non-destructive stale handling (alerts/recovery), not cancellation.
+  return;
 }
 
 async function requireDriver(req, res) {
@@ -266,10 +252,21 @@ router.post('/availability', requireAuth, async (req, res) => {
     const verification = await getDriverVerificationFromMysql(req.userId, user);
     const profile = verification.driverProfile || null;
     const vehicle = verification.vehicle || null;
+    const profileStatus = String(profile?.status || '').trim().toLowerCase();
+    const vehicleStatus = String(vehicle?.status || '').trim().toLowerCase();
+    const profileApproved = profileStatus === 'approved' || profileStatus === 'verified';
+    const vehicleApproved = vehicleStatus === 'approved' || vehicleStatus === 'verified';
+    const phoneVerified = verification?.phoneVerified === true;
 
     const isOnline = req.body?.isOnline === true;
     const latitude = req.body?.latitude === null || req.body?.latitude === undefined ? null : Number(req.body.latitude);
     const longitude = req.body?.longitude === null || req.body?.longitude === undefined ? null : Number(req.body.longitude);
+
+    if (isOnline && (!profileApproved || !vehicleApproved || !phoneVerified)) {
+      return res.status(403).json({
+        error: 'Complete profile approval, vehicle approval, and phone verification before going online.',
+      });
+    }
 
     if (isOnline && (!Number.isFinite(latitude) || !Number.isFinite(longitude))) {
       return res.status(400).json({ error: 'A valid driver location is required to go online.' });

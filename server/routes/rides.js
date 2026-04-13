@@ -219,15 +219,6 @@ async function expireRideRequestIfTimedOut(rideId, passengerUserId = null) {
 }
 
 async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKey }) {
-  await query(
-    `UPDATE ride_requests
-     SET status = 'cancelled',
-         cancellation_reason = 'Ride expired because the trip became stale',
-         cancelled_at = CURRENT_TIMESTAMP
-     WHERE status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-       AND COALESCE(updated_at, arrived_at, assigned_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${STALE_ACTIVE_RIDE_TTL_MINUTES} MINUTE)`
-  );
-
   const availabilityRows = await query(
     `SELECT da.*
      FROM driver_availability da
