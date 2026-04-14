@@ -1259,15 +1259,6 @@ router.post('/vehicle', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'You are not allowed to resubmit vehicle documents. Contact support.' });
     }
 
-    const [identityRow] = await query(
-      'SELECT profile_status FROM driver_identity WHERE driver_user_id = ? LIMIT 1',
-      [req.userId]
-    );
-    const profileApproved = identityRow?.profile_status === 'approved';
-    if (!profileApproved) {
-      return res.status(400).json({ error: 'Driver profile must be approved before registering a vehicle' });
-    }
-
     const {
       carPhotoFrontUrl,
       carPhotoRearUrl,

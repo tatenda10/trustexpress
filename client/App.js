@@ -654,8 +654,7 @@ function AppStack() {
 
   const needPhoneVerify =
     !phoneVerified &&
-    !driverSkippedPhoneVerify &&
-    (profileApproved || identityAwaitingAdminReview);
+    !driverSkippedPhoneVerify;
   // Do not park drivers on the register screen while the vehicle is pending admin review (same idea as identity docs in review).
   const needVehicle =
     profileApproved &&
@@ -670,15 +669,15 @@ function AppStack() {
         ? 'DriverTabs'
       : needDriverProfileCompletion
         ? 'DriverCompleteProfile'
+      : needPhoneVerify
+        ? 'DriverVerifyPhone'
       : needDriverEnhancedSelfie
         ? 'DriverEnhancedSelfie'
         : needDriverDocumentUpload
           ? 'DriverUploadDocuments'
-          : needPhoneVerify
-            ? 'DriverVerifyPhone'
-            : needVehicle
-              ? 'DriverRegisterCar'
-              : 'DriverTabs';
+          : needVehicle
+            ? 'DriverRegisterCar'
+            : 'DriverTabs';
 
   return (
     <DriverStatusProvider
@@ -708,12 +707,12 @@ function AppStack() {
                 props.navigation.replace(
                   canGoOnline
                     ? 'DriverTabs'
-                    : needDriverEnhancedSelfie
-                      ? 'DriverEnhancedSelfie'
-                      : needDriverDocumentUpload
-                        ? 'DriverUploadDocuments'
-                        : needPhoneVerify
-                          ? 'DriverVerifyPhone'
+                    : needPhoneVerify
+                      ? 'DriverVerifyPhone'
+                      : needDriverEnhancedSelfie
+                        ? 'DriverEnhancedSelfie'
+                        : needDriverDocumentUpload
+                          ? 'DriverUploadDocuments'
                           : needVehicle
                             ? 'DriverRegisterCar'
                             : 'DriverTabs'

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Image, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Image, Linking, Modal } from 'react-native';
 import { useUser, useClerk, useAuth } from '@clerk/clerk-expo';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,6 +23,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [deleting, setDeleting] = useState(false);
   const [profileData, setProfileData] = useState(null);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
+  const [showProfileImagePreview, setShowProfileImagePreview] = useState(false);
 
   const refetchRef = useRef(refetchDriverStatus);
   refetchRef.current = refetchDriverStatus;
@@ -247,6 +248,13 @@ const DriverAccountScreen = ({ navigation, route }) => {
       icon: 'document-text-outline',
       documentationReviewOnly: documentationAwaitingReviewOnly,
       onPress: () => {
+        if (profileApproved) {
+          Alert.alert(
+            'Document approved',
+            'Your documents are approved.',
+          );
+          return;
+        }
         if (documentationAwaitingReviewOnly) {
           Alert.alert(
             'Documents under review',
@@ -265,6 +273,13 @@ const DriverAccountScreen = ({ navigation, route }) => {
       icon: 'car-outline',
       vehicleRegistrationReviewOnly: vehicleRegistrationAwaitingReviewOnly,
       onPress: () => {
+        if (vehicleApproved) {
+          Alert.alert(
+            'Car verified',
+            'Your car is verified.',
+          );
+          return;
+        }
         if (vehicleRegistrationAwaitingReviewOnly) {
           Alert.alert(
             'Vehicle under review',
@@ -423,21 +438,24 @@ const DriverAccountScreen = ({ navigation, route }) => {
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 40 }}
         showsVerticalScrollIndicator={false}
       >
-        <View className="items-center px-4 pb-6 pt-4">
+        <View className="items-center px-4 pb-6 pt-2">
           <View className="relative">
-            <View className="h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-white">
+            <View className="h-[108px] w-[108px] items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#e8f1ff] shadow-sm">
               {profileImageUrl ? (
                 <Image
                   source={{ uri: profileImageUrl }}
-                  style={{ width: 96, height: 96 }}
+                  style={{ width: 108, height: 108 }}
                   resizeMode="cover"
                 />
               ) : (
-                <Ionicons name="person" size={30} color="#374151" />
+                <Ionicons name="person" size={36} color="#1f2937" />
               )}
             </View>
+            {allVerified ? (
+              <View className="absolute right-1 top-1 h-4 w-4 rounded-full border-2 border-white bg-[#25D366]" />
+            ) : null}
             <TouchableOpacity
-              className="absolute bottom-0 right-0 h-9 w-9 items-center justify-center rounded-full bg-[#111827]"
+              className="absolute bottom-0 right-0 h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
               activeOpacity={0.8}
               onPress={handleChangeProfilePhoto}
               disabled={updatingProfileImage}
@@ -449,9 +467,19 @@ const DriverAccountScreen = ({ navigation, route }) => {
               )}
             </TouchableOpacity>
           </View>
-          <TouchableOpacity activeOpacity={0.75} onPress={handleChangeProfilePhoto} disabled={updatingProfileImage}>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            onPress={() => {
+              if (profileImageUrl) {
+                setShowProfileImagePreview(true);
+              } else {
+                handleChangeProfilePhoto();
+              }
+            }}
+            disabled={updatingProfileImage}
+          >
             <Text className="mt-3 text-sm font-semibold text-[#2f73c9]">
-              {profileImageUrl ? 'Edit profile picture' : 'Add profile picture'}
+              {profileImageUrl ? 'View profile picture' : 'Add profile picture'}
             </Text>
           </TouchableOpacity>
           <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{driverName}</Text>
@@ -611,6 +639,40 @@ const DriverAccountScreen = ({ navigation, route }) => {
         </TouchableOpacity>
 
       </ScrollView>
+
+      <Modal
+        visible={showProfileImagePreview}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowProfileImagePreview(false)}
+      >
+        <View className="flex-1 bg-black/90 items-center justify-center">
+          <TouchableOpacity
+            className="absolute top-14 right-6 h-10 w-10 items-center justify-center rounded-full bg-black/40"
+            onPress={() => setShowProfileImagePreview(false)}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+          {profileImageUrl ? (
+            <Image
+              source={{ uri: profileImageUrl }}
+              style={{ width: 320, height: 320, borderRadius: 160 }}
+              resizeMode="cover"
+            />
+          ) : null}
+          <TouchableOpacity
+            className="mt-8 h-12 px-6 items-center justify-center rounded-full bg-white"
+            onPress={handleChangeProfilePhoto}
+            disabled={updatingProfileImage}
+          >
+            {updatingProfileImage ? (
+              <ActivityIndicator size="small" color="#111827" />
+            ) : (
+              <Text className="text-base font-semibold text-gray-900">Change photo</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   );
 };

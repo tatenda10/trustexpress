@@ -46,6 +46,11 @@ function askCropPreference() {
 }
 
 function nextRouteAfterDocumentsSubmit(driverMe) {
+  const vehicleStatus = String(driverMe?.vehicle?.status || '').trim().toLowerCase();
+  const hasVehicleSubmission =
+    !!driverMe?.vehicle &&
+    (vehicleStatus === 'approved' || vehicleStatus === 'verified' || vehicleStatus === 'pending');
+  if (!hasVehicleSubmission) return 'DriverRegisterCar';
   if (driverMe?.phoneVerified === true) return 'DriverTabs';
   return 'DriverVerifyPhone';
 }
@@ -284,9 +289,11 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         enhancedSelfieOnly ? 'Submitted' : 'Documents under review',
         enhancedSelfieOnly
           ? 'Your selfie with national ID was submitted successfully.'
-          : needsPhone
-            ? 'We are reviewing your documents. You will be notified when there is an update. Next, verify your phone number to continue.'
-            : 'We are reviewing your documents. You will be notified when there is an update. Continue to your dashboard.',
+          : target === 'DriverRegisterCar'
+            ? 'Documents saved. Continue by registering your car now so both checks can run in parallel.'
+            : needsPhone
+              ? 'We are reviewing your documents. You will be notified when there is an update. Next, verify your phone number to continue.'
+              : 'We are reviewing your documents. You will be notified when there is an update. Continue to your dashboard.',
         [{ text: 'Continue', onPress: finishAfterSubmit }],
         { onDismiss: finishAfterSubmit }
       );

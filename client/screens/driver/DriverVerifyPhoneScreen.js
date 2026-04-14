@@ -41,10 +41,32 @@ function getNextDriverOnboardingRouteAfterPhoneVerified(driverMe) {
   const profileApproved = profileStatus === 'approved' || profileStatus === 'verified';
   const vehicleStatus = String(vehicle?.status || '').trim().toLowerCase();
   const vehicleApproved = vehicleStatus === 'approved' || vehicleStatus === 'verified';
+  const needDriverEnhancedSelfie = profileApproved && !vehicleApproved && !profile?.selfieWithIdCardUrl;
+  const hasDriverSubmittedIdentityDocs = !!(
+    profile &&
+    (profile.nationalIdFrontUrl ||
+      profile.nationalIdBackUrl ||
+      profile.driverLicenceUrl ||
+      profile.selfieUrl ||
+      profile.selfieWithIdCardUrl)
+  );
+  const identityAwaitingAdminReview =
+    !!profile && profileStatus === 'pending' && hasDriverSubmittedIdentityDocs;
+  const needDriverDocumentUpload =
+    !profile ||
+    (!profileApproved &&
+      !identityAwaitingAdminReview &&
+      (profileStatus === 'rejected' ||
+        profileStatus === 'not_submitted' ||
+        !String(profileStatus || '').trim() ||
+        !hasDriverSubmittedIdentityDocs));
   const needVehicle =
     profileApproved &&
     (!vehicle || (!vehicleApproved && vehicleStatus !== 'pending'));
-  return needVehicle ? 'DriverRegisterCar' : 'DriverTabs';
+  if (needDriverEnhancedSelfie) return 'DriverEnhancedSelfie';
+  if (needDriverDocumentUpload) return 'DriverUploadDocuments';
+  if (needVehicle) return 'DriverRegisterCar';
+  return 'DriverTabs';
 }
 
 function resetRootToDriverRoute(routeName) {
