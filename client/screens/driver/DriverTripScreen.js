@@ -137,6 +137,31 @@ function toGoogleMapsLink(label, coordinate) {
   return `https://www.google.com/maps/search/?api=1&query=${query}`;
 }
 
+function toGoogleMapsOpenUrls(label, coordinate) {
+  if (!coordinate) return [];
+  const lat = Number(coordinate.latitude);
+  const lng = Number(coordinate.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+
+  const encodedLabel = encodeURIComponent(String(label || 'Destination'));
+  const latLng = `${lat},${lng}`;
+
+  if (Platform.OS === 'android') {
+    return [
+      `google.navigation:q=${latLng}`,
+      `geo:${latLng}?q=${latLng}(${encodedLabel})`,
+      `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
+      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${label || 'Destination'} (${lat},${lng})`)}`,
+    ];
+  }
+
+  return [
+    `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`,
+    `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
+    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${label || 'Destination'} (${lat},${lng})`)}`,
+  ];
+}
+
 async function fetchGoogleDirections(origin, destination) {
   const apiKey = getDirectionsApiKey();
   if (!apiKey || !origin || !destination) {
@@ -678,17 +703,22 @@ export default function DriverTripScreen({ navigation }) {
 
   const handleOpenGoogleMaps = async () => {
     try {
-      const url = toGoogleMapsLink(destinationLabelForMaps, destinationForMaps);
-      if (!url) {
+      const fallbackLink = toGoogleMapsLink(destinationLabelForMaps, destinationForMaps);
+      const candidateUrls = toGoogleMapsOpenUrls(destinationLabelForMaps, destinationForMaps);
+      if (!fallbackLink || !candidateUrls.length) {
         Alert.alert('Navigation unavailable', 'Could not open navigation for this trip.');
         return;
       }
-      const supported = await Linking.canOpenURL(url);
-      if (!supported) {
-        Alert.alert('Google Maps unavailable', 'Install Google Maps or use another maps app on this device.');
-        return;
+
+      for (const url of candidateUrls) {
+        const supported = await Linking.canOpenURL(url);
+        if (supported) {
+          await Linking.openURL(url);
+          return;
+        }
       }
-      await Linking.openURL(url);
+
+      await Linking.openURL(fallbackLink);
     } catch {
       Alert.alert('Navigation unavailable', 'Could not open Google Maps right now.');
     }

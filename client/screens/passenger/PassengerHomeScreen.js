@@ -20,7 +20,7 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { getNearbyPassengerDrivers } from '../../api';
+import { getNearbyPassengerDrivers, getPassengerCurrentRide } from '../../api';
 
 const HARARE_FALLBACK = {
   latitude: -17.8252,
@@ -615,6 +615,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const mapRef = useRef(null);
   const searchTimeoutRef = useRef(null);
   const placesSessionTokenRef = useRef(generatePlacesSessionToken());
+  const resumedRideRef = useRef(false);
 
   const [mapRegion, setMapRegion] = useState(HARARE_FALLBACK);
   const [currentLocationCoordinate, setCurrentLocationCoordinate] = useState(null);
@@ -636,6 +637,46 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [routeDistanceKm, setRouteDistanceKm] = useState(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState(null);
   const [nearbyDrivers, setNearbyDrivers] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+
+    const resumeActiveRide = async () => {
+      if (resumedRideRef.current) return;
+      resumedRideRef.current = true;
+      try {
+        const token = await getToken();
+        if (!token || !active) return;
+        const data = await getPassengerCurrentRide(token);
+        const ride = data?.rideRequest;
+        if (!active || !ride?.id) return;
+
+        navigation.replace('PassengerRideTracking', {
+          pickupCoordinate: ride.pickupCoordinate,
+          dropoffCoordinate: ride.dropoffCoordinate,
+          pickupLabel: ride.pickupLabel,
+          dropoffLabel: ride.dropoffLabel,
+          estimatedAmount: Number(ride.estimatedAmount || 0),
+          selectedTier: ride.requestedTierKey || ride.requestedTierName
+            ? {
+                tierKey: ride.requestedTierKey || '',
+                tierName: ride.requestedTierName || 'Ride',
+              }
+            : null,
+          driver: data?.assignedDriver || null,
+          rideRequestId: ride.id,
+        });
+      } catch {
+        // Stay on booking home if no active ride exists.
+      }
+    };
+
+    resumeActiveRide();
+
+    return () => {
+      active = false;
+    };
+  }, [getToken, navigation]);
 
   useEffect(() => {
     let active = true;

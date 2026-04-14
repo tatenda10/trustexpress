@@ -220,6 +220,10 @@ export async function getPassengerRideRequestStatus(token, rideRequestId) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/status`, {}, token);
 }
 
+export async function getPassengerCurrentRide(token) {
+  return apiFetch('/api/rides/passenger/current-ride', {}, token);
+}
+
 export async function getRideMessages(token, rideRequestId) {
   return apiFetch(`/api/rides/${rideRequestId}/messages`, {}, token);
 }

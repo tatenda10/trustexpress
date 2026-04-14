@@ -556,6 +556,99 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/passenger/current-ride', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const [ride] = await query(
+      `SELECT *
+       FROM ride_requests
+       WHERE passenger_user_id = ?
+         AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+       ORDER BY
+         COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC,
+         id DESC
+       LIMIT 1`,
+      [req.userId]
+    );
+
+    if (!ride) {
+      return res.json({ rideRequest: null, assignedDriver: null });
+    }
+
+    const pickupCoordinate = {
+      latitude: Number(ride.pickup_lat),
+      longitude: Number(ride.pickup_lng),
+    };
+
+    const [driverAvailability] = await query(
+      `SELECT
+         driver_user_id,
+         driver_name,
+         phone_number,
+         vehicle_tier_key,
+         vehicle_tier_name,
+         vehicle_make,
+         vehicle_model,
+         number_plate,
+         car_photo_url,
+         current_lat,
+         current_lng
+       FROM driver_availability
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [ride.driver_user_id]
+    );
+
+    const assignedDriver = driverAvailability
+      ? mapDriverAvailability(
+          {
+            ...driverAvailability,
+            estimated_amount: ride.estimated_amount,
+          },
+          pickupCoordinate
+        )
+      : null;
+
+    const driverCoordinate = assignedDriver?.coordinate || null;
+
+    return res.json({
+      rideRequest: {
+        id: ride.id,
+        publicId: ride.public_id,
+        status: ride.status,
+        stage: mapPassengerTripStage(ride.status),
+        pickupLabel: ride.pickup_label,
+        pickupCoordinate,
+        dropoffLabel: ride.dropoff_label,
+        dropoffCoordinate: {
+          latitude: Number(ride.dropoff_lat),
+          longitude: Number(ride.dropoff_lng),
+        },
+        estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
+        estimatedMinutes: Number(ride.estimated_minutes || 0),
+        estimatedAmount: Number(ride.estimated_amount || 0),
+        requestedTierKey: ride.requested_tier_key,
+        requestedTierName: ride.requested_tier_name,
+        requestedAt: toIsoOrNull(ride.requested_at),
+        expiresAt: computeExpiresAt(ride.requested_at),
+        driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
+        driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
+        driverCoordinate,
+        passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
+        passengerDriverReview: ride.passenger_driver_review || '',
+        passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
+        driversViewingCount: 0,
+      },
+      assignedDriver,
+    });
+  } catch (err) {
+    console.error('GET /api/rides/passenger/current-ride', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => {
   try {
     const user = await requirePassenger(req, res);
