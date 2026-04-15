@@ -14,13 +14,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useIsFocused } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { getNearbyPassengerDrivers, getPassengerCurrentRide } from '../../api';
+import { getNearbyPassengerDrivers, getPassengerCurrentRide, getPassengerRideHistory } from '../../api';
 
 const HARARE_FALLBACK = {
   latitude: -17.8252,
@@ -335,6 +336,41 @@ function areCoordinatesClose(left, right) {
   );
 }
 
+function stripRoutePrefix(label) {
+  return String(label || '')
+    .replace(/^Pickup:\s*/i, '')
+    .replace(/^Drop-?off:\s*/i, '')
+    .trim();
+}
+
+function toRideCoordinate(ride) {
+  const nested = ride?.dropoffCoordinate;
+  if (nested && Number.isFinite(Number(nested.latitude)) && Number.isFinite(Number(nested.longitude))) {
+    return {
+      latitude: Number(nested.latitude),
+      longitude: Number(nested.longitude),
+    };
+  }
+
+  const latitude = Number(
+    ride?.dropoff_lat ??
+    ride?.dropoffLatitude ??
+    ride?.dropoff_latitude ??
+    ride?.dropoffLat
+  );
+  const longitude = Number(
+    ride?.dropoff_lng ??
+    ride?.dropoffLongitude ??
+    ride?.dropoff_longitude ??
+    ride?.dropoffLng
+  );
+
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return { latitude, longitude };
+  }
+  return null;
+}
+
 function looksLikePlusCode(value) {
   const text = String(value || '').trim();
   // Basic Plus Code pattern like "428R+4V9" or "GF7V+23"
@@ -611,11 +647,12 @@ async function searchZimbabweFirst(query, locationContext, originCoordinate, ses
 export default function PassengerHomeScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
+  const isFocused = useIsFocused();
   const { getToken } = useAuth();
   const mapRef = useRef(null);
   const searchTimeoutRef = useRef(null);
   const placesSessionTokenRef = useRef(generatePlacesSessionToken());
-  const resumedRideRef = useRef(false);
+  const resumeCheckInFlightRef = useRef(false);
 
   const [mapRegion, setMapRegion] = useState(HARARE_FALLBACK);
   const [currentLocationCoordinate, setCurrentLocationCoordinate] = useState(null);
@@ -637,19 +674,46 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [routeDistanceKm, setRouteDistanceKm] = useState(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState(null);
   const [nearbyDrivers, setNearbyDrivers] = useState([]);
+  const [recentTrips, setRecentTrips] = useState([]);
 
   useEffect(() => {
+    if (!isFocused) return undefined;
     let active = true;
 
     const resumeActiveRide = async () => {
-      if (resumedRideRef.current) return;
-      resumedRideRef.current = true;
+      if (resumeCheckInFlightRef.current) return;
+      resumeCheckInFlightRef.current = true;
       try {
         const token = await getToken();
         if (!token || !active) return;
         const data = await getPassengerCurrentRide(token);
         const ride = data?.rideRequest;
         if (!active || !ride?.id) return;
+
+        const rideStatus = String(ride?.status || '').toLowerCase();
+        if (rideStatus === 'requested' || rideStatus === 'driver_found') {
+          navigation.replace('PassengerNearbyCars', {
+            pickupCoordinate: ride.pickupCoordinate,
+            dropoffCoordinate: ride.dropoffCoordinate,
+            pickupLabel: ride.pickupLabel,
+            dropoffLabel: ride.dropoffLabel,
+            distanceKm: Number(ride?.estimatedDistanceKm || 0),
+            estimatedMinutes: Number(ride?.estimatedMinutes || 0),
+            estimatedAmount: Number(ride?.estimatedAmount || 0),
+            selectedTier: ride.requestedTierKey || ride.requestedTierName
+              ? {
+                  tierKey: ride.requestedTierKey || '',
+                  tierName: ride.requestedTierName || 'Ride',
+                }
+              : null,
+            rideRequest: {
+              ...ride,
+              remainingSecondsCapturedAt: Date.now(),
+            },
+            nearbyDrivers: Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : [],
+          });
+          return;
+        }
 
         navigation.replace('PassengerRideTracking', {
           pickupCoordinate: ride.pickupCoordinate,
@@ -668,15 +732,20 @@ export default function PassengerHomeScreen({ navigation, route }) {
         });
       } catch {
         // Stay on booking home if no active ride exists.
+      } finally {
+        resumeCheckInFlightRef.current = false;
       }
     };
 
     resumeActiveRide();
+    const interval = setInterval(resumeActiveRide, 5000);
 
     return () => {
       active = false;
+      clearInterval(interval);
+      resumeCheckInFlightRef.current = false;
     };
-  }, [getToken, navigation]);
+  }, [getToken, isFocused, navigation]);
 
   useEffect(() => {
     let active = true;
@@ -756,6 +825,41 @@ export default function PassengerHomeScreen({ navigation, route }) {
       clearInterval(interval);
     };
   }, [currentLocationCoordinate, getToken, pickupCoordinate]);
+
+  useEffect(() => {
+    let active = true;
+    const loadRecentTrips = async () => {
+      try {
+        const token = await getToken();
+        if (!token || !active) return;
+        const data = await getPassengerRideHistory(token, { page: 1, limit: 6 });
+        if (!active) return;
+        const rides = Array.isArray(data?.rides) ? data.rides : [];
+        const deduped = [];
+        const seen = new Set();
+        rides.forEach((ride) => {
+          const dropoffLabel = stripRoutePrefix(ride?.dropoffLabel);
+          const coord = toRideCoordinate(ride);
+          const key = `${dropoffLabel}:${Number(coord?.latitude || 0).toFixed(4)}:${Number(coord?.longitude || 0).toFixed(4)}`;
+          if (!dropoffLabel || !coord || seen.has(key)) return;
+          seen.add(key);
+          deduped.push({
+            id: ride.id,
+            title: dropoffLabel,
+            coordinate: coord,
+          });
+        });
+        setRecentTrips(deduped.slice(0, 4));
+      } catch {
+        if (!active) return;
+        setRecentTrips([]);
+      }
+    };
+    loadRecentTrips();
+    return () => {
+      active = false;
+    };
+  }, [getToken]);
 
   // Load Google route (polyline + route-based distance/duration for pricing)
   useEffect(() => {
@@ -862,6 +966,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const applyDestination = async (coordinate, label, closeModal = false) => {
     setDropoffCoordinate(coordinate);
     setDropoffLabel(label);
+    setDestinationQuery(String(label || '').replace(/^Drop-?off:\s*/i, '').trim());
     setIsCalculating(true);
     const nextRegion = buildRouteRegion(pickupCoordinate, coordinate);
     setMapRegion(nextRegion);
@@ -1119,6 +1224,24 @@ export default function PassengerHomeScreen({ navigation, route }) {
             </View>
           ) : (
             <View className="pb-5">
+              {recentTrips.length ? (
+                <View className="mt-4 rounded-[20px] bg-white px-4 py-4">
+                  <Text className="text-sm font-semibold text-gray-700">Recent trips</Text>
+                  <View className="mt-3 flex-row flex-wrap gap-2">
+                    {recentTrips.map((trip) => (
+                      <TouchableOpacity
+                        key={trip.id}
+                        onPress={() => applyDestination(trip.coordinate, `Drop-off: ${trip.title}`)}
+                        className="rounded-full bg-[#eef5ff] px-3 py-2"
+                      >
+                        <Text className="text-xs font-semibold" style={{ color: PRIMARY_BLUE }}>
+                          {trip.title}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               {locationError ? (
                 <View className="mt-4 rounded-[20px] border border-amber-200 bg-amber-50 px-4 py-3">
                   <Text className="text-sm font-semibold text-amber-900">Location unavailable</Text>

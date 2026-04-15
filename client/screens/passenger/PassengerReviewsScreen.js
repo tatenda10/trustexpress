@@ -119,7 +119,7 @@ export default function PassengerReviewsScreen({ navigation }) {
               <View key={ride.id} className="mb-4 rounded-[28px] bg-white px-5 py-5">
                 <View className="flex-row items-start justify-between">
                   <View className="flex-1 pr-4">
-                    <Text className="text-sm text-gray-500">{ride.pickupLabel} to {ride.dropoffLabel}</Text>
+                    <Text className="text-sm text-gray-500">Trip review</Text>
                   </View>
                   <Text className="text-sm text-gray-400">{formatDate(ride.driverPassengerRatedAt || ride.completedAt)}</Text>
                 </View>

@@ -3,8 +3,11 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
+const DRIVER_REQUEST_SOUND_FILE = 'notificationaudio.mpeg';
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
+    // Keep only the normal OS foreground banner behavior.
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
@@ -53,7 +56,7 @@ export async function registerForPushNotificationsAsync() {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'default',
         importance: Notifications.AndroidImportance.MAX,
-        sound: 'default',
+        sound: DRIVER_REQUEST_SOUND_FILE,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2f73c9',
       });
@@ -76,7 +79,7 @@ export async function showLocalRideNotification({
       content: {
         title,
         body,
-        sound: 'default',
+        sound: DRIVER_REQUEST_SOUND_FILE,
         data,
       },
       trigger: null,

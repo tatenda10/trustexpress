@@ -13,11 +13,14 @@ import {
 } from '../lib/realtime.js';
 
 const router = Router();
-const OPEN_REQUEST_TTL_MINUTES = 2;
+const OPEN_REQUEST_TTL_MINUTES = 3;
+const DRIVER_FOUND_SELECTION_TTL_MINUTES = 2;
+const OPEN_REQUEST_MIN_REMAINING_SECONDS = 30;
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DEADLOCK_RETRY_DELAY_MS = 120;
 const DEADLOCK_RETRY_ATTEMPTS = 3;
 const DRIVER_ONLINE_STALE_DAYS = 1;
+const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -93,6 +96,14 @@ function toIsoOrNull(value) {
   return value ? new Date(value).toISOString() : null;
 }
 
+function shouldHideFreshPassengerReview(passengerDriverRatedAt) {
+  if (!passengerDriverRatedAt) return false;
+  const ratedAtMs = new Date(passengerDriverRatedAt).getTime();
+  if (!Number.isFinite(ratedAtMs)) return false;
+  const revealAtMs = ratedAtMs + DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES * 60 * 1000;
+  return Date.now() < revealAtMs;
+}
+
 function isDriverAvailabilityFresh(lastSeenAt) {
   if (!lastSeenAt) return false;
   const lastSeenMs = new Date(lastSeenAt).getTime();
@@ -105,6 +116,17 @@ function computeExpiresAt(value) {
   const date = new Date(value);
   date.setMinutes(date.getMinutes() + OPEN_REQUEST_TTL_MINUTES);
   return date.toISOString();
+}
+
+function computeRideExpiresAt(status, requestedAt, driverFoundAt = null) {
+  const normalized = String(status || '');
+  if (normalized === 'driver_found') {
+    if (!requestedAt && !driverFoundAt) return null;
+    const date = new Date(driverFoundAt || requestedAt);
+    date.setMinutes(date.getMinutes() + DRIVER_FOUND_SELECTION_TTL_MINUTES);
+    return date.toISOString();
+  }
+  return computeExpiresAt(requestedAt);
 }
 
 function sleep(ms) {
@@ -402,8 +424,12 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     await query(
       `UPDATE ride_requests
        SET status = 'expired'
-       WHERE status IN ('requested', 'driver_found')
-         AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)`
+       WHERE
+         (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
+         OR (
+           status = 'driver_found'
+           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+         )`
     );
 
     await query(
@@ -445,6 +471,15 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.estimated_amount,
          r.status,
          r.requested_at,
+         r.driver_found_at,
+         GREATEST(
+           0,
+           CASE
+             WHEN r.status = 'driver_found'
+               THEN ${(DRIVER_FOUND_SELECTION_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, COALESCE(r.driver_found_at, r.requested_at), CURRENT_TIMESTAMP)
+             ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP)
+           END
+         ) AS remaining_seconds,
          r.driver_user_id
        FROM ride_request_driver_responses rr
        INNER JOIN ride_requests r ON r.id = rr.ride_request_id
@@ -453,6 +488,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          AND r.public_id NOT LIKE 'SIM-%'
          AND r.passenger_user_id IS NOT NULL
          AND r.status IN ('requested', 'driver_found')
+         AND TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP) <= ${(OPEN_REQUEST_TTL_MINUTES * 60) - OPEN_REQUEST_MIN_REMAINING_SECONDS}
        ORDER BY requested_at DESC
        LIMIT 20`,
       [req.userId]
@@ -474,6 +510,20 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         rideStatus: row.status,
         requestedAt: row.requested_at,
         passengerUserId: row.passenger_user_id,
+      })),
+    });
+    console.log('[drivers.rideRequests] ttl snapshot', {
+      driverUserId: req.userId,
+      openRequestTtlMinutes: OPEN_REQUEST_TTL_MINUTES,
+      driverFoundSelectionTtlMinutes: DRIVER_FOUND_SELECTION_TTL_MINUTES,
+      minRemainingSeconds: OPEN_REQUEST_MIN_REMAINING_SECONDS,
+      nowIso: new Date().toISOString(),
+      rows: rows.map((row) => ({
+        rideRequestId: row.id,
+        status: row.status,
+        requestedAt: row.requested_at,
+        driverFoundAt: row.driver_found_at || null,
+        remainingSeconds: Number(row.remaining_seconds || 0),
       })),
     });
 
@@ -514,7 +564,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
           estimatedAmount: Number(row.estimated_amount || 0),
           status: row.status,
           requestedAt: toIsoOrNull(row.requested_at),
-          expiresAt: computeExpiresAt(row.requested_at),
+          expiresAt: computeRideExpiresAt(row.status, row.requested_at, row.driver_found_at),
+          remainingSeconds: Number(row.remaining_seconds || 0),
           driverDistanceKm,
           etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
         };
@@ -572,16 +623,41 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
     }
 
     const [ride] = await query(
-      `SELECT *
+      `SELECT *,
+              CASE
+                WHEN status = 'driver_found'
+                  THEN TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
+                ELSE TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
+              END AS age_seconds
        FROM ride_requests
        WHERE id = ?
        LIMIT 1`,
       [rideRequestId]
     );
     if (!ride) {
+      console.log('[drivers.accept] ride not found', {
+        driverUserId: req.userId,
+        rideRequestId,
+      });
       return res.status(404).json({ error: 'Ride request not found' });
     }
+    console.log('[drivers.accept] fetched ride snapshot', {
+      driverUserId: req.userId,
+      rideRequestId,
+      rideStatus: ride.status,
+      requestedAt: ride.requested_at,
+      driverFoundAt: ride.driver_found_at || null,
+      ageSeconds: Number(ride?.age_seconds || 0),
+      nowIso: new Date().toISOString(),
+      openRequestTtlMinutes: OPEN_REQUEST_TTL_MINUTES,
+      driverFoundSelectionTtlMinutes: DRIVER_FOUND_SELECTION_TTL_MINUTES,
+    });
     if (!['requested', 'driver_found'].includes(String(ride.status || ''))) {
+      console.log('[drivers.accept] blocked by ride status', {
+        driverUserId: req.userId,
+        rideRequestId,
+        rideStatus: ride.status,
+      });
       return res.status(409).json({ error: 'Ride request is no longer available' });
     }
     const [offer] = await query(
@@ -593,6 +669,11 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       [rideRequestId, req.userId]
     );
     if (!offer || !['pending', 'accepted'].includes(String(offer.status || ''))) {
+      console.log('[drivers.accept] blocked by offer status', {
+        driverUserId: req.userId,
+        rideRequestId,
+        offerStatus: offer?.status || null,
+      });
       return res.status(409).json({ error: 'This ride offer is no longer available to you' });
     }
     const driverPoint = {
@@ -605,6 +686,28 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
     };
     const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
     const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
+    const acceptedDriverPayload = {
+      id: req.userId,
+      tierName: availability.vehicle_tier_name || 'Ride',
+      carName: [availability.vehicle_make, availability.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
+      plate: availability.number_plate || 'Unknown plate',
+      driverName: availability.driver_name || getDriverDisplayName(user),
+      etaMinutes: driverEtaMinutes,
+      driverDistanceKm,
+      amount: Number(ride.estimated_amount || 0),
+      rating: 4.9,
+      trips: 0,
+      phoneNumber: availability.phone_number || null,
+      coordinate: {
+        latitude: Number.isFinite(Number(availability.current_lat)) ? Number(availability.current_lat) : pickupPoint.latitude,
+        longitude: Number.isFinite(Number(availability.current_lng)) ? Number(availability.current_lng) : pickupPoint.longitude,
+      },
+      tier: {
+        tierKey: availability.vehicle_tier_key || null,
+        tierName: availability.vehicle_tier_name || 'Ride',
+      },
+      carImage: availability.car_photo_url || null,
+    };
 
     await query(
       `INSERT INTO ride_request_driver_responses (
@@ -618,20 +721,104 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
          responded_at = CURRENT_TIMESTAMP`,
       [rideRequestId, req.userId]
     );
+    const [acceptedSnapshot] = await query(
+      `SELECT status, responded_at
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?
+         AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    console.log('[drivers.accept] response row after accept upsert', {
+      driverUserId: req.userId,
+      rideRequestId,
+      responseStatus: acceptedSnapshot?.status || null,
+      respondedAt: acceptedSnapshot?.responded_at || null,
+      nowIso: new Date().toISOString(),
+    });
 
-    await query(
+    const acceptableRideUpdate = await query(
       `UPDATE ride_requests
        SET status = CASE WHEN status = 'requested' THEN 'driver_found' ELSE status END,
            driver_found_at = COALESCE(driver_found_at, CURRENT_TIMESTAMP)
        WHERE id = ?
-         AND status IN ('requested', 'driver_found')`,
+         AND status IN ('requested', 'driver_found')
+         AND (
+           (status = 'requested' AND requested_at >= (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
+           OR (
+             status = 'driver_found'
+             AND COALESCE(driver_found_at, requested_at) >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+           )
+         )`,
       [rideRequestId]
     );
+    console.log('[drivers.accept] ttl-gated update result', {
+      driverUserId: req.userId,
+      rideRequestId,
+      affectedRows: Number(acceptableRideUpdate?.affectedRows || 0),
+      changedRows: Number(acceptableRideUpdate?.changedRows || 0),
+      nowIso: new Date().toISOString(),
+    });
+    if (Number(acceptableRideUpdate?.affectedRows || 0) < 1) {
+      const [latestRide] = await query(
+        `SELECT
+           id,
+           status,
+           requested_at,
+           driver_found_at,
+           TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP) AS requested_age_seconds,
+           TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP) AS selection_age_seconds
+         FROM ride_requests
+         WHERE id = ?
+         LIMIT 1`,
+        [rideRequestId]
+      );
+      const latestStatus = String(latestRide?.status || '');
+      const requestedAgeSeconds = Number(latestRide?.requested_age_seconds || 0);
+      const selectionAgeSeconds = Number(latestRide?.selection_age_seconds || 0);
+      const stillEligibleNoop =
+        (latestStatus === 'requested' && requestedAgeSeconds < OPEN_REQUEST_TTL_MINUTES * 60) ||
+        (latestStatus === 'driver_found' && selectionAgeSeconds < DRIVER_FOUND_SELECTION_TTL_MINUTES * 60);
+      if (stillEligibleNoop) {
+        console.log('[drivers.accept] ttl-gated update no-op but still eligible', {
+          driverUserId: req.userId,
+          rideRequestId,
+          latestRide,
+          nowIso: new Date().toISOString(),
+        });
+      } else {
+      await query(
+        `UPDATE ride_requests
+         SET status = 'expired',
+             cancellation_reason = 'No driver accepted the request in time',
+             cancelled_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND (
+             (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
+             OR (
+               status = 'driver_found'
+               AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+             )
+           )`,
+        [rideRequestId]
+      );
+      console.log('[drivers.accept] marked expired after ttl gate miss', {
+        driverUserId: req.userId,
+        rideRequestId,
+        latestRide: latestRide || null,
+        openRequestTtlSeconds: OPEN_REQUEST_TTL_MINUTES * 60,
+        driverFoundSelectionTtlSeconds: DRIVER_FOUND_SELECTION_TTL_MINUTES * 60,
+        nowIso: new Date().toISOString(),
+      });
+      return res.status(409).json({ error: 'Ride request has expired' });
+      }
+    }
 
     emitRideStatusToPassenger(ride.passenger_user_id, {
       rideRequestId,
       status: 'driver_found',
       driverUserId: req.userId,
+      acceptedDriver: acceptedDriverPayload,
     });
     await notifyPassengerRideStatus(ride.passenger_user_id, {
       title: 'Driver accepted your request',
@@ -1118,6 +1305,18 @@ router.get('/history', requireAuth, async (req, res) => {
 
     return res.json({
       rides: rows.map((row) => ({
+        ...(function buildReviewPayload() {
+          const hideFreshReview = shouldHideFreshPassengerReview(row.passenger_driver_rated_at);
+          return {
+            passengerDriverRating: hideFreshReview
+              ? null
+              : (row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating)),
+            passengerDriverReview: hideFreshReview ? '' : (row.passenger_driver_review || ''),
+            passengerDriverRatedAt: hideFreshReview ? null : (row.passenger_driver_rated_at || null),
+            passengerDriverReviewPending:
+              hideFreshReview && (row.passenger_driver_rating !== null || !!String(row.passenger_driver_review || '').trim()),
+          };
+        })(),
         id: row.id,
         publicId: row.public_id,
         passengerName: getPassengerDisplayName(row.passenger_name),
@@ -1129,9 +1328,6 @@ router.get('/history', requireAuth, async (req, res) => {
         estimatedAmount: Number(row.estimated_amount || 0),
         driverDistanceKm: row.driver_distance_km === null ? null : Number(row.driver_distance_km),
         driverEtaMinutes: row.driver_eta_minutes === null ? null : Number(row.driver_eta_minutes),
-        passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
-        passengerDriverReview: row.passenger_driver_review || '',
-        passengerDriverRatedAt: row.passenger_driver_rated_at || null,
         status: mapDriverRideStatus(row.status),
         rawStatus: row.status,
         requestedAt: row.requested_at,

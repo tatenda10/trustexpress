@@ -159,7 +159,12 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         estimatedAmount,
         selectedTier,
         tiers,
-        rideRequest: data?.rideRequest || null,
+        rideRequest: data?.rideRequest
+          ? {
+              ...data.rideRequest,
+              remainingSecondsCapturedAt: Date.now(),
+            }
+          : null,
         nearbyDrivers: Array.isArray(data?.nearbyDrivers) ? data.nearbyDrivers : [],
       });
     } catch (error) {

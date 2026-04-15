@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dimensions, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dimensions, TextInput, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,6 +30,9 @@ const DEFAULT_LAT_DELTA = 0.03;
 const DEFAULT_LNG_DELTA = 0.03;
 const DRIVER_FOLLOW_LAT_DELTA = 0.012;
 const DRIVER_FOLLOW_LNG_DELTA = 0.012;
+const SPEECH_MIN_INTERVAL_MS = 3500;
+const SPEECH_STABILIZE_MS = 900;
+const SPEECH_MIN_CHARS = 8;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -97,6 +100,36 @@ function stripHtml(value) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeInstructionForSpeech(value) {
+  const text = String(value || '')
+    .replace(/\bN\b/g, 'north')
+    .replace(/\bS\b/g, 'south')
+    .replace(/\bE\b/g, 'east')
+    .replace(/\bW\b/g, 'west')
+    .replace(/\bri\b/gi, 'right')
+    .replace(/\blt\b/gi, 'left')
+    .replace(/\brd\b/gi, 'road')
+    .replace(/\bst\b/gi, 'street')
+    .replace(/\bave\b/gi, 'avenue')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return '';
+
+  // If the step text was truncated by upstream formatting, smooth common endings.
+  if (/\bturn\s+ri$/i.test(text) || /\bkeep\s+ri$/i.test(text)) {
+    return text.replace(/\bri$/i, 'right');
+  }
+  if (/\bturn\s+le$/i.test(text) || /\bkeep\s+le$/i.test(text)) {
+    return text.replace(/\ble$/i, 'left');
+  }
+  if (/\b(turn|keep|head|continue)\s+[a-z]{1,2}$/i.test(text)) {
+    return '';
+  }
+
+  return text;
 }
 
 function getDirectionsApiKey() {
@@ -210,7 +243,9 @@ export default function DriverTripScreen({ navigation }) {
   const hasAutoFocusedRef = useRef(false);
   const lastAutoFocusStageRef = useRef('');
   const lastSpokenInstructionRef = useRef('');
+  const lastSpokenAtRef = useRef(0);
   const lastArrivalAnnouncementStageRef = useRef('');
+  const speechDebounceTimeoutRef = useRef(null);
   const [ride, setRide] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -254,7 +289,7 @@ export default function DriverTripScreen({ navigation }) {
       try {
         const token = await getToken();
         if (!token) throw new Error('Not signed in');
-        const data = await getDriverCurrentRide(token);
+        const data = await getDriverCurrentRide(token, { suppressAuthErrorHandler: true });
         if (!active) return;
         if (data?.ride || !showPassengerRating) {
           setRide(data?.ride || null);
@@ -311,25 +346,55 @@ export default function DriverTripScreen({ navigation }) {
     return () => {
       active = false;
       localSocket?.__driverTripCleanup?.();
+      if (speechDebounceTimeoutRef.current) {
+        clearTimeout(speechDebounceTimeoutRef.current);
+        speechDebounceTimeoutRef.current = null;
+      }
       Speech.stop();
     };
   }, [getToken]);
 
   useEffect(() => {
-    const normalizedInstruction = String(nextInstruction || '').trim();
-    if (!voiceGuidanceEnabled) return undefined;
+    const normalizedInstruction = normalizeInstructionForSpeech(nextInstruction);
+    if (!voiceGuidanceEnabled) {
+      if (speechDebounceTimeoutRef.current) {
+        clearTimeout(speechDebounceTimeoutRef.current);
+        speechDebounceTimeoutRef.current = null;
+      }
+      return undefined;
+    }
     if (!normalizedInstruction || ride?.stage === 'waiting_for_customer') return undefined;
+    if (normalizedInstruction.length < SPEECH_MIN_CHARS) return undefined;
     if (normalizedInstruction === lastSpokenInstructionRef.current) return undefined;
 
-    lastSpokenInstructionRef.current = normalizedInstruction;
-    Speech.stop();
-    Speech.speak(normalizedInstruction, {
-      rate: 0.95,
-      pitch: 1.0,
-      language: 'en',
-    });
+    if (speechDebounceTimeoutRef.current) {
+      clearTimeout(speechDebounceTimeoutRef.current);
+      speechDebounceTimeoutRef.current = null;
+    }
 
-    return undefined;
+    speechDebounceTimeoutRef.current = setTimeout(() => {
+      const now = Date.now();
+      if (now - lastSpokenAtRef.current < SPEECH_MIN_INTERVAL_MS) return;
+      Speech.isSpeakingAsync()
+        .then((isSpeaking) => {
+          if (isSpeaking) return;
+          lastSpokenInstructionRef.current = normalizedInstruction;
+          lastSpokenAtRef.current = Date.now();
+          Speech.speak(normalizedInstruction, {
+            rate: 0.92,
+            pitch: 1.0,
+            language: 'en',
+          });
+        })
+        .catch(() => {});
+    }, SPEECH_STABILIZE_MS);
+
+    return () => {
+      if (speechDebounceTimeoutRef.current) {
+        clearTimeout(speechDebounceTimeoutRef.current);
+        speechDebounceTimeoutRef.current = null;
+      }
+    };
   }, [nextInstruction, ride?.stage, voiceGuidanceEnabled]);
 
   useEffect(() => {
@@ -526,9 +591,16 @@ export default function DriverTripScreen({ navigation }) {
       setSubmitting(true);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await markDriverCurrentRideArrived(token, ride.id);
-      const data = await getDriverCurrentRide(token);
-      setRide(data?.ride || null);
+      await markDriverCurrentRideArrived(token, ride.id, { suppressAuthErrorHandler: true });
+      setRide((current) => (current ? { ...current, stage: 'waiting_for_customer' } : current));
+      setRealtimeSignal((current) => current + 1);
+      getDriverCurrentRide(token, { suppressAuthErrorHandler: true })
+        .then((data) => {
+          setRide(data?.ride || null);
+        })
+        .catch(() => {
+          // Keep the action successful even if the follow-up refresh fails.
+        });
     } catch (error) {
       Alert.alert('Arrive failed', error?.message || 'Could not update ride status.');
     } finally {
@@ -542,9 +614,16 @@ export default function DriverTripScreen({ navigation }) {
       setSubmitting(true);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await startDriverCurrentRide(token, ride.id);
-      const data = await getDriverCurrentRide(token);
-      setRide(data?.ride || null);
+      await startDriverCurrentRide(token, ride.id, { suppressAuthErrorHandler: true });
+      setRide((current) => (current ? { ...current, stage: 'on_trip' } : current));
+      setRealtimeSignal((current) => current + 1);
+      getDriverCurrentRide(token, { suppressAuthErrorHandler: true })
+        .then((data) => {
+          setRide(data?.ride || null);
+        })
+        .catch(() => {
+          // Keep the action successful even if the follow-up refresh fails.
+        });
     } catch (error) {
       Alert.alert('Start ride failed', error?.message || 'Could not start the ride.');
     } finally {
@@ -560,9 +639,11 @@ export default function DriverTripScreen({ navigation }) {
       if (!token) throw new Error('Not signed in');
       await completeDriverCurrentRide(token, ride.id, {
         completedRoutePolyline: null,
-      });
+      }, { suppressAuthErrorHandler: true });
       setCompletedRideSnapshot(ride);
       setCompletedRideId(ride.id);
+      setRide(null);
+      setRealtimeSignal((current) => current + 1);
       setShowPassengerRating(true);
     } catch (error) {
       Alert.alert('Complete ride failed', error?.message || 'Could not complete the ride.');
@@ -605,7 +686,7 @@ export default function DriverTripScreen({ navigation }) {
         language: 'en',
       });
     } else if (nextInstruction) {
-      Speech.speak(nextInstruction, {
+      Speech.speak(normalizeInstructionForSpeech(nextInstruction), {
         rate: 0.95,
         pitch: 1.0,
         language: 'en',

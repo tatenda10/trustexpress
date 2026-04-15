@@ -4,7 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getPassengerRideHistory } from '../../api';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { getPassengerRideHistory, getPassengerRideReceipt } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function getStatusColors(status) {
@@ -56,6 +58,7 @@ const PassengerActivityScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [downloadingReceiptId, setDownloadingReceiptId] = useState(null);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({
     page: 1,
@@ -143,6 +146,30 @@ const PassengerActivityScreen = ({ navigation }) => {
     await loadHistoryPage(page, true);
   };
 
+  const handleDownloadReceipt = async (ride) => {
+    try {
+      setDownloadingReceiptId(ride.id);
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      const receiptText = await getPassengerRideReceipt(token, ride.id);
+      const fileName = `trustcars-receipt-${ride.publicId || ride.id}.txt`;
+      const receiptFile = new File(Paths.cache, fileName);
+      receiptFile.write(receiptText);
+      const fileUri = receiptFile.uri;
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/plain',
+          dialogTitle: 'Download ride receipt',
+        });
+      }
+    } catch {
+      // Keep history list usable if receipt generation fails.
+    } finally {
+      setDownloadingReceiptId(null);
+    }
+  };
+
   return (
     <View className="flex-1 bg-white">
       <View
@@ -216,6 +243,22 @@ const PassengerActivityScreen = ({ navigation }) => {
                     <View className="mt-4 flex-row items-center justify-between">
                       <Text className="text-sm text-gray-500">{formatDate(ride.requestedAt)}</Text>
                       <Text className="text-sm text-gray-500">{ride.driverName || 'No driver assigned'}</Text>
+                    </View>
+
+                    <View className="mt-3 flex-row gap-2">
+                      <TouchableOpacity
+                        onPress={() => handleDownloadReceipt(ride)}
+                        disabled={downloadingReceiptId === ride.id}
+                        className="h-10 flex-1 items-center justify-center rounded-[12px] border border-blue-200 bg-white"
+                      >
+                        {downloadingReceiptId === ride.id ? (
+                          <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+                        ) : (
+                          <Text className="text-xs font-bold uppercase" style={{ color: PRIMARY_BLUE }}>
+                            Receipt
+                          </Text>
+                        )}
+                      </TouchableOpacity>
                     </View>
                   </TouchableOpacity>
                 );

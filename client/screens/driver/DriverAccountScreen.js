@@ -219,6 +219,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
     if (raw.startsWith('uploads/')) return getApiUrl(`/${raw}`);
     return raw;
   })();
+  const canSetProfilePhoto = !profileImageUrl;
 
   const verificationHeadline = allVerified ? 'Ready to drive' : 'Verification in progress';
   const verificationTone = allVerified
@@ -454,18 +455,20 @@ const DriverAccountScreen = ({ navigation, route }) => {
             {allVerified ? (
               <View className="absolute right-1 top-1 h-4 w-4 rounded-full border-2 border-white bg-[#25D366]" />
             ) : null}
-            <TouchableOpacity
-              className="absolute bottom-0 right-0 h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
-              activeOpacity={0.8}
-              onPress={handleChangeProfilePhoto}
-              disabled={updatingProfileImage}
-            >
-              {updatingProfileImage ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="camera" size={18} color="#fff" />
-              )}
-            </TouchableOpacity>
+            {canSetProfilePhoto ? (
+              <TouchableOpacity
+                className="absolute bottom-0 right-0 h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
+                activeOpacity={0.8}
+                onPress={handleChangeProfilePhoto}
+                disabled={updatingProfileImage}
+              >
+                {updatingProfileImage ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="camera" size={18} color="#fff" />
+                )}
+              </TouchableOpacity>
+            ) : null}
           </View>
           <TouchableOpacity
             activeOpacity={0.75}
@@ -660,17 +663,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
               resizeMode="cover"
             />
           ) : null}
-          <TouchableOpacity
-            className="mt-8 h-12 px-6 items-center justify-center rounded-full bg-white"
-            onPress={handleChangeProfilePhoto}
-            disabled={updatingProfileImage}
-          >
-            {updatingProfileImage ? (
-              <ActivityIndicator size="small" color="#111827" />
-            ) : (
-              <Text className="text-base font-semibold text-gray-900">Change photo</Text>
-            )}
-          </TouchableOpacity>
         </View>
       </Modal>
     </View>

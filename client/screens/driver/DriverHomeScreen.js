@@ -3,6 +3,8 @@ import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, A
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
+import { Audio } from 'expo-av';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
@@ -22,7 +24,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 
 const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
-const REQUEST_REFRESH_INTERVAL_MS = 12000;
+const REQUEST_REFRESH_INTERVAL_MS = 2500;
 const CURRENT_RIDE_REFRESH_INTERVAL_MS = 15000;
 const AVAILABILITY_TOGGLE_DEBOUNCE_MS = 2500;
 const DB_UPDATE_INTERVAL_MS = 90000;
@@ -35,6 +37,9 @@ const INITIAL_REGION = {
   longitudeDelta: 0.18,
 };
 const DRIVER_IDLE_REGION = { latitudeDelta: 0.05, longitudeDelta: 0.05 };
+const DRIVER_KEEP_AWAKE_TAG = 'driver-home-online';
+const INCOMING_RIDE_ALERT_INTERVAL_MS = 4500;
+const MIN_ACCEPTABLE_REQUEST_SECONDS = 8;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -55,7 +60,13 @@ function calculateDistanceKm(start, end) {
   return earthRadiusKm * c;
 }
 
-function getRemainingSeconds(expiresAt) {
+function getRemainingSeconds(expiresAt, serverRemainingSeconds = null, capturedAtMs = null) {
+  if (Number.isFinite(Number(serverRemainingSeconds)) && Number(serverRemainingSeconds) >= 0) {
+    const base = Number(serverRemainingSeconds);
+    if (!Number.isFinite(Number(capturedAtMs))) return Math.max(0, Math.floor(base));
+    const elapsed = Math.max(0, Math.floor((Date.now() - Number(capturedAtMs)) / 1000));
+    return Math.max(0, Math.floor(base) - elapsed);
+  }
   if (!expiresAt) return 0;
   return Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000));
 }
@@ -348,6 +359,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const [mapRegion, setMapRegion] = useState(INITIAL_REGION);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const idleLocationWatcherRef = useRef(null);
+  const incomingRideSoundRef = useRef(null);
+  const incomingAlertTimerRef = useRef(null);
+  const incomingAlertInFlightRef = useRef(false);
   const locationWatcherRef = useRef(null);
   const locationSyncInFlightRef = useRef(false);
   const manualAvailabilityRequestRef = useRef(null);
@@ -417,8 +431,22 @@ const DriverHomeScreen = ({ navigation, route }) => {
   }, [isFocused]);
 
   useEffect(() => {
+    const shouldKeepAwake = isOnline || !!currentRide || !!pendingSelectionRide;
+    if (shouldKeepAwake) {
+      activateKeepAwakeAsync(DRIVER_KEEP_AWAKE_TAG).catch(() => {});
+    } else {
+      deactivateKeepAwake(DRIVER_KEEP_AWAKE_TAG);
+    }
+
+    return () => {
+      deactivateKeepAwake(DRIVER_KEEP_AWAKE_TAG);
+    };
+  }, [currentRide, isOnline, pendingSelectionRide]);
+
+  useEffect(() => {
     if (route?.params?.openIncomingRideOverlay) {
-      setShowIncomingRideOverlay(true);
+      // Do not auto-open the in-app incoming request modal.
+      setShowIncomingRideOverlay(false);
       navigation.setParams?.({
         openIncomingRideOverlay: false,
         notificationTs: route?.params?.notificationTs || undefined,
@@ -625,9 +653,41 @@ const DriverHomeScreen = ({ navigation, route }) => {
         const data = await getDriverRideRequests(token);
         if (!active) return;
 
-        const nextList = Array.isArray(data?.requests)
+        const nextListRaw = Array.isArray(data?.requests)
           ? data.requests.filter((request) => !dismissedRequestIds.includes(request.id))
           : [];
+        const serverCapturedAt = Date.now();
+        const nextList = nextListRaw
+          .map((request) => ({
+            ...request,
+            remainingSecondsCapturedAt: serverCapturedAt,
+          }))
+          .filter(
+            (request) =>
+              getRemainingSeconds(
+                request?.expiresAt,
+                request?.remainingSeconds,
+                request?.remainingSecondsCapturedAt,
+              ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
+          );
+        if (__DEV__) {
+          console.log('[driver.home] requests fetched', {
+            totalRaw: nextListRaw.length,
+            totalVisible: nextList.length,
+            nowIso: new Date().toISOString(),
+            requests: nextListRaw.map((request) => ({
+              id: request?.id,
+              status: request?.status,
+              expiresAt: request?.expiresAt || null,
+              remainingSecondsServer: Number(request?.remainingSeconds ?? -1),
+              remainingSecondsUi: getRemainingSeconds(
+                request?.expiresAt,
+                request?.remainingSeconds,
+                serverCapturedAt,
+              ),
+            })),
+          });
+        }
         const nextRequest = nextList[0] || null;
 
         const prevCount = prevRequestCountRef.current;
@@ -653,9 +713,13 @@ const DriverHomeScreen = ({ navigation, route }) => {
         prevRequestCountRef.current = nextList.length;
 
         setAvailableRequests(nextList);
+        // Keep requests in the list UI; avoid auto popup duplicate with top notification banner.
         setActiveRequest((current) => {
-          if (current && nextList.some((request) => request.id === current.id)) {
-            return current;
+          if (current) {
+            const refreshedCurrent = nextList.find((request) => request.id === current.id);
+            if (refreshedCurrent) {
+              return refreshedCurrent;
+            }
           }
           return nextRequest;
         });
@@ -687,6 +751,70 @@ const DriverHomeScreen = ({ navigation, route }) => {
       clearInterval(interval);
     };
   }, [dismissedRequestIds, isOnline, realtimeSignal]);
+
+  useEffect(() => {
+    const shouldAlertForIncomingRide =
+      isFocused &&
+      isOnline &&
+      !currentRide &&
+      !pendingSelectionRide &&
+      availableRequests.length > 0;
+
+    const playIncomingAlert = async () => {
+      if (incomingAlertInFlightRef.current) return;
+      incomingAlertInFlightRef.current = true;
+      try {
+        if (!incomingRideSoundRef.current) {
+          const { sound } = await Audio.Sound.createAsync(
+            require('../../assets/notificationaudio.mpeg'),
+            { shouldPlay: false, volume: 1.0 },
+          );
+          incomingRideSoundRef.current = sound;
+        }
+
+        const sound = incomingRideSoundRef.current;
+        if (sound) {
+          await sound.replayAsync();
+        }
+        Vibration.vibrate([0, 250, 160, 250]);
+      } catch {
+        // Keep request flow working even if audio playback fails.
+      } finally {
+        incomingAlertInFlightRef.current = false;
+      }
+    };
+
+    const stopIncomingAlert = async () => {
+      if (incomingAlertTimerRef.current) {
+        clearInterval(incomingAlertTimerRef.current);
+        incomingAlertTimerRef.current = null;
+      }
+      try {
+        if (incomingRideSoundRef.current) {
+          await incomingRideSoundRef.current.stopAsync();
+          await incomingRideSoundRef.current.unloadAsync();
+        }
+      } catch {
+        // ignore cleanup failures
+      } finally {
+        incomingRideSoundRef.current = null;
+      }
+      Vibration.cancel();
+    };
+
+    if (shouldAlertForIncomingRide) {
+      playIncomingAlert();
+      if (!incomingAlertTimerRef.current) {
+        incomingAlertTimerRef.current = setInterval(playIncomingAlert, INCOMING_RIDE_ALERT_INTERVAL_MS);
+      }
+    } else {
+      stopIncomingAlert();
+    }
+
+    return () => {
+      stopIncomingAlert();
+    };
+  }, [availableRequests.length, currentRide, isFocused, isOnline, pendingSelectionRide]);
 
   useEffect(() => {
     if (!isOnline || activeRequest || currentRide || pendingSelectionRide) {
@@ -754,6 +882,23 @@ const DriverHomeScreen = ({ navigation, route }) => {
     () => formatCountdown(getRemainingSeconds(activeRequest?.expiresAt)),
     [activeRequest?.expiresAt, nowTick]
   );
+
+  useEffect(() => {
+    if (!pendingSelectionRide || currentRide?.id) return;
+    if (
+      getRemainingSeconds(
+        pendingSelectionRide.expiresAt,
+        pendingSelectionRide?.remainingSeconds,
+        pendingSelectionRide?.remainingSecondsCapturedAt,
+      ) > 0
+    ) return;
+
+    setPendingSelectionRide(null);
+    Alert.alert(
+      'Request expired',
+      'Passenger did not select in time. You can accept a new incoming request.',
+    );
+  }, [currentRide?.id, nowTick, pendingSelectionRide]);
 
   // Load a curved Google Maps route for the current ride or active request
   useEffect(() => {
@@ -1104,11 +1249,40 @@ const DriverHomeScreen = ({ navigation, route }) => {
     const req = request || activeRequest;
     try {
       if (!req) return;
+      if (getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt) < 1) {
+        if (__DEV__) {
+          console.log('[driver.home] accept blocked locally as expired', {
+            rideRequestId: req?.id,
+            expiresAt: req?.expiresAt || null,
+            remainingSecondsServer: Number(req?.remainingSeconds ?? -1),
+            remainingSecondsUi: getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt),
+            nowIso: new Date().toISOString(),
+          });
+        }
+        Alert.alert('Request expired', 'This request expired before acceptance. Please take the next request.');
+        setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
+        return;
+      }
       setAcceptingRideId(req.id);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      await acceptDriverRideRequest(token, req.id);
+      const acceptResult = await acceptDriverRideRequest(token, req.id);
+      if (__DEV__) {
+        console.log('[driver.home] accept success', {
+          rideRequestId: req?.id,
+          acceptResult: acceptResult?.rideRequest || acceptResult || null,
+          nowIso: new Date().toISOString(),
+        });
+      }
       const nextRide = await getDriverCurrentRide(token);
+      if (__DEV__) {
+        console.log('[driver.home] current ride after accept', {
+          rideRequestId: req?.id,
+          hasCurrentRide: !!nextRide?.ride,
+          currentRideStatus: nextRide?.ride?.status || null,
+          nowIso: new Date().toISOString(),
+        });
+      }
       setActiveRequest(null);
       setAvailableRequests([]);
       setShowIncomingRideOverlay(false);
@@ -1118,6 +1292,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setPendingSelectionRide(nextRide?.ride ? null : req);
       Alert.alert('Request accepted', nextRide?.ride ? 'Ride assigned. Open the trip route when ready.' : 'Waiting for passenger to choose a driver.');
     } catch (error) {
+      if (__DEV__) {
+        console.log('[driver.home] accept failed', {
+          rideRequestId: req?.id,
+          errorMessage: error?.message || null,
+          errorStatus: error?.status ?? null,
+          nowIso: new Date().toISOString(),
+        });
+      }
       Alert.alert('Accept ride failed', error?.message || 'Could not accept this ride.');
     } finally {
       setAcceptingRideId(null);
@@ -1390,7 +1572,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                     <View className="rounded-full bg-[#111827] px-3 py-1.5">
                       <Text className="text-xs font-bold uppercase tracking-[1px] text-white">
-                        {formatCountdown(getRemainingSeconds(req.expiresAt))}
+                        {formatCountdown(getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt))}
                       </Text>
                     </View>
                   </View>
@@ -1493,7 +1675,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   <View className="rounded-[20px] bg-[#111827] px-4 py-3">
                     <Text className="text-xs font-bold uppercase tracking-[1px] text-white">Expires in</Text>
                     <Text className="mt-1 text-xl font-extrabold text-white">
-                      {formatCountdown(getRemainingSeconds(activeRequest?.expiresAt))}
+                      {formatCountdown(getRemainingSeconds(activeRequest?.expiresAt, activeRequest?.remainingSeconds, activeRequest?.remainingSecondsCapturedAt))}
                     </Text>
                   </View>
                 </View>

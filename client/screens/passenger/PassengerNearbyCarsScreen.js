@@ -10,7 +10,7 @@ import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReas
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { connectRealtime } from '../../realtime';
 
-const REQUEST_EXPIRY_POLL_MS = 2000;
+const REQUEST_EXPIRY_POLL_MS = 1000;
 
 function decodePolyline(encoded) {
   if (!encoded) return [];
@@ -107,6 +107,16 @@ function getRemainingSeconds(expiresAt) {
   return Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000));
 }
 
+function getEffectiveRemainingSeconds(expiresAt, serverRemainingSeconds = null, capturedAtMs = null) {
+  if (Number.isFinite(Number(serverRemainingSeconds)) && Number(serverRemainingSeconds) >= 0) {
+    const base = Number(serverRemainingSeconds);
+    if (!Number.isFinite(Number(capturedAtMs))) return Math.max(0, Math.floor(base));
+    const elapsed = Math.max(0, Math.floor((Date.now() - Number(capturedAtMs)) / 1000));
+    return Math.max(0, Math.floor(base) - elapsed);
+  }
+  return getRemainingSeconds(expiresAt);
+}
+
 function formatCountdown(totalSeconds) {
   const safeSeconds = Math.max(0, Number(totalSeconds || 0));
   const minutes = Math.floor(safeSeconds / 60);
@@ -118,7 +128,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const navigatedToTrackingRef = useRef(false);
-  const autoExpiryHandledRef = useRef(false);
   const expiryNavigationHandledRef = useRef(false);
   const [isSubmittingDriverId, setIsSubmittingDriverId] = useState('');
   const [isCancellingRequest, setIsCancellingRequest] = useState(false);
@@ -187,7 +196,16 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
         if (!token) throw new Error('Not signed in');
         const data = await getPassengerRideRequestStatus(token, rideRequest.id);
         if (!active) return;
-        setRideStatus(data?.rideRequest || null);
+        if (__DEV__) {
+          console.log('[passenger.nearby] status fetched', {
+            rideRequestId: rideRequest.id,
+            rideStatus: data?.rideRequest?.status || null,
+            acceptedDriversCount: Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers.length : 0,
+            assignedDriverId: data?.assignedDriver?.id || null,
+            nowIso: new Date().toISOString(),
+          });
+        }
+        setRideStatus(data?.rideRequest ? { ...data.rideRequest, remainingSecondsCapturedAt: Date.now() } : null);
         setAcceptedDrivers(Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : []);
         setAssignedDriver(data?.assignedDriver || null);
       } catch (error) {
@@ -220,6 +238,15 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
         const handleRideUpdate = (payload = {}) => {
           if (!active || Number(payload.rideRequestId) !== Number(rideRequest.id)) return;
+          if (payload?.status === 'driver_found' && payload?.acceptedDriver) {
+            const incomingDriver = payload.acceptedDriver;
+            setAcceptedDrivers((current) => {
+              const list = Array.isArray(current) ? current : [];
+              if (list.some((item) => String(item?.id) === String(incomingDriver?.id))) return list;
+              return [incomingDriver, ...list];
+            });
+            setRideStatus((current) => ({ ...(current || {}), status: 'driver_found' }));
+          }
           setRealtimeSignal((current) => current + 1);
         };
 
@@ -269,25 +296,32 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
   const rideExpiresAt = rideStatus?.expiresAt || rideRequest?.expiresAt || null;
   const rideStatusValue = String(rideStatus?.status || rideRequest?.status || '').toLowerCase();
-  const remainingSeconds = useMemo(() => getRemainingSeconds(rideExpiresAt), [rideExpiresAt, nowTick]);
+  const remainingSeconds = useMemo(
+    () =>
+      getEffectiveRemainingSeconds(
+        rideExpiresAt,
+        rideStatus?.remainingSeconds ?? rideRequest?.remainingSeconds,
+        rideStatus?.remainingSecondsCapturedAt ?? rideRequest?.remainingSecondsCapturedAt,
+      ),
+    [
+      nowTick,
+      rideExpiresAt,
+      rideRequest?.remainingSeconds,
+      rideRequest?.remainingSecondsCapturedAt,
+      rideStatus?.remainingSeconds,
+      rideStatus?.remainingSecondsCapturedAt,
+    ],
+  );
   const isWaitingForDrivers = !assignedDriver && ['requested', 'driver_found', ''].includes(rideStatusValue);
+  const shouldForceAcceptedRefresh = !assignedDriver && rideStatusValue === 'driver_found' && acceptedDrivers.length === 0;
 
   useEffect(() => {
-    if (!rideRequest?.id || !isWaitingForDrivers || remainingSeconds > 0 || autoExpiryHandledRef.current) {
-      return;
-    }
-
-    autoExpiryHandledRef.current = true;
-    (async () => {
-      try {
-        const token = await getToken();
-        if (!token) return;
-        await cancelRideRequest(token, rideRequest.id, 'Request timed out');
-      } catch {
-        // The backend may already have expired the request.
-      }
-    })();
-  }, [getToken, isWaitingForDrivers, remainingSeconds, rideRequest?.id]);
+    if (!shouldForceAcceptedRefresh) return undefined;
+    const interval = setInterval(() => {
+      setRealtimeSignal((current) => current + 1);
+    }, 600);
+    return () => clearInterval(interval);
+  }, [shouldForceAcceptedRefresh]);
 
   useEffect(() => {
     if (assignedDriver || expiryNavigationHandledRef.current) return;
@@ -297,7 +331,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     Alert.alert(
       rideStatusValue === 'expired' ? 'Request expired' : 'Request cancelled',
       rideStatusValue === 'expired'
-        ? 'No driver accepted your trip within 2 minutes.'
+        ? 'No driver accepted your trip in time.'
         : 'Your ride request has been cancelled.',
       [
         {
@@ -365,12 +399,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   };
 
   const driversViewingCount = rideStatus?.driversViewingCount ?? 0;
-  const infoText = useMemo(() => {
-    if (assignedDriver) return `${assignedDriver.driverName} has been assigned`;
-    if (acceptedDrivers.length > 0) return `${acceptedDrivers.length} driver${acceptedDrivers.length === 1 ? '' : 's'} accepted your trip`;
-    if (driversViewingCount > 0) return `${driversViewingCount} nearby driver${driversViewingCount === 1 ? '' : 's'} notified`;
-    return 'Waiting for nearby drivers to accept your request';
-  }, [acceptedDrivers.length, assignedDriver, driversViewingCount]);
 
   return (
     <SafeAreaView className="flex-1 bg-white">
@@ -397,6 +425,12 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             </Marker>
           ))}
         </MapView>
+        {acceptedDrivers.length > 0 && !assignedDriver ? (
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.58)' }}
+          />
+        ) : null}
 
         <View className="absolute top-0 left-0 right-0 px-5" style={{ paddingTop: insets.top + 8 }}>
           <View className="flex-row items-center rounded-[26px] bg-white/95 px-4 py-3">
@@ -427,39 +461,113 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           </View>
         </View>
 
+        {acceptedDrivers.length > 0 && !assignedDriver ? (
+          <View
+            className="absolute left-0 right-0"
+            style={{ top: insets.top + 64, maxHeight: '82%', paddingHorizontal: 14, zIndex: 50, elevation: 50 }}
+            pointerEvents="box-none"
+          >
+            <View className="rounded-[24px] bg-white/96 px-3 pt-3 pb-2" style={{ borderWidth: 1, borderColor: '#dbeafe' }}>
+              <View className="mb-2 flex-row items-center justify-between px-1">
+                <Text className="text-xs font-bold uppercase tracking-[1px] text-[#1d4ed8]">Drivers accepted</Text>
+                <Text className="text-xs font-semibold text-gray-500">Swipe up/down</Text>
+              </View>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 6 }}
+                keyboardShouldPersistTaps="handled"
+              >
+                {acceptedDrivers.map((driver) => (
+                  <View
+                    key={driver.id}
+                    className="mb-3 rounded-[20px] bg-white px-3 py-3"
+                    style={{ borderWidth: 1, borderColor: '#e5e7eb' }}
+                  >
+                    <View className="mb-3 flex-row items-center justify-between">
+                      <View className="rounded-full bg-[#dbeafe] px-2.5 py-1">
+                        <Text className="text-[10px] font-bold uppercase tracking-[1px] text-[#1d4ed8]">Accepted</Text>
+                      </View>
+                      <View className="rounded-full bg-[#f8fafc] px-2.5 py-1">
+                        <Text className="text-[10px] font-semibold text-gray-700">Auto-cancel {formatCountdown(remainingSeconds)}</Text>
+                      </View>
+                    </View>
+
+                    <View className="flex-row items-start justify-between">
+                      <View className="flex-row flex-1 pr-2">
+                        <Image
+                          source={{
+                            uri:
+                              normalizeVehicleImageUrl(driver.carImage) ||
+                              'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80',
+                          }}
+                          style={{ width: 62, height: 62, borderRadius: 18 }}
+                        />
+                        <View className="ml-3 flex-1">
+                          <Text className="text-base font-bold text-gray-900" numberOfLines={1}>
+                            {driver.driverName}
+                          </Text>
+                          <Text className="mt-0.5 text-xs text-gray-700" numberOfLines={1}>
+                            {driver.carName} · {driver.plate}
+                          </Text>
+                          <View className="mt-1.5 flex-row items-center">
+                            <Ionicons name="star" size={13} color="#f59e0b" />
+                            <Text className="ml-1 text-[11px] font-medium text-gray-500">
+                              {driver.rating.toFixed(2)} ({driver.trips} rides)
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      <View className="items-end">
+                        <Text className="text-[22px] font-extrabold text-gray-900">
+                          ${Number(driver.amount || estimatedAmount || 0).toFixed(2)}
+                        </Text>
+                        <Text className="mt-0.5 text-xs font-semibold text-gray-900">
+                          {driver.etaMinutes} min
+                        </Text>
+                        <Text className="mt-0.5 text-[11px] text-gray-500">
+                          {driver.driverDistanceKm.toFixed(1)} km away
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View className="mt-3 flex-row gap-2.5">
+                      <TouchableOpacity
+                        onPress={handleCancelRequest}
+                        className="h-10 flex-1 items-center justify-center rounded-[14px] border border-red-200 bg-white"
+                      >
+                        <Text className="text-xs font-semibold text-red-500">Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleAccept(driver)}
+                        disabled={isSubmittingDriverId === driver.id}
+                        className="h-10 flex-[1.35] items-center justify-center rounded-[14px]"
+                        style={{ backgroundColor: PRIMARY_BLUE }}
+                      >
+                        {isSubmittingDriverId === driver.id ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text className="text-xs font-semibold text-white">Choose driver</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+        ) : null}
+
         <View
           className="mt-auto rounded-t-[32px] bg-white px-5 pt-4"
-          style={{ marginTop: 'auto', minHeight: acceptedDrivers.length ? '52%' : '42%', paddingBottom: Math.max(insets.bottom + 16, 28) }}
+          style={{ marginTop: 'auto', minHeight: acceptedDrivers.length ? '16%' : '42%', paddingBottom: Math.max(insets.bottom + 16, 28) }}
         >
           <View className="items-center mb-3">
             <View className="h-1.5 w-14 rounded-full bg-gray-300" />
           </View>
 
-          <View className="rounded-[22px] bg-[#eff5ff] px-4 py-4">
-            <View className="flex-row items-center justify-between">
-              <View className="flex-row items-center flex-1 pr-3">
-                <View className="h-10 w-10 items-center justify-center rounded-full bg-[#dbeafe]">
-                  {loadingStatus ? (
-                    <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-                  ) : (
-                    <Ionicons name="flash-outline" size={20} color={PRIMARY_BLUE} />
-                  )}
-                </View>
-                <Text className="ml-3 flex-1 text-base font-semibold text-gray-900" numberOfLines={2}>
-                  {infoText}
-                </Text>
-              </View>
-              {isWaitingForDrivers ? (
-                <View className="items-end">
-                  <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#1d4ed8]">Auto-cancel</Text>
-                  <Text className="text-lg font-extrabold text-gray-900">{formatCountdown(remainingSeconds)}</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
-
           <ScrollView
-            className="mt-4"
+            className={acceptedDrivers.length ? 'mt-0' : 'mt-4'}
             contentContainerStyle={{ paddingBottom: 8 }}
             showsVerticalScrollIndicator={false}
           >
@@ -482,100 +590,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
             ) : null}
-
-            {acceptedDrivers.map((driver) => (
-              <View
-                key={driver.id}
-                className="mb-4 rounded-[28px] bg-white px-4 py-4"
-                style={{ borderWidth: 1, borderColor: '#e5e7eb' }}
-              >
-                <View className="mb-4 flex-row items-center justify-between">
-                  <View className="rounded-full bg-[#dbeafe] px-3 py-1.5">
-                    <Text className="text-xs font-bold uppercase tracking-[1px] text-[#1d4ed8]">Driver found</Text>
-                  </View>
-                  <View className="rounded-full bg-[#f8fafc] px-3 py-1.5">
-                    <Text className="text-xs font-semibold text-gray-700">Auto-cancel {formatCountdown(remainingSeconds)}</Text>
-                  </View>
-                </View>
-                <View className="flex-row items-start justify-between">
-                  <View className="flex-row flex-1 pr-3">
-                    <Image
-                      source={{
-                        uri:
-                          normalizeVehicleImageUrl(driver.carImage) ||
-                          'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80',
-                      }}
-                      style={{ width: 72, height: 72, borderRadius: 22 }}
-                    />
-                    <View className="ml-3 flex-1">
-                      <View className="self-start rounded-full bg-[#d1fae5] px-2.5 py-1">
-                        <Text className="text-xs font-semibold text-[#047857]">Your fare</Text>
-                      </View>
-                      <Text className="mt-2 text-lg font-bold text-gray-900" numberOfLines={1}>
-                        {driver.driverName}
-                      </Text>
-                      <Text className="mt-1 text-sm text-gray-700" numberOfLines={1}>
-                        {driver.carName} · {driver.plate}
-                      </Text>
-                      <View className="mt-2 flex-row items-center">
-                        <Ionicons name="star" size={15} color="#f59e0b" />
-                        <Text className="ml-1.5 text-xs font-medium text-gray-500">
-                          {driver.rating.toFixed(2)} ({driver.trips} rides)
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-
-                  <View className="items-end">
-                    <Text className="text-[30px] font-extrabold text-gray-900">
-                      ${Number(driver.amount || estimatedAmount || 0).toFixed(2)}
-                    </Text>
-                    <Text className="mt-1 text-sm font-semibold text-gray-900">
-                      {driver.etaMinutes} min
-                    </Text>
-                    <Text className="mt-0.5 text-xs text-gray-500">
-                      {driver.driverDistanceKm.toFixed(1)} km away
-                    </Text>
-                  </View>
-                </View>
-
-                <View className="mt-4 rounded-[22px] bg-[#f8fafc] px-4 py-4">
-                  <Text className="text-sm font-medium text-gray-500">Trip summary</Text>
-                  <View className="mt-3 flex-row items-start">
-                    <View className="mr-3 items-center pt-1">
-                      <View className="h-3.5 w-3.5 rounded-full border-[3px] border-green-600" />
-                      <View className="my-1 h-8 w-0.5 bg-gray-300" />
-                      <View className="h-3.5 w-3.5 rounded-full border-[3px]" style={{ borderColor: PRIMARY_BLUE }} />
-                    </View>
-                    <View className="flex-1">
-                      <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>{pickupLabel}</Text>
-                      <Text className="mt-3 text-sm font-semibold text-gray-900" numberOfLines={1}>{dropoffLabel}</Text>
-                    </View>
-                  </View>
-                </View>
-
-                <View className="mt-4 flex-row gap-3">
-                  <TouchableOpacity
-                    onPress={handleCancelRequest}
-                    className="h-12 flex-1 items-center justify-center rounded-[18px] border border-red-200 bg-white"
-                  >
-                    <Text className="text-sm font-semibold text-red-500">Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleAccept(driver)}
-                    disabled={isSubmittingDriverId === driver.id}
-                    className="h-12 flex-[1.4] items-center justify-center rounded-[18px]"
-                    style={{ backgroundColor: PRIMARY_BLUE }}
-                  >
-                    {isSubmittingDriverId === driver.id ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text className="text-sm font-semibold text-white">Accept driver</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
 
           </ScrollView>
         </View>

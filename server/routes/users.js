@@ -124,6 +124,18 @@ router.patch('/me', requireAuth, async (req, res) => {
     const lastName = req.body?.lastName === undefined ? currentUser.lastName : String(req.body.lastName || '').trim();
     const phoneVisibleToDrivers = req.body?.phoneVisibleToDrivers;
     const profileImageUrl = req.body?.profileImageUrl;
+    const existingProfileImageUrl = String(currentUser?.privateMetadata?.profileImageUrl || '').trim();
+    const nextProfileImageUrl = profileImageUrl === undefined
+      ? undefined
+      : (profileImageUrl ? String(profileImageUrl).trim() : null);
+
+    if (
+      nextProfileImageUrl !== undefined &&
+      existingProfileImageUrl &&
+      nextProfileImageUrl !== existingProfileImageUrl
+    ) {
+      return res.status(403).json({ error: 'Profile picture can only be set once and cannot be changed.' });
+    }
 
     await clerkClient.users.updateUser(req.userId, {
       firstName: firstName || null,
@@ -134,7 +146,7 @@ router.patch('/me', requireAuth, async (req, res) => {
       await mergePrivateMetadata(req.userId, {
         ...(currentUser.privateMetadata || {}),
         ...(phoneVisibleToDrivers !== undefined ? { phoneVisibleToDrivers: phoneVisibleToDrivers === true } : {}),
-        ...(profileImageUrl !== undefined ? { profileImageUrl: profileImageUrl ? String(profileImageUrl).trim() : null } : {}),
+        ...(nextProfileImageUrl !== undefined ? { profileImageUrl: nextProfileImageUrl } : {}),
       });
     }
 

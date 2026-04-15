@@ -14,6 +14,19 @@ import { connectRealtime } from '../../realtime';
 
 const TRACKING_STATUS_REFRESH_MS = 5000;
 
+function mapRideStatusToStage(status) {
+  switch (String(status || '').toLowerCase()) {
+    case 'driver_arrived':
+      return 'waiting_at_pickup';
+    case 'in_progress':
+      return 'on_trip';
+    case 'completed':
+      return 'completed';
+    default:
+      return '';
+  }
+}
+
 function toRadians(value) {
   return (value * Math.PI) / 180;
 }
@@ -146,6 +159,15 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
         const handleRideUpdate = (payload = {}) => {
           if (!active || Number(payload.rideRequestId) !== Number(rideRequestId)) return;
+          const nextStatus = String(payload.status || '').toLowerCase();
+          const nextStage = mapRideStatusToStage(nextStatus);
+          if (nextStatus) {
+            setRideStatus((current) => (current ? {
+              ...current,
+              status: nextStatus,
+              stage: nextStage || current.stage,
+            } : current));
+          }
           setRealtimeSignal((current) => current + 1);
         };
 

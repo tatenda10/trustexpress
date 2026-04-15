@@ -29,14 +29,15 @@ function getFriendlyApiErrorMessage(status, fallbackMessage) {
 }
 
 export async function apiFetch(path, options = {}, token) {
+  const { suppressAuthErrorHandler = false, ...fetchOptions } = options || {};
   const url = getApiUrl(path);
-  const headers = { ...(options.headers || {}) };
-  if (options.body === undefined || typeof options.body === 'string') headers['Content-Type'] = 'application/json';
+  const headers = { ...(fetchOptions.headers || {}) };
+  if (fetchOptions.body === undefined || typeof fetchOptions.body === 'string') headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
   let res;
   let data = {};
   try {
-    res = await fetch(url, { ...options, headers });
+    res = await fetch(url, { ...fetchOptions, headers });
     data = await res.json().catch(() => ({}));
   } catch (error) {
     const err = new Error('Network error. Please check your connection and try again.');
@@ -49,7 +50,7 @@ export async function apiFetch(path, options = {}, token) {
     const err = new Error(message);
     err.status = res.status;
     // If the backend reports an auth problem, trigger the global handler so the app can log out.
-    if (res.status === 401 && authErrorHandler) {
+    if (res.status === 401 && authErrorHandler && !suppressAuthErrorHandler) {
       try {
         authErrorHandler();
       } catch {
@@ -127,28 +128,33 @@ export async function getDriverRideHistory(token, options = {}) {
   return apiFetch(`/api/drivers/history${suffix}`, {}, token);
 }
 
-export async function getDriverCurrentRide(token) {
-  return apiFetch('/api/drivers/current-ride', {}, token);
+export async function getDriverCurrentRide(token, options = {}) {
+  return apiFetch('/api/drivers/current-ride', {
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
+  }, token);
 }
 
-export async function markDriverCurrentRideArrived(token, rideRequestId) {
+export async function markDriverCurrentRideArrived(token, rideRequestId, options = {}) {
   return apiFetch(`/api/drivers/current-ride/${rideRequestId}/arrived`, {
     method: 'PATCH',
     body: JSON.stringify({}),
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
   }, token);
 }
 
-export async function startDriverCurrentRide(token, rideRequestId) {
+export async function startDriverCurrentRide(token, rideRequestId, options = {}) {
   return apiFetch(`/api/drivers/current-ride/${rideRequestId}/start`, {
     method: 'PATCH',
     body: JSON.stringify({}),
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
   }, token);
 }
 
-export async function completeDriverCurrentRide(token, rideRequestId, payload = {}) {
+export async function completeDriverCurrentRide(token, rideRequestId, payload = {}, options = {}) {
   return apiFetch(`/api/drivers/current-ride/${rideRequestId}/complete`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
   }, token);
 }
 
@@ -196,6 +202,26 @@ export async function getPassengerRideHistory(token, options = {}) {
 
 export async function getPassengerRideDetails(token, rideRequestId) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/details`, {}, token);
+}
+
+export async function getPassengerRideReceipt(token, rideRequestId) {
+  const url = getApiUrl(`/api/rides/passenger/${rideRequestId}/receipt`);
+  const headers = { Authorization: `Bearer ${token}` };
+  const res = await fetch(url, { method: 'GET', headers });
+  const text = await res.text().catch(() => '');
+  if (!res.ok) {
+    const err = new Error(text || getFriendlyApiErrorMessage(res.status, 'Could not download receipt.'));
+    err.status = res.status;
+    throw err;
+  }
+  return text;
+}
+
+export async function reportLostItem(token, rideRequestId, payload) {
+  return apiFetch(`/api/rides/passenger/${rideRequestId}/lost-items`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
 }
 
 export async function submitPassengerDriverRating(token, rideRequestId, payload) {

@@ -119,10 +119,18 @@ export default function DriverReviewsScreen({ navigation }) {
               <View key={ride.id} className="mb-4 rounded-[28px] bg-white px-5 py-5">
                 <View className="flex-row items-start justify-between">
                   <View className="flex-1 pr-4">
-                    <Text className="text-sm text-gray-500">{ride.pickupLabel} to {ride.dropoffLabel}</Text>
+                    <Text className="text-sm text-gray-500">Anonymous trip review</Text>
                   </View>
                   <Text className="text-sm text-gray-400">{formatDate(ride.passengerDriverRatedAt || ride.completedAt)}</Text>
                 </View>
+
+                {ride.passengerDriverReviewPending ? (
+                  <View className="mt-4 rounded-xl bg-[#eff6ff] px-3 py-3">
+                    <Text className="text-sm font-medium text-[#1d4ed8]">
+                      New feedback received. Details will appear shortly.
+                    </Text>
+                  </View>
+                ) : null}
 
                 {ride.passengerDriverRating !== null ? (
                   <View className="mt-4 flex-row items-center">

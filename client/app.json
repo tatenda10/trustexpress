@@ -4,6 +4,14 @@
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/notificationaudio.mpeg"
+          ]
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {

@@ -196,6 +196,8 @@ function AppStack() {
 
   // Register push notifications once we know the user and role
   useEffect(() => {
+    let cancelled = false;
+
     async function syncPushToken() {
       try {
         if (!user || !storageLoaded || roleLoading || !roleBootstrapped || !userRole) return;
@@ -220,6 +222,7 @@ function AppStack() {
         } else {
           await saveUserPushToken(token, pushToken);
         }
+        if (cancelled) return;
       } catch (error) {
         pushSyncKeyRef.current = '';
         console.warn('[AppStack] Failed to register push token', error);
@@ -227,6 +230,14 @@ function AppStack() {
     }
 
     syncPushToken();
+    const retryInterval = setInterval(() => {
+      syncPushToken();
+    }, 45000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(retryInterval);
+    };
   }, [user?.id, isDriver, storageLoaded, roleLoading, roleBootstrapped, userRole]);
 
   // Role: backend first, then stored choice from the auth flow. Never default an authenticated
@@ -479,7 +490,8 @@ function AppStack() {
       first_name: user?.firstName || null,
       last_name: user?.lastName || null,
       role: userProfile?.role || storedRole || null,
-      phoneVerified: userProfile?.phoneVerified || false,
+      // Preserve previously known verification state on transient refresh failures.
+      phoneVerified: typeof userProfile?.phoneVerified === 'boolean' ? userProfile.phoneVerified : null,
     };
 
     try {
@@ -559,10 +571,12 @@ function AppStack() {
       return <SplashScreen />;
     }
 
+    const passengerPhoneKnown = typeof userProfile?.phoneVerified === 'boolean';
     const passengerPhoneVerified = userProfile?.phoneVerified === true;
     const needPassengerProfile = needsProfileCompletion;
     const needPassengerLocation = passengerLocationGranted !== true;
-    const needPassengerPhoneVerify = !passengerPhoneVerified;
+    // Only force verification when backend explicitly says "false".
+    const needPassengerPhoneVerify = passengerPhoneKnown && !passengerPhoneVerified;
     const passengerInitialRoute = needPassengerProfile
       ? 'PassengerCompleteProfile'
       : needPassengerLocation
@@ -624,6 +638,7 @@ function AppStack() {
   const profile = driverStatus?.driverProfile;
   const vehicle = driverStatus?.vehicle;
   const phoneVerified = driverStatus?.phoneVerified === true;
+  const driverPhoneKnown = typeof driverStatus?.phoneVerified === 'boolean';
   const needDriverProfileCompletion = needsProfileCompletion;
   const profileStatus = String(profile?.status || '').trim().toLowerCase();
   const vehicleStatus = String(vehicle?.status || '').trim().toLowerCase();
@@ -652,7 +667,9 @@ function AppStack() {
         !String(profileStatus || '').trim() ||
         !hasDriverSubmittedIdentityDocs));
 
+  // Avoid false verify-screen redirects when driver status is temporarily unavailable.
   const needPhoneVerify =
+    driverPhoneKnown &&
     !phoneVerified &&
     !driverSkippedPhoneVerify;
   // Do not park drivers on the register screen while the vehicle is pending admin review (same idea as identity docs in review).
@@ -763,7 +780,7 @@ function AppStack() {
 
 // Main App Component – use isSignedIn so setActive() correctly switches to AppStack (no manual navigate)
 function AppContent() {
-  const { isLoaded, isSignedIn, signOut } = useAuth();
+  const { isLoaded, isSignedIn } = useAuth();
   const { setInviteFromToken, hydrateStoredInvite } = useAgentInvite();
   const pendingInviteNavigationRef = useRef(false);
 
@@ -797,15 +814,14 @@ function AppContent() {
     console.log('[AppContent] auth state:', { isLoaded, isSignedIn, rendering: !isLoaded ? 'AuthStack' : isSignedIn ? 'AppStack' : 'AuthStack' });
   }, [isLoaded, isSignedIn]);
 
-  // When the backend says the token is invalid/expired, automatically sign the user out.
+  // Avoid hard auto-logout on a single backend 401. Mobile networks can briefly
+  // return transient auth errors while Clerk session is still valid.
   useEffect(() => {
     setApiAuthErrorHandler(() => {
-      // Avoid calling signOut before Clerk is ready.
-      if (isLoaded) {
-        signOut().catch(() => {});
-      }
+      // Keep the current session and let individual screens handle request errors.
+      // Clerk auth state will still move to signed-out naturally if the session is actually invalid.
     });
-  }, [isLoaded, signOut]);
+  }, []);
 
   useEffect(() => {
     // Complete OAuth session when app opens from redirect (Clerk Google/Apple sign-in)

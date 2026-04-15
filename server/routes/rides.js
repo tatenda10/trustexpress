@@ -38,12 +38,14 @@ function createPublicRideId() {
   return `TR-${crypto.randomInt(100000, 999999)}`;
 }
 
-const OPEN_REQUEST_TTL_MINUTES = 2;
+const OPEN_REQUEST_TTL_MINUTES = 3;
+const DRIVER_FOUND_SELECTION_TTL_MINUTES = 2;
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DRIVER_REQUEST_RADIUS_KM = 20;
 const MAX_DRIVER_OFFERS = 8;
 const DRIVER_ONLINE_STALE_DAYS = 1;
+const LOST_ITEM_MAX_LENGTH = 2000;
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
@@ -118,6 +120,34 @@ function mapDriverAvailability(row, pickupCoordinate) {
   };
 }
 
+function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
+  const lat = Number(row.current_lat);
+  const lng = Number(row.current_lng);
+  const coordinate = Number.isFinite(lat) && Number.isFinite(lng)
+    ? { latitude: lat, longitude: lng }
+    : pickupCoordinate;
+  const driverDistanceKm = calculateDistanceKm(pickupCoordinate, coordinate);
+  return {
+    id: row.driver_user_id,
+    tierName: row.vehicle_tier_name || 'Ride',
+    carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
+    plate: row.number_plate || 'Unknown plate',
+    driverName: row.driver_name || 'Driver',
+    etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
+    driverDistanceKm,
+    amount: Number(estimatedAmount || 0),
+    rating: 4.9,
+    trips: 0,
+    phoneNumber: row.phone_number || null,
+    coordinate,
+    tier: {
+      tierKey: row.vehicle_tier_key || null,
+      tierName: row.vehicle_tier_name || 'Ride',
+    },
+    carImage: row.car_photo_url || null,
+  };
+}
+
 function mapPassengerRideStatus(status) {
   if (status === 'completed') return 'Completed';
   if (status === 'cancelled' || status === 'expired') return 'Cancelled';
@@ -135,11 +165,18 @@ function toIsoOrNull(value) {
   return value ? new Date(value).toISOString() : null;
 }
 
-function computeExpiresAt(value) {
+function computeExpiresAt(value, ttlMinutes = OPEN_REQUEST_TTL_MINUTES) {
   if (!value) return null;
   const date = new Date(value);
-  date.setMinutes(date.getMinutes() + OPEN_REQUEST_TTL_MINUTES);
+  date.setMinutes(date.getMinutes() + ttlMinutes);
   return date.toISOString();
+}
+
+function computeRideExpiresAt(status, requestedAt, driverFoundAt = null) {
+  if (String(status || '') === 'driver_found') {
+    return computeExpiresAt(driverFoundAt || requestedAt, DRIVER_FOUND_SELECTION_TTL_MINUTES);
+  }
+  return computeExpiresAt(requestedAt, OPEN_REQUEST_TTL_MINUTES);
 }
 
 function isOpenRideRequest(status) {
@@ -157,6 +194,27 @@ function mapRideMessage(row) {
     createdAt: toIsoOrNull(row.created_at),
     readAt: toIsoOrNull(row.read_at),
   };
+}
+
+function formatRideReceiptText(ride) {
+  const lines = [
+    'TrustCars Ride Receipt',
+    '----------------------',
+    `Receipt #: RCPT-${ride.id}`,
+    `Trip ID: ${ride.public_id || ride.id}`,
+    `Status: ${mapPassengerRideStatus(ride.status)}`,
+    `Requested: ${ride.requested_at ? new Date(ride.requested_at).toISOString() : '-'}`,
+    `Completed: ${ride.completed_at ? new Date(ride.completed_at).toISOString() : '-'}`,
+    '',
+    `Passenger: ${ride.passenger_name || 'Passenger'}`,
+    `Driver: ${ride.driver_name || 'N/A'}`,
+    `Pickup: ${ride.pickup_label || '-'}`,
+    `Drop-off: ${ride.dropoff_label || '-'}`,
+    '',
+    `Tier: ${ride.requested_tier_name || 'Ride'}`,
+    `Fare: $${Number(ride.estimated_amount || 0).toFixed(2)}`,
+  ];
+  return `${lines.join('\n')}\n`;
 }
 
 async function loadAuthorizedRideChat(rideRequestId, userId) {
@@ -210,8 +268,13 @@ async function expireRideRequestIfTimedOut(rideId, passengerUserId = null) {
          cancelled_at = CURRENT_TIMESTAMP
      WHERE id = ?
        ${passengerClause}
-       AND status IN ('requested', 'driver_found')
-       AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)`,
+       AND (
+         (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
+         OR (
+           status = 'driver_found'
+           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+         )
+       )`,
     params
   );
 
@@ -345,7 +408,11 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
          id,
          public_id,
          pickup_label,
+        pickup_lat,
+        pickup_lng,
          dropoff_label,
+        dropoff_lat,
+        dropoff_lng,
          estimated_amount,
          requested_tier_name,
          driver_name,
@@ -371,7 +438,15 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         id: row.id,
         publicId: row.public_id,
         pickupLabel: row.pickup_label,
+        pickupCoordinate: {
+          latitude: Number(row.pickup_lat),
+          longitude: Number(row.pickup_lng),
+        },
         dropoffLabel: row.dropoff_label,
+        dropoffCoordinate: {
+          latitude: Number(row.dropoff_lat),
+          longitude: Number(row.dropoff_lng),
+        },
         estimatedAmount: Number(row.estimated_amount || 0),
         tierName: row.requested_tier_name,
         driverName: row.driver_name || null,
@@ -407,6 +482,26 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
   try {
     const user = await requirePassenger(req, res);
     if (!user) return;
+
+    const [existingOpenRide] = await query(
+      `SELECT id, public_id, status
+       FROM ride_requests
+       WHERE passenger_user_id = ?
+         AND status IN ('requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress')
+       ORDER BY COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC, id DESC
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (existingOpenRide) {
+      return res.status(409).json({
+        error: 'You already have an active ride request. Complete or cancel it before requesting another ride.',
+        activeRideRequest: {
+          id: existingOpenRide.id,
+          publicId: existingOpenRide.public_id,
+          status: existingOpenRide.status,
+        },
+      });
+    }
 
     const {
       pickupCoordinate,
@@ -547,6 +642,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         status: 'requested',
         requestedAt,
         expiresAt: computeExpiresAt(requestedAt),
+        remainingSeconds: OPEN_REQUEST_TTL_MINUTES * 60,
       },
       nearbyDrivers,
     });
@@ -562,10 +658,18 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
     if (!user) return;
 
     const [ride] = await query(
-      `SELECT *
+      `SELECT *,
+              GREATEST(
+                0,
+                CASE
+                  WHEN status = 'driver_found'
+                    THEN ${(DRIVER_FOUND_SELECTION_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
+                  ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
+                END
+              ) AS remaining_seconds
        FROM ride_requests
        WHERE passenger_user_id = ?
-         AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+         AND status IN ('requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress')
        ORDER BY
          COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC,
          id DESC
@@ -581,6 +685,33 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
       latitude: Number(ride.pickup_lat),
       longitude: Number(ride.pickup_lng),
     };
+
+    const respondingDrivers = await query(
+      `SELECT
+         rr.driver_user_id,
+         rr.status AS response_status,
+         da.driver_name,
+         da.phone_number,
+         da.vehicle_tier_key,
+         da.vehicle_tier_name,
+         da.vehicle_make,
+         da.vehicle_model,
+         da.number_plate,
+         da.car_photo_url,
+         da.current_lat,
+         da.current_lng,
+         da.is_online
+       FROM ride_request_driver_responses rr
+       LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
+       WHERE rr.ride_request_id = ?
+         AND rr.status IN ('accepted', 'selected')
+       ORDER BY rr.responded_at ASC`,
+      [ride.id]
+    );
+
+    const acceptedDrivers = respondingDrivers.map((row) =>
+      mapAcceptedDriverOffer(row, pickupCoordinate, ride.estimated_amount)
+    );
 
     const [driverAvailability] = await query(
       `SELECT
@@ -609,7 +740,11 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
           },
           pickupCoordinate
         )
-      : null;
+      : (
+          ride.driver_user_id
+            ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || null
+            : null
+        );
 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
@@ -632,7 +767,8 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
-        expiresAt: computeExpiresAt(ride.requested_at),
+        expiresAt: computeRideExpiresAt(ride.status, ride.requested_at, ride.driver_found_at),
+        remainingSeconds: Number(ride.remaining_seconds || 0),
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
         driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
         driverCoordinate,
@@ -641,6 +777,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
         driversViewingCount: 0,
       },
+      acceptedDrivers,
       assignedDriver,
     });
   } catch (err) {
@@ -660,7 +797,15 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     }
 
     const [ride] = await query(
-      `SELECT *
+      `SELECT *,
+              GREATEST(
+                0,
+                CASE
+                  WHEN status = 'driver_found'
+                    THEN ${(DRIVER_FOUND_SELECTION_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
+                  ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
+                END
+              ) AS remaining_seconds
        FROM ride_requests
        WHERE id = ? AND passenger_user_id = ?
        LIMIT 1`,
@@ -705,17 +850,28 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
          da.current_lng,
          da.is_online
        FROM ride_request_driver_responses rr
-       INNER JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
+       LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
        WHERE rr.ride_request_id = ?
          AND rr.status IN ('accepted', 'selected')
        ORDER BY rr.responded_at ASC`,
       [rideRequestId]
     );
+    console.log('[rides.passenger.status] accepted drivers snapshot', {
+      passengerUserId: req.userId,
+      rideRequestId,
+      rideStatus: ride.status,
+      respondingCount: respondingDrivers.length,
+      respondingStatuses: respondingDrivers.map((row) => ({
+        driverUserId: row.driver_user_id,
+        status: row.response_status,
+        hasAvailability: row.current_lat !== null && row.current_lng !== null,
+      })),
+      nowIso: new Date().toISOString(),
+    });
 
-    const acceptedDrivers = respondingDrivers.map((row) => mapDriverAvailability({
-      ...row,
-      estimated_amount: ride.estimated_amount,
-    }, pickupCoordinate));
+    const acceptedDrivers = respondingDrivers.map((row) =>
+      mapAcceptedDriverOffer(row, pickupCoordinate, ride.estimated_amount)
+    );
 
     const assignedDriver = ride.driver_user_id
       ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || (() => {
@@ -771,7 +927,8 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
-        expiresAt: computeExpiresAt(ride.requested_at),
+        expiresAt: computeRideExpiresAt(ride.status, ride.requested_at, ride.driver_found_at),
+        remainingSeconds: Number(ride.remaining_seconds || 0),
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
         driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
         driverCoordinate,
@@ -836,6 +993,113 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
     });
   } catch (err) {
     console.error('GET /api/rides/passenger/:rideRequestId/details', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT
+         id,
+         public_id,
+         passenger_name,
+         driver_name,
+         requested_tier_name,
+         pickup_label,
+         dropoff_label,
+         estimated_amount,
+         status,
+         requested_at,
+         completed_at
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const fileName = `trustcars-receipt-${ride.public_id || ride.id}.txt`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    return res.status(200).send(formatRideReceiptText(ride));
+  } catch (err) {
+    console.error('GET /api/rides/passenger/:rideRequestId/receipt', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/passenger/:rideRequestId/lost-items', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    const itemDescription = String(req.body?.itemDescription || '').trim();
+    const contactPhone = String(req.body?.contactPhone || '').trim();
+
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+    if (!itemDescription) {
+      return res.status(400).json({ error: 'itemDescription is required' });
+    }
+    if (itemDescription.length > LOST_ITEM_MAX_LENGTH) {
+      return res.status(400).json({ error: `itemDescription must be ${LOST_ITEM_MAX_LENGTH} characters or less` });
+    }
+
+    const [ride] = await query(
+      `SELECT id, public_id, driver_user_id, status
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const insertResult = await query(
+      `INSERT INTO ride_lost_items (
+         ride_request_id,
+         ride_public_id,
+         passenger_user_id,
+         driver_user_id,
+         item_description,
+         contact_phone,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, 'open')`,
+      [
+        rideRequestId,
+        ride.public_id || null,
+        req.userId,
+        ride.driver_user_id || null,
+        itemDescription,
+        contactPhone || null,
+      ]
+    );
+
+    return res.status(201).json({
+      lostItemReport: {
+        id: Number(insertResult?.insertId || 0),
+        rideRequestId,
+        status: 'open',
+        itemDescription,
+        contactPhone: contactPhone || null,
+      },
+    });
+  } catch (err) {
+    console.error('POST /api/rides/passenger/:rideRequestId/lost-items', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });
