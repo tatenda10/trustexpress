@@ -782,7 +782,17 @@ function AppStack() {
 function AppContent() {
   const { isLoaded, isSignedIn } = useAuth();
   const { setInviteFromToken, hydrateStoredInvite } = useAgentInvite();
-  const pendingInviteNavigationRef = useRef(false);
+  const pendingInviteNavigationRef = useRef(null);
+
+  const navigateToOnboardingIfAvailable = useCallback((target) => {
+    if (!navigationRef.isReady()) return false;
+    const routeName = target === 'passenger' ? 'PassengerOnboarding' : 'DriverOnboarding';
+    const rootState = navigationRef.getRootState?.();
+    const routeNames = Array.isArray(rootState?.routeNames) ? rootState.routeNames : [];
+    if (!routeNames.includes(routeName)) return false;
+    navigationRef.navigate(routeName);
+    return true;
+  }, []);
 
   const handleInviteUrl = useCallback(async (url) => {
     if (!url) return false;
@@ -799,16 +809,15 @@ function AppContent() {
 
     try {
       await setInviteFromToken(inviteToken);
-      if (navigationRef.isReady() && !isSignedIn) {
-        navigationRef.navigate(looksLikePassengerSignup ? 'PassengerOnboarding' : 'DriverOnboarding');
-      } else if (!isSignedIn) {
-        pendingInviteNavigationRef.current = looksLikePassengerSignup ? 'passenger' : 'driver';
+      const target = looksLikePassengerSignup ? 'passenger' : 'driver';
+      if (!isSignedIn && !navigateToOnboardingIfAvailable(target)) {
+        pendingInviteNavigationRef.current = target;
       }
       return true;
     } catch {
       return false;
     }
-  }, [isSignedIn, setInviteFromToken]);
+  }, [isSignedIn, navigateToOnboardingIfAvailable, setInviteFromToken]);
 
   useEffect(() => {
     console.log('[AppContent] auth state:', { isLoaded, isSignedIn, rendering: !isLoaded ? 'AuthStack' : isSignedIn ? 'AppStack' : 'AuthStack' });
@@ -852,8 +861,9 @@ function AppContent() {
       onReady={() => {
         if (pendingInviteNavigationRef.current && !isSignedIn) {
           const pendingTarget = pendingInviteNavigationRef.current;
-          pendingInviteNavigationRef.current = false;
-          navigationRef.navigate(pendingTarget === 'passenger' ? 'PassengerOnboarding' : 'DriverOnboarding');
+          if (navigateToOnboardingIfAvailable(pendingTarget)) {
+            pendingInviteNavigationRef.current = null;
+          }
         }
       }}
     >

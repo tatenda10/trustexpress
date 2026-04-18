@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentAuth } from './auth/AgentAuthContext.jsx'
 import BASE_URL from './context/Api'
 
+const ANDROID_PLAY_STORE_FALLBACK_URL = 'https://play.google.com/store/search?q=trust%20express%20app&c=apps'
+
 const agentSections = [
   {
     label: null,
@@ -501,7 +503,7 @@ function RegisterDriverSection({
   vehicleEligibilityError,
 }) {
   const qrCodeUrl = invite?.appUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(invite.appUrl)}`
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(ANDROID_PLAY_STORE_FALLBACK_URL)}`
     : ''
   const canShowInvite = !!invite && vehicleEligibility?.available === true
 
@@ -610,7 +612,7 @@ function RegisterDriverSection({
                 />
               </div>
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                The driver scans this code and is taken into the Trust Express mobile app signup flow with your referral already attached.
+                Scan to open the Trust Express app. If the app is not installed, use the Play Store button below.
               </p>
             </div>
 
@@ -620,29 +622,35 @@ function RegisterDriverSection({
                 <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.appUrl}</p>
               </div>
               <div className="border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Fallback Link</p>
-                <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.universalUrl}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Play Store Link (Android fallback)</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{ANDROID_PLAY_STORE_FALLBACK_URL}</p>
               </div>
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={() => onCopyInvite(invite.universalUrl)}
+                  onClick={() => onCopyInvite(invite.appUrl)}
                   className="h-10 rounded-sm bg-[#16213a] px-4 text-sm font-semibold text-white transition hover:bg-slate-900"
                 >
-                  Copy Invite Link
+                  Copy App Deep Link
                 </button>
                 <button
                   type="button"
-                  onClick={() => onCopyInvite(invite.appUrl)}
+                  onClick={() => onCopyInvite(ANDROID_PLAY_STORE_FALLBACK_URL)}
                   className="h-10 rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
                 >
-                  Copy App Link
+                  Copy Play Store Link
                 </button>
                 <a
                   href={invite.appUrl}
                   className="inline-flex h-10 items-center rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
                 >
                   Open Driver App
+                </a>
+                <a
+                  href={ANDROID_PLAY_STORE_FALLBACK_URL}
+                  className="inline-flex h-10 items-center rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  Open Play Store
                 </a>
               </div>
             </div>
