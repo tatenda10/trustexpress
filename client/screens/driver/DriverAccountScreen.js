@@ -5,7 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { deleteMe, getApiUrl, getMe, updateMe, uploadFile } from '../../api';
+import { deleteMe, getApiUrl, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
@@ -213,11 +213,10 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const driverName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.firstName || 'Driver';
   const driverEmail = user?.primaryEmailAddress?.emailAddress || 'No email connected';
   const profileImageUrl = (() => {
-    const raw = String(profileData?.image_url || '').trim();
-    if (!raw) return user?.imageUrl || null;
-    if (raw.startsWith('/')) return getApiUrl(raw);
-    if (raw.startsWith('uploads/')) return getApiUrl(`/${raw}`);
-    return raw;
+    const fromMe = resolveUploadedMediaUrl(profileData?.image_url);
+    if (fromMe) return fromMe;
+    const clerkFallback = String(user?.imageUrl || '').trim();
+    return clerkFallback || null;
   })();
   const canSetProfilePhoto = !profileImageUrl;
 

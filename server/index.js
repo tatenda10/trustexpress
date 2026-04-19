@@ -15,7 +15,73 @@ const PORT = Number(process.env.PORT) || 3001;
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+const uploadsStaticRoot = path.join(__dirname, 'uploads');
+app.use('/uploads', express.static(uploadsStaticRoot));
+// When the file is missing, express.static calls next() and the global JSON 404 hid the real issue.
+app.use('/uploads', (req, res) => {
+  res.status(404).json({
+    error: 'Upload not found on server',
+    path: req.originalUrl,
+    hint: 'The file is not under server/uploads on this host, or the deploy wiped the uploads folder. Re-upload the image after ensuring uploads/ is persisted.',
+  });
+});
+
+const ANDROID_PLAY_STORE_SEARCH_URL =
+  process.env.ANDROID_PLAY_STORE_SEARCH_URL ||
+  'https://play.google.com/store/search?q=trust%20express%20app&c=apps';
+
+/**
+ * Agent QR / shared link: HTTPS so phone cameras treat it as a normal link.
+ * Tries app deep link first; only redirects to Play Store if the page stays in the foreground (app did not open).
+ */
+app.get('/invite/driver', (req, res) => {
+  const invite = String(req.query.invite || '').trim();
+  if (!invite || invite.length > 200 || !/^[a-zA-Z0-9_-]+$/.test(invite)) {
+    return res.status(400).send('Invalid invite token');
+  }
+  const appDeepLink = `trustexpress://driver-signup?invite=${encodeURIComponent(invite)}`;
+  const playUrl = ANDROID_PLAY_STORE_SEARCH_URL;
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trust Express — Driver invite</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 24px; max-width: 420px; margin: 0 auto; }
+    p { color: #444; line-height: 1.5; }
+    a { color: #16213a; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <p>Opening Trust Express…</p>
+  <p>If nothing happens, <a href="${playUrl.replace(/"/g, '&quot;')}">get the app from Google Play</a>.</p>
+  <p><a href="${appDeepLink.replace(/"/g, '&quot;')}">Open in app</a></p>
+  <script>
+(function () {
+  var appUrl = ${JSON.stringify(appDeepLink)};
+  var storeUrl = ${JSON.stringify(playUrl)};
+  var left = false;
+  function markLeft() { left = true; }
+  window.addEventListener('pagehide', markLeft);
+  window.addEventListener('blur', markLeft);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') markLeft();
+  });
+  window.location.href = appUrl;
+  setTimeout(function () {
+    if (!left && document.visibilityState === 'visible') {
+      window.location.replace(storeUrl);
+    }
+  }, 2800);
+})();
+  </script>
+</body>
+</html>`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
 app.use('/api', routes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));

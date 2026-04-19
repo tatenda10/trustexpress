@@ -57,34 +57,62 @@ const DriverCreateAccountScreen = ({ navigation }) => {
     setModalState({ visible: true, title: content.title, message: content.message, tone: 'error' });
   };
 
-  const ensureDriverRole = async () => {
-    const token = await getToken();
-    if (!token) return true;
-    const profile = await getMe(token);
-    if (profile?.role !== 'driver') {
-      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
-      await signOut().catch(() => {});
-      setModalState({
-        visible: true,
-        title: 'This account is not registered as a driver',
-        message:
-          profile?.role === 'passenger'
-            ? 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.'
-            : 'This account is not registered as a driver. Please create a driver account first.',
-        tone: 'error',
-      });
-      return false;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * After registerUser, Clerk + GET /me can briefly return stale role metadata.
+   * Trust the server response from registerUser first, then retry getMe before signing out.
+   */
+  const ensureDriverRole = async (registeredFromServer = null) => {
+    if (registeredFromServer?.role === 'driver') {
+      return true;
     }
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        const token = await getToken();
+        if (!token) {
+          await sleep(350);
+          continue;
+        }
+        const profile = await getMe(token);
+        if (profile?.role === 'driver') {
+          return true;
+        }
+        if (profile?.role === 'passenger') {
+          await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
+          await signOut().catch(() => {});
+          setModalState({
+            visible: true,
+            title: 'This account is not registered as a driver',
+            message:
+              'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.',
+            tone: 'error',
+          });
+          return false;
+        }
+      } catch {
+        // Transient network or 401 — retry instead of signing out.
+      }
+      await sleep(400);
+    }
+
+    // Do not sign out on ambiguous/stale reads; user can continue onboarding.
     return true;
   };
 
   const completeSignUp = async (sessionId) => {
     await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
     await setActive({ session: sessionId });
+    let registeredProfile = null;
     try {
       const token = await getToken();
       if (token) {
-        await registerUser(token, { role: 'driver', email, inviteToken: inviteToken || undefined });
+        registeredProfile = await registerUser(token, {
+          role: 'driver',
+          email,
+          inviteToken: inviteToken || undefined,
+        });
       }
     } catch (e) {
       await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
@@ -92,7 +120,7 @@ const DriverCreateAccountScreen = ({ navigation }) => {
       showErrorModal(e, 'signup');
       return;
     }
-    const allowed = await ensureDriverRole();
+    const allowed = await ensureDriverRole(registeredProfile);
     if (!allowed) return;
   };
 
@@ -183,13 +211,21 @@ const DriverCreateAccountScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
+        let registeredProfile = null;
         try {
           const token = await getToken();
           if (token) {
-            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+            registeredProfile = await registerUser(token, {
+              role: 'driver',
+              email: null,
+              inviteToken: inviteToken || undefined,
+            });
           }
-        } catch (e) {}
-        const allowed = await ensureDriverRole();
+        } catch (e) {
+          showErrorModal(e, 'signup');
+          return;
+        }
+        const allowed = await ensureDriverRole(registeredProfile);
         if (!allowed) return;
       }
     } catch (error) {
@@ -209,13 +245,21 @@ const DriverCreateAccountScreen = ({ navigation }) => {
       if (createdSessionId && setActiveSession) {
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActiveSession({ session: createdSessionId });
+        let registeredProfile = null;
         try {
           const token = await getToken();
           if (token) {
-            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+            registeredProfile = await registerUser(token, {
+              role: 'driver',
+              email: null,
+              inviteToken: inviteToken || undefined,
+            });
           }
-        } catch (e) {}
-        const allowed = await ensureDriverRole();
+        } catch (e) {
+          showErrorModal(e, 'signup');
+          return;
+        }
+        const allowed = await ensureDriverRole(registeredProfile);
         if (!allowed) return;
       }
     } catch (error) {

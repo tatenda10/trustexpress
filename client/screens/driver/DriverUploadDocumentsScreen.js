@@ -189,7 +189,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     const formData = new FormData();
     formData.append('file', { uri: uploadReadyUri, name: 'photo.jpg', type: 'image/jpeg' });
     try {
-      const { url } = await uploadFile(token, formData);
+      const { url } = await uploadFile(token, formData, { suppressAuthErrorHandler: true });
       console.log('[DriverUploadDocumentsScreen] upload success', { label, url });
       return url;
     } catch (error) {

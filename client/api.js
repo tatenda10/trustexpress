@@ -15,6 +15,36 @@ export function getApiUrl(path) {
   return `${base}${p}`;
 }
 
+/**
+ * Uploaded files are stored as /uploads/... on our API host. Older sessions may have
+ * full URLs pointing at a dev IP or old domain — always resolve /uploads/ against current BASE_URL.
+ * External URLs (e.g. Clerk avatars) are returned unchanged.
+ */
+export function resolveUploadedMediaUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('./') || raw.startsWith('../')) return null;
+
+  const uploadsIdx = raw.indexOf('/uploads/');
+  if (uploadsIdx >= 0) {
+    const pathOnly = raw.slice(uploadsIdx).split('?')[0];
+    return getApiUrl(pathOnly);
+  }
+  if (raw.startsWith('/')) return getApiUrl(raw);
+  if (raw.startsWith('uploads/')) return getApiUrl(`/${raw}`);
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.pathname.startsWith('/uploads/')) {
+      return getApiUrl(parsed.pathname);
+    }
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return raw;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function getFriendlyApiErrorMessage(status, fallbackMessage) {
   if (status === 401) {
     return 'Session expired. Please sign in again.';
@@ -327,7 +357,8 @@ export async function confirmPhoneVerification(token, phoneNumber) {
   }, token);
 }
 
-export async function uploadFile(token, formData) {
+export async function uploadFile(token, formData, options = {}) {
+  const { suppressAuthErrorHandler = false } = options || {};
   const url = getApiUrl('/api/upload');
   const headers = { Authorization: `Bearer ${token}` };
   let res;
@@ -344,7 +375,7 @@ export async function uploadFile(token, formData) {
   if (!res.ok) {
     let message = getFriendlyApiErrorMessage(res.status, data?.error);
     if (res.status === 401) {
-      if (authErrorHandler) {
+      if (authErrorHandler && !suppressAuthErrorHandler) {
         try {
           authErrorHandler();
         } catch {

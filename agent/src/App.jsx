@@ -502,8 +502,14 @@ function RegisterDriverSection({
   vehicleEligibility,
   vehicleEligibilityError,
 }) {
-  const qrCodeUrl = invite?.appUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(ANDROID_PLAY_STORE_FALLBACK_URL)}`
+  const apiBase = String(BASE_URL || '').replace(/\/$/, '')
+  /** HTTPS page on API host: opens app first, Play Store only if app did not open (see server GET /invite/driver). */
+  const driverSmartInviteUrl =
+    invite?.token && apiBase
+      ? `${apiBase}/invite/driver?invite=${encodeURIComponent(invite.token)}`
+      : ''
+  const qrCodeUrl = driverSmartInviteUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(driverSmartInviteUrl)}`
     : ''
   const canShowInvite = !!invite && vehicleEligibility?.available === true
 
@@ -612,11 +618,15 @@ function RegisterDriverSection({
                 />
               </div>
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                Scan to open the Trust Express app. If the app is not installed, use the Play Store button below.
+                Scan opens a secure link: Trust Express app if installed, otherwise Google Play after a short moment.
               </p>
             </div>
 
             <div className="grid gap-3">
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Invite link (QR &amp; WhatsApp)</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{driverSmartInviteUrl || '—'}</p>
+              </div>
               <div className="border border-slate-200 bg-slate-50 px-4 py-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">App Deep Link</p>
                 <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.appUrl}</p>
@@ -628,10 +638,10 @@ function RegisterDriverSection({
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={() => onCopyInvite(invite.appUrl)}
+                  onClick={() => onCopyInvite(driverSmartInviteUrl || invite.appUrl)}
                   className="h-10 rounded-sm bg-[#16213a] px-4 text-sm font-semibold text-white transition hover:bg-slate-900"
                 >
-                  Copy App Deep Link
+                  Copy Invite Link
                 </button>
                 <button
                   type="button"
