@@ -229,7 +229,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       if (enhancedSelfieOnly) {
         const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard, 'Selfie with national ID');
         try {
-          await submitDriverDocuments(token, { selfieWithIdCardUrl });
+          await submitDriverDocuments(token, { selfieWithIdCardUrl }, { suppressAuthErrorHandler: true });
         } catch (error) {
           console.log('[DriverUploadDocumentsScreen] submit documents failed', {
             mode: 'enhancedSelfieOnly',
@@ -246,13 +246,17 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard, 'Selfie with national ID');
 
         try {
-          await submitDriverDocuments(token, {
-            nationalIdFrontUrl,
-            nationalIdBackUrl,
-            driverLicenceUrl,
-            selfieUrl,
-            selfieWithIdCardUrl,
-          });
+          await submitDriverDocuments(
+            token,
+            {
+              nationalIdFrontUrl,
+              nationalIdBackUrl,
+              driverLicenceUrl,
+              selfieUrl,
+              selfieWithIdCardUrl,
+            },
+            { suppressAuthErrorHandler: true },
+          );
         } catch (error) {
           console.log('[DriverUploadDocumentsScreen] submit documents failed', {
             mode: 'full',

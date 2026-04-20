@@ -10,6 +10,7 @@ const agentSections = [
     label: null,
     items: [
       { id: 'dashboard', label: 'Dashboard', description: 'Overview of your recruitment activity', icon: GridIcon },
+      { id: 'rewards', label: 'Rewards', description: 'Redeem payouts and view reward history', icon: ClipboardIcon },
     ],
   },
   {
@@ -49,6 +50,23 @@ async function fetchAgentDashboard(token) {
     return response.data
   } catch (error) {
     throw new Error(error?.response?.data?.error || 'Failed to load dashboard')
+  }
+}
+
+async function postRedeemAgentRewards(token) {
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/api/agent/rewards/redeem`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    )
+    return response.data
+  } catch (error) {
+    throw new Error(error?.response?.data?.error || 'Failed to redeem rewards')
   }
 }
 
@@ -162,6 +180,11 @@ function ArrowIcon() {
       <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
+}
+
+function formatUsd(value) {
+  const amount = Number(value || 0);
+  return `USD ${amount.toFixed(2)}`;
 }
 
 function StatusBadge({ tone = 'slate', children }) {
@@ -391,7 +414,7 @@ function DashboardContent({ agent, summary, applications }) {
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <section className="border border-slate-200 bg-white p-5">
           <SectionEyebrow>Invite Opens</SectionEyebrow>
           <h3 className="mt-2 text-[28px] font-semibold text-slate-950">{summary?.inviteOpens ?? 0}</h3>
@@ -486,6 +509,125 @@ function DashboardContent({ agent, summary, applications }) {
           </div>
         </section>
       </div>
+    </div>
+  )
+}
+
+function RewardsSection({ rewards, redeeming, onRedeemRewards }) {
+  const rewardTiers = Array.isArray(rewards?.tiersProgress) ? rewards.tiersProgress : []
+  const redemptionHistory = Array.isArray(rewards?.redemptionHistory) ? rewards.redemptionHistory : []
+  const pendingUsd = Number(rewards?.summary?.pendingPayoutUsd ?? rewards?.summary?.totalPayoutUsd ?? 0)
+  const pendingRequestCount = Number(rewards?.summary?.pendingRedemptionCount || 0)
+
+  return (
+    <div className="grid gap-5">
+      <div className="grid gap-4 md:grid-cols-2">
+        <section className="border border-slate-200 bg-white p-5">
+          <SectionEyebrow>Reward Pending (This Cycle)</SectionEyebrow>
+          <h3 className="mt-2 text-[28px] font-semibold text-slate-950">{formatUsd(pendingUsd)}</h3>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            This is what you can redeem now. Redeeming resets your cycle counter to 0, while lifetime ride history remains.
+          </p>
+        </section>
+        <section className="border border-slate-200 bg-white p-5">
+          <SectionEyebrow>Lifetime Redeemed</SectionEyebrow>
+          <h3 className="mt-2 text-[28px] font-semibold text-slate-950">{formatUsd(rewards?.summary?.lifetimeRedeemedUsd || 0)}</h3>
+          <p className="mt-2 text-sm leading-6 text-slate-500">Total payouts already redeemed and stored in your history.</p>
+        </section>
+      </div>
+
+      <section className="border border-slate-200 bg-white p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <SectionEyebrow>Milestones</SectionEyebrow>
+            <h3 className="mt-2 text-2xl font-semibold text-slate-950">Reward tiers this cycle</h3>
+          </div>
+          <div className="flex flex-col items-stretch gap-2 sm:items-end">
+            <StatusBadge tone="emerald">
+              {Number(rewards?.summary?.unlockedTierCount || 0)} milestones unlocked
+            </StatusBadge>
+            <button
+              type="button"
+              onClick={onRedeemRewards}
+              disabled={redeeming || pendingUsd <= 0 || pendingRequestCount > 0}
+              className={`h-10 rounded-sm px-4 text-sm font-semibold text-white ${redeeming || pendingUsd <= 0 || pendingRequestCount > 0 ? 'cursor-not-allowed bg-slate-300' : 'bg-[#16213a] hover:bg-slate-900'}`}
+            >
+              {redeeming ? 'Submitting...' : pendingRequestCount > 0 ? 'Request pending review' : 'Request payout'}
+            </button>
+          </div>
+        </div>
+        {rewardTiers.length === 0 ? (
+          <div className="mt-4 border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500">
+            Reward tiers are not configured yet. Admin can add them under Agent Rewards.
+          </div>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-0">
+              <thead>
+                <tr className="bg-[#16213a] text-white">
+                  <th className="rounded-tl-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Threshold</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Reward</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Status</th>
+                  <th className="rounded-tr-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Payout</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rewardTiers.map((tier) => (
+                  <tr key={`reward-tier-${tier.ridesThreshold}`}>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{tier.ridesThreshold} rides</td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">{formatUsd(tier.rewardAmountUsd || 0)}</td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">{tier.isUnlocked ? 'Unlocked' : 'Locked'}</td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{formatUsd(tier.payoutUsd || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="mt-3 text-xs text-slate-500">
+          Lifetime completed rides: <span className="font-semibold text-slate-700">{Number(rewards?.summary?.totalCompletedRides || 0)}</span>
+          {' '}
+          • Rides since last redeem: <span className="font-semibold text-slate-700">{Number(rewards?.summary?.cycleRides || 0)}</span>
+          {' '}
+          • Pending requests: <span className="font-semibold text-slate-700">{pendingRequestCount}</span>
+          {rewards?.summary?.nextTier ? (
+            <> • Next milestone: {rewards.summary.nextTier.ridesThreshold} rides ({formatUsd(rewards.summary.nextTier.rewardAmountUsd)})</>
+          ) : (
+            <> • All configured milestones unlocked</>
+          )}
+        </p>
+      </section>
+
+      {redemptionHistory.length ? (
+        <section className="border border-slate-200 bg-white p-5">
+          <SectionEyebrow>Payout History</SectionEyebrow>
+          <h3 className="mt-2 text-2xl font-semibold text-slate-950">Recent redemptions</h3>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-0">
+              <thead>
+                <tr className="bg-[#16213a] text-white">
+                  <th className="rounded-tl-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">When</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Amount</th>
+                  <th className="rounded-tr-sm px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em]">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {redemptionHistory.map((item) => (
+                  <tr key={`redemption-${item.id}`}>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">
+                      {item.createdAt ? new Date(item.createdAt).toLocaleString() : '-'}
+                    </td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{formatUsd(item.amountUsd || 0)}</td>
+                    <td className="border-b border-slate-200 px-4 py-3 text-xs text-slate-600">
+                      Cycle rides: {item.cycleRidesAtRedeem} • Lifetime rides at redeem: {item.ridesTotalAtRedeem} • Highest tier: {item.highestThreshold}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -914,9 +1056,10 @@ function DashboardShell() {
   const [checkingVehicleNumber, setCheckingVehicleNumber] = useState(false)
   const [vehicleEligibility, setVehicleEligibility] = useState(null)
   const [vehicleEligibilityError, setVehicleEligibilityError] = useState('')
-  const [dashboardData, setDashboardData] = useState({ summary: null, applications: [] })
+  const [dashboardData, setDashboardData] = useState({ summary: null, applications: [], rewards: null })
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [dashboardError, setDashboardError] = useState('')
+  const [redeemingRewards, setRedeemingRewards] = useState(false)
   const [applications, setApplications] = useState([])
   const [applicationsLoading, setApplicationsLoading] = useState(false)
   const [applicationsError, setApplicationsError] = useState('')
@@ -980,6 +1123,7 @@ function DashboardShell() {
           setDashboardData({
             summary: data?.summary || null,
             applications: Array.isArray(data?.applications) ? data.applications : [],
+            rewards: data?.rewards || null,
           })
         }
       } catch (error) {
@@ -1057,6 +1201,39 @@ function DashboardShell() {
 
   const handleApplicationFilterChange = (key, value) => {
     setApplicationFilters((current) => ({ ...current, [key]: value }))
+  }
+
+  const handleRedeemRewards = async () => {
+    if (!token) return
+    const pendingUsd = Number(
+      dashboardData?.rewards?.summary?.pendingPayoutUsd ?? dashboardData?.rewards?.summary?.totalPayoutUsd ?? 0,
+    )
+    if (!Number.isFinite(pendingUsd) || pendingUsd <= 0) {
+      window.alert('No reward is available to redeem yet.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Redeem ${formatUsd(pendingUsd)} now?\n\nThis will record a payout and reset your reward cycle counter to 0 (your lifetime ride history stays).`,
+    )
+    if (!confirmed) return
+
+    setRedeemingRewards(true)
+    try {
+      const result = await postRedeemAgentRewards(token)
+      const requestedAmount = result?.request?.amountUsd
+      const data = await fetchAgentDashboard(token)
+      setDashboardData({
+        summary: data?.summary || null,
+        applications: Array.isArray(data?.applications) ? data.applications : [],
+        rewards: data?.rewards || null,
+      })
+      window.alert(`Redemption request for ${formatUsd(requestedAmount || pendingUsd)} submitted. Admin will process or reject it.`)
+    } catch (error) {
+      window.alert(error?.message || 'Could not redeem rewards.')
+    } finally {
+      setRedeemingRewards(false)
+    }
   }
 
   const initials = String(agent?.fullName || 'A')
@@ -1137,6 +1314,12 @@ function DashboardShell() {
                 applications={dashboardData?.applications || []}
               />
             )
+          ) : currentSection === 'rewards' ? (
+            <RewardsSection
+              rewards={dashboardData?.rewards || {}}
+              redeeming={redeemingRewards}
+              onRedeemRewards={handleRedeemRewards}
+            />
           ) : currentSection === 'register-driver' ? (
             <RegisterDriverSection
               invite={invite}

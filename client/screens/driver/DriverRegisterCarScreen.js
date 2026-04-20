@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,9 @@ import {
   Alert,
   Image,
   InteractionManager,
+  BackHandler,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
@@ -32,6 +34,19 @@ function navigateToDriverAccountTab() {
     } catch {
       // ignore
     }
+  }
+}
+
+/** When this screen is the stack root (e.g. initialRouteName), goBack() throws GO_BACK — use tabs as fallback. */
+function goBackOrDriverTabs(navigation) {
+  if (navigation?.canGoBack?.()) {
+    navigation.goBack();
+    return;
+  }
+  try {
+    navigation.replace('DriverTabs');
+  } catch {
+    navigateToDriverAccountTab();
   }
 }
 
@@ -120,6 +135,18 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [selectedTierKey, setSelectedTierKey] = useState(vehicle?.vehicleTierKey || '');
   /** When true, vehicle is pending after a successful submit — show alert before auto-redirect skips this. */
   const pendingSubmitAlertRef = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      const onHardwareBack = () => {
+        if (navigation.canGoBack()) return false;
+        goBackOrDriverTabs(navigation);
+        return true;
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+      return () => sub.remove();
+    }, [navigation])
+  );
 
   // Pending vehicle (e.g. reopened app): go to Account — use root ref so it still works after stack remounts.
   useLayoutEffect(() => {
@@ -364,7 +391,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
     return (
       <View className="flex-1 bg-white">
         <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}>
-          <TouchableOpacity onPress={() => navigation.goBack()} className="p-2 -ml-2">
+          <TouchableOpacity onPress={() => goBackOrDriverTabs(navigation)} className="p-2 -ml-2">
             <Ionicons name="arrow-back" size={24} color="#000" />
           </TouchableOpacity>
         </View>
@@ -388,7 +415,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   return (
     <View className="flex-1 bg-white">
       <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-        <TouchableOpacity onPress={() => navigation.goBack()} className="p-2 -ml-2">
+        <TouchableOpacity onPress={() => goBackOrDriverTabs(navigation)} className="p-2 -ml-2">
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
       </View>

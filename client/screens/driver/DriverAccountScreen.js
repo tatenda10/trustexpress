@@ -212,13 +212,16 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const allVerified = phoneVerified && profileApproved && vehicleApproved;
   const driverName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.firstName || 'Driver';
   const driverEmail = user?.primaryEmailAddress?.emailAddress || 'No email connected';
-  const profileImageUrl = (() => {
-    const fromMe = resolveUploadedMediaUrl(profileData?.image_url);
-    if (fromMe) return fromMe;
-    const clerkFallback = String(user?.imageUrl || '').trim();
-    return clerkFallback || null;
-  })();
-  const canSetProfilePhoto = !profileImageUrl;
+  // API merges Clerk OAuth avatar into `image_url`; only `privateMetadata.profileImageUrl` is an in-app upload.
+  const appProfileImageUrl = resolveUploadedMediaUrl(profileData?.privateMetadata?.profileImageUrl);
+  const clerkFallback = String(user?.imageUrl || '').trim();
+  const displayProfileImageUrl =
+    appProfileImageUrl ||
+    resolveUploadedMediaUrl(profileData?.image_url) ||
+    clerkFallback ||
+    null;
+  const hasAppProfilePicture = !!appProfileImageUrl;
+  const canSetProfilePhoto = !hasAppProfilePicture;
 
   const verificationHeadline = allVerified ? 'Ready to drive' : 'Verification in progress';
   const verificationTone = allVerified
@@ -441,9 +444,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
         <View className="items-center px-4 pb-6 pt-2">
           <View className="relative">
             <View className="h-[108px] w-[108px] items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#e8f1ff] shadow-sm">
-              {profileImageUrl ? (
+              {displayProfileImageUrl ? (
                 <Image
-                  source={{ uri: profileImageUrl }}
+                  source={{ uri: displayProfileImageUrl }}
                   style={{ width: 108, height: 108 }}
                   resizeMode="cover"
                 />
@@ -472,7 +475,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
           <TouchableOpacity
             activeOpacity={0.75}
             onPress={() => {
-              if (profileImageUrl) {
+              if (hasAppProfilePicture) {
                 setShowProfileImagePreview(true);
               } else {
                 handleChangeProfilePhoto();
@@ -481,7 +484,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
             disabled={updatingProfileImage}
           >
             <Text className="mt-3 text-sm font-semibold text-[#2f73c9]">
-              {profileImageUrl ? 'View profile picture' : 'Add profile picture'}
+              {hasAppProfilePicture ? 'View profile picture' : 'Add profile picture'}
             </Text>
           </TouchableOpacity>
           <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{driverName}</Text>
@@ -655,9 +658,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
           >
             <Ionicons name="close" size={24} color="#fff" />
           </TouchableOpacity>
-          {profileImageUrl ? (
+          {appProfileImageUrl ? (
             <Image
-              source={{ uri: profileImageUrl }}
+              source={{ uri: appProfileImageUrl }}
               style={{ width: 320, height: 320, borderRadius: 160 }}
               resizeMode="cover"
             />

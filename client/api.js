@@ -131,8 +131,12 @@ export async function saveUserPushToken(token, pushToken) {
   );
 }
 
-export async function getDriverMe(token) {
-  return apiFetch('/api/drivers/me', {}, token);
+export async function getDriverMe(token, options = {}) {
+  return apiFetch(
+    '/api/drivers/me',
+    { suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler) },
+    token,
+  );
 }
 
 export async function saveDriverPushToken(token, pushToken) {
@@ -342,8 +346,16 @@ export async function updateDriverAvailability(token, payload) {
   return apiFetch('/api/drivers/availability', { method: 'POST', body: JSON.stringify(payload) }, token);
 }
 
-export async function submitDriverDocuments(token, payload) {
-  return apiFetch('/api/drivers/documents', { method: 'POST', body: JSON.stringify(payload) }, token);
+export async function submitDriverDocuments(token, payload, options = {}) {
+  return apiFetch(
+    '/api/drivers/documents',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
+    },
+    token,
+  );
 }
 
 export async function submitVehicle(token, payload) {

@@ -529,7 +529,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       try {
         const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
-        const data = await getDriverMe(token);
+        const data = await getDriverMe(token, { suppressAuthErrorHandler: true });
         if (!active) return;
 
         setIsOnline(!!data?.availability?.isOnline);

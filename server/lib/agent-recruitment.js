@@ -1,5 +1,6 @@
 import { query } from '../db/connection.js';
 import { getClerkUserById, getPrimaryEmail, getPrimaryPhone } from './clerk-user.js';
+import { getAgentRewardProgress } from './agent-rewards.js';
 
 function hasValue(value) {
   return value !== null && value !== undefined && String(value).trim() !== '';
@@ -322,7 +323,7 @@ export async function listAgentRecruitmentApplications(agentUserId) {
 }
 
 export async function getAgentRecruitmentDashboard(agentUserId) {
-  const [applications, inviteOpenRows] = await Promise.all([
+  const [applications, inviteOpenRows, rewards] = await Promise.all([
     listAgentRecruitmentApplications(agentUserId),
     query(
       `SELECT COUNT(*) AS total
@@ -331,6 +332,7 @@ export async function getAgentRecruitmentDashboard(agentUserId) {
        WHERE i.agent_user_id = ? AND e.event_type = 'invite_opened'`,
       [agentUserId]
     ),
+    getAgentRewardProgress(agentUserId),
   ]);
 
   const summary = {
@@ -344,5 +346,5 @@ export async function getAgentRecruitmentDashboard(agentUserId) {
     passengerAccountsCreated: applications.filter((item) => item.type === 'passenger').length,
   };
 
-  return { summary, applications };
+  return { summary, applications, rewards };
 }

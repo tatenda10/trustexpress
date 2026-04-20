@@ -114,6 +114,8 @@ function AppStack() {
   const [roleLoading, setRoleLoading] = useState(true);
   const [storageLoaded, setStorageLoaded] = useState(false);
   const [driverStatus, setDriverStatus] = useState(null);
+  /** Latest driver status for refetch error paths (avoids stale useCallback closure wiping state). */
+  const driverStatusRef = useRef(null);
   const [driverLoading, setDriverLoading] = useState(true);
   const [driverSkippedOnboarding, setDriverSkippedOnboarding] = useState(false);
   const [driverSkippedEnhancedSelfie, setDriverSkippedEnhancedSelfie] = useState(false);
@@ -402,14 +404,16 @@ function AppStack() {
     if (!isDriver) return;
     try {
       const token = await getTokenRef.current?.();
-      if (token) {
-        const data = await getDriverMe(token);
-        setDriverStatus(data);
-        if (user?.id) {
-          AsyncStorage.setItem(getDriverStatusCacheKey(user.id), JSON.stringify(data)).catch(() => {});
-        }
-        return data;
+      if (!token) {
+        const latest = driverStatusRef.current;
+        return latest && typeof latest === 'object' ? latest : null;
       }
+      const data = await getDriverMe(token, { suppressAuthErrorHandler: true });
+      setDriverStatus(data);
+      if (user?.id) {
+        AsyncStorage.setItem(getDriverStatusCacheKey(user.id), JSON.stringify(data)).catch(() => {});
+      }
+      return data;
     } catch {
       try {
         if (user?.id) {
@@ -426,17 +430,17 @@ function AppStack() {
         // Ignore cache read failures and fall through.
       }
 
-      if (driverStatus) {
-        return driverStatus;
+      const latest = driverStatusRef.current;
+      if (latest && typeof latest === 'object') {
+        return latest;
       }
 
-      const fallback = { driverProfile: null, vehicle: null };
-      setDriverStatus(fallback);
-      return fallback;
+      setDriverStatus(null);
+      return null;
     } finally {
       setDriverLoading(false);
     }
-  }, [driverStatus, isDriver, user?.id]);
+  }, [isDriver, user?.id]);
 
   useEffect(() => {
     if (!isDriver) {
