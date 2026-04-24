@@ -10,12 +10,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Linking,
+  Image,
+  Modal,
 } from 'react-native';
 import { useUser, useClerk, useAuth } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { deleteMe, getMe, updateMe } from '../../api';
+import * as ImagePicker from 'expo-image-picker';
+import { deleteMe, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 const PassengerAccountScreen = ({ navigation }) => {
@@ -32,6 +35,8 @@ const PassengerAccountScreen = ({ navigation }) => {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
   const [phoneVisibleToDrivers, setPhoneVisibleToDrivers] = useState(false);
+  const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
+  const [showProfileImagePreview, setShowProfileImagePreview] = useState(false);
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
@@ -132,6 +137,14 @@ const PassengerAccountScreen = ({ navigation }) => {
 
   const passengerName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ') || user?.firstName || 'Passenger';
   const passengerEmail = profile?.email || user?.primaryEmailAddress?.emailAddress || 'No email connected';
+  const appProfileImageUrl = resolveUploadedMediaUrl(profile?.privateMetadata?.profileImageUrl);
+  const clerkFallbackImageUrl = String(user?.imageUrl || '').trim() || null;
+  const displayProfileImageUrl =
+    appProfileImageUrl ||
+    resolveUploadedMediaUrl(profile?.image_url) ||
+    clerkFallbackImageUrl ||
+    null;
+  const hasAppProfilePicture = !!appProfileImageUrl;
   const phoneVerified = profile?.phoneVerified === true;
   const passengerIdentity = profile?.passengerIdentity || null;
   const identityStatus = passengerIdentity?.status || 'not_submitted';
@@ -260,6 +273,45 @@ const PassengerAccountScreen = ({ navigation }) => {
     },
   ];
 
+  const handleChangeProfilePhoto = async () => {
+    try {
+      setUpdatingProfileImage(true);
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow photo library access to choose a profile picture.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+
+      const token = await getTokenRef.current({ skipCache: true });
+      if (!token) throw new Error('Not signed in');
+
+      const formData = new FormData();
+      formData.append('file', {
+        uri: result.assets[0].uri,
+        name: `passenger-profile-${Date.now()}.jpg`,
+        type: 'image/jpeg',
+      });
+
+      const { url } = await uploadFile(token, formData);
+      const nextProfile = await updateMe(token, { profileImageUrl: url });
+      setProfile(nextProfile);
+      Alert.alert('Profile updated', 'Your profile picture has been updated.');
+    } catch (saveError) {
+      Alert.alert('Update failed', saveError?.message || 'Could not update your profile picture.');
+    } finally {
+      setUpdatingProfileImage(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -299,9 +351,46 @@ const PassengerAccountScreen = ({ navigation }) => {
           ) : null}
 
           <View className="items-center px-4 pb-6 pt-4">
-            <View className="h-24 w-24 items-center justify-center rounded-full bg-white">
-              <Ionicons name="person" size={30} color="#374151" />
+            <View className="relative">
+              <View className="h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-white">
+                {displayProfileImageUrl ? (
+                  <Image
+                    source={{ uri: displayProfileImageUrl }}
+                    style={{ width: 96, height: 96 }}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons name="person" size={30} color="#374151" />
+                )}
+              </View>
+              <TouchableOpacity
+                className="absolute bottom-0 right-0 h-9 w-9 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
+                activeOpacity={0.8}
+                onPress={handleChangeProfilePhoto}
+                disabled={updatingProfileImage}
+              >
+                {updatingProfileImage ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="camera" size={16} color="#fff" />
+                )}
+              </TouchableOpacity>
             </View>
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => {
+                if (hasAppProfilePicture) {
+                  setShowProfileImagePreview(true);
+                } else {
+                  handleChangeProfilePhoto();
+                }
+              }}
+              disabled={updatingProfileImage}
+            >
+              <Text className="mt-3 text-sm font-semibold text-[#2f73c9]">
+                {hasAppProfilePicture ? 'View profile picture' : 'Add profile picture'}
+              </Text>
+            </TouchableOpacity>
             <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{passengerName}</Text>
             <View className="mt-3 rounded-full bg-white px-4 py-2">
               <Text className="text-sm font-medium text-gray-500">{passengerEmail}</Text>
@@ -476,6 +565,28 @@ const PassengerAccountScreen = ({ navigation }) => {
           </TouchableOpacity>
         </ScrollView>
       )}
+      <Modal
+        visible={showProfileImagePreview}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowProfileImagePreview(false)}
+      >
+        <View className="flex-1 items-center justify-center bg-black/90">
+          <TouchableOpacity
+            className="absolute right-6 top-14 h-10 w-10 items-center justify-center rounded-full bg-black/40"
+            onPress={() => setShowProfileImagePreview(false)}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+          {appProfileImageUrl ? (
+            <Image
+              source={{ uri: appProfileImageUrl }}
+              style={{ width: 320, height: 320, borderRadius: 160 }}
+              resizeMode="cover"
+            />
+          ) : null}
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };

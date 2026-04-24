@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dimensions, TextInput, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dimensions, TextInput, Platform, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,6 +13,7 @@ import {
   completeDriverCurrentRide,
   getDriverCurrentRide,
   markDriverCurrentRideArrived,
+  resolveUploadedMediaUrl,
   startDriverCurrentRide,
   submitDriverPassengerRating,
   updateDriverAvailability,
@@ -781,6 +782,7 @@ export default function DriverTripScreen({ navigation }) {
 
   const destinationForMaps = ride.stage === 'on_trip' ? ride.dropoffCoordinate : ride.pickupCoordinate;
   const destinationLabelForMaps = ride.stage === 'on_trip' ? ride.dropoffLabel : ride.pickupLabel;
+  const passengerProfileImageUrl = resolveUploadedMediaUrl(ride.passengerProfileImageUrl);
 
   const handleOpenGoogleMaps = async () => {
     try {
@@ -887,8 +889,22 @@ export default function DriverTripScreen({ navigation }) {
           </View>
 
           <View className="mt-4 rounded-[24px] bg-white p-5">
-            <Text className="text-xl font-bold text-gray-900">{ride.passengerName}</Text>
-            <Text className="mt-1 text-sm text-gray-500">{ride.passengerPhone || 'Phone not shared yet'}</Text>
+            <View className="flex-row items-center">
+              {passengerProfileImageUrl ? (
+                <Image
+                  source={{ uri: passengerProfileImageUrl }}
+                  style={{ width: 52, height: 52, borderRadius: 26 }}
+                />
+              ) : (
+                <View className="h-[52px] w-[52px] items-center justify-center rounded-full bg-[#e0e7ff]">
+                  <Ionicons name="person" size={22} color={PRIMARY_BLUE} />
+                </View>
+              )}
+              <View className="ml-3 flex-1">
+                <Text className="text-xl font-bold text-gray-900">{ride.passengerName}</Text>
+                <Text className="mt-1 text-sm text-gray-500">{ride.passengerPhone || 'Phone not shared yet'}</Text>
+              </View>
+            </View>
             <Text className="mt-4 text-sm font-semibold uppercase text-gray-400">Pickup</Text>
             <Text className="mt-1 text-base font-bold text-gray-900">{ride.pickupLabel}</Text>
             <Text className="mt-4 text-sm font-semibold uppercase text-gray-400">Destination</Text>

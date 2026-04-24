@@ -168,6 +168,16 @@ async function requireDriver(req, res) {
   return user;
 }
 
+async function getUserProfileImageUrl(userId) {
+  if (!userId) return null;
+  try {
+    const user = await getClerkUserById(userId);
+    return toAppUser(user)?.image_url || null;
+  } catch {
+    return null;
+  }
+}
+
 router.get('/me', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -527,7 +537,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       })),
     });
 
-    const requests = rows.map((row) => {
+    const requests = await Promise.all(rows.map(async (row) => {
+        const passengerProfileImageUrl = await getUserProfileImageUrl(row.passenger_user_id);
         const pickupCoordinate = {
           latitude: Number(row.pickup_lat),
           longitude: Number(row.pickup_lng),
@@ -548,7 +559,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
             lastName: null,
             fullName: row.passenger_name || 'Passenger',
             email: null,
-            imageUrl: null,
+            imageUrl: passengerProfileImageUrl,
             phoneNumber: row.passenger_phone || null,
             phoneVisibleToDrivers: !!row.passenger_phone,
             phoneVerified: false,
@@ -569,7 +580,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
           driverDistanceKm,
           etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
         };
-      })
+      }))
       .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
       .slice(0, 8);
 
@@ -862,6 +873,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
       `SELECT
          id,
          public_id,
+         passenger_user_id,
          passenger_name,
          passenger_phone,
          pickup_label,
@@ -873,6 +885,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
          estimated_distance_km,
          estimated_minutes,
          estimated_amount,
+         tip_amount,
          status,
          requested_at,
          assigned_at,
@@ -905,6 +918,8 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         }
       : null;
 
+    const passengerProfileImageUrl = await getUserProfileImageUrl(ride.passenger_user_id);
+
     return res.json({
       ride: {
         id: ride.id,
@@ -924,6 +939,8 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
         estimatedAmount: Number(ride.estimated_amount || 0),
+        tipAmount: Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         status: ride.status,
         stage: mapTripStage(ride.status),
         driverCoordinate,
@@ -931,6 +948,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         assignedAt: ride.assigned_at,
         arrivedAt: ride.arrived_at,
         completedAt: ride.completed_at,
+        passengerProfileImageUrl,
       },
     });
   } catch (err) {
@@ -1268,6 +1286,7 @@ router.get('/history', requireAuth, async (req, res) => {
          estimated_distance_km,
          estimated_minutes,
          estimated_amount,
+         tip_amount,
          driver_distance_km,
          driver_eta_minutes,
          passenger_driver_rating,
@@ -1291,9 +1310,9 @@ router.get('/history', requireAuth, async (req, res) => {
          COUNT(*) AS total_rides,
          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides,
          SUM(CASE WHEN status IN ('driver_assigned', 'driver_arrived', 'in_progress') THEN 1 ELSE 0 END) AS active_rides,
-         COALESCE(SUM(CASE WHEN status = 'completed' THEN estimated_amount ELSE 0 END), 0) AS total_earnings,
+         COALESCE(SUM(CASE WHEN status = 'completed' THEN estimated_amount + COALESCE(tip_amount, 0) ELSE 0 END), 0) AS total_earnings,
          COALESCE(SUM(CASE
-           WHEN status = 'completed' AND DATE(completed_at) = CURRENT_DATE THEN estimated_amount
+           WHEN status = 'completed' AND DATE(completed_at) = CURRENT_DATE THEN estimated_amount + COALESCE(tip_amount, 0)
            ELSE 0
          END), 0) AS today_earnings,
          AVG(CASE WHEN passenger_driver_rating IS NOT NULL THEN passenger_driver_rating END) AS avg_rating,
@@ -1326,6 +1345,8 @@ router.get('/history', requireAuth, async (req, res) => {
         estimatedDistanceKm: Number(row.estimated_distance_km || 0),
         estimatedMinutes: Number(row.estimated_minutes || 0),
         estimatedAmount: Number(row.estimated_amount || 0),
+        tipAmount: Number(row.tip_amount || 0),
+        totalEarned: Number(row.estimated_amount || 0) + Number(row.tip_amount || 0),
         driverDistanceKm: row.driver_distance_km === null ? null : Number(row.driver_distance_km),
         driverEtaMinutes: row.driver_eta_minutes === null ? null : Number(row.driver_eta_minutes),
         status: mapDriverRideStatus(row.status),

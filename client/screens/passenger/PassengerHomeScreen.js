@@ -24,8 +24,8 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { getNearbyPassengerDrivers, getPassengerCurrentRide, getPassengerRideHistory } from '../../api';
 
 const HARARE_FALLBACK = {
-  latitude: -17.8252,
-  longitude: 31.0335,
+  latitude: -20.1535,
+  longitude: 28.5870,
   latitudeDelta: 0.12,
   longitudeDelta: 0.12,
 };
@@ -494,63 +494,19 @@ async function fetchGooglePlaceDetails(placeId, sessionToken) {
   };
 }
 
-async function fetchGoogleRouteDistanceKm(origin, destination) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !origin || !destination) return null;
-
-  const params = new URLSearchParams({
-    origin: `${origin.latitude},${origin.longitude}`,
-    destination: `${destination.latitude},${destination.longitude}`,
-    mode: 'driving',
-    departure_time: 'now',
-    key: apiKey,
-  });
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-  const leg = payload?.routes?.[0]?.legs?.[0];
-  const distanceMeters = Number(leg?.distance?.value || 0);
-
-  if (!response.ok || payload?.status !== 'OK' || !distanceMeters) {
-    return null;
-  }
-
-  return distanceMeters / 1000;
-}
-
-async function hydrateSuggestionDistances(items, originCoordinate, sessionToken) {
-  if (!originCoordinate || !Array.isArray(items) || items.length === 0) {
+async function hydrateSuggestionDistances(items, originCoordinate) {
+  if (!Array.isArray(items) || items.length === 0) {
     return items || [];
   }
 
   const hydrated = await Promise.all(
     items.map(async (item) => {
       if (item.coordinate) {
-      return {
-        ...item,
-        distanceKm:
-          (await fetchGoogleRouteDistanceKm(originCoordinate, item.coordinate)) ??
-          calculateDistanceKm(originCoordinate, item.coordinate),
-      };
-    }
-
-      if (!item.placeId) {
         return item;
       }
-
-      const details = await fetchGooglePlaceDetails(item.placeId, sessionToken);
-      if (!details?.coordinate) {
-        return item;
-      }
-
       return {
         ...item,
-        coordinate: details.coordinate,
-        title: details.title || item.title,
-        subtitle: details.subtitle || item.subtitle,
-        distanceKm:
-          (await fetchGoogleRouteDistanceKm(originCoordinate, details.coordinate)) ??
-          calculateDistanceKm(originCoordinate, details.coordinate),
+        distanceKm: originCoordinate ? calculateDistanceKm(originCoordinate, item.coordinate) : 0,
       };
     })
   );
@@ -763,14 +719,18 @@ export default function PassengerHomeScreen({ navigation, route }) {
         };
         const label = await getReadableLocationLabel('Pickup', coordinate);
         const context = await getLocationContext(coordinate);
+        const nextRegion = buildRouteRegion(coordinate, null);
 
         setCurrentLocationCoordinate(coordinate);
         setPickupCoordinate(coordinate);
-        setMapRegion(buildRouteRegion(coordinate, null));
+        setMapRegion(nextRegion);
         setPickupLabel(label);
         setPickupQuery(label.replace('Pickup: ', ''));
         setPickupContext(context);
         setLocationError('');
+        setTimeout(() => {
+          mapRef.current?.animateToRegion(nextRegion, 500);
+        }, 50);
       } catch (error) {
         if (!active) return;
         setCurrentLocationCoordinate(null);
@@ -920,7 +880,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
         const hydratedResults = await hydrateSuggestionDistances(
           results,
           originCoordinate,
-          placesSessionTokenRef.current,
         );
         setSuggestions(hydratedResults);
       } catch (error) {

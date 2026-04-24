@@ -5,7 +5,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { getPassengerRideDetails, getPassengerRideReceipt, reportLostItem, submitPassengerDriverRating } from '../../api';
+import { getPassengerRideDetails, getPassengerRideReceipt, reportLostItem, submitPassengerDriverRating, tipDriver } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function formatCurrency(value) {
@@ -33,10 +33,12 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const [submitting, setSubmitting] = useState(false);
   const [downloadingReceipt, setDownloadingReceipt] = useState(false);
   const [submittingLostItem, setSubmittingLostItem] = useState(false);
+  const [submittingTip, setSubmittingTip] = useState(false);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
   const [lostItemDescription, setLostItemDescription] = useState('');
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
+  const tipOptions = [1, 2, 5, 10];
 
   useEffect(() => {
     let active = true;
@@ -141,6 +143,27 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     }
   };
 
+  const handleSendTip = async (amount) => {
+    try {
+      if (!rideRequestId) return;
+      setSubmittingTip(true);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      await tipDriver(token, rideRequestId, amount);
+      setRide((current) => current ? {
+        ...current,
+        tipAmount: Number(amount),
+        totalAmount: Number(current.estimatedAmount || 0) + Number(amount),
+        canTipDriver: false,
+      } : current);
+      Alert.alert('Tip sent', `Your $${Number(amount).toFixed(2)} tip was added for ${ride.driverName || 'your driver'}.`);
+    } catch (error) {
+      Alert.alert('Tip failed', error?.message || 'Could not send your tip right now.');
+    } finally {
+      setSubmittingTip(false);
+    }
+  };
+
   if (loading) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
@@ -178,8 +201,13 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         <View className="rounded-[28px] border border-gray-100 bg-white px-5 py-5">
           <Text className="text-lg font-bold text-gray-900">{ride.pickupLabel}</Text>
           <Text className="mt-1 text-sm text-gray-500">to {ride.dropoffLabel}</Text>
-          <Text className="mt-4 text-3xl font-bold text-gray-900">{formatCurrency(ride.estimatedAmount)}</Text>
+          <Text className="mt-4 text-3xl font-bold text-gray-900">{formatCurrency(ride.totalAmount || ride.estimatedAmount)}</Text>
           <Text className="mt-1 text-sm text-gray-500">{ride.tierName || 'Ride'}</Text>
+          {Number(ride.tipAmount || 0) > 0 ? (
+            <Text className="mt-2 text-sm font-medium text-green-600">
+              Includes {formatCurrency(ride.tipAmount)} tip
+            </Text>
+          ) : null}
 
           <View className="mt-5 border-t border-gray-100 pt-4">
             <Text className="text-sm text-gray-500">Driver</Text>
@@ -244,6 +272,41 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
             {ride.passengerDriverReview ? (
               <Text className="mt-4 text-base text-gray-700">{ride.passengerDriverReview}</Text>
             ) : null}
+          </View>
+        ) : null}
+
+        {ride.canTipDriver ? (
+          <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+            <Text className="text-xl font-bold text-gray-900">Tip Driver</Text>
+            <Text className="mt-2 text-sm text-gray-500">
+              Add an optional thank-you tip for {ride.driverName || 'your driver'}.
+            </Text>
+            <View className="mt-5 flex-row flex-wrap">
+              {tipOptions.map((amount) => (
+                <TouchableOpacity
+                  key={amount}
+                  onPress={() => handleSendTip(amount)}
+                  disabled={submittingTip}
+                  className="mb-3 mr-3 h-12 min-w-[72px] items-center justify-center rounded-full border border-blue-200 bg-[#eff6ff] px-4"
+                >
+                  <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
+                    {formatCurrency(amount)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {submittingTip ? (
+              <View className="mt-2 flex-row items-center">
+                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+                <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : Number(ride.tipAmount || 0) > 0 ? (
+          <View className="mt-5 rounded-[28px] border border-green-100 bg-white px-5 py-5">
+            <Text className="text-xl font-bold text-gray-900">Driver Tip</Text>
+            <Text className="mt-3 text-2xl font-bold text-green-600">{formatCurrency(ride.tipAmount)}</Text>
+            <Text className="mt-2 text-sm text-gray-500">Thanks for supporting your driver.</Text>
           </View>
         ) : null}
 

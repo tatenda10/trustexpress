@@ -6,7 +6,7 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Speech from 'expo-speech';
-import { cancelRideRequest, completeRideRequest, getApiUrl, getPassengerRideRequestStatus, submitPassengerDriverRating } from '../../api';
+import { cancelRideRequest, completeRideRequest, getApiUrl, getPassengerRideRequestStatus, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -101,6 +101,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
+  const [submittingTip, setSubmittingTip] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
@@ -200,10 +201,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const pickupLabel = rideStatus?.pickupLabel || initialPickupLabel;
   const dropoffLabel = rideStatus?.dropoffLabel || initialDropoffLabel;
   const estimatedAmount = Number(rideStatus?.estimatedAmount || initialEstimatedAmount || 0);
+  const tipAmount = Number(rideStatus?.tipAmount || 0);
+  const totalAmount = Number(rideStatus?.totalAmount || (estimatedAmount + tipAmount) || 0);
   const stage = rideStatus?.stage || 'driver_on_the_way';
   const isCompleted = stage === 'completed';
   const driverCoordinate = rideStatus?.driverCoordinate || driver?.coordinate || pickupCoordinate;
   const activeTarget = stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
+  const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
+  const tipOptions = [1, 2, 5, 10];
 
   useEffect(() => {
     const shouldOpen = stage === 'completed' && !rideStatus?.passengerDriverRating;
@@ -306,6 +311,26 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       Alert.alert('Rating failed', error?.message || 'Could not save your rating.');
     } finally {
       setSubmittingRating(false);
+    }
+  };
+
+  const handleSendTip = async (amount) => {
+    try {
+      setSubmittingTip(true);
+      const token = await getToken();
+      if (!token || !rideRequestId) throw new Error('Not signed in');
+      await tipDriver(token, rideRequestId, amount);
+      setRideStatus((current) => current ? {
+        ...current,
+        tipAmount: Number(amount),
+        totalAmount: Number(current.estimatedAmount || 0) + Number(amount),
+        canTipDriver: false,
+      } : current);
+      Alert.alert('Tip sent', `Your $${Number(amount).toFixed(2)} tip was added.`);
+    } catch (error) {
+      Alert.alert('Tip failed', error?.message || 'Could not send your tip.');
+    } finally {
+      setSubmittingTip(false);
     }
   };
 
@@ -425,10 +450,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             >
               <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
               <View className="flex-row items-center">
-                <Image
-                  source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80' }}
-                  style={{ width: 96, height: 72, borderRadius: 18 }}
-                />
+                <View className="items-center">
+                  {driverProfileImageUrl ? (
+                    <Image
+                      source={{ uri: driverProfileImageUrl }}
+                      style={{ width: 62, height: 62, borderRadius: 31 }}
+                    />
+                  ) : (
+                    <View className="h-[62px] w-[62px] items-center justify-center rounded-full bg-[#e0e7ff]">
+                      <Ionicons name="person" size={26} color={PRIMARY_BLUE} />
+                    </View>
+                  )}
+                  <Image
+                    source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80' }}
+                    style={{ marginTop: 10, width: 96, height: 72, borderRadius: 18 }}
+                  />
+                </View>
                 <View className="ml-4 flex-1">
                   <Text className="text-xl font-bold text-gray-900">{driver?.driverName || 'Driver'}</Text>
                   <View className="mt-1 flex-row items-center">
@@ -457,8 +494,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
               <View className="mt-5 border-t border-gray-100 pt-4">
                 <Text className="text-sm font-medium text-gray-500">Fare</Text>
-                <Text className="mt-1 text-3xl font-bold text-gray-900">${estimatedAmount.toFixed(2)}</Text>
+                <Text className="mt-1 text-3xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
                 <Text className="mt-1 text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
+                {tipAmount > 0 ? (
+                  <Text className="mt-2 text-sm font-medium text-green-600">
+                    Includes ${tipAmount.toFixed(2)} tip
+                  </Text>
+                ) : null}
               </View>
 
               <View className="mt-5 rounded-[22px] bg-[#f8fafc] p-4">
@@ -605,6 +647,37 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               textAlignVertical="top"
               className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
             />
+            {(rideStatus?.canTipDriver || tipAmount > 0) ? (
+              <View className="mt-4 rounded-[22px] bg-[#f8fafc] px-4 py-4">
+                <Text className="text-sm font-semibold uppercase tracking-[1px] text-gray-500">Optional tip</Text>
+                {tipAmount > 0 ? (
+                  <Text className="mt-2 text-base font-bold text-green-600">
+                    Tip added: ${tipAmount.toFixed(2)}
+                  </Text>
+                ) : (
+                  <View className="mt-3 flex-row flex-wrap">
+                    {tipOptions.map((amount) => (
+                      <TouchableOpacity
+                        key={amount}
+                        onPress={() => handleSendTip(amount)}
+                        disabled={submittingTip}
+                        className="mb-2 mr-2 rounded-full border border-blue-200 bg-white px-4 py-2"
+                      >
+                        <Text className="text-sm font-bold" style={{ color: PRIMARY_BLUE }}>
+                          ${amount.toFixed(2)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                {submittingTip ? (
+                  <View className="mt-2 flex-row items-center">
+                    <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+                    <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             <TouchableOpacity
               onPress={handleSubmitRating}
               disabled={submittingRating}

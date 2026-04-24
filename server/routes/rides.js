@@ -46,6 +46,7 @@ const DRIVER_REQUEST_RADIUS_KM = 20;
 const MAX_DRIVER_OFFERS = 8;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const LOST_ITEM_MAX_LENGTH = 2000;
+const MAX_RIDE_TIP_AMOUNT = 200;
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
@@ -197,6 +198,9 @@ function mapRideMessage(row) {
 }
 
 function formatRideReceiptText(ride) {
+  const fareAmount = Number(ride.estimated_amount || 0);
+  const tipAmount = Number(ride.tip_amount || 0);
+  const totalAmount = fareAmount + tipAmount;
   const lines = [
     'TrustCars Ride Receipt',
     '----------------------',
@@ -212,9 +216,21 @@ function formatRideReceiptText(ride) {
     `Drop-off: ${ride.dropoff_label || '-'}`,
     '',
     `Tier: ${ride.requested_tier_name || 'Ride'}`,
-    `Fare: $${Number(ride.estimated_amount || 0).toFixed(2)}`,
+    `Fare: $${fareAmount.toFixed(2)}`,
+    `Tip: $${tipAmount.toFixed(2)}`,
+    `Total: $${totalAmount.toFixed(2)}`,
   ];
   return `${lines.join('\n')}\n`;
+}
+
+async function getUserProfileImageUrl(userId) {
+  if (!userId) return null;
+  try {
+    const user = await getClerkUserById(userId);
+    return toAppUser(user)?.image_url || null;
+  } catch {
+    return null;
+  }
 }
 
 async function loadAuthorizedRideChat(rideRequestId, userId) {
@@ -411,10 +427,12 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         pickup_lat,
         pickup_lng,
          dropoff_label,
-        dropoff_lat,
-        dropoff_lng,
+         dropoff_lat,
+         dropoff_lng,
          estimated_amount,
+         tip_amount,
          requested_tier_name,
+         driver_user_id,
          driver_name,
          status,
          passenger_driver_rating,
@@ -448,6 +466,8 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
           longitude: Number(row.dropoff_lng),
         },
         estimatedAmount: Number(row.estimated_amount || 0),
+        tipAmount: Number(row.tip_amount || 0),
+        totalAmount: Number(row.estimated_amount || 0) + Number(row.tip_amount || 0),
         tierName: row.requested_tier_name,
         driverName: row.driver_name || null,
         status: mapPassengerRideStatus(row.status),
@@ -459,6 +479,7 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         driverPassengerReview: row.driver_passenger_review || '',
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
         canRateDriver: row.status === 'completed' && !!row.driver_name,
+        canTipDriver: row.status === 'completed' && !!row.driver_user_id && Number(row.tip_amount || 0) <= 0,
         requestedAt: row.requested_at,
         completedAt: row.completed_at,
         cancelledAt: row.cancelled_at,
@@ -883,6 +904,9 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
           }, pickupCoordinate);
         })()
       : null;
+    const assignedDriverProfileImageUrl = ride.driver_user_id
+      ? await getUserProfileImageUrl(ride.driver_user_id)
+      : null;
 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
@@ -924,6 +948,8 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
         estimatedAmount: Number(ride.estimated_amount || 0),
+        tipAmount: Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
@@ -938,7 +964,10 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         driversViewingCount,
       },
       acceptedDrivers,
-      assignedDriver,
+      assignedDriver: assignedDriver ? {
+        ...assignedDriver,
+        profileImageUrl: assignedDriverProfileImageUrl,
+      } : null,
     });
   } catch (err) {
     console.error('GET /api/rides/passenger/:rideRequestId/status', err);
@@ -974,6 +1003,8 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
         pickupLabel: ride.pickup_label,
         dropoffLabel: ride.dropoff_label,
         estimatedAmount: Number(ride.estimated_amount || 0),
+        tipAmount: Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         tierName: ride.requested_tier_name,
         driverName: ride.driver_name || null,
         driverPhone: ride.driver_phone || null,
@@ -989,6 +1020,7 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
         driverPassengerReview: ride.driver_passenger_review || '',
         driverPassengerRatedAt: ride.driver_passenger_rated_at || null,
         canRateDriver: ride.status === 'completed' && !!ride.driver_user_id,
+        canTipDriver: ride.status === 'completed' && !!ride.driver_user_id && Number(ride.tip_amount || 0) <= 0,
       },
     });
   } catch (err) {
@@ -1017,6 +1049,7 @@ router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) =>
          pickup_label,
          dropoff_label,
          estimated_amount,
+         tip_amount,
          status,
          requested_at,
          completed_at
@@ -1176,6 +1209,85 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
     });
   } catch (err) {
     console.error('POST /api/rides/passenger/:rideRequestId/rate-driver', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/passenger/:rideRequestId/tip-driver', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    const amount = Number(req.body?.amount);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Tip amount must be greater than zero' });
+    }
+    if (amount > MAX_RIDE_TIP_AMOUNT) {
+      return res.status(400).json({ error: `Tip amount must be $${MAX_RIDE_TIP_AMOUNT.toFixed(2)} or less` });
+    }
+
+    const normalizedAmount = Number(amount.toFixed(2));
+    const [ride] = await query(
+      `SELECT id, public_id, driver_user_id, status, tip_amount
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+    if (ride.status !== 'completed' || !ride.driver_user_id) {
+      return res.status(409).json({ error: 'Drivers can only be tipped after a completed ride' });
+    }
+    if (Number(ride.tip_amount || 0) > 0) {
+      return res.status(409).json({ error: 'A tip has already been added to this ride' });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET tip_amount = ?,
+           tipped_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND passenger_user_id = ?`,
+      [normalizedAmount, rideRequestId, req.userId]
+    );
+
+    try {
+      const driverUser = await getClerkUserById(ride.driver_user_id);
+      const pushToken = String(driverUser?.privateMetadata?.pushToken || '').trim();
+      if (pushToken) {
+        await sendExpoPushNotifications({
+          to: pushToken,
+          title: 'New passenger tip',
+          body: `You received a $${normalizedAmount.toFixed(2)} tip.`,
+          data: {
+            type: 'driver_tip_received',
+            rideRequestId,
+            tipAmount: normalizedAmount,
+          },
+        });
+      }
+    } catch (pushError) {
+      console.error('Failed to send driver tip push', pushError);
+    }
+
+    emitTripRatingToDriver(ride.driver_user_id, {
+      rideRequestId,
+      tipAmount: normalizedAmount,
+      from: 'passenger',
+      type: 'tip',
+    });
+
+    return res.status(201).json({
+      ok: true,
+      tipAmount: normalizedAmount,
+    });
+  } catch (err) {
+    console.error('POST /api/rides/passenger/:rideRequestId/tip-driver', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 const DRIVER_REQUEST_SOUND_FILE = 'notificationaudio.mpeg';
+const DRIVER_REQUEST_CHANNEL_ID = 'ride-requests';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -53,6 +54,14 @@ export async function registerForPushNotificationsAsync() {
     }
 
     if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(DRIVER_REQUEST_CHANNEL_ID, {
+        name: 'Ride requests',
+        importance: Notifications.AndroidImportance.MAX,
+        sound: DRIVER_REQUEST_SOUND_FILE,
+        vibrationPattern: [0, 300, 180, 300, 180, 300],
+        lightColor: '#2f73c9',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
       await Notifications.setNotificationChannelAsync('default', {
         name: 'default',
         importance: Notifications.AndroidImportance.MAX,
@@ -80,6 +89,9 @@ export async function showLocalRideNotification({
         title,
         body,
         sound: DRIVER_REQUEST_SOUND_FILE,
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        sticky: true,
+        channelId: DRIVER_REQUEST_CHANNEL_ID,
         data,
       },
       trigger: null,

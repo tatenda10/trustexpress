@@ -19,7 +19,7 @@ const PassengerEnableLocationScreen = ({ onGranted }) => {
       }
       Alert.alert(
         'Location required',
-        'TrustCars needs your location to set pickups, match you with drivers, and estimate fares. Allow location access in Settings, then tap Enable location again.',
+        'TrustCars needs your location to set pickups, match you with drivers, and estimate fares. Allow location access in Settings, then return and tap Continue again.',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Open Settings', onPress: () => Linking.openSettings() },
@@ -54,7 +54,7 @@ const PassengerEnableLocationScreen = ({ onGranted }) => {
         {loading ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
-          <Text className="text-lg font-bold text-white">Enable location</Text>
+          <Text className="text-lg font-bold text-white">Continue</Text>
         )}
       </TouchableOpacity>
     </View>

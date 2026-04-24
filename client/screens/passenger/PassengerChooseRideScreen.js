@@ -154,6 +154,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         dropoffCoordinate,
         pickupLabel,
         dropoffLabel,
+        routeCoordinates,
         distanceKm,
         estimatedMinutes,
         estimatedAmount,

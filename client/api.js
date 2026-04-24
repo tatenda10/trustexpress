@@ -265,6 +265,13 @@ export async function submitPassengerDriverRating(token, rideRequestId, payload)
   }, token);
 }
 
+export async function tipDriver(token, rideRequestId, amount) {
+  return apiFetch(`/api/rides/passenger/${rideRequestId}/tip-driver`, {
+    method: 'POST',
+    body: JSON.stringify({ amount }),
+  }, token);
+}
+
 export async function findNearbyDrivers(token, payload) {
   return apiFetch('/api/rides/passenger/find-driver', { method: 'POST', body: JSON.stringify(payload) }, token);
 }

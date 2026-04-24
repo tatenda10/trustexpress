@@ -264,6 +264,9 @@ function AppStack() {
         title: notification?.request?.content?.title || null,
         data,
       });
+      if (data?.type === 'driver_new_ride_request' && isDriver) {
+        openDriverIncomingRequest();
+      }
     });
 
     const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -282,7 +285,7 @@ function AppStack() {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [openDriverIncomingRequest]);
+  }, [isDriver, openDriverIncomingRequest]);
 
   useEffect(() => {
     let cancelled = false;

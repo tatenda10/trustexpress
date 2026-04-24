@@ -221,7 +221,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
     clerkFallback ||
     null;
   const hasAppProfilePicture = !!appProfileImageUrl;
-  const canSetProfilePhoto = !hasAppProfilePicture;
 
   const verificationHeadline = allVerified ? 'Ready to drive' : 'Verification in progress';
   const verificationTone = allVerified
@@ -457,20 +456,18 @@ const DriverAccountScreen = ({ navigation, route }) => {
             {allVerified ? (
               <View className="absolute right-1 top-1 h-4 w-4 rounded-full border-2 border-white bg-[#25D366]" />
             ) : null}
-            {canSetProfilePhoto ? (
-              <TouchableOpacity
-                className="absolute bottom-0 right-0 h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
-                activeOpacity={0.8}
-                onPress={handleChangeProfilePhoto}
-                disabled={updatingProfileImage}
-              >
-                {updatingProfileImage ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons name="camera" size={18} color="#fff" />
-                )}
-              </TouchableOpacity>
-            ) : null}
+            <TouchableOpacity
+              className="absolute bottom-0 right-0 h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
+              activeOpacity={0.8}
+              onPress={handleChangeProfilePhoto}
+              disabled={updatingProfileImage}
+            >
+              {updatingProfileImage ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="camera" size={18} color="#fff" />
+              )}
+            </TouchableOpacity>
           </View>
           <TouchableOpacity
             activeOpacity={0.75}

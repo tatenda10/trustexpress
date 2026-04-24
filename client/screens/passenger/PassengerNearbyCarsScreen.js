@@ -145,6 +145,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     dropoffCoordinate,
     pickupLabel,
     dropoffLabel,
+    routeCoordinates: initialRouteCoordinates = [],
     distanceKm,
     estimatedMinutes,
     estimatedAmount,
@@ -166,6 +167,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       return undefined;
     }
 
+    if (Array.isArray(initialRouteCoordinates) && initialRouteCoordinates.length > 1) {
+      setRouteCoordinates(initialRouteCoordinates);
+      return undefined;
+    }
+
     let cancelled = false;
 
     const loadRoute = async () => {
@@ -184,7 +190,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, pickupCoordinate]);
+  }, [dropoffCoordinate, initialRouteCoordinates, pickupCoordinate]);
 
   useEffect(() => {
     if (!rideRequest?.id) return undefined;

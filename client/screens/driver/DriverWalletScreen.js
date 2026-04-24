@@ -197,10 +197,15 @@ const DriverWalletScreen = () => {
                         <Text className="text-sm text-gray-500">
                           {formatDate(ride.completedAt || ride.cancelledAt || ride.assignedAt || ride.requestedAt)}
                         </Text>
+                        {Number(ride.tipAmount || 0) > 0 ? (
+                          <Text className="mt-1 text-xs font-semibold text-green-600">
+                            Includes tip {formatCurrency(ride.tipAmount)}
+                          </Text>
+                        ) : null}
                       </View>
                       <View className="items-end">
                         <Text className={`text-base font-semibold ${meta.amountColor}`}>
-                          {meta.amountPrefix}{formatCurrency(ride.estimatedAmount)}
+                          {meta.amountPrefix}{formatCurrency(ride.totalEarned || ride.estimatedAmount)}
                         </Text>
                         <Text className="text-xs text-gray-400">{ride.status.toUpperCase()}</Text>
                       </View>

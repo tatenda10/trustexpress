@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
@@ -18,6 +18,7 @@ import {
   getDriverCurrentRide,
   getDriverMe,
   getDriverRideRequests,
+  resolveUploadedMediaUrl,
   updateDriverAvailability,
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -29,10 +30,10 @@ const CURRENT_RIDE_REFRESH_INTERVAL_MS = 15000;
 const AVAILABILITY_TOGGLE_DEBOUNCE_MS = 2500;
 const DB_UPDATE_INTERVAL_MS = 90000;
 const DB_UPDATE_MIN_DISTANCE_KM = 0.3;
-const FALLBACK_DRIVER_COORDINATE = { latitude: -17.8056, longitude: 31.0447 };
+const FALLBACK_DRIVER_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 const INITIAL_REGION = {
-  latitude: -17.8252,
-  longitude: 31.0503,
+  latitude: -20.1535,
+  longitude: 28.5870,
   latitudeDelta: 0.18,
   longitudeDelta: 0.18,
 };
@@ -399,6 +400,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
         const handleDriverRating = (payload = {}) => {
           if (!active) return;
+          if (payload.type === 'tip') {
+            const tipAmount = Number(payload.tipAmount || 0);
+            Alert.alert(
+              'New Passenger Tip',
+              `You received a $${tipAmount.toFixed(2)} tip for this trip.`
+            );
+            return;
+          }
           const ratingValue = Number(payload.rating || 0);
           Alert.alert(
             'New Trip Rating',
@@ -1580,9 +1589,21 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   <View className="flex-row items-start justify-between">
                     <View className="flex-1 pr-4">
                       <Text className="text-xs font-semibold uppercase tracking-wide text-[#2f73c9]">Incoming request</Text>
-                      <Text className="mt-1 text-xl font-bold text-[#111111]">
-                        {req.passengerName || 'Passenger'}
-                      </Text>
+                      <View className="mt-2 flex-row items-center">
+                        {resolveUploadedMediaUrl(req?.passengerProfile?.imageUrl) ? (
+                          <Image
+                            source={{ uri: resolveUploadedMediaUrl(req?.passengerProfile?.imageUrl) }}
+                            style={{ width: 40, height: 40, borderRadius: 20 }}
+                          />
+                        ) : (
+                          <View className="h-10 w-10 items-center justify-center rounded-full bg-[#e0e7ff]">
+                            <Ionicons name="person" size={18} color={PRIMARY_BLUE} />
+                          </View>
+                        )}
+                        <Text className="ml-3 text-xl font-bold text-[#111111]">
+                          {req.passengerName || 'Passenger'}
+                        </Text>
+                      </View>
                       <View className="mt-2 self-start rounded-full bg-[#e3e9f2] px-3 py-1">
                         <Text className="text-xs font-bold uppercase text-[#2f73c9]">{req.tierName || 'Ride'}</Text>
                       </View>
