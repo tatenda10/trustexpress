@@ -537,50 +537,52 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       })),
     });
 
-    const requests = await Promise.all(rows.map(async (row) => {
-        const passengerProfileImageUrl = await getUserProfileImageUrl(row.passenger_user_id);
-        const pickupCoordinate = {
-          latitude: Number(row.pickup_lat),
-          longitude: Number(row.pickup_lng),
-        };
-        const dropoffCoordinate = {
-          latitude: Number(row.dropoff_lat),
-          longitude: Number(row.dropoff_lng),
-        };
-        const driverDistanceKm = calculateDistanceKm(driverPoint, pickupCoordinate);
+    const resolvedRequests = await Promise.all(rows.map(async (row) => {
+      const passengerProfileImageUrl = await getUserProfileImageUrl(row.passenger_user_id);
+      const pickupCoordinate = {
+        latitude: Number(row.pickup_lat),
+        longitude: Number(row.pickup_lng),
+      };
+      const dropoffCoordinate = {
+        latitude: Number(row.dropoff_lat),
+        longitude: Number(row.dropoff_lng),
+      };
+      const driverDistanceKm = calculateDistanceKm(driverPoint, pickupCoordinate);
 
-        return {
-          id: row.id,
-          publicId: row.public_id,
-          passengerName: getPassengerDisplayName(row.passenger_name),
-          passengerPhone: row.passenger_phone || null,
-          passengerProfile: {
-            firstName: null,
-            lastName: null,
-            fullName: row.passenger_name || 'Passenger',
-            email: null,
-            imageUrl: passengerProfileImageUrl,
-            phoneNumber: row.passenger_phone || null,
-            phoneVisibleToDrivers: !!row.passenger_phone,
-            phoneVerified: false,
-          },
-          tierKey: row.requested_tier_key,
-          tierName: row.requested_tier_name,
-          pickup: row.pickup_label,
-          dropoff: row.dropoff_label,
-          pickupCoordinate,
-          dropoffCoordinate,
-          estimatedDistanceKm: Number(row.estimated_distance_km || 0),
-          estimatedMinutes: Number(row.estimated_minutes || 0),
-          estimatedAmount: Number(row.estimated_amount || 0),
-          status: row.status,
-          requestedAt: toIsoOrNull(row.requested_at),
-          expiresAt: computeRideExpiresAt(row.status, row.requested_at, row.driver_found_at),
-          remainingSeconds: Number(row.remaining_seconds || 0),
-          driverDistanceKm,
-          etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
-        };
-      }))
+      return {
+        id: row.id,
+        publicId: row.public_id,
+        passengerName: getPassengerDisplayName(row.passenger_name),
+        passengerPhone: row.passenger_phone || null,
+        passengerProfile: {
+          firstName: null,
+          lastName: null,
+          fullName: row.passenger_name || 'Passenger',
+          email: null,
+          imageUrl: passengerProfileImageUrl,
+          phoneNumber: row.passenger_phone || null,
+          phoneVisibleToDrivers: !!row.passenger_phone,
+          phoneVerified: false,
+        },
+        tierKey: row.requested_tier_key,
+        tierName: row.requested_tier_name,
+        pickup: row.pickup_label,
+        dropoff: row.dropoff_label,
+        pickupCoordinate,
+        dropoffCoordinate,
+        estimatedDistanceKm: Number(row.estimated_distance_km || 0),
+        estimatedMinutes: Number(row.estimated_minutes || 0),
+        estimatedAmount: Number(row.estimated_amount || 0),
+        status: row.status,
+        requestedAt: toIsoOrNull(row.requested_at),
+        expiresAt: computeRideExpiresAt(row.status, row.requested_at, row.driver_found_at),
+        remainingSeconds: Number(row.remaining_seconds || 0),
+        driverDistanceKm,
+        etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
+      };
+    }));
+
+    const requests = resolvedRequests
       .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
       .slice(0, 8);
 
