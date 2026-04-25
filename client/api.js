@@ -276,6 +276,13 @@ export async function findNearbyDrivers(token, payload) {
   return apiFetch('/api/rides/passenger/find-driver', { method: 'POST', body: JSON.stringify(payload) }, token);
 }
 
+export async function getDirectionsRoute(token, payload) {
+  return apiFetch('/api/maps/directions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
 export async function selectRideDriver(token, rideRequestId, driverUserId) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/select-driver`, {
     method: 'PATCH',

@@ -21,7 +21,7 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { getNearbyPassengerDrivers, getPassengerCurrentRide, getPassengerRideHistory } from '../../api';
+import { getDirectionsRoute, getNearbyPassengerDrivers, getPassengerCurrentRide, getPassengerRideHistory } from '../../api';
 
 const HARARE_FALLBACK = {
   latitude: -20.1535,
@@ -54,48 +54,6 @@ function calculateDistanceKm(start, end) {
   );
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadiusKm * c;
-}
-
-function decodePolyline(encoded) {
-  if (!encoded) return [];
-  let index = 0;
-  let latitude = 0;
-  let longitude = 0;
-  const coordinates = [];
-
-  while (index < encoded.length) {
-    let shift = 0;
-    let result = 0;
-    let byte = null;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
-    latitude += deltaLat;
-
-    shift = 0;
-    result = 0;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
-    longitude += deltaLng;
-
-    coordinates.push({
-      latitude: latitude / 1e5,
-      longitude: longitude / 1e5,
-    });
-  }
-
-  return coordinates;
 }
 
 function getDirectionsApiKey() {
@@ -248,45 +206,22 @@ async function fetchGeocodedSuggestions(query, originCoordinate, locationContext
   return suggestions.filter(Boolean);
 }
 
-/**
- * Fetches driving route from Google Directions API.
- * Returns coordinates for the map polyline plus route distance (km) and duration (minutes) for pricing.
- */
-async function fetchGoogleRoute(origin, destination) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !origin || !destination) {
+async function fetchRideRoute(token, origin, destination) {
+  if (!token || !origin || !destination) {
     return { coordinates: null, distanceKm: null, durationMinutes: null };
   }
 
-  const params = new URLSearchParams({
-    origin: `${origin.latitude},${origin.longitude}`,
-    destination: `${destination.latitude},${destination.longitude}`,
-    mode: 'driving',
-    departure_time: 'now',
-    key: apiKey,
+  const data = await getDirectionsRoute(token, {
+    origin,
+    destination,
+    cacheTtlSeconds: 1800,
   });
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload?.error_message || `Directions request failed (${response.status})`);
-  }
-
-  if (payload?.status !== 'OK' || !Array.isArray(payload?.routes) || !payload.routes[0]) {
-    throw new Error(payload?.error_message || 'No Google route found');
-  }
-
-  const route = payload.routes[0];
-  const leg = route.legs?.[0];
-  const distanceMeters = leg?.distance?.value ?? 0;
-  const durationSeconds = leg?.duration?.value ?? 0;
-  const coordinates = decodePolyline(route.overview_polyline?.points);
+  const route = data?.route || {};
 
   return {
-    coordinates: coordinates?.length > 1 ? coordinates : null,
-    distanceKm: distanceMeters > 0 ? distanceMeters / 1000 : null,
-    durationMinutes: durationSeconds > 0 ? Math.max(1, Math.round(durationSeconds / 60)) : null,
+    coordinates: Array.isArray(route.coordinates) && route.coordinates.length > 1 ? route.coordinates : null,
+    distanceKm: Number(route.distanceKm || 0) > 0 ? Number(route.distanceKm) : null,
+    durationMinutes: Number(route.durationMinutes || 0) > 0 ? Number(route.durationMinutes) : null,
   };
 }
 
@@ -834,7 +769,8 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
     const loadRoute = async () => {
       try {
-        const result = await fetchGoogleRoute(pickupCoordinate, dropoffCoordinate);
+        const token = await getToken();
+        const result = await fetchRideRoute(token, pickupCoordinate, dropoffCoordinate);
         if (cancelled) return;
 
         if (Array.isArray(result.coordinates) && result.coordinates.length > 1) {
@@ -857,7 +793,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [pickupCoordinate, dropoffCoordinate]);
+  }, [dropoffCoordinate, getToken, pickupCoordinate]);
 
   useEffect(() => {
     const query = (activeField === 'pickup' ? pickupQuery : destinationQuery).trim();

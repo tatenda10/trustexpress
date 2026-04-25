@@ -232,6 +232,37 @@ const DriverAccountScreen = ({ navigation, route }) => {
     profile?.status === 'pending' && hasSubmittedProfileDocs && missingProfileDocCount === 0;
 
   const vehicleRegistrationAwaitingReviewOnly = vehicle?.status === 'pending';
+  const handleCarRegistrationPress = () => {
+    if (vehicleApproved) {
+      Alert.alert(
+        'Change car?',
+        'Changing your car will submit the new vehicle for admin review. You will be taken offline and cannot go online again until the new car is approved.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Continue',
+            onPress: () => {
+              const rootNavigation = navigation.getParent()?.getParent();
+              if (rootNavigation?.navigate) {
+                rootNavigation.navigate('DriverRegisterCar', { driverStatus, changeVehicle: true });
+              } else {
+                navigation.navigate('DriverCarRegistration', { driverStatus, changeVehicle: true });
+              }
+            },
+          },
+        ],
+      );
+      return;
+    }
+    if (vehicleRegistrationAwaitingReviewOnly) {
+      Alert.alert(
+        'Vehicle under review',
+        'We are reviewing your registration. You will be notified when there is an update. Status is also shown above on this screen.',
+      );
+      return;
+    }
+    navigation.navigate('DriverCarRegistration', { driverStatus });
+  };
 
   const verificationRows = [
     {
@@ -270,27 +301,12 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'car',
       title: 'Car registration',
-      subtitle: !vehicle ? 'Not registered' : vehicle.status === 'approved' ? 'Verified' : vehicle.status === 'pending' ? 'Under review' : 'Rejected',
+      subtitle: !vehicle ? 'Not registered' : vehicle.status === 'approved' ? 'Verified · Tap to change car' : vehicle.status === 'pending' ? 'Under review' : 'Rejected',
       verified: vehicle?.status === 'approved',
       icon: 'car-outline',
+      changeableWhenVerified: vehicle?.status === 'approved',
       vehicleRegistrationReviewOnly: vehicleRegistrationAwaitingReviewOnly,
-      onPress: () => {
-        if (vehicleApproved) {
-          Alert.alert(
-            'Car verified',
-            'Your car is verified.',
-          );
-          return;
-        }
-        if (vehicleRegistrationAwaitingReviewOnly) {
-          Alert.alert(
-            'Vehicle under review',
-            'We are reviewing your registration. You will be notified when there is an update. Status is also shown above on this screen.',
-          );
-          return;
-        }
-        navigation.navigate('DriverCarRegistration', { driverStatus });
-      },
+      onPress: handleCarRegistrationPress,
     },
   ];
 
@@ -533,7 +549,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
                     <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
                     <Text className={`mt-0.5 text-sm ${row.verified ? 'text-green-600' : 'text-gray-500'}`}>{row.subtitle}</Text>
                   </View>
-                  {row.verified ? (
+                  {row.changeableWhenVerified ? (
+                    <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+                  ) : row.verified ? (
                     <View className="h-8 w-8 items-center justify-center rounded-full bg-green-100">
                       <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
                     </View>

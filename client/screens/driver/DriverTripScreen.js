@@ -3,7 +3,6 @@ import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dim
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
@@ -11,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import {
   completeDriverCurrentRide,
+  getDirectionsRoute,
   getDriverCurrentRide,
   markDriverCurrentRideArrived,
   resolveUploadedMediaUrl,
@@ -21,7 +21,8 @@ import {
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { connectRealtime } from '../../realtime';
 
-const ROUTE_REFRESH_DISTANCE_METERS = 25;
+const ROUTE_REFRESH_DISTANCE_METERS = 2000;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 90000;
 const LOCATION_UPDATE_DISTANCE_METERS = 35;
 const LOCATION_UPDATE_INTERVAL_MS = 12000;
 const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.38);
@@ -54,55 +55,6 @@ function calculateDistanceKm(start, end) {
   return earthRadiusKm * c;
 }
 
-function decodePolyline(encoded) {
-  if (!encoded) return [];
-  let index = 0;
-  let latitude = 0;
-  let longitude = 0;
-  const coordinates = [];
-
-  while (index < encoded.length) {
-    let shift = 0;
-    let result = 0;
-    let byte = null;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
-    latitude += deltaLat;
-
-    shift = 0;
-    result = 0;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
-    longitude += deltaLng;
-
-    coordinates.push({
-      latitude: latitude / 1e5,
-      longitude: longitude / 1e5,
-    });
-  }
-
-  return coordinates;
-}
-
-function stripHtml(value) {
-  return String(value || '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function normalizeInstructionForSpeech(value) {
   const text = String(value || '')
     .replace(/\bN\b/g, 'north')
@@ -131,15 +83,6 @@ function normalizeInstructionForSpeech(value) {
   }
 
   return text;
-}
-
-function getDirectionsApiKey() {
-  return (
-    Constants.expoConfig?.extra?.googleMapsDirectionsApiKey ||
-    Constants.expoConfig?.android?.config?.googleMaps?.apiKey ||
-    Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
-    ''
-  );
 }
 
 function buildRegionFromCoordinates(coordinates) {
@@ -196,39 +139,23 @@ function toGoogleMapsOpenUrls(label, coordinate) {
   ];
 }
 
-async function fetchGoogleDirections(origin, destination) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !origin || !destination) {
+async function fetchTripDirections(token, origin, destination) {
+  if (!token || !origin || !destination) {
     return null;
   }
 
-  const params = new URLSearchParams({
-    origin: `${origin.latitude},${origin.longitude}`,
-    destination: `${destination.latitude},${destination.longitude}`,
-    mode: 'driving',
-    departure_time: 'now',
-    key: apiKey,
+  const data = await getDirectionsRoute(token, {
+    origin,
+    destination,
+    cacheTtlSeconds: 120,
   });
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload?.error_message || `Directions request failed (${response.status})`);
-  }
-
-  if (payload?.status !== 'OK' || !Array.isArray(payload?.routes) || !payload.routes[0]) {
-    throw new Error(payload?.error_message || 'No Google route found');
-  }
-
-  const route = payload.routes[0];
-  const leg = route.legs?.[0];
+  const route = data?.route || {};
 
   return {
-    coordinates: decodePolyline(route.overview_polyline?.points),
-    distanceMeters: Number(leg?.distance?.value || 0),
-    durationSeconds: Number(leg?.duration_in_traffic?.value || leg?.duration?.value || 0),
-    nextInstruction: stripHtml(leg?.steps?.[0]?.html_instructions || ''),
+    coordinates: Array.isArray(route.coordinates) ? route.coordinates : [],
+    distanceMeters: Number(route.distanceMeters || 0),
+    durationSeconds: Number(route.durationSeconds || 0),
+    nextInstruction: route.nextInstruction || '',
   };
 }
 
@@ -237,6 +164,8 @@ export default function DriverTripScreen({ navigation }) {
   const { getToken } = useAuth();
   const mapRef = useRef(null);
   const lastRouteOriginRef = useRef(null);
+  const lastRouteTargetRef = useRef(null);
+  const lastRouteFetchedAtRef = useRef(0);
   const locationSubscriptionRef = useRef(null);
   const routeRequestIdRef = useRef(0);
   const availabilitySyncInFlightRef = useRef(false);
@@ -505,11 +434,20 @@ export default function DriverTripScreen({ navigation }) {
     if (!driverCoordinate || !targetCoordinate) return undefined;
 
     const previousOrigin = lastRouteOriginRef.current;
+    const previousTarget = lastRouteTargetRef.current;
     const movedDistanceMeters = previousOrigin
       ? calculateDistanceKm(previousOrigin, driverCoordinate) * 1000
       : Infinity;
+    const targetChanged = previousTarget
+      ? calculateDistanceKm(previousTarget, targetCoordinate) * 1000 >= 30
+      : true;
+    const routeAgeMs = Date.now() - lastRouteFetchedAtRef.current;
 
-    if (movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS && routeCoordinates.length > 0) {
+    if (
+      !targetChanged &&
+      routeCoordinates.length > 0 &&
+      (movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS || routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS)
+    ) {
       return undefined;
     }
 
@@ -517,12 +455,15 @@ export default function DriverTripScreen({ navigation }) {
     const currentRequestId = routeRequestIdRef.current + 1;
     routeRequestIdRef.current = currentRequestId;
     lastRouteOriginRef.current = driverCoordinate;
+    lastRouteTargetRef.current = targetCoordinate;
+    lastRouteFetchedAtRef.current = Date.now();
 
     const loadDirections = async () => {
       try {
         setRouteLoading(true);
         setRouteError('');
-        const route = await fetchGoogleDirections(driverCoordinate, targetCoordinate);
+        const token = await getToken();
+        const route = await fetchTripDirections(token, driverCoordinate, targetCoordinate);
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
 
         setRouteCoordinates(Array.isArray(route?.coordinates) && route.coordinates.length > 1
@@ -550,7 +491,7 @@ export default function DriverTripScreen({ navigation }) {
     return () => {
       cancelled = true;
     };
-  }, [driverCoordinate, ride?.stage, routeCoordinates.length, targetCoordinate]);
+  }, [driverCoordinate, getToken, ride?.stage, routeCoordinates.length, targetCoordinate]);
 
   useEffect(() => {
     const coordinatesToFit = getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate);

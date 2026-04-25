@@ -4,64 +4,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useAuth } from '@clerk/clerk-expo';
-import Constants from 'expo-constants';
-import { cancelRideRequest, getApiUrl, getPassengerRideRequestStatus, selectRideDriver } from '../../api';
+import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, selectRideDriver } from '../../api';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { connectRealtime } from '../../realtime';
 
 const REQUEST_EXPIRY_POLL_MS = 1000;
-
-function decodePolyline(encoded) {
-  if (!encoded) return [];
-  let index = 0;
-  let latitude = 0;
-  let longitude = 0;
-  const coordinates = [];
-
-  while (index < encoded.length) {
-    let shift = 0;
-    let result = 0;
-    let byte = null;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
-    latitude += deltaLat;
-
-    shift = 0;
-    result = 0;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
-    longitude += deltaLng;
-
-    coordinates.push({
-      latitude: latitude / 1e5,
-      longitude: longitude / 1e5,
-    });
-  }
-
-  return coordinates;
-}
-
-function getDirectionsApiKey() {
-  return (
-    Constants.expoConfig?.extra?.googleMapsDirectionsApiKey ||
-    Constants.expoConfig?.android?.config?.googleMaps?.apiKey ||
-    Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
-    ''
-  );
-}
+const EMPTY_ROUTE_COORDINATES = [];
 
 function normalizeVehicleImageUrl(url) {
   const raw = String(url || '').trim();
@@ -79,26 +28,14 @@ function normalizeVehicleImageUrl(url) {
   }
 }
 
-async function fetchGoogleRoute(origin, destination) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !origin || !destination) return null;
-
-  const params = new URLSearchParams({
-    origin: `${origin.latitude},${origin.longitude}`,
-    destination: `${destination.latitude},${destination.longitude}`,
-    mode: 'driving',
-    departure_time: 'now',
-    key: apiKey,
+async function fetchRouteCoordinates(token, origin, destination) {
+  if (!token || !origin || !destination) return null;
+  const data = await getDirectionsRoute(token, {
+    origin,
+    destination,
+    cacheTtlSeconds: 1800,
   });
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok || payload?.status !== 'OK' || !Array.isArray(payload?.routes) || !payload.routes[0]) {
-    return null;
-  }
-
-  const coordinates = decodePolyline(payload.routes[0]?.overview_polyline?.points);
+  const coordinates = data?.route?.coordinates;
   return Array.isArray(coordinates) && coordinates.length > 1 ? coordinates : null;
 }
 
@@ -145,7 +82,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     dropoffCoordinate,
     pickupLabel,
     dropoffLabel,
-    routeCoordinates: initialRouteCoordinates = [],
+    routeCoordinates: initialRouteCoordinates = EMPTY_ROUTE_COORDINATES,
     distanceKm,
     estimatedMinutes,
     estimatedAmount,
@@ -176,7 +113,8 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
     const loadRoute = async () => {
       try {
-        const coordinates = await fetchGoogleRoute(pickupCoordinate, dropoffCoordinate);
+        const token = await getToken();
+        const coordinates = await fetchRouteCoordinates(token, pickupCoordinate, dropoffCoordinate);
         if (cancelled) return;
         setRouteCoordinates(coordinates || [pickupCoordinate, dropoffCoordinate]);
       } catch {
@@ -190,7 +128,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, initialRouteCoordinates, pickupCoordinate]);
+  }, [dropoffCoordinate, getToken, initialRouteCoordinates, pickupCoordinate]);
 
   useEffect(() => {
     if (!rideRequest?.id) return undefined;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -17,6 +17,21 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
   const isRejected = status === 'rejected';
   const canResubmit = vehicle?.canResubmit !== false;
   const notSubmitted = !vehicle;
+
+  const openVehicleForm = (changeVehicle = false) => {
+    const rootNavigation = navigation.getParent()?.getParent();
+    rootNavigation?.navigate?.('DriverRegisterCar', { driverStatus, changeVehicle });
+  };
+  const confirmVehicleChange = () => {
+    Alert.alert(
+      'Change car?',
+      'Changing your car will submit the new vehicle for admin review. You will be taken offline and cannot go online again until the new car is approved.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Continue', onPress: () => openVehicleForm(true) },
+      ],
+    );
+  };
 
   const statusLabel = notSubmitted
     ? 'Not yet registered'
@@ -52,7 +67,7 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
           <Text className="text-sm text-gray-500 text-center px-4">
             {notSubmitted && (profileApproved ? 'Register your vehicle with photos, plate and documents.' : 'Complete document verification first, then register your vehicle.')}
             {isPending && 'Your vehicle is being reviewed. We\'ll notify you once approved.'}
-            {isApproved && vehicle?.numberPlate && `Your vehicle ${vehicle.numberPlate} has been verified.`}
+            {isApproved && vehicle?.numberPlate && `Your vehicle ${vehicle.numberPlate} has been verified. You can submit a different car for review.`}
             {isRejected && !canResubmit && 'You are not allowed to resubmit. Contact support if you believe this is an error.'}
             {isRejected && canResubmit && (vehicle?.rejectionReason || 'Your vehicle was not approved. You can resubmit below.')}
           </Text>
@@ -68,12 +83,21 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
             className="rounded-xl p-4 items-center flex-row justify-center gap-2"
             style={{ backgroundColor: PRIMARY_BLUE }}
             onPress={() => {
-              const rootNavigation = navigation.getParent()?.getParent();
-              rootNavigation?.navigate?.('DriverRegisterCar', { driverStatus });
+              openVehicleForm(false);
             }}
           >
             <Text className="text-white font-semibold">{notSubmitted ? 'Register vehicle' : 'Resubmit vehicle'}</Text>
             <Ionicons name="arrow-forward" size={18} color="#fff" />
+          </TouchableOpacity>
+        )}
+        {isApproved && profileApproved && (
+          <TouchableOpacity
+            className="rounded-xl p-4 items-center flex-row justify-center gap-2"
+            style={{ backgroundColor: PRIMARY_BLUE }}
+            onPress={confirmVehicleChange}
+          >
+            <Text className="text-white font-semibold">Change vehicle</Text>
+            <Ionicons name="swap-horizontal-outline" size={18} color="#fff" />
           </TouchableOpacity>
         )}
       </ScrollView>

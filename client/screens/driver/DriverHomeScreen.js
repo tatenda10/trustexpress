@@ -15,6 +15,7 @@ import { showLocalRideNotification } from '../../notifications';
 import {
   acceptDriverRideRequest,
   cancelDriverCurrentRide,
+  getDirectionsRoute,
   getDriverCurrentRide,
   getDriverMe,
   getDriverRideRequests,
@@ -77,48 +78,6 @@ function formatCountdown(totalSeconds) {
   const minutes = Math.floor(safeSeconds / 60);
   const seconds = safeSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function decodePolyline(encoded) {
-  if (!encoded) return [];
-  let index = 0;
-  let latitude = 0;
-  let longitude = 0;
-  const coordinates = [];
-
-  while (index < encoded.length) {
-    let shift = 0;
-    let result = 0;
-    let byte = null;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
-    latitude += deltaLat;
-
-    shift = 0;
-    result = 0;
-
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-
-    const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
-    longitude += deltaLng;
-
-    coordinates.push({
-      latitude: latitude / 1e5,
-      longitude: longitude / 1e5,
-    });
-  }
-
-  return coordinates;
 }
 
 function getDirectionsApiKey() {
@@ -302,33 +261,19 @@ async function fetchNicePlaceLabel(coordinate) {
   return null;
 }
 
-async function fetchGoogleRouteCoordinates(origin, destination) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !origin || !destination) {
+async function fetchRouteCoordinates(token, origin, destination) {
+  if (!token || !origin || !destination) {
     return null;
   }
 
-  const params = new URLSearchParams({
-    origin: `${origin.latitude},${origin.longitude}`,
-    destination: `${destination.latitude},${destination.longitude}`,
-    mode: 'driving',
-    departure_time: 'now',
-    key: apiKey,
+  const data = await getDirectionsRoute(token, {
+    origin,
+    destination,
+    cachePrecision: 3,
+    cacheTtlSeconds: 600,
   });
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload?.error_message || `Directions request failed (${response.status})`);
-  }
-
-  if (payload?.status !== 'OK' || !Array.isArray(payload?.routes) || !payload.routes[0]) {
-    throw new Error(payload?.error_message || 'No Google route found');
-  }
-
-  const route = payload.routes[0];
-  return decodePolyline(route.overview_polyline?.points);
+  const coordinates = data?.route?.coordinates;
+  return Array.isArray(coordinates) && coordinates.length > 1 ? coordinates : null;
 }
 
 const DriverHomeScreen = ({ navigation, route }) => {
@@ -935,7 +880,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
     const loadRoute = async () => {
       try {
-        const coords = await fetchGoogleRouteCoordinates(origin, destination);
+        const token = await getTokenRef.current();
+        const coords = await fetchRouteCoordinates(token, origin, destination);
         if (cancelled) return;
 
         if (Array.isArray(coords) && coords.length > 1) {

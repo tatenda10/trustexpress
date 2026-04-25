@@ -1526,6 +1526,18 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     );
 
     const existingVehicle = existingVehicleRow || null;
+    const [activeRide] = await query(
+      `SELECT id
+       FROM ride_requests
+       WHERE driver_user_id = ?
+         AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (activeRide) {
+      return res.status(409).json({ error: 'Complete or cancel your active ride before changing your car.' });
+    }
+
     const mergedPhotoUrls = Array.from(
       new Set([
         ...(Array.isArray(existingVehicle?.car_photo_urls)
@@ -1684,6 +1696,14 @@ router.post('/vehicle', requireAuth, async (req, res) => {
         'pending',
         submittedAt,
       ]
+    );
+
+    await query(
+      `UPDATE driver_availability
+       SET is_online = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [req.userId]
     );
 
     const vehicle = {

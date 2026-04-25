@@ -108,6 +108,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const vehicle = driverStatus?.vehicle;
   const isPending = vehicle?.status === 'pending';
   const isRejected = vehicle?.status === 'rejected';
+  const isChangingApprovedVehicle = route.params?.changeVehicle === true || vehicle?.status === 'approved';
   const isVehicleBlocked = isRejected && vehicle?.canResubmit === false;
 
   const [carPhotoUris, setCarPhotoUris] = useState(Array.isArray(vehicle?.carPhotoUrls) ? vehicle.carPhotoUrls : []);
@@ -423,8 +424,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 24) }}
         showsVerticalScrollIndicator={false}
       >
-        <Text className="text-2xl font-bold text-gray-900 mb-2">Register your car</Text>
-        <Text className="text-sm text-gray-600 mb-4">Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.</Text>
+        <Text className="text-2xl font-bold text-gray-900 mb-2">{isChangingApprovedVehicle ? 'Change your car' : 'Register your car'}</Text>
+        <Text className="text-sm text-gray-600 mb-4">
+          {isChangingApprovedVehicle
+            ? 'Submit the new car details and documents for admin review. You will be offline until the new car is approved.'
+            : 'Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.'}
+        </Text>
 
         {isRejected && vehicle?.rejectionReason && (
           <View className="mb-4 p-3 bg-red-50 rounded-xl">
@@ -623,7 +628,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           onPress={handleSubmit}
           disabled={loading || tiersLoading || tiers.length === 0}
         >
-          {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-white text-lg font-semibold">Submit for review</Text>}
+          {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-white text-lg font-semibold">{isChangingApprovedVehicle ? 'Submit change for review' : 'Submit for review'}</Text>}
         </TouchableOpacity>
       </ScrollView>
     </View>
