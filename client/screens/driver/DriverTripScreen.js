@@ -20,6 +20,12 @@ import {
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { connectRealtime } from '../../realtime';
+import {
+  hideTripOverlay,
+  isTripOverlaySupported,
+  openTripOverlaySettings,
+  showTripOverlay,
+} from '../../services/tripOverlay';
 
 const ROUTE_REFRESH_DISTANCE_METERS = 2000;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 90000;
@@ -176,6 +182,7 @@ export default function DriverTripScreen({ navigation }) {
   const lastSpokenAtRef = useRef(0);
   const lastArrivalAnnouncementStageRef = useRef('');
   const speechDebounceTimeoutRef = useRef(null);
+  const overlayPermissionPromptedRef = useRef(false);
   const [ride, setRide] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -526,6 +533,62 @@ export default function DriverTripScreen({ navigation }) {
     const fallbackMinutes = Math.max(1, Math.round(calculateDistanceKm(driverCoordinate, targetCoordinate) * 4));
     return `${fallbackMinutes} min away`;
   }, [driverCoordinate, routeDurationSeconds, targetCoordinate]);
+
+  useEffect(() => () => {
+    hideTripOverlay();
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    if (!ride?.id) {
+      hideTripOverlay();
+      return undefined;
+    }
+
+    let active = true;
+    const stageLabel = ride.stage === 'on_trip'
+      ? 'On trip'
+      : ride.stage === 'waiting_for_customer'
+        ? 'At pickup'
+        : 'To pickup';
+    const targetLabel = ride.stage === 'on_trip'
+      ? ride.dropoffLabel
+      : ride.pickupLabel;
+    const meta = ride.stage === 'waiting_for_customer'
+      ? 'Pickup reached'
+      : `${distanceKmText} · ${etaText}`;
+
+    const syncOverlay = async () => {
+      const shown = await showTripOverlay({
+        title: 'Trust Express',
+        subtitle: `${stageLabel}: ${targetLabel || 'Trip route'}`,
+        meta,
+      });
+
+      if (
+        active &&
+        !shown &&
+        isTripOverlaySupported() &&
+        !overlayPermissionPromptedRef.current
+      ) {
+        overlayPermissionPromptedRef.current = true;
+        Alert.alert(
+          'Floating trip bubble',
+          'Allow Trust Express to display over other apps to show a small active trip bubble while you use navigation.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open settings', onPress: openTripOverlaySettings },
+          ],
+        );
+      }
+    };
+
+    syncOverlay();
+
+    return () => {
+      active = false;
+    };
+  }, [distanceKmText, etaText, ride?.dropoffLabel, ride?.id, ride?.pickupLabel, ride?.stage]);
 
   const handleMarkArrived = async () => {
     try {

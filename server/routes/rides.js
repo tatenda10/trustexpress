@@ -1,9 +1,10 @@
 import crypto from 'crypto';
 import { Router } from 'express';
+import PDFDocument from 'pdfkit';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
-import { sendExpoPushNotifications } from '../lib/push.js';
+import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideChatMessageToUser,
@@ -358,44 +359,77 @@ async function createPendingDriverOffers(rideRequestId, drivers) {
 async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, rideRequestId, publicId, tierName }) {
   if (!Array.isArray(drivers) || !drivers.length) return;
 
-  const tokens = (
+  const destinations = (
     await Promise.all(
       drivers.map(async (driver) => {
         try {
           const driverUser = await getClerkUserById(driver.id);
-          return String(driverUser?.privateMetadata?.pushToken || '').trim() || null;
+          return {
+            expoToken: String(driverUser?.privateMetadata?.pushToken || '').trim() || null,
+            fcmToken: String(driverUser?.privateMetadata?.fcmToken || '').trim() || null,
+          };
         } catch {
-          return null;
+          return { expoToken: null, fcmToken: null };
         }
       })
     )
-  ).filter(Boolean);
+  ).filter((item) => item.expoToken || item.fcmToken);
+
+  const expoTokens = destinations.map((item) => item.expoToken).filter(Boolean);
+  const fcmTokens = destinations.map((item) => item.fcmToken).filter(Boolean);
 
   console.log('[rides.findDriver] push notification targets', {
     rideRequestId,
     driverCount: drivers.length,
-    tokenCount: tokens.length,
+    expoTokenCount: expoTokens.length,
+    fcmTokenCount: fcmTokens.length,
     driverIds: drivers.map((driver) => driver.id),
   });
 
-  if (!tokens.length) return;
+  if (expoTokens.length) {
+    await sendExpoPushNotifications(
+      expoTokens.map((token) => ({
+        to: token,
+        title: 'New ride request',
+        body: `${pickupLabel} to ${dropoffLabel}`,
+        data: {
+          type: 'driver_new_ride_request',
+          rideRequestId,
+          publicId,
+          passengerName,
+          pickupLabel,
+          dropoffLabel,
+          tierName,
+        },
+      }))
+    );
+  }
 
-  await sendExpoPushNotifications(
-    tokens.map((token) => ({
-      to: token,
-      title: 'New ride request',
-      body: `${pickupLabel} to ${dropoffLabel}`,
-      data: {
-        type: 'driver_new_ride_request',
-        rideRequestId,
-        publicId,
-        passengerName,
-        pickupLabel,
-        dropoffLabel,
-        tierName,
-      },
-    }))
-  );
+  if (fcmTokens.length) {
+    await sendFcmNotifications(
+      fcmTokens.map((token) => ({
+        to: token,
+        title: 'New ride request',
+        body: `${pickupLabel} to ${dropoffLabel}`,
+        android: {
+          channelId: 'ride-requests',
+          notification: {
+            sound: 'default',
+            clickAction: 'TRUST_EXPRESS_FULL_SCREEN_RIDE_REQUEST',
+          },
+        },
+        data: {
+          type: 'driver_new_ride_request',
+          rideRequestId: String(rideRequestId),
+          publicId: String(publicId || ''),
+          passengerName: String(passengerName || ''),
+          pickupLabel: String(pickupLabel || ''),
+          dropoffLabel: String(dropoffLabel || ''),
+          tierName: String(tierName || ''),
+        },
+      }))
+    );
+  }
 }
 
 router.get('/passenger/history', requireAuth, async (req, res) => {
@@ -1068,6 +1102,96 @@ router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) =>
     return res.status(200).send(formatRideReceiptText(ride));
   } catch (err) {
     console.error('GET /api/rides/passenger/:rideRequestId/receipt', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT
+         id,
+         public_id,
+         passenger_name,
+         driver_name,
+         requested_tier_name,
+         pickup_label,
+         dropoff_label,
+         estimated_amount,
+         tip_amount,
+         status,
+         requested_at,
+         completed_at
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const fileName = `trustcars-receipt-${ride.public_id || ride.id}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    doc.pipe(res);
+
+    const fareAmount = Number(ride.estimated_amount || 0);
+    const tipAmount = Number(ride.tip_amount || 0);
+    const totalAmount = fareAmount + tipAmount;
+    const requestedAt = ride.requested_at ? new Date(ride.requested_at).toISOString() : '-';
+    const completedAt = ride.completed_at ? new Date(ride.completed_at).toISOString() : '-';
+    const statusLabel = mapPassengerRideStatus(ride.status);
+
+    doc.fillColor('#0C1F49').fontSize(22).font('Helvetica-Bold').text('TRUST EXPRESS APP', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fillColor('#999').fontSize(12).font('Helvetica').text('Trust Express Ride Receipt', { align: 'center' });
+    doc.moveDown(1);
+
+    doc.fillColor('#206EFF').fontSize(10).font('Helvetica-Bold').text('Receipt #:', { continued: true }).fillColor('#000').text(` RCPT-${ride.id}`);
+    doc.fillColor('#206EFF').text('Trip ID:', { continued: true }).fillColor('#000').text(` ${ride.public_id || ride.id}`);
+    doc.fillColor('#206EFF').text('Status:', { continued: true }).fillColor('#000').text(` ${statusLabel}`);
+    doc.fillColor('#206EFF').text('Requested:', { continued: true }).fillColor('#000').text(` ${requestedAt}`);
+    doc.fillColor('#206EFF').text('Completed:', { continued: true }).fillColor('#000').text(` ${completedAt}`);
+
+    doc.moveDown(0.5);
+    doc.strokeColor('#D9D9D9').lineWidth(1).moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
+    doc.moveDown(0.5);
+
+    doc.fontSize(12).fillColor('#0C1F49').font('Helvetica-Bold').text('Passenger:', { continued: true }).fillColor('#000').text(` ${ride.passenger_name || 'Passenger'}`);
+    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Driver:', { continued: true }).fillColor('#000').text(` ${ride.driver_name || 'N/A'}`);
+    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Pickup:', { continued: true }).fillColor('#000').text(` ${ride.pickup_label || '-'}`);
+    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Drop-off:', { continued: true }).fillColor('#000').text(` ${ride.dropoff_label || '-'}`);
+
+    doc.moveDown(0.5);
+    doc.strokeColor('#D9D9D9').lineWidth(1).moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
+    doc.moveDown(0.5);
+
+    doc.fontSize(12).fillColor('#0C1F49').font('Helvetica-Bold').text('Tier:', { continued: true }).fillColor('#000').text(` ${ride.requested_tier_name || 'Trust Express'}`);
+    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Fare:', { continued: true }).fillColor('#000').text(` $${fareAmount.toFixed(2)}`);
+    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Tip:', { continued: true }).fillColor('#000').text(` $${tipAmount.toFixed(2)}`);
+    doc.font('Helvetica-Bold').fillColor('#206EFF').fontSize(14).text('Total:', { continued: true }).fillColor('#000').text(` $${totalAmount.toFixed(2)}`);
+
+    doc.moveDown(1);
+    doc.fontSize(10).fillColor('#666').font('Helvetica').text('Thank you for riding with Trust Express!', { align: 'center' });
+    doc.moveDown(0.25);
+    doc.fontSize(9).fillColor('#666').text('Safe rides. Trusted drivers. Always.', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(8).fillColor('#999').text('Support: support@trustexpress.co.zw | +263 713 834 565 | trustjavvehicles.co.zw', { align: 'center' });
+
+    doc.end();
+  } catch (err) {
+    console.error('GET /api/rides/passenger/:rideRequestId/receipt-pdf', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

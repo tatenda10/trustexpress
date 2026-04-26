@@ -2,6 +2,7 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import messaging from '@react-native-firebase/messaging';
 
 const DRIVER_REQUEST_SOUND_FILE = 'notificationaudio.mpeg';
 const DRIVER_REQUEST_CHANNEL_ID = 'ride-requests';
@@ -73,7 +74,39 @@ export async function registerForPushNotificationsAsync() {
 
     return token;
   } catch (error) {
+    // Handle network connectivity issues gracefully
+    if (error.message?.includes('Network error') || 
+        error.message?.includes('connect') || 
+        error.message?.includes('timeout') ||
+        error.message?.includes('503') ||
+        error.message?.includes('upstream')) {
+      console.log('[notifications] Network issue with Expo push token registration, will retry later');
+      return null;
+    }
+    // Log other errors (like permission issues) as warnings
     console.warn('[notifications] registerForPushNotificationsAsync failed', error);
+    return null;
+  }
+}
+
+export async function registerForFcmTokenAsync() {
+  try {
+    if (!Device.isDevice) {
+      return null;
+    }
+
+    const authStatus = await messaging().requestPermission();
+    const enabled = authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+
+    if (!enabled) {
+      return null;
+    }
+
+    const fcmToken = await messaging().getToken();
+    return fcmToken || null;
+  } catch (error) {
+    console.log('[notifications] registerForFcmTokenAsync failed', error);
     return null;
   }
 }

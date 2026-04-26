@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -50,6 +50,12 @@ import { DriverStatusProvider } from './context/DriverStatusContext';
 import { AgentInviteProvider, useAgentInvite } from './context/AgentInviteContext';
 import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
+import {
+  isTripOverlaySupported,
+  canUseTripOverlay,
+  showTripOverlay,
+  hideTripOverlay,
+} from './services/tripOverlay';
 
 const Stack = createNativeStackNavigator();
 
@@ -90,7 +96,7 @@ function AuthStack() {
   );
 }
 
-import { attachAgentReferral, getMe, getDriverMe, registerUser, saveDriverPushToken, saveUserPushToken } from './api';
+import { attachAgentReferral, getMe, getDriverMe, registerUser, saveDriverPushToken, saveDriverFcmToken, saveUserPushToken } from './api';
 import {
   DRIVER_SKIP_ENHANCED_SELFIE_KEY,
   DRIVER_SKIP_ONBOARDING_KEY,
@@ -124,6 +130,15 @@ function AppStack() {
   const [passengerLocationGranted, setPassengerLocationGranted] = useState(null);
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
   const [roleBootstrapped, setRoleBootstrapped] = useState(false);
+
+  // Cleanup overlay on unmount
+  useEffect(() => {
+    return () => {
+      if (Platform.OS === 'android') {
+        hideTripOverlay();
+      }
+    };
+  }, []);
 
   const resolveExplicitRole = useCallback((profile) => {
     const metaRole = String(profile?.publicMetadata?.role || '').trim().toLowerCase();
@@ -208,26 +223,49 @@ function AppStack() {
         const token = await getTokenRef.current?.();
         if (!token) return;
 
-        const { registerForPushNotificationsAsync } = await import('./notifications');
-        const pushToken = await registerForPushNotificationsAsync();
-        if (!pushToken) return;
+        const { registerForPushNotificationsAsync, registerForFcmTokenAsync } = await import('./notifications');
+        const [pushToken, fcmToken] = await Promise.all([
+          registerForPushNotificationsAsync(),
+          registerForFcmTokenAsync(),
+        ]);
+
+        if (!pushToken && !fcmToken) {
+          console.log('[AppStack] No notification token available');
+          return;
+        }
+
         pushSyncKeyRef.current = pushKey;
 
-        console.log('[AppStack] push token ready', {
-          userId: user?.id || null,
-          role: isDriver ? 'driver' : 'passenger',
-          pushToken,
-        });
+        if (pushToken) {
+          console.log('[AppStack] push token ready', {
+            userId: user?.id || null,
+            role: isDriver ? 'driver' : 'passenger',
+            pushToken,
+          });
+        }
+        if (fcmToken) {
+          console.log('[AppStack] fcm token ready', {
+            userId: user?.id || null,
+            role: isDriver ? 'driver' : 'passenger',
+            fcmTokenPreview: String(fcmToken).slice(0, 18),
+          });
+        }
 
         if (isDriver) {
-          await saveDriverPushToken(token, pushToken);
+          if (pushToken) await saveDriverPushToken(token, pushToken);
+          if (fcmToken) await saveDriverFcmToken(token, fcmToken);
         } else {
-          await saveUserPushToken(token, pushToken);
+          if (pushToken) await saveUserPushToken(token, pushToken);
         }
         if (cancelled) return;
       } catch (error) {
         pushSyncKeyRef.current = '';
-        console.warn('[AppStack] Failed to register push token', error);
+        // Only log network errors as warnings, don't treat as critical failures
+        if (error.message?.includes('Network error') || error.message?.includes('connection')) {
+          console.log('[AppStack] Push token registration deferred due to network connectivity');
+        } else {
+          console.warn('[AppStack] Failed to register push token', error);
+        }
       }
     }
 
@@ -253,8 +291,9 @@ function AppStack() {
       roleLoading,
       userRole,
       isDriver,
+      driverStatus: driverStatus ? { isOnline: driverStatus.isOnline, id: driverStatus.id } : null,
     });
-  }, [storageLoaded, roleLoading, userRole, isDriver]);
+  }, [storageLoaded, roleLoading, userRole, isDriver, driverStatus]);
 
   useEffect(() => {
     const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
@@ -286,6 +325,61 @@ function AppStack() {
       responseSubscription.remove();
     };
   }, [isDriver, openDriverIncomingRequest]);
+
+  // Background overlay for online drivers
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isTripOverlaySupported()) {
+      console.log('[BackgroundOverlay] Not supported or not Android');
+      return;
+    }
+
+    const handleAppStateChange = async (nextAppState) => {
+      console.log('[BackgroundOverlay] App state changed:', nextAppState, { isDriver, driverStatus });
+      if (nextAppState === 'background' && isDriver && driverStatus?.isOnline) {
+        console.log('[BackgroundOverlay] Showing overlay for online driver');
+        // Show overlay when going to background and driver is online
+        const canShow = await canUseTripOverlay();
+        console.log('[BackgroundOverlay] Can show overlay:', canShow);
+        if (canShow) {
+          await showTripOverlay({
+            title: 'Trust Express',
+            subtitle: 'Online - Ready for rides',
+            meta: 'Tap to return to app',
+          });
+          console.log('[BackgroundOverlay] Overlay shown');
+        } else {
+          console.log('[BackgroundOverlay] Cannot show overlay - permission denied');
+        }
+      } else if (nextAppState === 'active') {
+        console.log('[BackgroundOverlay] Hiding overlay');
+        // Hide overlay when coming back to foreground
+        await hideTripOverlay();
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    // Initial check in case app starts in background (unlikely but safe)
+    if (AppState.currentState === 'background' && isDriver && driverStatus?.isOnline) {
+      console.log('[BackgroundOverlay] App started in background with online driver');
+      canUseTripOverlay().then(async (canShow) => {
+        console.log('[BackgroundOverlay] Initial canShow:', canShow);
+        if (canShow) {
+          await showTripOverlay({
+            title: 'Trust Express',
+            subtitle: 'Online - Ready for rides',
+            meta: 'Tap to return to app',
+          });
+          console.log('[BackgroundOverlay] Initial overlay shown');
+        }
+      });
+    }
+
+    return () => {
+      console.log('[BackgroundOverlay] Cleaning up subscription');
+      subscription?.remove();
+    };
+  }, [isDriver, driverStatus?.isOnline]);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,7 +418,11 @@ function AppStack() {
     getTokenRef.current?.()
       .then((token) => {
         if (!token || cancelled) return;
-        return getMe(token);
+        // Add timeout to prevent hanging
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('API timeout')), 5000);
+        });
+        return Promise.race([getMe(token), timeoutPromise]);
       })
       .then((profile) => {
         if (cancelled) return;
@@ -376,14 +474,16 @@ function AppStack() {
           });
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        console.warn('[AppStack] Role bootstrap API error, using fallback:', error.message);
         if (cancelled) return;
+        // On API error, fall back to stored role or null
         const fallbackRole = storedRole || null;
         setUserProfile((prev) => ({
           ...(prev || {}),
           first_name: prev?.first_name || user?.firstName || null,
           last_name: prev?.last_name || user?.lastName || null,
-          role: prev?.role || fallbackRole || null,
+          role: fallbackRole,
         }));
         if (fallbackRole && storedRole !== fallbackRole) {
           setStoredRole(fallbackRole);

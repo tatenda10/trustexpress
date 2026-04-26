@@ -11,6 +11,7 @@
           ]
         }
       ],
+      "./plugins/withTrustOverlay",
       [
         "expo-build-properties",
         {

@@ -4,9 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { File, Paths } from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
-import { getPassengerRideHistory, getPassengerRideReceipt } from '../../api';
+import { shareReceiptPdf } from '../../services/receiptPrint';
+import { getPassengerRideHistory } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function getStatusColors(status) {
@@ -151,18 +150,7 @@ const PassengerActivityScreen = ({ navigation }) => {
       setDownloadingReceiptId(ride.id);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      const receiptText = await getPassengerRideReceipt(token, ride.id);
-      const fileName = `trustcars-receipt-${ride.publicId || ride.id}.txt`;
-      const receiptFile = new File(Paths.cache, fileName);
-      receiptFile.write(receiptText);
-      const fileUri = receiptFile.uri;
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(fileUri, {
-          mimeType: 'text/plain',
-          dialogTitle: 'Download ride receipt',
-        });
-      }
+      await shareReceiptPdf(token, ride.id);
     } catch {
       // Keep history list usable if receipt generation fails.
     } finally {

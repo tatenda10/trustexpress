@@ -13,6 +13,10 @@ module.exports = () => {
 
   return {
     ...expo,
+    plugins: [
+      ...(expo.plugins || []),
+      './plugins/withTrustOverlay',
+    ],
     updates: {
       ...(expo.updates || {}),
       url: `https://u.expo.dev/${projectId}`,

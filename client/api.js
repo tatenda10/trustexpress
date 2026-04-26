@@ -1,7 +1,7 @@
 /**
  * Backend connection - BASE_URL and helpers for API routes.
  */
-export const BASE_URL = 'https://ridehailcarsserver.online';
+export const BASE_URL = 'http://192.168.100.35:5000';
 
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
@@ -150,6 +150,17 @@ export async function saveDriverPushToken(token, pushToken) {
   );
 }
 
+export async function saveDriverFcmToken(token, fcmToken) {
+  return apiFetch(
+    '/api/drivers/fcm-token',
+    {
+      method: 'POST',
+      body: JSON.stringify({ fcmToken }),
+    },
+    token,
+  );
+}
+
 export async function getDriverRideRequests(token) {
   return apiFetch('/api/drivers/ride-requests', {}, token);
 }
@@ -249,6 +260,19 @@ export async function getPassengerRideReceipt(token, rideRequestId) {
     throw err;
   }
   return text;
+}
+
+export async function getPassengerRideReceiptPdf(token, rideRequestId) {
+  const url = getApiUrl(`/api/rides/passenger/${rideRequestId}/receipt-pdf`);
+  const headers = { Authorization: `Bearer ${token}` };
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const err = new Error(text || getFriendlyApiErrorMessage(res.status, 'Could not download receipt PDF.'));
+    err.status = res.status;
+    throw err;
+  }
+  return res.arrayBuffer();
 }
 
 export async function reportLostItem(token, rideRequestId, payload) {

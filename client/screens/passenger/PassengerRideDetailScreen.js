@@ -3,9 +3,8 @@ import { View, Text, TouchableOpacity, ActivityIndicator, TextInput, Alert, Scro
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { File, Paths } from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
-import { getPassengerRideDetails, getPassengerRideReceipt, reportLostItem, submitPassengerDriverRating, tipDriver } from '../../api';
+import { getPassengerRideDetails, reportLostItem, submitPassengerDriverRating, tipDriver } from '../../api';
+import { printReceiptPdf, shareReceiptPdf } from '../../services/receiptPrint';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function formatCurrency(value) {
@@ -31,7 +30,8 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const [ride, setRide] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [downloadingReceipt, setDownloadingReceipt] = useState(false);
+  const [sharingReceipt, setSharingReceipt] = useState(false);
+  const [printingReceipt, setPrintingReceipt] = useState(false);
   const [submittingLostItem, setSubmittingLostItem] = useState(false);
   const [submittingTip, setSubmittingTip] = useState(false);
   const [rating, setRating] = useState(0);
@@ -89,31 +89,31 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     }
   };
 
-  const handleDownloadReceipt = async () => {
+  const handleShareReceipt = async () => {
     try {
       if (!rideRequestId) return;
-      setDownloadingReceipt(true);
+      setSharingReceipt(true);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      const receiptText = await getPassengerRideReceipt(token, rideRequestId);
-      const fileName = `trustcars-receipt-${ride?.publicId || rideRequestId}.txt`;
-      const receiptFile = new File(Paths.cache, fileName);
-      receiptFile.write(receiptText);
-      const fileUri = receiptFile.uri;
-
-      const canShare = await Sharing.isAvailableAsync();
-      if (!canShare) {
-        Alert.alert('Receipt saved', `Receipt saved to:\n${fileUri}`);
-        return;
-      }
-      await Sharing.shareAsync(fileUri, {
-        mimeType: 'text/plain',
-        dialogTitle: 'Download ride receipt',
-      });
+      await shareReceiptPdf(token, rideRequestId);
     } catch (error) {
-      Alert.alert('Receipt download failed', error?.message || 'Could not download your ride receipt.');
+      Alert.alert('Receipt share failed', error?.message || 'Could not share your ride receipt.');
     } finally {
-      setDownloadingReceipt(false);
+      setSharingReceipt(false);
+    }
+  };
+
+  const handlePrintReceipt = async () => {
+    try {
+      if (!rideRequestId) return;
+      setPrintingReceipt(true);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      await printReceiptPdf(token, rideRequestId);
+    } catch (error) {
+      Alert.alert('Receipt print failed', error?.message || 'Could not print your ride receipt.');
+    } finally {
+      setPrintingReceipt(false);
     }
   };
 
@@ -215,19 +215,36 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
             <Text className="mt-1 text-sm text-gray-500">{formatDate(ride.completedAt || ride.requestedAt)}</Text>
           </View>
 
-          <TouchableOpacity
-            onPress={handleDownloadReceipt}
-            disabled={downloadingReceipt}
-            className="mt-5 h-12 items-center justify-center rounded-[16px] border border-blue-200 bg-white"
-          >
-            {downloadingReceipt ? (
-              <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-            ) : (
-              <Text className="text-sm font-bold uppercase" style={{ color: PRIMARY_BLUE }}>
-                Download receipt
-              </Text>
-            )}
-          </TouchableOpacity>
+          <View className="mt-5 flex-row items-center justify-between gap-3">
+            <TouchableOpacity
+              onPress={handleShareReceipt}
+              disabled={sharingReceipt || downloadingReceipt}
+              className="flex-1 h-12 items-center justify-center rounded-[16px] border border-blue-200 bg-white"
+              style={{ opacity: sharingReceipt || downloadingReceipt ? 0.6 : 1 }}
+            >
+              {(sharingReceipt || downloadingReceipt) ? (
+                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+              ) : (
+                <Text className="text-sm font-bold uppercase" style={{ color: PRIMARY_BLUE }}>
+                  Share receipt
+                </Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handlePrintReceipt}
+              disabled={printingReceipt || downloadingReceipt}
+              className="flex-1 h-12 items-center justify-center rounded-[16px] bg-[#206EFF]"
+              style={{ opacity: printingReceipt || downloadingReceipt ? 0.6 : 1 }}
+            >
+              {printingReceipt ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text className="text-sm font-bold uppercase text-white">
+                  Print receipt
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
 
         {ride.canRateDriver ? (

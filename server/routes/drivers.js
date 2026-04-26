@@ -387,6 +387,33 @@ router.post('/push-token', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/fcm-token', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const fcmToken = String(req.body?.fcmToken || '').trim();
+    if (!fcmToken) {
+      return res.status(400).json({ error: 'fcmToken is required' });
+    }
+
+    const nextMeta = await mergePrivateMetadata(req.userId, {
+      fcmToken,
+    });
+
+    console.log('[drivers.fcm-token] saved', {
+      driverUserId: req.userId,
+      hasToken: !!(nextMeta.fcmToken || fcmToken),
+      tokenPreview: String(nextMeta.fcmToken || fcmToken).slice(0, 18),
+    });
+
+    return res.status(201).json({ fcmToken: nextMeta.fcmToken || fcmToken });
+  } catch (err) {
+    console.error('POST /api/drivers/fcm-token', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/ride-requests', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
