@@ -37,3 +37,6 @@ yarn-error.*
 .DS_Store
 *.pem
 *.tsbuildinfo
+
+
+trust-vehicles-app-firebase-adminsdk-fbsvc-fbf7550e60.json
