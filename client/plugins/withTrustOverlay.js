@@ -22,20 +22,46 @@ function patchMainApplication(contents, androidPackage, language) {
   const packageAddLine = language === 'java'
     ? 'packages.add(new TrustOverlayPackage());'
     : 'packages.add(TrustOverlayPackage())';
+  const applyAddLine = 'add(TrustOverlayPackage())';
 
-  if (!contents.includes(packageAddLine)) {
+  if (!contents.includes(packageAddLine) && !contents.includes(applyAddLine)) {
     const nextContents = contents.replace(
       /^(\s*)return packages\s*$/m,
       (_match, indent) => `${indent}${packageAddLine}\n${indent}return packages`
     );
     if (nextContents !== contents) {
       contents = nextContents;
+    } else if (language !== 'java') {
+      let kotlinContents = contents.replace(
+        /^(\s*.*PackageList\(this\)\.packages\.apply\s*\{\s*)$/m,
+        (_match, line) => `${line}\n${line.match(/^\s*/)[0]}  ${applyAddLine}`
+      );
+
+      if (kotlinContents === contents) {
+        kotlinContents = contents.replace(
+          /^(\s*)override fun getPackages\(\):\s*(?:Mutable)?List<ReactPackage>\s*=\s*PackageList\(this\)\.packages\s*$/m,
+          (_match, indent) => `${indent}override fun getPackages(): List<ReactPackage> =\n${indent}  PackageList(this).packages.apply {\n${indent}    ${applyAddLine}\n${indent}  }`
+        );
+      }
+
+      if (kotlinContents === contents) {
+        kotlinContents = contents.replace(
+          /^(\s*)return PackageList\(this\)\.packages\s*$/m,
+          (_match, indent) => `${indent}val packages = PackageList(this).packages\n${indent}${packageAddLine}\n${indent}return packages`
+        );
+      }
+
+      contents = kotlinContents;
     } else if (language === 'java') {
       contents = contents.replace(
         /^(\s*)return new PackageList\(this\)\.getPackages\(\);$/m,
         (_match, indent) => `${indent}List<ReactPackage> packages = new PackageList(this).getPackages();\n${indent}${packageAddLine}\n${indent}return packages;`
       );
     }
+  }
+
+  if (!contents.includes(packageAddLine) && !contents.includes(applyAddLine)) {
+    throw new Error('Trust overlay plugin could not register TrustOverlayPackage in MainApplication.');
   }
 
   return contents;
@@ -48,7 +74,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -57,8 +82,11 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.LinearLayout;
-import android.widget.TextView;
+import android.view.animation.AlphaAnimation;
+import android.view.animation.Animation;
+import android.view.animation.AnimationSet;
+import android.view.animation.ScaleAnimation;
+import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
 
@@ -73,10 +101,8 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
   private final ReactApplicationContext reactContext;
   private WindowManager windowManager;
   private View overlayView;
-  private TextView titleView;
-  private TextView subtitleView;
-  private TextView metaView;
   private WindowManager.LayoutParams layoutParams;
+  private String currentVariant = "";
 
   private int initialX;
   private int initialY;
@@ -110,17 +136,35 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     return fallback;
   }
 
-  private void updateText(ReadableMap config) {
-    if (titleView == null || subtitleView == null || metaView == null) return;
+  private String getVariant(ReadableMap config) {
+    String variant = getMapString(config, "variant", "online").trim().toLowerCase();
+    if (variant.equals("request")) return "request";
+    return "online";
+  }
 
-    String title = getMapString(config, "title", "Trust Express");
-    String subtitle = getMapString(config, "subtitle", "Active trip");
-    String meta = getMapString(config, "meta", "");
+  private void renderVariant(FrameLayout container, String variant) {
+    if (variant.equals(currentVariant) && container.getChildCount() > 0) return;
 
-    titleView.setText(title);
-    subtitleView.setText(subtitle);
-    metaView.setText(meta);
-    metaView.setVisibility(meta.length() > 0 ? View.VISIBLE : View.GONE);
+    currentVariant = variant;
+    container.removeAllViews();
+
+    if (variant.equals("request")) {
+      container.addView(createPulseRing(88, "#5522C55E", 1.55f, 0.46f, 0.06f, 820, 0));
+      container.addView(createPulseRing(70, "#7722C55E", 1.32f, 0.36f, 0.08f, 820, 180));
+      container.addView(createCenterCircle("#16A34A", "#DCFCE7", 64));
+      container.addView(createBadge());
+      return;
+    }
+
+    container.addView(createPulseRing(86, "#33206EFF", 1.28f, 0.32f, 0.04f, 1600, 0));
+    container.addView(createPulseRing(70, "#55206EFF", 1.18f, 0.26f, 0.06f, 1600, 420));
+    container.addView(createCenterCircle("#206EFF", "#E8F0FF", 58));
+  }
+
+  private void updateOverlay(ReadableMap config) {
+    if (!(overlayView instanceof FrameLayout)) return;
+
+    renderVariant((FrameLayout) overlayView, getVariant(config));
   }
 
   private void openApp() {
@@ -130,38 +174,85 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     reactContext.startActivity(launchIntent);
   }
 
-  private View createOverlayView() {
-    LinearLayout container = new LinearLayout(reactContext);
-    container.setOrientation(LinearLayout.VERTICAL);
-    container.setPadding(dp(14), dp(10), dp(14), dp(10));
-
+  private View createPulseRing(
+    int sizeDp,
+    String color,
+    float maxScale,
+    float startAlpha,
+    float endAlpha,
+    long duration,
+    long startOffset
+  ) {
+    View ring = new View(reactContext);
     GradientDrawable background = new GradientDrawable();
-    background.setColor(Color.parseColor("#206EFF"));
-    background.setCornerRadius(dp(18));
-    container.setBackground(background);
+    background.setShape(GradientDrawable.OVAL);
+    background.setColor(Color.parseColor(color));
+    ring.setBackground(background);
+
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(sizeDp), dp(sizeDp), Gravity.CENTER);
+    ring.setLayoutParams(params);
+
+    AnimationSet pulse = new AnimationSet(true);
+    ScaleAnimation scale = new ScaleAnimation(
+      1f,
+      maxScale,
+      1f,
+      maxScale,
+      Animation.RELATIVE_TO_SELF,
+      0.5f,
+      Animation.RELATIVE_TO_SELF,
+      0.5f
+    );
+    AlphaAnimation fade = new AlphaAnimation(startAlpha, endAlpha);
+    pulse.addAnimation(scale);
+    pulse.addAnimation(fade);
+    pulse.setDuration(duration);
+    pulse.setRepeatCount(Animation.INFINITE);
+    pulse.setRepeatMode(Animation.RESTART);
+    pulse.setStartOffset(startOffset);
+    ring.startAnimation(pulse);
+
+    return ring;
+  }
+
+  private View createCenterCircle(String color, String strokeColor, int sizeDp) {
+    View circle = new View(reactContext);
+    GradientDrawable background = new GradientDrawable();
+    background.setShape(GradientDrawable.OVAL);
+    background.setColor(Color.parseColor(color));
+    background.setStroke(dp(2), Color.parseColor(strokeColor));
+    circle.setBackground(background);
+    circle.setElevation(dp(10));
+    circle.setLayoutParams(new FrameLayout.LayoutParams(dp(sizeDp), dp(sizeDp), Gravity.CENTER));
+    return circle;
+  }
+
+  private View createBadge() {
+    View badge = new View(reactContext);
+    GradientDrawable background = new GradientDrawable();
+    background.setShape(GradientDrawable.OVAL);
+    background.setColor(Color.parseColor("#EF4444"));
+    background.setStroke(dp(3), Color.WHITE);
+    badge.setBackground(background);
+    badge.setElevation(dp(12));
+
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.END);
+    params.setMargins(0, dp(16), dp(16), 0);
+    badge.setLayoutParams(params);
+    return badge;
+  }
+
+  private View createOverlayView() {
+    FrameLayout container = new FrameLayout(reactContext);
+    container.setClipChildren(false);
+    container.setClipToPadding(false);
+    container.setPadding(dp(4), dp(4), dp(4), dp(4));
+    container.setLayoutParams(new FrameLayout.LayoutParams(dp(116), dp(116)));
+    container.setMinimumWidth(dp(116));
+    container.setMinimumHeight(dp(116));
     container.setElevation(dp(8));
 
-    titleView = new TextView(reactContext);
-    titleView.setTextColor(Color.WHITE);
-    titleView.setTextSize(14);
-    titleView.setTypeface(Typeface.DEFAULT_BOLD);
-    titleView.setMaxLines(1);
-
-    subtitleView = new TextView(reactContext);
-    subtitleView.setTextColor(Color.WHITE);
-    subtitleView.setTextSize(12);
-    subtitleView.setAlpha(0.92f);
-    subtitleView.setMaxLines(1);
-
-    metaView = new TextView(reactContext);
-    metaView.setTextColor(Color.WHITE);
-    metaView.setTextSize(12);
-    metaView.setTypeface(Typeface.DEFAULT_BOLD);
-    metaView.setMaxLines(1);
-
-    container.addView(titleView);
-    container.addView(subtitleView);
-    container.addView(metaView);
+    renderVariant(container, "online");
 
     container.setOnTouchListener((view, event) -> {
       if (layoutParams == null || windowManager == null) return false;
@@ -247,7 +338,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
           windowManager.addView(overlayView, layoutParams);
         }
 
-        updateText(config);
+        updateOverlay(config);
         promise.resolve(true);
       } catch (Exception error) {
         promise.reject("overlay_show_failed", error);
@@ -263,7 +354,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
           promise.resolve(false);
           return;
         }
-        updateText(config);
+        updateOverlay(config);
         promise.resolve(true);
       } catch (Exception error) {
         promise.reject("overlay_update_failed", error);
@@ -279,9 +370,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
           windowManager.removeView(overlayView);
         }
         overlayView = null;
-        titleView = null;
-        subtitleView = null;
-        metaView = null;
+        currentVariant = "";
         layoutParams = null;
         promise.resolve(true);
       } catch (Exception error) {
@@ -379,7 +468,7 @@ public class RideRequestFullScreenActivity extends Activity {
     if (pickup != null || dropoff != null) {
       TextView routeView = new TextView(this);
       String routeText = "";
-      if (pickup != null) routeText += "From: " + pickup + "\n";
+      if (pickup != null) routeText += "From: " + pickup + "\\n";
       if (dropoff != null) routeText += "To: " + dropoff;
       routeView.setText(routeText.trim());
       routeView.setTextColor(Color.parseColor("#CCCCCC"));
@@ -488,3 +577,6 @@ function withTrustOverlay(config) {
 }
 
 module.exports = withTrustOverlay;
+module.exports.patchMainApplication = patchMainApplication;
+module.exports.overlayModuleSource = overlayModuleSource;
+module.exports.fullScreenActivitySource = fullScreenActivitySource;

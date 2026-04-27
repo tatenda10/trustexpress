@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image } from 'react-native';
+import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
@@ -24,6 +24,7 @@ import {
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
+import { updateTripOverlay } from '../../services/tripOverlay';
 
 const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
 const REQUEST_REFRESH_INTERVAL_MS = 2500;
@@ -769,6 +770,29 @@ const DriverHomeScreen = ({ navigation, route }) => {
       stopIncomingAlert();
     };
   }, [availableRequests.length, currentRide, isFocused, isOnline, pendingSelectionRide]);
+
+  useEffect(() => {
+    if (!isOnline) return undefined;
+
+    const hasIncomingRideRequest = !currentRide && !pendingSelectionRide && availableRequests.length > 0;
+    const nextVariant = hasIncomingRideRequest ? 'request' : 'online';
+    let backgroundSyncTimeout = null;
+    const syncOverlayVariant = () => {
+      updateTripOverlay({ variant: nextVariant }).catch(() => {});
+    };
+
+    syncOverlayVariant();
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'background') {
+        backgroundSyncTimeout = setTimeout(syncOverlayVariant, 250);
+      }
+    });
+
+    return () => {
+      if (backgroundSyncTimeout) clearTimeout(backgroundSyncTimeout);
+      subscription?.remove();
+    };
+  }, [availableRequests.length, currentRide?.id, isOnline, pendingSelectionRide?.id]);
 
   useEffect(() => {
     if (!isOnline || activeRequest || currentRide || pendingSelectionRide) {

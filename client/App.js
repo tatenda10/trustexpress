@@ -52,12 +52,19 @@ import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
 import {
   isTripOverlaySupported,
+  getTripOverlaySupportInfo,
   canUseTripOverlay,
   showTripOverlay,
+  updateTripOverlay,
   hideTripOverlay,
 } from './services/tripOverlay';
 
 const Stack = createNativeStackNavigator();
+
+function isDriverStatusOnline(status) {
+  const value = status?.availability?.isOnline ?? status?.isOnline;
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
 
 // Auth Stack (for unauthenticated users)
 function AuthStack() {
@@ -304,6 +311,7 @@ function AppStack() {
         data,
       });
       if (data?.type === 'driver_new_ride_request' && isDriver) {
+        updateTripOverlay({ variant: 'request' }).catch(() => {});
         openDriverIncomingRequest();
       }
     });
@@ -328,14 +336,16 @@ function AppStack() {
 
   // Background overlay for online drivers
   useEffect(() => {
-    if (Platform.OS !== 'android' || !isTripOverlaySupported()) {
-      console.log('[BackgroundOverlay] Not supported or not Android');
+    const driverIsOnline = isDriverStatusOnline(driverStatus);
+    const overlaySupported = Platform.OS === 'android' && isTripOverlaySupported();
+    if (!overlaySupported) {
+      console.log('[BackgroundOverlay] Not supported', getTripOverlaySupportInfo());
       return;
     }
 
     const handleAppStateChange = async (nextAppState) => {
-      console.log('[BackgroundOverlay] App state changed:', nextAppState, { isDriver, driverStatus });
-      if (nextAppState === 'background' && isDriver && driverStatus?.isOnline) {
+      console.log('[BackgroundOverlay] App state changed:', nextAppState, { isDriver, driverIsOnline });
+      if (nextAppState === 'background' && isDriver && driverIsOnline) {
         console.log('[BackgroundOverlay] Showing overlay for online driver');
         // Show overlay when going to background and driver is online
         const canShow = await canUseTripOverlay();
@@ -345,6 +355,7 @@ function AppStack() {
             title: 'Trust Express',
             subtitle: 'Online - Ready for rides',
             meta: 'Tap to return to app',
+            variant: 'online',
           });
           console.log('[BackgroundOverlay] Overlay shown');
         } else {
@@ -360,7 +371,7 @@ function AppStack() {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
 
     // Initial check in case app starts in background (unlikely but safe)
-    if (AppState.currentState === 'background' && isDriver && driverStatus?.isOnline) {
+    if (AppState.currentState === 'background' && isDriver && driverIsOnline) {
       console.log('[BackgroundOverlay] App started in background with online driver');
       canUseTripOverlay().then(async (canShow) => {
         console.log('[BackgroundOverlay] Initial canShow:', canShow);
@@ -369,6 +380,7 @@ function AppStack() {
             title: 'Trust Express',
             subtitle: 'Online - Ready for rides',
             meta: 'Tap to return to app',
+            variant: 'online',
           });
           console.log('[BackgroundOverlay] Initial overlay shown');
         }
@@ -379,7 +391,7 @@ function AppStack() {
       console.log('[BackgroundOverlay] Cleaning up subscription');
       subscription?.remove();
     };
-  }, [isDriver, driverStatus?.isOnline]);
+  }, [isDriver, driverStatus?.availability?.isOnline, driverStatus?.isOnline]);
 
   useEffect(() => {
     let cancelled = false;

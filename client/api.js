@@ -1,7 +1,7 @@
 /**
  * Backend connection - BASE_URL and helpers for API routes.
  */
-export const BASE_URL = 'http://192.168.100.35:5000';
+export const BASE_URL = 'https://ridehailcarsserver.online';
 
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;

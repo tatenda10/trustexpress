@@ -1,21 +1,46 @@
 import { NativeModules, Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-const overlayModule = NativeModules.TrustOverlay;
+let unsupportedLogged = false;
+
+function getOverlayModule() {
+  return NativeModules.TrustOverlay;
+}
+
+export function getTripOverlaySupportInfo() {
+  const matchingNativeModules = Object.keys(NativeModules || {})
+    .filter((key) => /trust|overlay/i.test(key))
+    .sort();
+
+  return {
+    platform: Platform.OS,
+    appOwnership: Constants.appOwnership || null,
+    hasNativeModule: !!getOverlayModule(),
+    matchingNativeModules,
+  };
+}
 
 function isSupported() {
   const isAndroid = Platform.OS === 'android';
-  const hasModule = !!overlayModule;
+  const hasModule = !!getOverlayModule();
   const isExpoGo = Constants.appOwnership === 'expo';
   const supported = isAndroid && hasModule && !isExpoGo;
   return supported;
 }
 
+function logUnsupported(source) {
+  if (unsupportedLogged) return;
+  unsupportedLogged = true;
+  console.log(`[TripOverlay] ${source}: unsupported`, getTripOverlaySupportInfo());
+}
+
 function normalizePayload(payload = {}) {
+  const variant = String(payload.variant || 'online').trim().toLowerCase();
   return {
     title: String(payload.title || 'Trust Express'),
     subtitle: String(payload.subtitle || 'Active trip'),
     meta: String(payload.meta || ''),
+    variant: variant === 'request' ? 'request' : 'online',
   };
 }
 
@@ -25,10 +50,11 @@ export function isTripOverlaySupported() {
 
 export async function canUseTripOverlay() {
   if (!isSupported()) {
-    console.log('[TripOverlay] Not supported');
+    logUnsupported('canUseTripOverlay');
     return false;
   }
   try {
+    const overlayModule = getOverlayModule();
     const result = await overlayModule.canDrawOverlays();
     console.log('[TripOverlay] canDrawOverlays result:', result);
     return result;
@@ -41,6 +67,7 @@ export async function canUseTripOverlay() {
 export async function openTripOverlaySettings() {
   if (!isSupported()) return false;
   try {
+    const overlayModule = getOverlayModule();
     await overlayModule.openOverlaySettings();
     return true;
   } catch {
@@ -50,7 +77,7 @@ export async function openTripOverlaySettings() {
 
 export async function showTripOverlay(payload) {
   if (!isSupported()) {
-    console.log('[TripOverlay] showTripOverlay: Not supported');
+    logUnsupported('showTripOverlay');
     return false;
   }
   const canDraw = await canUseTripOverlay();
@@ -60,6 +87,7 @@ export async function showTripOverlay(payload) {
   }
 
   try {
+    const overlayModule = getOverlayModule();
     console.log('[TripOverlay] showTripOverlay: Showing overlay with payload:', payload);
     await overlayModule.show(normalizePayload(payload));
     console.log('[TripOverlay] showTripOverlay: Overlay shown successfully');
@@ -73,6 +101,7 @@ export async function showTripOverlay(payload) {
 export async function updateTripOverlay(payload) {
   if (!isSupported()) return false;
   try {
+    const overlayModule = getOverlayModule();
     return await overlayModule.update(normalizePayload(payload));
   } catch {
     return false;
@@ -81,11 +110,12 @@ export async function updateTripOverlay(payload) {
 
 export async function hideTripOverlay() {
   if (!isSupported()) {
-    console.log('[TripOverlay] hideTripOverlay: Not supported');
+    logUnsupported('hideTripOverlay');
     return false;
   }
 
   try {
+    const overlayModule = getOverlayModule();
     console.log('[TripOverlay] hideTripOverlay: Hiding overlay');
     await overlayModule.hide();
     console.log('[TripOverlay] hideTripOverlay: Overlay hidden successfully');

@@ -271,6 +271,16 @@ function areCoordinatesClose(left, right) {
   );
 }
 
+function areRegionsClose(left, right) {
+  if (!left || !right) return false;
+  return (
+    Math.abs(Number(left.latitude) - Number(right.latitude)) < 0.00001 &&
+    Math.abs(Number(left.longitude) - Number(right.longitude)) < 0.00001 &&
+    Math.abs(Number(left.latitudeDelta) - Number(right.latitudeDelta)) < 0.00001 &&
+    Math.abs(Number(left.longitudeDelta) - Number(right.longitudeDelta)) < 0.00001
+  );
+}
+
 function stripRoutePrefix(label) {
   return String(label || '')
     .replace(/^Pickup:\s*/i, '')
@@ -544,6 +554,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const searchTimeoutRef = useRef(null);
   const placesSessionTokenRef = useRef(generatePlacesSessionToken());
   const resumeCheckInFlightRef = useRef(false);
+  const getTokenRef = useRef(getToken);
 
   const [mapRegion, setMapRegion] = useState(HARARE_FALLBACK);
   const [currentLocationCoordinate, setCurrentLocationCoordinate] = useState(null);
@@ -568,6 +579,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [recentTrips, setRecentTrips] = useState([]);
 
   useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
+  useEffect(() => {
     if (!isFocused) return undefined;
     let active = true;
 
@@ -575,7 +590,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       if (resumeCheckInFlightRef.current) return;
       resumeCheckInFlightRef.current = true;
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current?.();
         if (!token || !active) return;
         const data = await getPassengerCurrentRide(token);
         const ride = data?.rideRequest;
@@ -636,7 +651,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       clearInterval(interval);
       resumeCheckInFlightRef.current = false;
     };
-  }, [getToken, isFocused, navigation]);
+  }, [isFocused, navigation]);
 
   useEffect(() => {
     let active = true;
@@ -697,7 +712,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
     const loadNearbyDrivers = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current?.();
         if (!token || !active) return;
         const data = await getNearbyPassengerDrivers(token, {
           latitude: anchor.latitude,
@@ -719,13 +734,13 @@ export default function PassengerHomeScreen({ navigation, route }) {
       active = false;
       clearInterval(interval);
     };
-  }, [currentLocationCoordinate, getToken, pickupCoordinate]);
+  }, [currentLocationCoordinate, pickupCoordinate]);
 
   useEffect(() => {
     let active = true;
     const loadRecentTrips = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current?.();
         if (!token || !active) return;
         const data = await getPassengerRideHistory(token, { page: 1, limit: 6 });
         if (!active) return;
@@ -754,7 +769,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     return () => {
       active = false;
     };
-  }, [getToken]);
+  }, []);
 
   // Load Google route (polyline + route-based distance/duration for pricing)
   useEffect(() => {
@@ -769,7 +784,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
     const loadRoute = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current?.();
         const result = await fetchRideRoute(token, pickupCoordinate, dropoffCoordinate);
         if (cancelled) return;
 
@@ -793,7 +808,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, getToken, pickupCoordinate]);
+  }, [dropoffCoordinate, pickupCoordinate]);
 
   useEffect(() => {
     const query = (activeField === 'pickup' ? pickupQuery : destinationQuery).trim();
@@ -947,6 +962,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
     mapRef.current?.animateToRegion(nextRegion, 400);
   };
 
+  const handleRegionChangeComplete = (region) => {
+    setMapRegion((current) => (areRegionsClose(current, region) ? current : region));
+  };
+
   const openChooseRideScreen = () => {
     if (!pickupCoordinate || !dropoffCoordinate) {
       Alert.alert('Missing route', 'Set your pickup and destination first.');
@@ -971,7 +990,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={mapRegion}
-          onRegionChangeComplete={(region) => setMapRegion(region)}
+          onRegionChangeComplete={handleRegionChangeComplete}
           onPress={handleMapPress}
           showsCompass={false}
           toolbarEnabled={false}
@@ -1220,7 +1239,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                         const rerun = async () => {
                           let token = null;
                           for (let attempt = 0; attempt < 3; attempt += 1) {
-                            token = await getToken();
+                            token = await getTokenRef.current?.();
                             if (token) break;
                             await new Promise((resolve) => setTimeout(resolve, 450));
                           }

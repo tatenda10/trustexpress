@@ -6,17 +6,25 @@ const GOOGLE_MAPS_DIRECTIONS_API_KEY =
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_DIRECTIONS_API_KEY ||
   process.env.ANDROID_GOOGLE_MAPS_API_KEY ||
   ANDROID_GOOGLE_MAPS_API_KEY;
+const TRUST_OVERLAY_PLUGIN = './plugins/withTrustOverlay';
 
-module.exports = () => {
-  const expo = appJson.expo || {};
+function hasPlugin(plugins, pluginName) {
+  return plugins.some((plugin) => {
+    if (Array.isArray(plugin)) return plugin[0] === pluginName;
+    return plugin === pluginName;
+  });
+}
+
+module.exports = ({ config } = {}) => {
+  const expo = config || appJson.expo || {};
   const projectId = expo.extra?.eas?.projectId || 'ea348ba3-a2a2-4924-882c-6fbc5eb8384c';
+  const basePlugins = expo.plugins || [];
 
   return {
     ...expo,
-    plugins: [
-      ...(expo.plugins || []),
-      './plugins/withTrustOverlay',
-    ],
+    plugins: hasPlugin(basePlugins, TRUST_OVERLAY_PLUGIN)
+      ? basePlugins
+      : [...basePlugins, TRUST_OVERLAY_PLUGIN],
     updates: {
       ...(expo.updates || {}),
       url: `https://u.expo.dev/${projectId}`,
