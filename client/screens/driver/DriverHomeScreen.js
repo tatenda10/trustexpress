@@ -9,7 +9,6 @@ import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
-import Constants from 'expo-constants';
 import { connectRealtime } from '../../realtime';
 import { showLocalRideNotification } from '../../notifications';
 import {
@@ -79,15 +78,6 @@ function formatCountdown(totalSeconds) {
   const minutes = Math.floor(safeSeconds / 60);
   const seconds = safeSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function getDirectionsApiKey() {
-  return (
-    Constants.expoConfig?.extra?.googleMapsDirectionsApiKey ||
-    Constants.expoConfig?.android?.config?.googleMaps?.apiKey ||
-    Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
-    ''
-  );
 }
 
 /** Open Location Code style names Android often returns from reverse geocode (e.g. 428R+4V9). */
@@ -164,102 +154,27 @@ function getAvailabilityErrorMessage(nextOnline, error) {
 }
 
 async function fetchNicePlaceLabel(coordinate) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !coordinate) return null;
-
-  const { latitude, longitude } = coordinate;
-  const latlng = `${latitude},${longitude}`;
+  if (!coordinate) return null;
 
   try {
-    // 1) Try a nearby place first (POI-style label).
-    const nearbyParams = new URLSearchParams({
-      location: latlng,
-      rankby: 'distance',
-      key: apiKey,
-    });
+    const places = await Location.reverseGeocodeAsync(coordinate);
+    const place = places?.[0];
+    if (!place) return null;
 
-    const nearbyRes = await fetch(
-      `https://maps.googleapis.com/maps/api/place/nearbysearch/json?${nearbyParams.toString()}`
-    );
-    const nearbyJson = await nearbyRes.json().catch(() => ({}));
+    const safeName = looksLikePlusCode(place.name) ? null : place.name;
+    const street = [place.streetNumber, place.street].filter(Boolean).join(' ').trim();
+    const parts = [
+      street,
+      safeName,
+      place.district,
+      place.subregion,
+      place.city,
+    ].filter(Boolean);
 
-    if (nearbyJson?.status === 'OK' && Array.isArray(nearbyJson.results)) {
-      const poi = nearbyJson.results.find((place) => {
-        const name = place?.name || '';
-        if (!name) return false;
-        if (looksLikePlusCode(name)) return false;
-        const lower = name.toLowerCase();
-        if (lower.includes('unnamed') || lower.includes('unknown')) return false;
-        return true;
-      });
-
-      if (poi) {
-        const name = poi.name;
-        const vicinityRaw = (poi.vicinity || '').trim();
-        const cleanedVicinity = stripLeadingPlusCodeFromLabel(vicinityRaw) || vicinityRaw;
-        const candidate = cleanedVicinity ? `${name}, ${cleanedVicinity}` : name;
-        const nice = cleanLocationLabelCandidate(candidate);
-        if (nice) return nice;
-      }
-    }
+    return cleanLocationLabelCandidate(parts.slice(0, 3).join(', '));
   } catch {
-    // Ignore and fall back to reverse geocode.
+    return null;
   }
-
-  try {
-    // 2) Fallback: reverse geocode to a street address-style label.
-    const geocodeParams = new URLSearchParams({
-      latlng,
-      key: apiKey,
-    });
-
-    const geoRes = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?${geocodeParams.toString()}`
-    );
-    const geoJson = await geoRes.json().catch(() => ({}));
-
-    if (geoJson?.status === 'OK' && Array.isArray(geoJson.results) && geoJson.results[0]) {
-      const result =
-        geoJson.results.find((r) =>
-          Array.isArray(r.types) &&
-          (r.types.includes('street_address') || r.types.includes('route'))
-        ) || geoJson.results[0];
-
-      const components = Array.isArray(result.address_components)
-        ? result.address_components
-        : [];
-
-      function pick(type) {
-        const comp = components.find((c) => c.types && c.types.includes(type));
-        return comp ? comp.long_name : '';
-      }
-
-      const streetNumber = pick('street_number');
-      const route = pick('route');
-      const sublocality = pick('sublocality') || pick('sublocality_level_1');
-      const locality = pick('locality') || pick('administrative_area_level_2');
-
-      const parts = [];
-      if (route || streetNumber) {
-        parts.push([streetNumber, route].filter(Boolean).join(' ').trim());
-      }
-      if (sublocality) parts.push(sublocality);
-      if (locality) parts.push(locality);
-
-      const label = parts.filter(Boolean).join(', ');
-      const niceLabel = cleanLocationLabelCandidate(label);
-      if (niceLabel) return niceLabel;
-
-      if (result.formatted_address) {
-        const niceFormatted = cleanLocationLabelCandidate(result.formatted_address);
-        if (niceFormatted) return niceFormatted;
-      }
-    }
-  } catch {
-    // Final fallback will be coordinates.
-  }
-
-  return null;
 }
 
 async function fetchRouteCoordinates(token, origin, destination) {

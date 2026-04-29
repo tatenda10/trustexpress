@@ -18,23 +18,22 @@ import { useIsFocused } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
-import Constants from 'expo-constants';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { getDirectionsRoute, getNearbyPassengerDrivers, getPassengerCurrentRide, getPassengerRideHistory } from '../../api';
+import {
+  getDirectionsRoute,
+  getNearbyPassengerDrivers,
+  getPassengerCurrentRide,
+  getPassengerRideHistory,
+  getPlaceAutocomplete,
+  getPlaceDetails,
+} from '../../api';
 
 const HARARE_FALLBACK = {
   latitude: -20.1535,
   longitude: 28.5870,
   latitudeDelta: 0.12,
   longitudeDelta: 0.12,
-};
-
-const ZIMBABWE_BOUNDS = {
-  minLatitude: -22.5,
-  maxLatitude: -15.3,
-  minLongitude: 25.0,
-  maxLongitude: 33.2,
 };
 
 function toRadians(value) {
@@ -56,39 +55,15 @@ function calculateDistanceKm(start, end) {
   return earthRadiusKm * c;
 }
 
-function getDirectionsApiKey() {
-  return (
-    Constants.expoConfig?.extra?.googleMapsDirectionsApiKey ||
-    Constants.expoConfig?.android?.config?.googleMaps?.apiKey ||
-    Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
-    ''
-  );
-}
-
 function generatePlacesSessionToken() {
   return `trustcars-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-const ZIMBABWE_CITY_TERMS = [
-  'harare',
-  'bulawayo',
-  'mutare',
-  'gweru',
-  'masvingo',
-  'chinhoyi',
-  'bindura',
-  'kadoma',
-  'kariba',
-  'hwange',
-  'beitbridge',
-  'victoria falls',
-  'marondera',
-  'rusape',
-  'redcliff',
-  'chegutu',
-  'kwekwe',
-  'plumtree',
-];
+const PLACE_SEARCH_MIN_CHARS = 3;
+const PLACE_SEARCH_DEBOUNCE_MS = 700;
+const PLACE_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const PLACE_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_PLACE_CACHE_ENTRIES = 80;
 
 function normalizeSearchText(value) {
   return String(value || '')
@@ -96,114 +71,6 @@ function normalizeSearchText(value) {
     .replace(/[^a-z0-9\s,]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function looksLikeSpecificStreetAddress(query) {
-  const normalized = normalizeSearchText(query);
-  if (!normalized) return false;
-  const startsWithNumber = /^\d+[a-z]?\s+/i.test(normalized);
-  const hasStreetTerm = /\b(road|rd|street|st|avenue|ave|drive|dr|close|crescent|way|lane|ln)\b/i.test(normalized);
-  return startsWithNumber && hasStreetTerm;
-}
-
-function getLocationTerms(locationContext) {
-  return [
-    locationContext?.district,
-    locationContext?.city,
-    locationContext?.region,
-  ]
-    .map((item) => normalizeSearchText(item))
-    .filter(Boolean);
-}
-
-function extractMentionedZimbabweCities(query) {
-  const normalized = normalizeSearchText(query);
-  return ZIMBABWE_CITY_TERMS.filter((city) => normalized.includes(city));
-}
-
-function isExplicitIntercityQuery(query, locationContext) {
-  const mentionedCities = extractMentionedZimbabweCities(query);
-  if (!mentionedCities.length) return false;
-  const localTerms = getLocationTerms(locationContext);
-  return mentionedCities.some((city) => !localTerms.some((term) => term.includes(city) || city.includes(term)));
-}
-
-function rankAutocompletePredictions(predictions, query, locationContext, broadSearch) {
-  const normalizedQuery = normalizeSearchText(query);
-  const localTerms = getLocationTerms(locationContext);
-
-  return (predictions || [])
-    .map((prediction, index) => {
-      const mainText = normalizeSearchText(prediction.structured_formatting?.main_text || prediction.description || '');
-      const secondaryText = normalizeSearchText(prediction.structured_formatting?.secondary_text || prediction.description || '');
-      let score = 0;
-
-      if (mainText.startsWith(normalizedQuery)) score += 8;
-      if (mainText.includes(normalizedQuery)) score += 5;
-      if (secondaryText.includes(normalizedQuery)) score += 2;
-
-      if (!broadSearch && localTerms.length) {
-        if (localTerms.some((term) => secondaryText.includes(term))) score += 14;
-        if (localTerms.some((term) => mainText.includes(term))) score += 6;
-      }
-
-      if (looksLikeSpecificStreetAddress(query) && /^\d+[a-z]?\s+/i.test(mainText)) {
-        score += 12;
-      }
-
-      return { prediction, index, score };
-    })
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .map((item) => item.prediction);
-}
-
-async function fetchGeocodedSuggestions(query, originCoordinate, locationContext, broadSearch) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey) return [];
-
-  const normalized = String(query || '').trim();
-  if (!normalized) return [];
-
-  const geocodeQuery = `${normalized}, Zimbabwe`;
-
-  const params = new URLSearchParams({
-    address: geocodeQuery,
-    key: apiKey,
-    components: 'country:ZW',
-  });
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-  const results = Array.isArray(payload?.results) ? payload.results : [];
-
-  if (!response.ok || payload?.status !== 'OK' || !results.length) {
-    return [];
-  }
-
-  const suggestions = await Promise.all(
-    results.slice(0, 4).map(async (result, index) => {
-      const coordinate = {
-        latitude: result.geometry?.location?.lat,
-        longitude: result.geometry?.location?.lng,
-      };
-      if (!Number.isFinite(coordinate.latitude) || !Number.isFinite(coordinate.longitude)) {
-        return null;
-      }
-
-      const title = result.address_components?.[0]?.long_name || result.formatted_address || normalized;
-      const subtitle = result.formatted_address || 'Zimbabwe';
-
-      return {
-        id: `geocode-${index}-${coordinate.latitude}-${coordinate.longitude}`,
-        coordinate,
-        title,
-        subtitle,
-        distanceKm: originCoordinate ? calculateDistanceKm(originCoordinate, coordinate) : 0,
-      };
-    })
-  );
-
-  return suggestions.filter(Boolean);
 }
 
 async function fetchRideRoute(token, origin, destination) {
@@ -238,26 +105,6 @@ function buildRouteRegion(start, end) {
   };
 }
 
-function isWithinZimbabwe(coordinate) {
-  if (!coordinate) return false;
-  return (
-    coordinate.latitude >= ZIMBABWE_BOUNDS.minLatitude &&
-    coordinate.latitude <= ZIMBABWE_BOUNDS.maxLatitude &&
-    coordinate.longitude >= ZIMBABWE_BOUNDS.minLongitude &&
-    coordinate.longitude <= ZIMBABWE_BOUNDS.maxLongitude
-  );
-}
-
-function dedupeCoordinates(results) {
-  const seen = new Set();
-  return results.filter((item) => {
-    const key = `${item.latitude.toFixed(5)}:${item.longitude.toFixed(5)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function formatCoordinateLabel(prefix, coordinate) {
   if (!coordinate) return prefix;
   return `${prefix} (${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)})`;
@@ -279,6 +126,37 @@ function areRegionsClose(left, right) {
     Math.abs(Number(left.latitudeDelta) - Number(right.latitudeDelta)) < 0.00001 &&
     Math.abs(Number(left.longitudeDelta) - Number(right.longitudeDelta)) < 0.00001
   );
+}
+
+function placeCoordinateKey(coordinate) {
+  if (!coordinate) return 'none';
+  return `${Number(coordinate.latitude).toFixed(3)},${Number(coordinate.longitude).toFixed(3)}`;
+}
+
+function placeSearchCacheKey({ field, query, originCoordinate }) {
+  return [
+    String(field || 'destination'),
+    normalizeSearchText(query),
+    placeCoordinateKey(originCoordinate),
+  ].join('|');
+}
+
+function getFreshCacheValue(cache, key, ttlMs) {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.createdAt > ttlMs) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function setBoundedCacheValue(cache, key, value) {
+  cache.set(key, { createdAt: Date.now(), value });
+  while (cache.size > MAX_PLACE_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+  }
 }
 
 function stripRoutePrefix(label) {
@@ -337,108 +215,6 @@ async function getReadableLocationLabel(prefix, coordinate) {
   }
 }
 
-async function getLocationContext(coordinate) {
-  try {
-    const places = await Location.reverseGeocodeAsync(coordinate);
-    const place = places?.[0];
-    if (!place) return null;
-
-    return {
-      district: place.district || null,
-      city: place.city || null,
-      region: place.region || null,
-      country: place.country || 'Zimbabwe',
-    };
-  } catch (error) {
-    return null;
-  }
-}
-
-async function buildSuggestion(query, item, originCoordinate) {
-  const coordinate = {
-    latitude: item.latitude,
-    longitude: item.longitude,
-  };
-  let title = query;
-  let subtitle = `${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)}`;
-
-  try {
-    const places = await Location.reverseGeocodeAsync(coordinate);
-    const place = places?.[0];
-    if (place) {
-      const safeName = looksLikePlusCode(place.name) ? null : place.name;
-
-      const first =
-        [place.street, safeName]
-          .filter(Boolean)
-          .join(', ') ||
-        [safeName, place.district].filter(Boolean).join(', ');
-
-      const second = [place.district, place.city, place.region]
-        .filter(Boolean)
-        .join(', ');
-      if (first) title = first;
-      if (second) subtitle = second;
-    }
-  } catch (error) {
-    // fall back to coordinates
-  }
-
-  return {
-    id: `${coordinate.latitude}-${coordinate.longitude}-${title}`,
-    coordinate,
-    title,
-    subtitle,
-    distanceKm: originCoordinate ? calculateDistanceKm(originCoordinate, coordinate) : 0,
-  };
-}
-
-async function fetchGooglePlaceDetails(placeId, sessionToken) {
-  const apiKey = getDirectionsApiKey();
-  if (!apiKey || !placeId) return null;
-
-  const params = new URLSearchParams({
-    place_id: placeId,
-    fields: 'geometry/location,formatted_address,name,address_component',
-    key: apiKey,
-  });
-
-  if (sessionToken) {
-    params.append('sessiontoken', sessionToken);
-  }
-
-  const response = await fetch(`https://maps.googleapis.com/maps/api/place/details/json?${params.toString()}`);
-  const payload = await response.json().catch(() => ({}));
-  const result = payload?.result;
-  const location = result?.geometry?.location;
-
-  if (!response.ok || payload?.status !== 'OK' || !location) {
-    return null;
-  }
-
-  const coordinate = {
-    latitude: location.lat,
-    longitude: location.lng,
-  };
-
-  const components = Array.isArray(result.address_components) ? result.address_components : [];
-  const district = components.find((item) => item.types?.includes('sublocality') || item.types?.includes('locality'))?.long_name;
-  const city = components.find((item) => item.types?.includes('administrative_area_level_2') || item.types?.includes('locality'))?.long_name;
-  const region = components.find((item) => item.types?.includes('administrative_area_level_1'))?.long_name;
-
-  return {
-    coordinate,
-    title: result?.name || result?.formatted_address || 'Selected place',
-    subtitle: result?.formatted_address || '',
-    context: {
-      district: district || null,
-      city: city || null,
-      region: region || null,
-      country: 'Zimbabwe',
-    },
-  };
-}
-
 async function hydrateSuggestionDistances(items, originCoordinate) {
   if (!Array.isArray(items) || items.length === 0) {
     return items || [];
@@ -459,87 +235,19 @@ async function hydrateSuggestionDistances(items, originCoordinate) {
   return hydrated.sort((a, b) => (a.distanceKm || Number.MAX_SAFE_INTEGER) - (b.distanceKm || Number.MAX_SAFE_INTEGER));
 }
 
-async function searchZimbabweFirst(query, locationContext, originCoordinate, sessionToken) {
+async function searchZimbabweFirst(token, query, originCoordinate, sessionToken) {
   const normalized = query.trim();
   if (!normalized) return [];
+  if (!token) return [];
 
   try {
-    const apiKey = getDirectionsApiKey();
-    if (!apiKey) return [];
-    const broadSearch = isExplicitIntercityQuery(normalized, locationContext);
-    const params = new URLSearchParams({
-      input: normalized,
-      components: 'country:zw',
-      key: apiKey,
+    const data = await getPlaceAutocomplete(token, {
+      query: normalized,
+      originCoordinate,
+      sessionToken,
+      cacheTtlSeconds: PLACE_SEARCH_CACHE_TTL_MS / 1000,
     });
-
-    if (originCoordinate?.latitude && originCoordinate?.longitude) {
-      params.append('location', `${originCoordinate.latitude},${originCoordinate.longitude}`);
-      params.append('radius', broadSearch ? '50000' : '35000');
-    }
-
-    if (sessionToken) {
-      params.append('sessiontoken', sessionToken);
-    }
-
-    const response = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`);
-    const payload = await response.json().catch(() => ({}));
-    const predictions = rankAutocompletePredictions(
-      Array.isArray(payload?.predictions) ? payload.predictions : [],
-      normalized,
-      locationContext,
-      broadSearch,
-    );
-
-    if (response.ok && predictions.length > 0) {
-      const autocompleteSuggestions = predictions.slice(0, 6).map((prediction, index) => ({
-        id: prediction.place_id || `${prediction.description}-${index}`,
-        placeId: prediction.place_id,
-        title: prediction.structured_formatting?.main_text || prediction.description || normalized,
-        subtitle: prediction.structured_formatting?.secondary_text || prediction.description || 'Zimbabwe',
-        coordinate: null,
-        distanceKm: 0,
-      }));
-
-      return autocompleteSuggestions;
-    }
-
-    const fallbackCoords = [];
-    const textSearchParams = new URLSearchParams({
-      query: `${normalized}, Zimbabwe`,
-      key: apiKey,
-    });
-
-    if (originCoordinate?.latitude && originCoordinate?.longitude) {
-      textSearchParams.append('location', `${originCoordinate.latitude},${originCoordinate.longitude}`);
-      textSearchParams.append('radius', broadSearch ? '50000' : '35000');
-    }
-    const textSearchResponse = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?${textSearchParams.toString()}`);
-    const textSearchPayload = await textSearchResponse.json().catch(() => ({}));
-    if (textSearchResponse.ok && Array.isArray(textSearchPayload.results)) {
-      fallbackCoords.push(
-        ...textSearchPayload.results
-          .map((result) => ({
-            latitude: result.geometry?.location?.lat,
-            longitude: result.geometry?.location?.lng,
-          }))
-          .filter((item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude))
-      );
-    }
-
-    const deduped = dedupeCoordinates(fallbackCoords);
-    const inZimbabwe = deduped.filter((item) => isWithinZimbabwe(item));
-    const textSuggestions = await Promise.all(
-      (inZimbabwe.length ? inZimbabwe : deduped)
-        .slice(0, 6)
-        .map((item) => buildSuggestion(normalized, item, originCoordinate))
-    );
-
-    if (textSuggestions.length > 0) {
-      return textSuggestions;
-    }
-
-    return fetchGeocodedSuggestions(normalized, originCoordinate, locationContext, broadSearch);
+    return Array.isArray(data?.suggestions) ? data.suggestions : [];
   } catch {
     return [];
   }
@@ -555,6 +263,8 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const placesSessionTokenRef = useRef(generatePlacesSessionToken());
   const resumeCheckInFlightRef = useRef(false);
   const getTokenRef = useRef(getToken);
+  const placeSearchCacheRef = useRef(new Map());
+  const placeDetailsCacheRef = useRef(new Map());
 
   const [mapRegion, setMapRegion] = useState(HARARE_FALLBACK);
   const [currentLocationCoordinate, setCurrentLocationCoordinate] = useState(null);
@@ -571,7 +281,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSearchingSuggestions, setIsSearchingSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
-  const [pickupContext, setPickupContext] = useState(null);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [routeDistanceKm, setRouteDistanceKm] = useState(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState(null);
@@ -668,7 +377,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
           longitude: current.coords.longitude,
         };
         const label = await getReadableLocationLabel('Pickup', coordinate);
-        const context = await getLocationContext(coordinate);
         const nextRegion = buildRouteRegion(coordinate, null);
 
         setCurrentLocationCoordinate(coordinate);
@@ -676,7 +384,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
         setMapRegion(nextRegion);
         setPickupLabel(label);
         setPickupQuery(label.replace('Pickup: ', ''));
-        setPickupContext(context);
         setLocationError('');
         setTimeout(() => {
           mapRef.current?.animateToRegion(nextRegion, 500);
@@ -687,7 +394,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
         setPickupCoordinate(null);
         setPickupLabel('Pickup location unavailable');
         setPickupQuery('');
-        setPickupContext(null);
         setLocationError(error?.message || 'We could not detect your location.');
       } finally {
         if (active) setLoadingLocation(false);
@@ -812,8 +518,25 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
   useEffect(() => {
     const query = (activeField === 'pickup' ? pickupQuery : destinationQuery).trim();
-    if (!showRouteModal || query.length < 2) {
+    if (!showRouteModal || query.length < PLACE_SEARCH_MIN_CHARS) {
       setSuggestions([]);
+      setIsSearchingSuggestions(false);
+      return undefined;
+    }
+
+    const originCoordinate = currentLocationCoordinate || pickupCoordinate;
+    const cacheKey = placeSearchCacheKey({
+      field: activeField,
+      query,
+      originCoordinate,
+    });
+    const cachedSuggestions = getFreshCacheValue(
+      placeSearchCacheRef.current,
+      cacheKey,
+      PLACE_SEARCH_CACHE_TTL_MS,
+    );
+    if (cachedSuggestions) {
+      setSuggestions(cachedSuggestions);
       setIsSearchingSuggestions(false);
       return undefined;
     }
@@ -821,10 +544,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
     searchTimeoutRef.current = setTimeout(async () => {
       setIsSearchingSuggestions(true);
       try {
-        const originCoordinate = currentLocationCoordinate || pickupCoordinate;
+        const token = await getTokenRef.current?.();
         const results = await searchZimbabweFirst(
+          token,
           query,
-          pickupContext,
           originCoordinate,
           placesSessionTokenRef.current,
         );
@@ -832,18 +555,19 @@ export default function PassengerHomeScreen({ navigation, route }) {
           results,
           originCoordinate,
         );
+        setBoundedCacheValue(placeSearchCacheRef.current, cacheKey, hydratedResults);
         setSuggestions(hydratedResults);
       } catch (error) {
         setSuggestions([]);
       } finally {
         setIsSearchingSuggestions(false);
       }
-    }, 300);
+    }, PLACE_SEARCH_DEBOUNCE_MS);
 
     return () => {
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     };
-  }, [activeField, currentLocationCoordinate, destinationQuery, pickupContext, pickupCoordinate, pickupQuery, showRouteModal]);
+  }, [activeField, currentLocationCoordinate, destinationQuery, pickupCoordinate, pickupQuery, showRouteModal]);
 
   const straightLineKm = useMemo(
     () => calculateDistanceKm(pickupCoordinate, dropoffCoordinate),
@@ -867,7 +591,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
     setPickupCoordinate(coordinate);
     setPickupLabel(label);
     if (!pickupQuery.trim()) setPickupQuery(label.replace('Pickup: ', ''));
-    setPickupContext(await getLocationContext(coordinate));
     const nextRegion = buildRouteRegion(coordinate, dropoffCoordinate);
     setMapRegion(nextRegion);
     mapRef.current?.animateToRegion(nextRegion, 500);
@@ -905,10 +628,30 @@ export default function PassengerHomeScreen({ navigation, route }) {
     let resolvedSuggestion = suggestion;
 
     if (!resolvedSuggestion.coordinate && resolvedSuggestion.placeId) {
-      const details = await fetchGooglePlaceDetails(
-        resolvedSuggestion.placeId,
-        placesSessionTokenRef.current,
+      const detailsCacheKey = String(resolvedSuggestion.placeId);
+      let details = getFreshCacheValue(
+        placeDetailsCacheRef.current,
+        detailsCacheKey,
+        PLACE_DETAILS_CACHE_TTL_MS,
       );
+      if (!details) {
+        try {
+          const token = await getTokenRef.current?.();
+          const data = token
+            ? await getPlaceDetails(token, {
+                placeId: resolvedSuggestion.placeId,
+                sessionToken: placesSessionTokenRef.current,
+                cacheTtlSeconds: PLACE_DETAILS_CACHE_TTL_MS / 1000,
+              })
+            : null;
+          details = data?.place || null;
+          if (details) {
+            setBoundedCacheValue(placeDetailsCacheRef.current, detailsCacheKey, details);
+          }
+        } catch {
+          details = null;
+        }
+      }
 
       if (!details?.coordinate) {
         Alert.alert('Location unavailable', 'We could not load that place. Please try another result.');
@@ -1431,7 +1174,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     <View className="rounded-[22px] bg-white px-4 py-5">
                       <ActivityIndicator size="small" color={PRIMARY_BLUE} />
                     </View>
-                  ) : !suggestions.length && (activeField === 'pickup' ? pickupQuery : destinationQuery).trim().length >= 2 ? (
+                  ) : !suggestions.length && (activeField === 'pickup' ? pickupQuery : destinationQuery).trim().length >= PLACE_SEARCH_MIN_CHARS ? (
                     <View className="rounded-[22px] bg-white px-4 py-5">
                       <Text className="text-base font-semibold text-gray-900">No matching places yet</Text>
                       <Text className="mt-2 text-sm text-gray-500">

@@ -1,7 +1,7 @@
 /**
  * Backend connection - BASE_URL and helpers for API routes.
  */
-export const BASE_URL = 'https://ridehailcarsserver.online';
+export const BASE_URL = 'https://192.168.100.35:5000';
 
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
@@ -302,6 +302,20 @@ export async function findNearbyDrivers(token, payload) {
 
 export async function getDirectionsRoute(token, payload) {
   return apiFetch('/api/maps/directions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function getPlaceAutocomplete(token, payload) {
+  return apiFetch('/api/maps/places/autocomplete', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function getPlaceDetails(token, payload) {
+  return apiFetch('/api/maps/places/details', {
     method: 'POST',
     body: JSON.stringify(payload),
   }, token);

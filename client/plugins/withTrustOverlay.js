@@ -87,6 +87,7 @@ import android.view.animation.Animation;
 import android.view.animation.AnimationSet;
 import android.view.animation.ScaleAnimation;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
@@ -153,12 +154,14 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
       container.addView(createPulseRing(70, "#7722C55E", 1.32f, 0.36f, 0.08f, 820, 180));
       container.addView(createCenterCircle("#16A34A", "#DCFCE7", 64));
       container.addView(createBadge());
+      container.addView(createCloseButton());
       return;
     }
 
     container.addView(createPulseRing(86, "#33206EFF", 1.28f, 0.32f, 0.04f, 1600, 0));
     container.addView(createPulseRing(70, "#55206EFF", 1.18f, 0.26f, 0.06f, 1600, 420));
     container.addView(createCenterCircle("#206EFF", "#E8F0FF", 58));
+    container.addView(createCloseButton());
   }
 
   private void updateOverlay(ReadableMap config) {
@@ -172,6 +175,18 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     if (launchIntent == null) return;
     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
     reactContext.startActivity(launchIntent);
+  }
+
+  private void hideOverlay() {
+    if (windowManager != null && overlayView != null) {
+      try {
+        windowManager.removeView(overlayView);
+      } catch (Exception ignored) {
+      }
+    }
+    overlayView = null;
+    currentVariant = "";
+    layoutParams = null;
   }
 
   private View createPulseRing(
@@ -240,6 +255,35 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     params.setMargins(0, dp(16), dp(16), 0);
     badge.setLayoutParams(params);
     return badge;
+  }
+
+  private View createCloseButton() {
+    TextView button = new TextView(reactContext);
+    button.setText("×");
+    button.setTextSize(14);
+    button.setTextColor(Color.WHITE);
+    button.setGravity(Gravity.CENTER);
+    button.setTypeface(button.getTypeface(), android.graphics.Typeface.BOLD);
+
+    GradientDrawable background = new GradientDrawable();
+    background.setShape(GradientDrawable.OVAL);
+    background.setColor(Color.parseColor("#88000000"));
+    button.setBackground(background);
+    button.setElevation(dp(14));
+    button.setClickable(true);
+
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP | Gravity.END);
+    params.setMargins(0, dp(8), dp(8), 0);
+    button.setLayoutParams(params);
+
+    button.setOnTouchListener((view, event) -> {
+      if (event.getAction() == MotionEvent.ACTION_UP) {
+        hideOverlay();
+      }
+      return true;
+    });
+
+    return button;
   }
 
   private View createOverlayView() {
@@ -366,12 +410,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
   public void hide(Promise promise) {
     UiThreadUtil.runOnUiThread(() -> {
       try {
-        if (windowManager != null && overlayView != null) {
-          windowManager.removeView(overlayView);
-        }
-        overlayView = null;
-        currentVariant = "";
-        layoutParams = null;
+        hideOverlay();
         promise.resolve(true);
       } catch (Exception error) {
         promise.reject("overlay_hide_failed", error);
