@@ -483,6 +483,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       setRouteCoordinates([]);
       setRouteDistanceKm(null);
       setRouteDurationMinutes(null);
+      setIsCalculating(false);
       return undefined;
     }
 
@@ -490,6 +491,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
     const loadRoute = async () => {
       try {
+        setIsCalculating(true);
         const token = await getTokenRef.current?.();
         const result = await fetchRideRoute(token, pickupCoordinate, dropoffCoordinate);
         if (cancelled) return;
@@ -506,6 +508,8 @@ export default function PassengerHomeScreen({ navigation, route }) {
         setRouteCoordinates([pickupCoordinate, dropoffCoordinate]);
         setRouteDistanceKm(null);
         setRouteDurationMinutes(null);
+      } finally {
+        if (!cancelled) setIsCalculating(false);
       }
     };
 
@@ -569,22 +573,17 @@ export default function PassengerHomeScreen({ navigation, route }) {
     };
   }, [activeField, currentLocationCoordinate, destinationQuery, pickupCoordinate, pickupQuery, showRouteModal]);
 
-  const straightLineKm = useMemo(
-    () => calculateDistanceKm(pickupCoordinate, dropoffCoordinate),
-    [pickupCoordinate, dropoffCoordinate]
-  );
-
   const distanceKm = useMemo(
-    () => (routeDistanceKm != null && routeDistanceKm > 0 ? routeDistanceKm : straightLineKm),
-    [routeDistanceKm, straightLineKm]
+    () => (routeDistanceKm != null && routeDistanceKm > 0 ? routeDistanceKm : 0),
+    [routeDistanceKm]
   );
 
   const estimatedMinutes = useMemo(
     () =>
       routeDurationMinutes != null && routeDurationMinutes > 0
         ? routeDurationMinutes
-        : Math.max(4, Math.round(straightLineKm * 2.6)),
-    [routeDurationMinutes, straightLineKm]
+        : 0,
+    [routeDurationMinutes]
   );
 
   const applyPickup = async (coordinate, label) => {
@@ -600,13 +599,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
     setDropoffCoordinate(coordinate);
     setDropoffLabel(label);
     setDestinationQuery(String(label || '').replace(/^Drop-?off:\s*/i, '').trim());
-    setIsCalculating(true);
     const nextRegion = buildRouteRegion(pickupCoordinate, coordinate);
     setMapRegion(nextRegion);
     mapRef.current?.animateToRegion(nextRegion, 500);
-    setTimeout(() => {
-      setIsCalculating(false);
-    }, 1000);
     if (closeModal) setShowRouteModal(false);
   };
 
@@ -712,6 +707,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const openChooseRideScreen = () => {
     if (!pickupCoordinate || !dropoffCoordinate) {
       Alert.alert('Missing route', 'Set your pickup and destination first.');
+      return;
+    }
+    if (!(routeDistanceKm > 0)) {
+      Alert.alert('Calculating road distance', 'Please wait for the road distance to finish calculating, then choose your ride.');
       return;
     }
 
@@ -863,7 +862,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
               <View className="rounded-[22px] bg-white px-4 py-4">
                 <Text className="text-sm font-medium text-gray-400">Trip preview</Text>
                 <Text className="mt-1 text-base font-semibold text-gray-900">
-                  {distanceKm.toFixed(1)} km • {estimatedMinutes} min away
+                  {routeDistanceKm > 0 ? `${distanceKm.toFixed(1)} km • ${estimatedMinutes} min away` : 'Calculating road distance...'}
                 </Text>
               </View>
               <TouchableOpacity
@@ -957,7 +956,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                   <View className="flex-1 pr-4">
                     <Text className="text-sm font-semibold uppercase tracking-[1px] text-gray-400">Trip</Text>
                     <Text className="mt-1 text-base font-semibold text-gray-900">
-                      {distanceKm.toFixed(1)} km • {estimatedMinutes} min away
+                      {routeDistanceKm > 0 ? `${distanceKm.toFixed(1)} km • ${estimatedMinutes} min away` : 'Calculating road distance...'}
                     </Text>
                   </View>
                   <Text className="text-[28px] font-bold text-gray-950">${estimatedAmount.toFixed(2)}</Text>

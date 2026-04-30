@@ -4,7 +4,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
-import { findNearbyDrivers, getPassengerRideOptions } from '../../api';
+import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function getTierIconName(tier) {
@@ -124,16 +124,68 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     return Math.ceil(Math.max(baseFare + (distanceKm * perKm), minimumFare));
   }, [distanceKm, selectedTier]);
 
+  const navigateToActiveRide = (data) => {
+    const ride = data?.rideRequest;
+    if (!ride?.id) return false;
+
+    const activeTier = ride.requestedTierKey || ride.requestedTierName
+      ? {
+          tierKey: ride.requestedTierKey || '',
+          tierName: ride.requestedTierName || 'Ride',
+        }
+      : null;
+    const rideStatus = String(ride?.status || '').toLowerCase();
+
+    if (rideStatus === 'requested' || rideStatus === 'driver_found') {
+      navigation.replace('PassengerNearbyCars', {
+        pickupCoordinate: ride.pickupCoordinate,
+        dropoffCoordinate: ride.dropoffCoordinate,
+        pickupLabel: ride.pickupLabel,
+        dropoffLabel: ride.dropoffLabel,
+        distanceKm: Number(ride?.estimatedDistanceKm || 0),
+        estimatedMinutes: Number(ride?.estimatedMinutes || 0),
+        estimatedAmount: Number(ride?.estimatedAmount || 0),
+        selectedTier: activeTier,
+        rideRequest: {
+          ...ride,
+          remainingSecondsCapturedAt: Date.now(),
+        },
+        nearbyDrivers: Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : [],
+      });
+      return true;
+    }
+
+    navigation.replace('PassengerRideTracking', {
+      pickupCoordinate: ride.pickupCoordinate,
+      dropoffCoordinate: ride.dropoffCoordinate,
+      pickupLabel: ride.pickupLabel,
+      dropoffLabel: ride.dropoffLabel,
+      estimatedAmount: Number(ride.estimatedAmount || 0),
+      selectedTier: activeTier,
+      driver: data?.assignedDriver || null,
+      rideRequestId: ride.id,
+    });
+    return true;
+  };
+
   const handleFindRide = async () => {
     if (!pickupCoordinate || !dropoffCoordinate || !selectedTier) {
       Alert.alert('Missing route', 'Set your pickup, destination, and ride tier first.');
       return;
     }
+    if (!(Number(distanceKm) > 0)) {
+      Alert.alert('Calculating road distance', 'Please wait for the road distance to finish calculating, then choose your ride.');
+      return;
+    }
 
     setIsSubmittingRide(true);
+    let token = null;
     try {
-      const token = await getTokenRef.current();
+      token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
+
+      const currentRideData = await getPassengerCurrentRide(token);
+      if (navigateToActiveRide(currentRideData)) return;
 
       const data = await findNearbyDrivers(token, {
         pickupCoordinate,
@@ -149,26 +201,46 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         selectedTier,
       });
 
+      const serverRide = data?.rideRequest || null;
+      const nextDistanceKm = Number(serverRide?.estimatedDistanceKm || distanceKm || 0);
+      const nextEstimatedMinutes = Number(serverRide?.estimatedMinutes || estimatedMinutes || 0);
+      const nextEstimatedAmount = Number(serverRide?.estimatedAmount || estimatedAmount || 0);
+      const nextSelectedTier = serverRide?.requestedTierKey || serverRide?.requestedTierName
+        ? {
+            ...selectedTier,
+            tierKey: serverRide.requestedTierKey || selectedTier.tierKey,
+            tierName: serverRide.requestedTierName || selectedTier.tierName,
+          }
+        : selectedTier;
+
       navigation.navigate('PassengerNearbyCars', {
         pickupCoordinate,
         dropoffCoordinate,
         pickupLabel,
         dropoffLabel,
         routeCoordinates,
-        distanceKm,
-        estimatedMinutes,
-        estimatedAmount,
-        selectedTier,
+        distanceKm: nextDistanceKm,
+        estimatedMinutes: nextEstimatedMinutes,
+        estimatedAmount: nextEstimatedAmount,
+        selectedTier: nextSelectedTier,
         tiers,
-        rideRequest: data?.rideRequest
+        rideRequest: serverRide
           ? {
-              ...data.rideRequest,
+              ...serverRide,
               remainingSecondsCapturedAt: Date.now(),
             }
           : null,
         nearbyDrivers: Array.isArray(data?.nearbyDrivers) ? data.nearbyDrivers : [],
       });
     } catch (error) {
+      if (error?.status === 409 && token) {
+        try {
+          const currentRideData = await getPassengerCurrentRide(token);
+          if (navigateToActiveRide(currentRideData)) return;
+        } catch {
+          // Fall through to the original error.
+        }
+      }
       Alert.alert('Ride request failed', error?.message || 'Could not create the ride request.');
     } finally {
       setIsSubmittingRide(false);

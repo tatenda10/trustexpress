@@ -6,13 +6,14 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Speech from 'expo-speech';
-import { cancelRideRequest, completeRideRequest, getApiUrl, getPassengerRideRequestStatus, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver } from '../../api';
+import { cancelRideRequest, completeRideRequest, getApiUrl, getPassengerRideRequestStatus, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 
 const TRACKING_STATUS_REFRESH_MS = 5000;
+const PICKUP_WAIT_SECONDS = 5 * 60;
 
 function mapRideStatusToStage(status) {
   switch (String(status || '').toLowerCase()) {
@@ -44,6 +45,19 @@ function calculateDistanceKm(start, end) {
   );
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadiusKm * c;
+}
+
+function formatCountdown(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function parseTimestampMs(value) {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, stage) {
@@ -104,6 +118,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [submittingTip, setSubmittingTip] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
+  const [nowTick, setNowTick] = useState(Date.now());
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
@@ -167,6 +182,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               ...current,
               status: nextStatus,
               stage: nextStage || current.stage,
+              ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
+              ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
             } : current));
           }
           setRealtimeSignal((current) => current + 1);
@@ -209,6 +226,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const activeTarget = stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
   const tipOptions = [1, 2, 5, 10];
+
+  useEffect(() => {
+    if (stage !== 'waiting_at_pickup') return undefined;
+    setNowTick(Date.now());
+    const interval = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [stage]);
 
   useEffect(() => {
     const shouldOpen = stage === 'completed' && !rideStatus?.passengerDriverRating;
@@ -259,6 +286,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     [liveDriverDistanceKm]
   );
 
+  const pickupWaitRemainingSeconds = useMemo(() => {
+    if (stage !== 'waiting_at_pickup') return null;
+    const arrivedAtMs = parseTimestampMs(rideStatus?.arrivedAt);
+    if (!arrivedAtMs) return PICKUP_WAIT_SECONDS;
+    const elapsedSeconds = Math.floor((nowTick - arrivedAtMs) / 1000);
+    return Math.max(0, PICKUP_WAIT_SECONDS - elapsedSeconds);
+  }, [nowTick, rideStatus?.arrivedAt, stage]);
+  const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
+  const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
+
   const handleCancelRide = () => {
     setShowCancelReasonModal(true);
   };
@@ -287,6 +324,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       // local UI still closes
     }
     navigation.popToTop();
+  };
+
+  const handleConfirmPickup = async () => {
+    try {
+      const token = await getToken();
+      if (token && rideRequestId) {
+        await confirmPassengerPickup(token, rideRequestId);
+        // Update local state
+        setRideStatus((current) => current ? {
+          ...current,
+          passengerConfirmedAt: new Date().toISOString(),
+        } : current);
+      }
+    } catch (error) {
+      Alert.alert('Confirmation failed', error?.message || 'Could not confirm pickup.');
+    }
   };
 
   const handleSubmitRating = async () => {
@@ -400,7 +453,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 {isCompleted
                   ? 'Please rate your driver for this trip.'
                   : stage === 'waiting_at_pickup'
-                    ? 'Meet your driver at the pickup point.'
+                    ? pickupWaitExpired
+                      ? 'Pickup wait time has ended. Please contact your driver.'
+                      : rideStatus?.passengerConfirmedAt
+                        ? `Confirmed! ${pickupWaitCountdownText} remaining.`
+                        : `${pickupWaitCountdownText} to meet your driver at pickup.`
                     : `${liveEtaMinutes} min away - ${liveDriverDistanceKm.toFixed(1)} km`}
               </Text>
             </View>
@@ -415,7 +472,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               </Text>
               <Text className="mt-1 text-base font-bold text-gray-900">
                 {stage === 'waiting_at_pickup'
-                  ? 'Driver is waiting at pickup.'
+                  ? pickupWaitExpired
+                    ? 'Pickup wait time has ended.'
+                    : `${pickupWaitCountdownText} to meet your driver.`
                   : `${liveEtaMinutes} min away - ${liveDriverDistanceKm.toFixed(1)} km`}
               </Text>
             </View>
@@ -439,6 +498,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 </Text>
                 <Text className="mt-1 text-sm text-gray-600">
                   Stay connected with your driver while you are on the way to your drop-off.
+                </Text>
+              </View>
+            ) : null}
+
+            {stage === 'waiting_at_pickup' ? (
+              <View className="mt-4 rounded-[22px] border border-amber-200 bg-[#fff7ed] px-4 py-3">
+                <Text className="text-xs font-semibold uppercase tracking-[2px] text-amber-600">
+                  Pickup timer
+                </Text>
+                <Text className="mt-1 text-3xl font-bold text-gray-900">{pickupWaitCountdownText}</Text>
+                <Text className="mt-1 text-sm text-gray-600">
+                  {pickupWaitExpired
+                    ? 'The pickup wait time has ended. Message or call your driver now.'
+                    : rideStatus?.passengerConfirmedAt
+                      ? 'You confirmed you\'re coming. Your driver is waiting.'
+                      : 'Please meet your driver at the pickup point.'}
                 </Text>
               </View>
             ) : null}
@@ -551,12 +626,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   </View>
                 ) : (
                   <View className="flex-row items-center gap-3">
-                    <TouchableOpacity
-                      onPress={handleCancelRide}
-                      className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
-                    >
-                      <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
-                    </TouchableOpacity>
+                    {!rideStatus?.passengerConfirmedAt ? (
+                      <TouchableOpacity
+                        onPress={handleConfirmPickup}
+                        className="flex-1 h-14 rounded-[22px] items-center justify-center"
+                        style={{ backgroundColor: PRIMARY_BLUE }}
+                      >
+                        <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        onPress={handleCancelRide}
+                        className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                      >
+                        <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       onPress={() => navigation.navigate('RideChat', {
                         rideRequestId,

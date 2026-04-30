@@ -8,8 +8,26 @@ import {
 
 const router = Router();
 
+// Track API calls for Google Maps and Places
+const apiCallStats = {
+  directions: { count: 0, cacheHits: 0, errors: 0 },
+  placesAutocomplete: { count: 0, cacheHits: 0, errors: 0 },
+  placesDetails: { count: 0, cacheHits: 0, errors: 0 },
+  lastUpdated: new Date().toISOString(),
+};
+
+// Debug endpoint to check stats
+router.get('/stats', (req, res) => {
+  return res.json({
+    ...apiCallStats,
+    uptime: Date.now(),
+  });
+});
+
 router.post('/directions', requireAuth, async (req, res) => {
   try {
+    apiCallStats.directions.count++;
+    
     const {
       origin,
       destination,
@@ -26,6 +44,10 @@ router.post('/directions', requireAuth, async (req, res) => {
       cacheTtlSeconds,
     });
 
+    if (route.cacheHit) {
+      apiCallStats.directions.cacheHits++;
+    }
+
     return res.json({
       route: {
         polyline: route.polyline || '',
@@ -40,6 +62,7 @@ router.post('/directions', requireAuth, async (req, res) => {
       cacheHit: Boolean(route.cacheHit),
     });
   } catch (error) {
+    apiCallStats.directions.errors++;
     const status = Number(error?.status || 500);
     if (status >= 500) {
       console.error('POST /api/maps/directions', error);
@@ -52,6 +75,8 @@ router.post('/directions', requireAuth, async (req, res) => {
 
 router.post('/places/autocomplete', requireAuth, async (req, res) => {
   try {
+    apiCallStats.placesAutocomplete.count++;
+    
     const {
       query,
       originCoordinate,
@@ -66,11 +91,16 @@ router.post('/places/autocomplete', requireAuth, async (req, res) => {
       cacheTtlSeconds,
     });
 
+    if (result.cacheHit) {
+      apiCallStats.placesAutocomplete.cacheHits++;
+    }
+
     return res.json({
       suggestions: Array.isArray(result.suggestions) ? result.suggestions : [],
       cacheHit: Boolean(result.cacheHit),
     });
   } catch (error) {
+    apiCallStats.placesAutocomplete.errors++;
     const status = Number(error?.status || 500);
     if (status >= 500) {
       console.error('POST /api/maps/places/autocomplete', error);
@@ -83,6 +113,8 @@ router.post('/places/autocomplete', requireAuth, async (req, res) => {
 
 router.post('/places/details', requireAuth, async (req, res) => {
   try {
+    apiCallStats.placesDetails.count++;
+    
     const {
       placeId,
       sessionToken,
@@ -95,11 +127,16 @@ router.post('/places/details', requireAuth, async (req, res) => {
       cacheTtlSeconds,
     });
 
+    if (result.cacheHit) {
+      apiCallStats.placesDetails.cacheHits++;
+    }
+
     return res.json({
       place: result.place || null,
       cacheHit: Boolean(result.cacheHit),
     });
   } catch (error) {
+    apiCallStats.placesDetails.errors++;
     const status = Number(error?.status || 500);
     if (status >= 500) {
       console.error('POST /api/maps/places/details', error);

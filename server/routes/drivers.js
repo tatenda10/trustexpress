@@ -973,10 +973,11 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         status: ride.status,
         stage: mapTripStage(ride.status),
         driverCoordinate,
-        requestedAt: ride.requested_at,
-        assignedAt: ride.assigned_at,
-        arrivedAt: ride.arrived_at,
-        completedAt: ride.completed_at,
+        requestedAt: toIsoOrNull(ride.requested_at),
+        assignedAt: toIsoOrNull(ride.assigned_at),
+        arrivedAt: toIsoOrNull(ride.arrived_at),
+        passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
+        completedAt: toIsoOrNull(ride.completed_at),
         passengerProfileImageUrl,
       },
     });
@@ -1004,6 +1005,7 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
          AND status = 'driver_assigned'`,
       [rideRequestId, req.userId]
     );
+    const arrivedAt = new Date().toISOString();
 
     const [ride] = await query(
       'SELECT passenger_user_id FROM ride_requests WHERE id = ? AND driver_user_id = ? LIMIT 1',
@@ -1013,6 +1015,7 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
       emitRideStatusToPassenger(ride.passenger_user_id, {
         rideRequestId,
         status: 'driver_arrived',
+        arrivedAt,
         driverUserId: req.userId,
       });
       await notifyPassengerRideStatus(ride.passenger_user_id, {
@@ -1021,6 +1024,7 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
         data: {
           type: 'ride_status',
           status: 'driver_arrived',
+          arrivedAt,
           rideRequestId,
           driverUserId: req.userId,
         },
@@ -1029,6 +1033,7 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
     emitRideStatusToDriver(req.userId, {
       rideRequestId,
       status: 'driver_arrived',
+      arrivedAt,
     });
 
     return res.json({ ok: true });

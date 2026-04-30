@@ -1,8 +1,8 @@
 /**
  * Backend connection - BASE_URL and helpers for API routes.
  */
-export const BASE_URL = 'https://192.168.100.35:5000';
-
+export const BASE_URL = 'https://ridehailcarsserver.online';
+//export const BASE_URL = 'http://192.168.100.35:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {
@@ -378,6 +378,13 @@ export async function submitDriverPassengerRating(token, rideRequestId, payload)
 
 export async function markRideArrived(token, rideRequestId) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/arrived`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  }, token);
+}
+
+export async function confirmPassengerPickup(token, rideRequestId) {
+  return apiFetch(`/api/rides/passenger/${rideRequestId}/confirm-pickup`, {
     method: 'PATCH',
     body: JSON.stringify({}),
   }, token);

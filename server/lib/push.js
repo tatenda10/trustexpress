@@ -62,7 +62,6 @@ export async function sendFcmNotifications(messages) {
             channelId: message.android?.channelId || 'ride-requests',
             sound: message.android?.notification?.sound || 'default',
             clickAction: message.android?.notification?.clickAction || 'TRUST_EXPRESS_FULL_SCREEN_RIDE_REQUEST',
-            fullScreenIntent: true,
             defaultVibrateTimings: true,
           },
         },
@@ -80,4 +79,3 @@ export async function sendFcmNotifications(messages) {
 
   return results.filter(Boolean);
 }
-

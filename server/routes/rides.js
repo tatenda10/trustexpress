@@ -4,6 +4,7 @@ import PDFDocument from 'pdfkit';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { fetchCachedGoogleDirections } from '../lib/google-directions.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import {
   emitRideRequestRemovedFromDriver,
@@ -93,6 +94,13 @@ async function loadPassengerTier(selectedTierKey) {
     per_minute_rate: Number(row.per_minute_rate || 0),
     minimum_fare: Number(row.minimum_fare || 0),
   };
+}
+
+function calculateTierFare(tier, distanceKm) {
+  const baseFare = Number(tier?.base_fare || 0);
+  const pricePerKm = Number(tier?.price_per_km || 0);
+  const minimumFare = Number(tier?.minimum_fare || 0);
+  return Math.ceil(Math.max(baseFare + (Number(distanceKm || 0) * pricePerKm), minimumFare));
 }
 
 function mapDriverAvailability(row, pickupCoordinate) {
@@ -563,12 +571,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       dropoffCoordinate,
       pickupLabel,
       dropoffLabel,
-      distanceKm,
-      estimatedMinutes,
-      estimatedAmount,
       routePolyline,
-      routeDistanceKm,
-      routeDurationMinutes,
       selectedTier,
     } = req.body || {};
 
@@ -586,6 +589,32 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
     }
 
     const pickupPoint = { latitude: pickupLat, longitude: pickupLng };
+    const dropoffPoint = { latitude: dropoffLat, longitude: dropoffLng };
+    let authoritativeRoute = null;
+    try {
+      authoritativeRoute = await fetchCachedGoogleDirections({
+        origin: pickupPoint,
+        destination: dropoffPoint,
+        cacheTtlSeconds: 1800,
+      });
+    } catch (routeError) {
+      console.error('[rides.findDriver] road distance calculation failed', {
+        status: routeError?.status,
+        message: routeError?.message,
+      });
+      return res.status(422).json({
+        error: 'Could not calculate the road distance for this trip. Please try again.',
+      });
+    }
+
+    const authoritativeDistanceKm = Number(authoritativeRoute?.distanceKm || 0);
+    const authoritativeMinutes = Number(authoritativeRoute?.durationMinutes || 0);
+    if (authoritativeDistanceKm <= 0 || !Number.isFinite(authoritativeDistanceKm)) {
+      return res.status(422).json({
+        error: 'Could not calculate the road distance for this trip. Please try again.',
+      });
+    }
+    const authoritativeAmount = calculateTierFare(tier, authoritativeDistanceKm);
     const passenger = toAppUser(user);
     const passengerFullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
     const passengerName = passengerFullName || 'Passenger';
@@ -630,12 +659,12 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         String(dropoffLabel).trim(),
         dropoffLat,
         dropoffLng,
-        String(routePolyline || '').trim() || null,
-        Number.isFinite(Number(routeDistanceKm)) ? Number(routeDistanceKm) : Number(distanceKm || 0),
-        Number.isFinite(Number(routeDurationMinutes)) ? Number(routeDurationMinutes) : Number(estimatedMinutes || 0),
-        Number(distanceKm || 0),
-        Number(estimatedMinutes || 0),
-        Number(estimatedAmount || 0),
+        String(authoritativeRoute?.polyline || routePolyline || '').trim() || null,
+        authoritativeDistanceKm,
+        authoritativeMinutes,
+        authoritativeDistanceKm,
+        authoritativeMinutes,
+        authoritativeAmount,
       ]
     );
 
@@ -643,7 +672,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
 
     const nearbyDrivers = await loadEligibleDriversForRide({
       pickupPoint,
-      estimatedAmount,
+      estimatedAmount: authoritativeAmount,
       tierKey: tier.tier_key,
     });
 
@@ -654,7 +683,10 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       requestedTierKey: tier.tier_key,
       requestedTierName: tier.tier_name,
       pickupPoint,
-      dropoffPoint: { latitude: dropoffLat, longitude: dropoffLng },
+      dropoffPoint,
+      routeDistanceKm: authoritativeDistanceKm,
+      routeDurationMinutes: authoritativeMinutes,
+      routeCacheHit: authoritativeRoute?.cacheHit === true,
       nearbyDriverIds: nearbyDrivers.map((driver) => driver.id),
     });
 
@@ -698,6 +730,15 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         requestedAt,
         expiresAt: computeExpiresAt(requestedAt),
         remainingSeconds: OPEN_REQUEST_TTL_MINUTES * 60,
+        pickupLabel: String(pickupLabel).trim(),
+        pickupCoordinate: pickupPoint,
+        dropoffLabel: String(dropoffLabel).trim(),
+        dropoffCoordinate: dropoffPoint,
+        estimatedDistanceKm: authoritativeDistanceKm,
+        estimatedMinutes: authoritativeMinutes,
+        estimatedAmount: authoritativeAmount,
+        requestedTierKey: tier.tier_key,
+        requestedTierName: tier.tier_name,
       },
       nearbyDrivers,
     });
@@ -822,6 +863,8 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
+        arrivedAt: toIsoOrNull(ride.arrived_at),
+        passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
         expiresAt: computeRideExpiresAt(ride.status, ride.requested_at, ride.driver_found_at),
         remainingSeconds: Number(ride.remaining_seconds || 0),
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
@@ -987,6 +1030,8 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
+        arrivedAt: toIsoOrNull(ride.arrived_at),
+        passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
         expiresAt: computeRideExpiresAt(ride.status, ride.requested_at, ride.driver_found_at),
         remainingSeconds: Number(ride.remaining_seconds || 0),
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
@@ -1608,6 +1653,7 @@ router.patch('/passenger/:rideRequestId/arrived', requireAuth, async (req, res) 
        WHERE id = ? AND passenger_user_id = ? AND status IN ('driver_assigned', 'driver_found')`,
       [rideRequestId, req.userId]
     );
+    const arrivedAt = new Date().toISOString();
 
     const [ride] = await query(
       'SELECT driver_user_id FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
@@ -1617,17 +1663,63 @@ router.patch('/passenger/:rideRequestId/arrived', requireAuth, async (req, res) 
       emitRideStatusToDriver(ride.driver_user_id, {
         rideRequestId,
         status: 'driver_arrived',
+        arrivedAt,
         passengerUserId: req.userId,
       });
     }
     emitRideStatusToPassenger(req.userId, {
       rideRequestId,
       status: 'driver_arrived',
+      arrivedAt,
     });
 
     return res.json({ ok: true });
   } catch (err) {
     console.error('PATCH /api/rides/passenger/:rideRequestId/arrived', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET passenger_confirmed_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND passenger_user_id = ? AND status = 'driver_arrived'`,
+      [rideRequestId, req.userId]
+    );
+
+    const confirmedAt = new Date().toISOString();
+
+    const [ride] = await query(
+      'SELECT driver_user_id FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
+      [rideRequestId, req.userId]
+    );
+    if (ride?.driver_user_id) {
+      emitRideStatusToDriver(ride.driver_user_id, {
+        rideRequestId,
+        status: 'passenger_confirmed',
+        confirmedAt,
+        passengerUserId: req.userId,
+      });
+    }
+    emitRideStatusToPassenger(req.userId, {
+      rideRequestId,
+      status: 'passenger_confirmed',
+      confirmedAt,
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/confirm-pickup', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

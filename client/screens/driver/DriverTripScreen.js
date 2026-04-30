@@ -33,6 +33,7 @@ const LOCATION_UPDATE_DISTANCE_METERS = 35;
 const LOCATION_UPDATE_INTERVAL_MS = 12000;
 const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.38);
 const TRIP_STATUS_REFRESH_MS = 8000;
+const PICKUP_WAIT_SECONDS = 5 * 60;
 const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
 const DEFAULT_LAT_DELTA = 0.03;
 const DEFAULT_LNG_DELTA = 0.03;
@@ -59,6 +60,19 @@ function calculateDistanceKm(start, end) {
   );
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadiusKm * c;
+}
+
+function formatCountdown(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function parseTimestampMs(value) {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalizeInstructionForSpeech(value) {
@@ -195,6 +209,7 @@ export default function DriverTripScreen({ navigation }) {
   const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
   const [nextInstruction, setNextInstruction] = useState('');
   const [liveDriverCoordinate, setLiveDriverCoordinate] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
   const [showPassengerRating, setShowPassengerRating] = useState(false);
   const [completedRideId, setCompletedRideId] = useState(null);
   const [completedRideSnapshot, setCompletedRideSnapshot] = useState(null);
@@ -351,6 +366,16 @@ export default function DriverTripScreen({ navigation }) {
   }, [ride?.stage, voiceGuidanceEnabled]);
 
   useEffect(() => {
+    if (ride?.stage !== 'waiting_for_customer') return undefined;
+    setNowTick(Date.now());
+    const interval = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [ride?.stage]);
+
+  useEffect(() => {
     if (!ride) return undefined;
     let active = true;
 
@@ -435,7 +460,7 @@ export default function DriverTripScreen({ navigation }) {
   }, [getToken, ride]);
 
   const driverCoordinate = liveDriverCoordinate || ride?.driverCoordinate || ride?.pickupCoordinate || ride?.dropoffCoordinate;
-  const targetCoordinate = ride?.dropoffCoordinate || ride?.pickupCoordinate;
+  const targetCoordinate = ride?.stage === 'on_trip' ? ride?.dropoffCoordinate : ride?.pickupCoordinate;
 
   useEffect(() => {
     if (!driverCoordinate || !targetCoordinate) return undefined;
@@ -520,7 +545,7 @@ export default function DriverTripScreen({ navigation }) {
     return () => clearTimeout(timeout);
   }, [driverCoordinate, ride?.stage, routeCoordinates, targetCoordinate]);
 
-  // Live distance from current position to destination so it updates every location tick
+  // Live distance from current position to the active target so it updates every location tick.
   const distanceKmText = useMemo(() => {
     const kilometers = calculateDistanceKm(driverCoordinate, targetCoordinate);
     return `${Math.max(0, kilometers).toFixed(1)} km left`;
@@ -533,6 +558,16 @@ export default function DriverTripScreen({ navigation }) {
     const fallbackMinutes = Math.max(1, Math.round(calculateDistanceKm(driverCoordinate, targetCoordinate) * 4));
     return `${fallbackMinutes} min away`;
   }, [driverCoordinate, routeDurationSeconds, targetCoordinate]);
+
+  const pickupWaitRemainingSeconds = useMemo(() => {
+    if (ride?.stage !== 'waiting_for_customer') return null;
+    const arrivedAtMs = parseTimestampMs(ride?.arrivedAt);
+    if (!arrivedAtMs) return PICKUP_WAIT_SECONDS;
+    const elapsedSeconds = Math.floor((nowTick - arrivedAtMs) / 1000);
+    return Math.max(0, PICKUP_WAIT_SECONDS - elapsedSeconds);
+  }, [nowTick, ride?.arrivedAt, ride?.stage]);
+  const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
+  const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
 
   useEffect(() => () => {
     hideTripOverlay();
@@ -555,7 +590,9 @@ export default function DriverTripScreen({ navigation }) {
       ? ride.dropoffLabel
       : ride.pickupLabel;
     const meta = ride.stage === 'waiting_for_customer'
-      ? 'Pickup reached'
+      ? pickupWaitExpired
+        ? 'Pickup wait ended'
+        : `Pickup wait ${pickupWaitCountdownText}`
       : `${distanceKmText} · ${etaText}`;
 
     const syncOverlay = async () => {
@@ -588,7 +625,7 @@ export default function DriverTripScreen({ navigation }) {
     return () => {
       active = false;
     };
-  }, [distanceKmText, etaText, ride?.dropoffLabel, ride?.id, ride?.pickupLabel, ride?.stage]);
+  }, [distanceKmText, etaText, pickupWaitCountdownText, pickupWaitExpired, ride?.dropoffLabel, ride?.id, ride?.pickupLabel, ride?.stage]);
 
   const handleMarkArrived = async () => {
     try {
@@ -597,7 +634,7 @@ export default function DriverTripScreen({ navigation }) {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
       await markDriverCurrentRideArrived(token, ride.id, { suppressAuthErrorHandler: true });
-      setRide((current) => (current ? { ...current, stage: 'waiting_for_customer' } : current));
+      setRide((current) => (current ? { ...current, stage: 'waiting_for_customer', arrivedAt: new Date().toISOString() } : current));
       setRealtimeSignal((current) => current + 1);
       getDriverCurrentRide(token, { suppressAuthErrorHandler: true })
         .then((data) => {
@@ -868,13 +905,17 @@ export default function DriverTripScreen({ navigation }) {
           contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 }}
         >
           <Text className="text-sm font-semibold uppercase tracking-wide text-[#2f73c9]">
-            {ride.stage === 'on_trip' ? 'Destination' : ride.stage === 'waiting_for_customer' ? 'Pickup reached' : 'Pickup'}
+            {ride.stage === 'on_trip' ? 'Destination' : ride.stage === 'waiting_for_customer' ? 'Pickup wait timer' : 'Pickup'}
           </Text>
           <Text className="mt-1 text-[30px] font-bold text-gray-900">
-            {ride.stage === 'waiting_for_customer' ? 'You are here' : distanceKmText}
+            {ride.stage === 'waiting_for_customer' ? pickupWaitCountdownText : distanceKmText}
           </Text>
           <Text className="mt-1 text-base text-gray-500">
-            {ride.stage === 'waiting_for_customer' ? ride.pickupLabel : etaText}
+            {ride.stage === 'waiting_for_customer'
+              ? pickupWaitExpired
+                ? 'Pickup wait time has ended.'
+                : `${ride.pickupLabel} - passenger has 5 minutes to come out.`
+              : etaText}
           </Text>
 
           <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
@@ -884,7 +925,11 @@ export default function DriverTripScreen({ navigation }) {
             </View>
             <Text className="mt-2 text-base font-semibold text-gray-900">
               {ride.stage === 'waiting_for_customer'
-                ? 'Passenger pickup point reached.'
+                ? pickupWaitExpired
+                  ? 'Pickup wait time has ended. Message or call the passenger before starting.'
+                  : ride.passengerConfirmedAt
+                    ? 'Passenger confirmed they\'re coming. Ready to start the ride.'
+                    : 'Passenger pickup point reached. Wait for the passenger to come out.'
                 : nextInstruction || 'Following the live Google Maps road route.'}
             </Text>
             {routeError ? (
