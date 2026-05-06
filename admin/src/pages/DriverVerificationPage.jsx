@@ -53,27 +53,40 @@ function statusStyle(status) {
 
 function typeStyle(type) {
   if (type === 'vehicle') return 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200'
+  if (type === 'profile_image') return 'bg-violet-50 text-violet-700 ring-1 ring-violet-200'
   return 'bg-sky-50 text-sky-700 ring-1 ring-sky-200'
 }
 
 function deriveVerificationRow(driver) {
   const profileStatus = driver.profile?.status || null
   const vehicleStatus = driver.vehicle?.status || null
+  const profileImageReviewStatus = driver.profileImageReview?.status || null
   const hasIncomingProfile = profileStatus === 'pending' && !!driver.profile?.submittedAt && !!driver.profile?.hasDocuments
   const hasIncomingVehicle = vehicleStatus === 'pending' && !!driver.vehicle?.submittedAt && !!driver.vehicle?.hasDocuments
+  const hasIncomingProfileImage = profileImageReviewStatus === 'pending' && !!driver.profileImageReview?.pendingImageUrl
   const hasApprovedProfile = profileStatus === 'approved' && !!driver.profile?.hasDocuments
   const hasApprovedVehicle = vehicleStatus === 'approved' && !!driver.vehicle?.hasDocuments
-  const hasIncoming = hasIncomingProfile || hasIncomingVehicle
+  const hasIncoming = hasIncomingProfile || hasIncomingVehicle || hasIncomingProfileImage
   const isPartial =
     (driver.profile?.hasDocuments && Number(driver.profile?.missingRequiredCount || 0) > 0) ||
     (driver.vehicle?.hasDocuments && Number(driver.vehicle?.missingRequiredCount || 0) > 0)
   const isVerified = hasApprovedProfile || hasApprovedVehicle
   const verificationType =
-    hasIncomingVehicle || hasApprovedVehicle
+    hasIncomingProfileImage
+      ? 'profile_image'
+      : hasIncomingVehicle || hasApprovedVehicle
       ? 'vehicle'
       : 'identity'
-  const verificationLabel = verificationType === 'vehicle' ? 'Vehicle Verification' : 'Identity Verification'
-  const submittedAt = verificationType === 'vehicle' ? driver.vehicle?.submittedAt : driver.profile?.submittedAt
+  const verificationLabel = verificationType === 'vehicle'
+    ? 'Vehicle Verification'
+    : verificationType === 'profile_image'
+      ? 'Profile Photo Verification'
+      : 'Identity Verification'
+  const submittedAt = verificationType === 'vehicle'
+    ? driver.vehicle?.submittedAt
+    : verificationType === 'profile_image'
+      ? driver.profileImageReview?.submittedAt
+      : driver.profile?.submittedAt
   const name = driver.email || driver.id
 
   return {
@@ -191,6 +204,7 @@ export default function DriverVerificationPage() {
             <option value="all">All types</option>
             <option value="identity">Identity only</option>
             <option value="vehicle">Vehicle only</option>
+            <option value="profile_image">Profile photo only</option>
           </select>
           <button
             type="button"

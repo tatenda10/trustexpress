@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, AppState } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
@@ -23,7 +23,13 @@ import {
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
-import { updateTripOverlay } from '../../services/tripOverlay';
+import { useDriverStatus } from '../../context/DriverStatusContext';
+import {
+  canUseTripOverlay,
+  getTripOverlaySupportInfo,
+  isTripOverlaySupported,
+  openTripOverlaySettings,
+} from '../../services/tripOverlay';
 
 const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
 const REQUEST_REFRESH_INTERVAL_MS = 2500;
@@ -195,6 +201,7 @@ async function fetchRouteCoordinates(token, origin, destination) {
 const DriverHomeScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const { patchDriverStatus } = useDriverStatus();
   const getTokenRef = useRef(getToken);
   const isFocused = useIsFocused();
   const [isOnline, setIsOnline] = useState(false);
@@ -230,6 +237,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const availabilityLoadInFlightRef = useRef(false);
   const currentRideLoadInFlightRef = useRef(false);
   const requestLoadInFlightRef = useRef(false);
+  const overlayPermissionPromptOpenRef = useRef(false);
   const lastAvailabilityAttemptRef = useRef({ target: null, at: 0 });
   const forwardedRideIdRef = useRef(null);
   const lastDbLocationRef = useRef({ coordinate: null, at: 0 });
@@ -463,6 +471,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
         const data = await getDriverCurrentRide(token);
         if (!active) return;
         setCurrentRide(data?.ride || null);
+        patchDriverStatus({ currentRide: data?.ride || null });
         if (data?.ride) {
           setPendingSelectionRide(null);
         }
@@ -492,7 +501,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       active = false;
       clearInterval(interval);
     };
-  }, [currentRide?.id, isFocused, pendingSelectionRide]);
+  }, [currentRide?.id, isFocused, patchDriverStatus, pendingSelectionRide]);
 
   useEffect(() => {
     if (!isOnline) {
@@ -540,24 +549,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 request?.remainingSecondsCapturedAt,
               ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
           );
-        if (__DEV__) {
-          console.log('[driver.home] requests fetched', {
-            totalRaw: nextListRaw.length,
-            totalVisible: nextList.length,
-            nowIso: new Date().toISOString(),
-            requests: nextListRaw.map((request) => ({
-              id: request?.id,
-              status: request?.status,
-              expiresAt: request?.expiresAt || null,
-              remainingSecondsServer: Number(request?.remainingSeconds ?? -1),
-              remainingSecondsUi: getRemainingSeconds(
-                request?.expiresAt,
-                request?.remainingSeconds,
-                serverCapturedAt,
-              ),
-            })),
-          });
-        }
         const nextRequest = nextList[0] || null;
 
         const prevCount = prevRequestCountRef.current;
@@ -685,29 +676,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
       stopIncomingAlert();
     };
   }, [availableRequests.length, currentRide, isFocused, isOnline, pendingSelectionRide]);
-
-  useEffect(() => {
-    if (!isOnline) return undefined;
-
-    const hasIncomingRideRequest = !currentRide && !pendingSelectionRide && availableRequests.length > 0;
-    const nextVariant = hasIncomingRideRequest ? 'request' : 'online';
-    let backgroundSyncTimeout = null;
-    const syncOverlayVariant = () => {
-      updateTripOverlay({ variant: nextVariant }).catch(() => {});
-    };
-
-    syncOverlayVariant();
-    const subscription = AppState.addEventListener('change', (nextAppState) => {
-      if (nextAppState === 'background') {
-        backgroundSyncTimeout = setTimeout(syncOverlayVariant, 250);
-      }
-    });
-
-    return () => {
-      if (backgroundSyncTimeout) clearTimeout(backgroundSyncTimeout);
-      subscription?.remove();
-    };
-  }, [availableRequests.length, currentRide?.id, isOnline, pendingSelectionRide?.id]);
 
   useEffect(() => {
     if (!isOnline || activeRequest || currentRide || pendingSelectionRide) {
@@ -892,6 +860,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
         latitude: nextCoordinate?.latitude ?? null,
         longitude: nextCoordinate?.longitude ?? null,
       });
+      patchDriverStatus({
+        isOnline: nextOnline,
+        availability: {
+          isOnline: nextOnline,
+          latitude: nextCoordinate?.latitude ?? null,
+          longitude: nextCoordinate?.longitude ?? null,
+        },
+      });
 
       if (nextCoordinate) {
         setDriverCoordinate(nextCoordinate);
@@ -909,6 +885,51 @@ const DriverHomeScreen = ({ navigation, route }) => {
     }
   };
 
+  const promptForDisplayOverlayPermission = useCallback(() => {
+    if (overlayPermissionPromptOpenRef.current) return;
+    overlayPermissionPromptOpenRef.current = true;
+
+    const closePrompt = () => {
+      overlayPermissionPromptOpenRef.current = false;
+    };
+
+    Alert.alert(
+      'Enable display overlay',
+      'Allow Trust Express to display over other apps so the online driver bubble can appear while the app is in the background.',
+      [
+        { text: 'Later', style: 'cancel', onPress: closePrompt },
+        {
+          text: 'Open Settings',
+          onPress: async () => {
+            closePrompt();
+            await openTripOverlaySettings();
+          },
+        },
+      ]
+    );
+  }, []);
+
+  const ensureDisplayOverlayReady = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    if (!isTripOverlaySupported()) {
+      if (__DEV__) {
+        console.log('[driver.home] display overlay unsupported', getTripOverlaySupportInfo());
+      }
+      return;
+    }
+
+    const canDraw = await canUseTripOverlay();
+    console.log('[driver.home] display overlay permission check', { canDraw });
+    if (!canDraw) {
+      promptForDisplayOverlayPermission();
+    }
+  }, [promptForDisplayOverlayPermission]);
+
+  useEffect(() => {
+    if (!isFocused || !isOnline) return;
+    ensureDisplayOverlayReady().catch(() => {});
+  }, [ensureDisplayOverlayReady, isFocused, isOnline]);
+
   const handleGoOnline = async () => {
     if (availabilityActionPending || isOnline) return;
     try {
@@ -916,6 +937,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       await syncAvailability(true);
       setDismissedRequestIds([]);
       setIsOnline(true);
+      ensureDisplayOverlayReady().catch(() => {});
     } catch (error) {
       Alert.alert('Could not go online', getAvailabilityErrorMessage(true, error));
     } finally {
@@ -1247,11 +1269,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
           toolbarEnabled={false}
           rotateEnabled={false}
         >
-          <Marker coordinate={driverCoordinate} title="You" pinColor="#2563eb" />
+          <Marker coordinate={driverCoordinate} title="You" pinColor="#2563eb" tracksViewChanges={false} />
           {currentRide ? (
             <>
-              <Marker coordinate={currentRide.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" />
-              <Marker coordinate={currentRide.dropoffCoordinate} title="Drop-off" pinColor="#111827" />
+              <Marker coordinate={currentRide.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+              <Marker coordinate={currentRide.dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
               {routeCoordinates.length > 1 ? (
                 <>
                   <Polyline
@@ -1280,8 +1302,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
           ) : null}
           {activeRequest ? (
             <>
-              <Marker coordinate={activeRequest.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" />
-              <Marker coordinate={activeRequest.dropoffCoordinate} title="Drop-off" pinColor="#111827" />
+              <Marker coordinate={activeRequest.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+              <Marker coordinate={activeRequest.dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
               {routeCoordinates.length > 1 ? (
                 <>
                   <Polyline

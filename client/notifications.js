@@ -2,7 +2,12 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import messaging from '@react-native-firebase/messaging';
+import {
+  AuthorizationStatus,
+  getMessaging,
+  getToken,
+  requestPermission,
+} from '@react-native-firebase/messaging';
 
 const DRIVER_REQUEST_SOUND_FILE = 'notificationaudio.mpeg';
 const DRIVER_REQUEST_CHANNEL_ID = 'ride-requests';
@@ -95,15 +100,16 @@ export async function registerForFcmTokenAsync() {
       return null;
     }
 
-    const authStatus = await messaging().requestPermission();
-    const enabled = authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+    const messagingInstance = getMessaging();
+    const authStatus = await requestPermission(messagingInstance);
+    const enabled = authStatus === AuthorizationStatus.AUTHORIZED ||
+      authStatus === AuthorizationStatus.PROVISIONAL;
 
     if (!enabled) {
       return null;
     }
 
-    const fcmToken = await messaging().getToken();
+    const fcmToken = await getToken(messagingInstance);
     return fcmToken || null;
   } catch (error) {
     console.log('[notifications] registerForFcmTokenAsync failed', error);

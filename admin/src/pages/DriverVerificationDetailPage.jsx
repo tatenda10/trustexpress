@@ -174,6 +174,7 @@ export default function DriverVerificationDetailPage() {
   const [activeSection, setActiveSection] = useState('documentation')
   const [rejectReasonPreset, setRejectReasonPreset] = useState('')
   const [customRejectReason, setCustomRejectReason] = useState('')
+  const [headerImageUrlIndex, setHeaderImageUrlIndex] = useState(0)
 
   const loadDriver = async () => {
     setLoading(true)
@@ -227,16 +228,29 @@ export default function DriverVerificationDetailPage() {
   const vehicleDocuments = documentGroups.vehicle
   const hasProfileDocuments = identityDocuments.some((doc) => !!doc.url)
   const hasVehicleDocuments = vehicleDocuments.some((doc) => !!doc.url) || documentGroups.carPhotos.length > 0
+  const profileImageReview = driver?.profileImageReview || null
+  const approvedProfilePhotoUrl = resolveMediaUrl(profileImageReview?.approvedImageUrl)
+  const pendingProfilePhotoUrl = resolveMediaUrl(profileImageReview?.pendingImageUrl)
   const carPhotoUrls = useMemo(
     () => documentGroups.carPhotos.map((item) => item.url).filter(Boolean),
     [documentGroups]
   )
   const reviewTarget =
-    driver?.vehicle?.status === 'pending' && hasVehicleDocuments
+    profileImageReview?.status === 'pending' && !!pendingProfilePhotoUrl
+      ? 'profile_image'
+      : driver?.vehicle?.status === 'pending' && hasVehicleDocuments
       ? 'vehicle'
       : 'profile'
-  const incomingType = reviewTarget === 'vehicle' ? 'Vehicle Verification' : 'Identity Verification'
-  const submittedAt = reviewTarget === 'vehicle' ? driver?.vehicle?.submittedAt : driver?.profile?.submittedAt
+  const incomingType = reviewTarget === 'vehicle'
+    ? 'Vehicle Verification'
+    : reviewTarget === 'profile_image'
+      ? 'Profile Photo Verification'
+      : 'Identity Verification'
+  const submittedAt = reviewTarget === 'vehicle'
+    ? driver?.vehicle?.submittedAt
+    : reviewTarget === 'profile_image'
+      ? profileImageReview?.submittedAt
+      : driver?.profile?.submittedAt
   const submittedAtLabel = formatAdminDateTime(submittedAt)
   const canReview = admin?.role === 'super_admin' || can('verification.review')
   const missingIdentityCount = identityDocuments.filter((doc) => !doc.url).length
@@ -245,10 +259,18 @@ export default function DriverVerificationDetailPage() {
   // Allow approve when docs exist but status isn't approved (fix drivers approved before Clerk fix / re-sync)
   const canApproveProfile = canReview && !!driver?.profile && !!hasProfileDocuments && missingIdentityCount === 0 && driver.profile.status !== 'approved'
   const canApproveVehicle = canReview && !!driver?.vehicle && !!hasVehicleDocuments && missingVehicleCount === 0 && driver.vehicle.status !== 'approved'
-  const canApproveCurrent = reviewTarget === 'vehicle' ? canApproveVehicle : canApproveProfile
+  const canApproveProfileImage = canReview && !!pendingProfilePhotoUrl && profileImageReview?.status === 'pending'
+  const canRejectProfileImage = canReview && !!pendingProfilePhotoUrl && profileImageReview?.status === 'pending'
+  const canApproveCurrent = reviewTarget === 'vehicle'
+    ? canApproveVehicle
+    : reviewTarget === 'profile_image'
+      ? canApproveProfileImage
+      : canApproveProfile
   const canRejectCurrent = canReview && (
     reviewTarget === 'vehicle'
       ? driver?.vehicle?.status === 'pending' && hasVehicleDocuments
+      : reviewTarget === 'profile_image'
+        ? profileImageReview?.status === 'pending' && !!pendingProfilePhotoUrl
       : driver?.profile?.status === 'pending' && hasProfileDocuments
   )
   const selectedApprovedTier = vehicleTiers.find((tier) => tier.tierKey === selectedApprovedTierKey) || null
@@ -276,7 +298,9 @@ export default function DriverVerificationDetailPage() {
     verificationStatusLabel === 'Verified'
       ? 'bg-emerald-50'
       : 'bg-white'
-  const profileImageUrl = resolveMediaUrl(driver?.profileDocs?.selfieUrl)
+  const profileImageUrl = pendingProfilePhotoUrl || approvedProfilePhotoUrl || resolveMediaUrl(driver?.profileDocs?.selfieUrl)
+  const profileImageCandidates = useMemo(() => resolveMediaCandidates(profileImageUrl), [profileImageUrl])
+  const activeProfileImageUrl = profileImageCandidates[headerImageUrlIndex] || profileImageUrl
   const rejectReasonOptions = reviewTarget === 'vehicle'
     ? [
         'Wrong vehicle document',
@@ -304,6 +328,10 @@ export default function DriverVerificationDetailPage() {
       profileImageUrl,
     })
   }, [driver, identityDocuments, vehicleDocuments, documentGroups, profileImageUrl])
+
+  useEffect(() => {
+    setHeaderImageUrlIndex(0)
+  }, [profileImageUrl])
 
   function itemStatusLabel(url, sectionStatus) {
     if (!url) return 'Missing'
@@ -374,7 +402,11 @@ export default function DriverVerificationDetailPage() {
       return
     }
     const allowResubmit = true
-    const canReject = target === 'vehicle' ? driver?.vehicle?.status === 'pending' : driver?.profile?.status === 'pending'
+    const canReject = target === 'vehicle'
+      ? driver?.vehicle?.status === 'pending'
+      : target === 'profile_image'
+        ? profileImageReview?.status === 'pending' && !!pendingProfilePhotoUrl
+        : driver?.profile?.status === 'pending'
     if (!canReject) return
 
     setReviewing(true)
@@ -397,6 +429,8 @@ export default function DriverVerificationDetailPage() {
 
   const handleApprove = () => approveFor(reviewTarget)
   const handleReject = () => rejectFor(reviewTarget)
+  const handleApproveProfileImage = () => approveFor('profile_image')
+  const handleRejectProfileImage = () => rejectFor('profile_image')
 
   useEffect(() => {
     setCarPhotoIndex(0)
@@ -489,7 +523,17 @@ export default function DriverVerificationDetailPage() {
 
             <div className="h-28 w-28 shrink-0 overflow-hidden rounded-sm bg-slate-900">
               {profileImageUrl ? (
-                <img src={profileImageUrl} alt={driverTitle} className="h-full w-full object-cover" />
+                <img
+                  src={activeProfileImageUrl}
+                  alt={driverTitle}
+                  className="h-full w-full object-cover"
+                  onError={() => {
+                    setHeaderImageUrlIndex((current) => {
+                      if (current >= profileImageCandidates.length - 1) return current
+                      return current + 1
+                    })
+                  }}
+                />
               ) : (
                 <div className="flex h-full w-full items-center justify-center text-lg font-semibold text-white">
                   {avatarLabel}
@@ -809,6 +853,59 @@ export default function DriverVerificationDetailPage() {
 
       {activeSection === 'other' ? (
         <>
+          <section className="border border-slate-300 bg-white p-4">
+            <div className="flex flex-col gap-4 border-b border-slate-200 pb-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-800">Driver Profile Photo Review</h2>
+                <p className="mt-2 text-sm text-slate-700">
+                  Profile photo changes stay pending until an admin approves them.
+                </p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Status: {profileImageReview?.status || 'No profile photo review yet'}
+                </p>
+                {profileImageReview?.submittedAt ? (
+                  <p className="mt-1 text-xs text-slate-500">Submitted: {formatAdminDateTime(profileImageReview.submittedAt)}</p>
+                ) : null}
+                {profileImageReview?.rejectionReason ? (
+                  <p className="mt-2 text-xs text-rose-600">Rejection reason: {profileImageReview.rejectionReason}</p>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleApproveProfileImage}
+                  disabled={!canApproveProfileImage || reviewing}
+                  className={`rounded-sm px-3 py-2 text-xs font-semibold text-white ${!canApproveProfileImage || reviewing ? 'cursor-not-allowed bg-emerald-300' : 'bg-emerald-600 hover:bg-emerald-500'}`}
+                >
+                  Approve photo
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRejectProfileImage}
+                  disabled={!canRejectProfileImage || reviewing}
+                  className={`rounded-sm px-3 py-2 text-xs font-semibold text-white ${!canRejectProfileImage || reviewing ? 'cursor-not-allowed bg-rose-300' : 'bg-rose-600 hover:bg-rose-500'}`}
+                >
+                  Reject photo
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <article className="overflow-hidden rounded-sm border border-slate-200 bg-slate-50">
+                <div className="border-b border-slate-200 px-3 py-2">
+                  <p className="text-xs font-semibold text-slate-700">Current approved photo</p>
+                </div>
+                <DocumentPreview url={approvedProfilePhotoUrl} label="Approved driver profile photo" />
+              </article>
+              <article className="overflow-hidden rounded-sm border border-slate-200 bg-slate-50">
+                <div className="border-b border-slate-200 px-3 py-2">
+                  <p className="text-xs font-semibold text-slate-700">Pending replacement photo</p>
+                </div>
+                <DocumentPreview url={pendingProfilePhotoUrl} label="Pending driver profile photo" />
+              </article>
+            </div>
+          </section>
+
           <section className="border border-slate-300 bg-white p-4">
             <h2 className="mb-3 text-sm font-semibold text-slate-800">Verification Controls</h2>
             <p className="mb-3 text-xs text-slate-500">Use these controls to finalize review decisions and keep the driver app in sync with the backend verification state.</p>

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkClient } from '../lib/clerk-client.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
-import { getClerkUserById, mergePrivateMetadata, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
+import { getClerkUserById, mergePrivateMetadata, normalizeRole, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
 import { attachDriverToAgentInvite, attachPassengerToAgentInvite } from '../lib/agent-invites.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
 import {
@@ -120,6 +120,7 @@ router.patch('/me', requireAuth, async (req, res) => {
   try {
     const clerkClient = getClerkClient();
     const currentUser = await getClerkUserById(req.userId);
+    const role = normalizeRole(currentUser.publicMetadata?.role);
     const firstName = req.body?.firstName === undefined ? currentUser.firstName : String(req.body.firstName || '').trim();
     const lastName = req.body?.lastName === undefined ? currentUser.lastName : String(req.body.lastName || '').trim();
     const phoneVisibleToDrivers = req.body?.phoneVisibleToDrivers;
@@ -134,11 +135,23 @@ router.patch('/me', requireAuth, async (req, res) => {
     });
 
     if (phoneVisibleToDrivers !== undefined || profileImageUrl !== undefined) {
-      await mergePrivateMetadata(req.userId, {
-        ...(currentUser.privateMetadata || {}),
+      const nextPrivateMetadataPatch = {
         ...(phoneVisibleToDrivers !== undefined ? { phoneVisibleToDrivers: phoneVisibleToDrivers === true } : {}),
-        ...(nextProfileImageUrl !== undefined ? { profileImageUrl: nextProfileImageUrl } : {}),
-      });
+      };
+
+      if (nextProfileImageUrl !== undefined) {
+        if (role === 'driver') {
+          nextPrivateMetadataPatch.pendingDriverProfileImageUrl = nextProfileImageUrl;
+          nextPrivateMetadataPatch.driverProfileImageReviewStatus = nextProfileImageUrl ? 'pending' : null;
+          nextPrivateMetadataPatch.driverProfileImageSubmittedAt = nextProfileImageUrl ? new Date().toISOString() : null;
+          nextPrivateMetadataPatch.driverProfileImageReviewedAt = null;
+          nextPrivateMetadataPatch.driverProfileImageRejectionReason = null;
+        } else {
+          nextPrivateMetadataPatch.profileImageUrl = nextProfileImageUrl;
+        }
+      }
+
+      await mergePrivateMetadata(req.userId, nextPrivateMetadataPatch);
     }
 
     const nextUser = await getClerkUserById(req.userId);

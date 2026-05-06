@@ -100,6 +100,21 @@ function askCropPreference() {
   });
 }
 
+function chooseImageSource({ title, message, allowCamera = true }) {
+  return new Promise((resolve) => {
+    const buttons = [];
+
+    if (allowCamera) {
+      buttons.push({ text: 'Take photo', onPress: () => resolve('camera') });
+    }
+
+    buttons.push({ text: 'Choose from gallery', onPress: () => resolve('gallery') });
+    buttons.push({ text: 'Cancel', style: 'cancel', onPress: () => resolve(null) });
+
+    Alert.alert(title, message, buttons, { cancelable: true, onDismiss: () => resolve(null) });
+  });
+}
+
 const DriverRegisterCarScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -195,34 +210,88 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         Alert.alert('Photo limit reached', `You can upload up to ${MAX_CAR_PHOTOS} car photos.`);
         return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        allowsMultipleSelection: true,
-        selectionLimit: remaining,
-        quality: 0.8,
+
+      const source = await chooseImageSource({
+        title: 'Add car photos',
+        message: 'Use your camera for a new car photo or choose existing ones from your gallery.',
       });
+      if (!source) return;
+
+      let result;
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Camera permission needed', 'Allow camera access to take car photos.');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: false,
+          quality: 0.8,
+        });
+      } else {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Gallery permission needed', 'Allow photo library access to choose car photos from your gallery.');
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: false,
+          allowsMultipleSelection: true,
+          selectionLimit: remaining,
+          quality: 0.8,
+        });
+      }
+
       if (result.canceled || !result.assets?.length) return;
       setCarPhotoUris((current) => {
         const merged = [...current, ...result.assets.map((asset) => asset.uri).filter(Boolean)];
         return Array.from(new Set(merged)).slice(0, MAX_CAR_PHOTOS);
       });
     } catch {
-      Alert.alert('Error', 'Could not open image picker');
+      Alert.alert('Error', 'Could not open the car photo picker');
     }
   };
 
   const pickSingleImage = async (setter) => {
     try {
-      const allowsEditing = await askCropPreference();
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing,
-        quality: 0.8,
+      const source = await chooseImageSource({
+        title: 'Upload document',
+        message: 'Use your camera or choose an existing document photo from your gallery.',
       });
+      if (!source) return;
+
+      const allowsEditing = await askCropPreference();
+      let result;
+
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Camera permission needed', 'Allow camera access to take a document photo.');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing,
+          quality: 0.8,
+        });
+      } else {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Gallery permission needed', 'Allow photo library access to choose a document image from your gallery.');
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing,
+          quality: 0.8,
+        });
+      }
+
       if (!result.canceled && result.assets?.[0]?.uri) setter(result.assets[0].uri);
     } catch {
-      Alert.alert('Error', 'Could not open image picker');
+      Alert.alert('Error', 'Could not open the document picker');
     }
   };
 

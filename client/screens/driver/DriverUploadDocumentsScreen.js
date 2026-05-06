@@ -45,6 +45,21 @@ function askCropPreference() {
   });
 }
 
+function chooseImageSource({ title, message, allowCamera = true }) {
+  return new Promise((resolve) => {
+    const buttons = [];
+
+    if (allowCamera) {
+      buttons.push({ text: 'Take photo', onPress: () => resolve('camera') });
+    }
+
+    buttons.push({ text: 'Choose from gallery', onPress: () => resolve('gallery') });
+    buttons.push({ text: 'Cancel', style: 'cancel', onPress: () => resolve(null) });
+
+    Alert.alert(title, message, buttons, { cancelable: true, onDismiss: () => resolve(null) });
+  });
+}
+
 function nextRouteAfterDocumentsSubmit(driverMe) {
   const vehicleStatus = String(driverMe?.vehicle?.status || '').trim().toLowerCase();
   const hasVehicleSubmission =
@@ -148,10 +163,21 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const pickImage = async (key) => {
     try {
       const imagePicker = await import('expo-image-picker');
+      const source = await chooseImageSource({
+        title: 'Upload document',
+        message:
+          key === 'selfieWithIdCard'
+            ? 'Use your camera or choose an existing photo while holding your national ID.'
+            : key === 'selfie'
+              ? 'Use your camera or choose an existing selfie from your gallery.'
+              : 'Use your camera or choose an existing document photo from your gallery.',
+      });
+      if (!source) return;
+
       const allowsEditing = await askCropPreference();
       let result;
 
-      if (key === 'selfie' || key === 'selfieWithIdCard') {
+      if (source === 'camera') {
         const permission = await imagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
           Alert.alert(
@@ -169,6 +195,11 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           quality: 0.8,
         });
       } else {
+        const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Gallery permission needed', 'Allow photo library access to choose an image from your gallery.');
+          return;
+        }
         result = await imagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsEditing,
@@ -180,7 +211,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         setUris((prev) => ({ ...prev, [key]: result.assets[0].uri }));
       }
     } catch {
-      Alert.alert('Error', key === 'selfie' || key === 'selfieWithIdCard' ? 'Could not open camera' : 'Could not open image picker');
+      Alert.alert('Error', 'Could not open the document picker.');
     }
   };
 

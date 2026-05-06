@@ -7,6 +7,13 @@ function getOverlayModule() {
   return NativeModules.TrustOverlay;
 }
 
+function logOverlay(event, details = {}) {
+  console.log(`[TripOverlay] ${event}`, {
+    ...details,
+    support: getTripOverlaySupportInfo(),
+  });
+}
+
 export function getTripOverlaySupportInfo() {
   const matchingNativeModules = Object.keys(NativeModules || {})
     .filter((key) => /trust|overlay/i.test(key))
@@ -36,16 +43,19 @@ function logUnsupported(source) {
 
 function normalizePayload(payload = {}) {
   const variant = String(payload.variant || 'online').trim().toLowerCase();
+  const normalizedVariant = ['request', 'trip'].includes(variant) ? variant : 'online';
   return {
     title: String(payload.title || 'Trust Express'),
     subtitle: String(payload.subtitle || 'Active trip'),
     meta: String(payload.meta || ''),
-    variant: variant === 'request' ? 'request' : 'online',
+    variant: normalizedVariant,
   };
 }
 
 export function isTripOverlaySupported() {
-  return isSupported();
+  const supported = isSupported();
+  logOverlay('isTripOverlaySupported', { supported });
+  return supported;
 }
 
 export async function canUseTripOverlay() {
@@ -55,22 +65,35 @@ export async function canUseTripOverlay() {
   }
   try {
     const overlayModule = getOverlayModule();
+    logOverlay('canDrawOverlays:start');
     const result = await overlayModule.canDrawOverlays();
-    console.log('[TripOverlay] canDrawOverlays result:', result);
+    logOverlay('canDrawOverlays:result', { result });
     return result;
   } catch (error) {
-    console.log('[TripOverlay] canDrawOverlays error:', error);
+    logOverlay('canDrawOverlays:error', {
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
     return false;
   }
 }
 
 export async function openTripOverlaySettings() {
-  if (!isSupported()) return false;
+  if (!isSupported()) {
+    logUnsupported('openTripOverlaySettings');
+    return false;
+  }
   try {
     const overlayModule = getOverlayModule();
+    logOverlay('openOverlaySettings:start');
     await overlayModule.openOverlaySettings();
+    logOverlay('openOverlaySettings:done');
     return true;
-  } catch {
+  } catch (error) {
+    logOverlay('openOverlaySettings:error', {
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
     return false;
   }
 }
@@ -80,30 +103,45 @@ export async function showTripOverlay(payload) {
     logUnsupported('showTripOverlay');
     return false;
   }
+  const normalizedPayload = normalizePayload(payload);
+  logOverlay('show:start', { payload: normalizedPayload });
   const canDraw = await canUseTripOverlay();
   if (!canDraw) {
-    console.log('[TripOverlay] showTripOverlay: Cannot draw overlays');
+    logOverlay('show:blocked:no-permission');
     return false;
   }
 
   try {
     const overlayModule = getOverlayModule();
-    console.log('[TripOverlay] showTripOverlay: Showing overlay with payload:', payload);
-    await overlayModule.show(normalizePayload(payload));
-    console.log('[TripOverlay] showTripOverlay: Overlay shown successfully');
+    await overlayModule.show(normalizedPayload);
+    logOverlay('show:done');
     return true;
   } catch (error) {
-    console.log('[TripOverlay] showTripOverlay: Error showing overlay:', error);
+    logOverlay('show:error', {
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
     return false;
   }
 }
 
 export async function updateTripOverlay(payload) {
-  if (!isSupported()) return false;
+  if (!isSupported()) {
+    logUnsupported('updateTripOverlay');
+    return false;
+  }
+  const normalizedPayload = normalizePayload(payload);
+  logOverlay('update:start', { payload: normalizedPayload });
   try {
     const overlayModule = getOverlayModule();
-    return await overlayModule.update(normalizePayload(payload));
-  } catch {
+    const result = await overlayModule.update(normalizedPayload);
+    logOverlay('update:done', { result });
+    return result;
+  } catch (error) {
+    logOverlay('update:error', {
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
     return false;
   }
 }
@@ -116,12 +154,15 @@ export async function hideTripOverlay() {
 
   try {
     const overlayModule = getOverlayModule();
-    console.log('[TripOverlay] hideTripOverlay: Hiding overlay');
+    logOverlay('hide:start');
     await overlayModule.hide();
-    console.log('[TripOverlay] hideTripOverlay: Overlay hidden successfully');
+    logOverlay('hide:done');
     return true;
   } catch (error) {
-    console.log('[TripOverlay] hideTripOverlay: Error hiding overlay:', error);
+    logOverlay('hide:error', {
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
     return false;
   }
 }

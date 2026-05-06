@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { shareReceiptPdf } from '../../services/receiptPrint';
+import { downloadReceiptPdf } from '../../services/receiptPrint';
 import { getPassengerRideHistory } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
@@ -150,9 +150,10 @@ const PassengerActivityScreen = ({ navigation }) => {
       setDownloadingReceiptId(ride.id);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      await shareReceiptPdf(token, ride.id);
-    } catch {
-      // Keep history list usable if receipt generation fails.
+      const result = await downloadReceiptPdf(token, ride.id);
+      Alert.alert('Receipt downloaded', `${result.fileName} was saved.`);
+    } catch (receiptError) {
+      Alert.alert('Receipt download failed', receiptError?.message || 'Could not download this ride receipt.');
     } finally {
       setDownloadingReceiptId(null);
     }

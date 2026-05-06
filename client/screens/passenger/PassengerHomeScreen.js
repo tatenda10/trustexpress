@@ -740,10 +740,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
           zoomEnabled
           rotateEnabled={false}
           pitchEnabled={false}
-          showsUserLocation={!!currentLocationCoordinate}
+          showsUserLocation={false}
         >
           {currentLocationCoordinate ? (
-            <Marker coordinate={currentLocationCoordinate} title="Your location">
+            <Marker coordinate={currentLocationCoordinate} title="Your location" tracksViewChanges={false}>
               <View className="items-center">
                 <View className="h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#2563eb]">
                   <Ionicons name="locate" size={18} color="#fff" />
@@ -757,6 +757,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
               coordinate={driver.coordinate}
               title={driver.carName || 'Nearby car'}
               description={driver.tierName || 'Nearby driver'}
+              tracksViewChanges={false}
             >
               <View className="items-center">
                 <View className="h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-[#111827]">

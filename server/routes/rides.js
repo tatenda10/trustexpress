@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import { Router } from 'express';
-import PDFDocument from 'pdfkit';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import { fetchCachedGoogleDirections } from '../lib/google-directions.js';
+import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import {
   emitRideRequestRemovedFromDriver,
@@ -104,18 +104,23 @@ function calculateTierFare(tier, distanceKm) {
 }
 
 function mapDriverAvailability(row, pickupCoordinate) {
-  const coordinate = {
-    latitude: Number(row.current_lat),
-    longitude: Number(row.current_lng),
-  };
-  const driverDistanceKm = calculateDistanceKm(pickupCoordinate, coordinate);
+  const lat = Number(row.current_lat);
+  const lng = Number(row.current_lng);
+  const hasCoordinate = Number.isFinite(lat) && Number.isFinite(lng);
+  const coordinate = hasCoordinate
+    ? {
+        latitude: lat,
+        longitude: lng,
+      }
+    : null;
+  const driverDistanceKm = hasCoordinate ? calculateDistanceKm(pickupCoordinate, coordinate) : null;
   return {
     id: row.driver_user_id,
     tierName: row.vehicle_tier_name,
     carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
     plate: row.number_plate || 'Unknown plate',
     driverName: row.driver_name || 'Driver',
-    etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
+    etaMinutes: hasCoordinate ? Math.max(1, Math.round(driverDistanceKm * 4)) : null,
     driverDistanceKm,
     amount: Number(row.estimated_amount || 0),
     rating: 4.9,
@@ -135,15 +140,15 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
   const lng = Number(row.current_lng);
   const coordinate = Number.isFinite(lat) && Number.isFinite(lng)
     ? { latitude: lat, longitude: lng }
-    : pickupCoordinate;
-  const driverDistanceKm = calculateDistanceKm(pickupCoordinate, coordinate);
+    : null;
+  const driverDistanceKm = coordinate ? calculateDistanceKm(pickupCoordinate, coordinate) : null;
   return {
     id: row.driver_user_id,
     tierName: row.vehicle_tier_name || 'Ride',
     carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
     plate: row.number_plate || 'Unknown plate',
     driverName: row.driver_name || 'Driver',
-    etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
+    etaMinutes: coordinate ? Math.max(1, Math.round(driverDistanceKm * 4)) : null,
     driverDistanceKm,
     amount: Number(estimatedAmount || 0),
     rating: 4.9,
@@ -954,19 +959,6 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
        ORDER BY rr.responded_at ASC`,
       [rideRequestId]
     );
-    console.log('[rides.passenger.status] accepted drivers snapshot', {
-      passengerUserId: req.userId,
-      rideRequestId,
-      rideStatus: ride.status,
-      respondingCount: respondingDrivers.length,
-      respondingStatuses: respondingDrivers.map((row) => ({
-        driverUserId: row.driver_user_id,
-        status: row.response_status,
-        hasAvailability: row.current_lat !== null && row.current_lng !== null,
-      })),
-      nowIso: new Date().toISOString(),
-    });
-
     const acceptedDrivers = respondingDrivers.map((row) =>
       mapAcceptedDriverOffer(row, pickupCoordinate, ride.estimated_amount)
     );
@@ -1188,53 +1180,10 @@ router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-    const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    doc.pipe(res);
-
-    const fareAmount = Number(ride.estimated_amount || 0);
-    const tipAmount = Number(ride.tip_amount || 0);
-    const totalAmount = fareAmount + tipAmount;
-    const requestedAt = ride.requested_at ? new Date(ride.requested_at).toISOString() : '-';
-    const completedAt = ride.completed_at ? new Date(ride.completed_at).toISOString() : '-';
-    const statusLabel = mapPassengerRideStatus(ride.status);
-
-    doc.fillColor('#0C1F49').fontSize(22).font('Helvetica-Bold').text('TRUST EXPRESS APP', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fillColor('#999').fontSize(12).font('Helvetica').text('Trust Express Ride Receipt', { align: 'center' });
-    doc.moveDown(1);
-
-    doc.fillColor('#206EFF').fontSize(10).font('Helvetica-Bold').text('Receipt #:', { continued: true }).fillColor('#000').text(` RCPT-${ride.id}`);
-    doc.fillColor('#206EFF').text('Trip ID:', { continued: true }).fillColor('#000').text(` ${ride.public_id || ride.id}`);
-    doc.fillColor('#206EFF').text('Status:', { continued: true }).fillColor('#000').text(` ${statusLabel}`);
-    doc.fillColor('#206EFF').text('Requested:', { continued: true }).fillColor('#000').text(` ${requestedAt}`);
-    doc.fillColor('#206EFF').text('Completed:', { continued: true }).fillColor('#000').text(` ${completedAt}`);
-
-    doc.moveDown(0.5);
-    doc.strokeColor('#D9D9D9').lineWidth(1).moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
-    doc.moveDown(0.5);
-
-    doc.fontSize(12).fillColor('#0C1F49').font('Helvetica-Bold').text('Passenger:', { continued: true }).fillColor('#000').text(` ${ride.passenger_name || 'Passenger'}`);
-    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Driver:', { continued: true }).fillColor('#000').text(` ${ride.driver_name || 'N/A'}`);
-    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Pickup:', { continued: true }).fillColor('#000').text(` ${ride.pickup_label || '-'}`);
-    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Drop-off:', { continued: true }).fillColor('#000').text(` ${ride.dropoff_label || '-'}`);
-
-    doc.moveDown(0.5);
-    doc.strokeColor('#D9D9D9').lineWidth(1).moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
-    doc.moveDown(0.5);
-
-    doc.fontSize(12).fillColor('#0C1F49').font('Helvetica-Bold').text('Tier:', { continued: true }).fillColor('#000').text(` ${ride.requested_tier_name || 'Trust Express'}`);
-    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Fare:', { continued: true }).fillColor('#000').text(` $${fareAmount.toFixed(2)}`);
-    doc.font('Helvetica-Bold').fillColor('#0C1F49').text('Tip:', { continued: true }).fillColor('#000').text(` $${tipAmount.toFixed(2)}`);
-    doc.font('Helvetica-Bold').fillColor('#206EFF').fontSize(14).text('Total:', { continued: true }).fillColor('#000').text(` $${totalAmount.toFixed(2)}`);
-
-    doc.moveDown(1);
-    doc.fontSize(10).fillColor('#666').font('Helvetica').text('Thank you for riding with Trust Express!', { align: 'center' });
-    doc.moveDown(0.25);
-    doc.fontSize(9).fillColor('#666').text('Safe rides. Trusted drivers. Always.', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(8).fillColor('#999').text('Support: support@trustexpress.co.zw | +263 713 834 565 | trustjavvehicles.co.zw', { align: 'center' });
-
-    doc.end();
+    writeRideReceiptPdf(res, ride, {
+      statusLabel: mapPassengerRideStatus(ride.status),
+      footerText: 'Thank you for riding with Trust Express!',
+    });
   } catch (err) {
     console.error('GET /api/rides/passenger/:rideRequestId/receipt-pdf', err);
     return res.status(500).json({ error: 'Server error' });

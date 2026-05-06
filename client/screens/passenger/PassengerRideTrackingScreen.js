@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, SafeAreaView, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Speech from 'expo-speech';
-import { cancelRideRequest, completeRideRequest, getApiUrl, getPassengerRideRequestStatus, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
+import { cancelRideRequest, completeRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -14,6 +14,7 @@ import { connectRealtime } from '../../realtime';
 
 const TRACKING_STATUS_REFRESH_MS = 5000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
+const ROUTE_REFRESH_DISTANCE_METERS = 1000;
 
 function mapRideStatusToStage(status) {
   switch (String(status || '').toLowerCase()) {
@@ -92,12 +93,34 @@ function normalizeVehicleImageUrl(url) {
   }
 }
 
+async function fetchTrackingDirections(token, origin, destination) {
+  if (!token || !origin || !destination) return null;
+
+  const data = await getDirectionsRoute(token, {
+    origin,
+    destination,
+    cacheTtlSeconds: 180,
+  });
+  const route = data?.route || {};
+
+  return {
+    coordinates: Array.isArray(route.coordinates) ? route.coordinates : [],
+    distanceMeters: Number(route.distanceMeters || 0),
+    durationSeconds: Number(route.durationSeconds || 0),
+    nextInstruction: route.nextInstruction || '',
+  };
+}
+
 export default function PassengerRideTrackingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const mapRef = useRef(null);
   const lastArrivalAnnouncementRef = useRef('');
+  const lastRouteOriginRef = useRef(null);
+  const lastRouteTargetRef = useRef(null);
+  const lastRouteFetchedAtRef = useRef(0);
+  const routeRequestIdRef = useRef(0);
   const {
     pickupCoordinate: initialPickupCoordinate,
     dropoffCoordinate: initialDropoffCoordinate,
@@ -120,9 +143,42 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [nowTick, setNowTick] = useState(Date.now());
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
+  const [rideSheetCollapsed, setRideSheetCollapsed] = useState(false);
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [tripRouteCoordinates, setTripRouteCoordinates] = useState([]);
+  const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
+  const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
+  const [nextInstruction, setNextInstruction] = useState('');
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState('');
+  const [lostItemDescription, setLostItemDescription] = useState('');
+  const [lostItemContactPhone, setLostItemContactPhone] = useState('');
+  const [submittingLostItem, setSubmittingLostItem] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
   const bottomActionInset = Math.max(insets.bottom + tabBarHeight - 8, 20);
+  const collapsedSheetHeight = Math.max(300, bottomActionInset + 220);
+
+  const exitToPassengerHome = () => {
+    if (navigation?.canGoBack?.()) {
+      try {
+        navigation.popToTop();
+        return;
+      } catch {
+        // Fall through to a direct route replace when popToTop is unavailable.
+      }
+    }
+
+    try {
+      navigation.replace('PassengerBookingHome');
+    } catch {
+      try {
+        navigation.navigate('PassengerBookingHome');
+      } catch {
+        // noop
+      }
+    }
+  };
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -209,9 +265,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
   useEffect(() => {
     if (rideStatus?.status === 'cancelled') {
-      navigation.popToTop?.();
+      exitToPassengerHome();
     }
-  }, [rideStatus?.status, navigation]);
+  }, [rideStatus?.status]);
 
   const pickupCoordinate = rideStatus?.pickupCoordinate || initialPickupCoordinate;
   const dropoffCoordinate = rideStatus?.dropoffCoordinate || initialDropoffCoordinate;
@@ -222,7 +278,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const totalAmount = Number(rideStatus?.totalAmount || (estimatedAmount + tipAmount) || 0);
   const stage = rideStatus?.stage || 'driver_on_the_way';
   const isCompleted = stage === 'completed';
-  const driverCoordinate = rideStatus?.driverCoordinate || driver?.coordinate || pickupCoordinate;
+  const driverCoordinate = rideStatus?.driverCoordinate || driver?.coordinate || null;
+  const hasDriverCoordinate = !!driverCoordinate;
   const activeTarget = stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
   const tipOptions = [1, 2, 5, 10];
@@ -276,15 +333,117 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     );
   }, [activeTarget, driverCoordinate, dropoffCoordinate, pickupCoordinate, stage]);
 
+  useEffect(() => {
+    if (!driverCoordinate || !activeTarget || isCompleted) {
+      setRouteCoordinates([]);
+      setRouteDistanceMeters(0);
+      setRouteDurationSeconds(0);
+      setNextInstruction('');
+      setRouteError('');
+      return undefined;
+    }
+
+    const previousOrigin = lastRouteOriginRef.current;
+    const previousTarget = lastRouteTargetRef.current;
+    const movedDistanceMeters = previousOrigin
+      ? calculateDistanceKm(previousOrigin, driverCoordinate) * 1000
+      : Infinity;
+    const targetChanged = previousTarget
+      ? calculateDistanceKm(previousTarget, activeTarget) * 1000 >= 30
+      : true;
+    if (
+      !targetChanged &&
+      routeCoordinates.length > 0 &&
+      movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const currentRequestId = routeRequestIdRef.current + 1;
+    routeRequestIdRef.current = currentRequestId;
+    lastRouteOriginRef.current = driverCoordinate;
+    lastRouteTargetRef.current = activeTarget;
+    lastRouteFetchedAtRef.current = Date.now();
+
+    const loadDirections = async () => {
+      try {
+        setRouteLoading(true);
+        setRouteError('');
+        const token = await getToken();
+        const route = await fetchTrackingDirections(token, driverCoordinate, activeTarget);
+        if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
+
+        setRouteCoordinates(Array.isArray(route?.coordinates) && route.coordinates.length > 1
+          ? route.coordinates
+          : [driverCoordinate, activeTarget].filter(Boolean));
+        setRouteDistanceMeters(route?.distanceMeters || 0);
+        setRouteDurationSeconds(route?.durationSeconds || 0);
+        setNextInstruction(route?.nextInstruction || '');
+      } catch (error) {
+        if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
+        setRouteCoordinates([driverCoordinate, activeTarget].filter(Boolean));
+        setRouteDistanceMeters(0);
+        setRouteDurationSeconds(0);
+        setNextInstruction('');
+        setRouteError(error?.message || 'Could not load road directions.');
+      } finally {
+        if (!cancelled && routeRequestIdRef.current === currentRequestId) {
+          setRouteLoading(false);
+        }
+      }
+    };
+
+    loadDirections();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTarget, driverCoordinate, getToken, isCompleted, routeCoordinates.length]);
+
+  useEffect(() => {
+    if (!pickupCoordinate || !dropoffCoordinate || isCompleted) {
+      setTripRouteCoordinates([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadTripRoute = async () => {
+      try {
+        const token = await getToken();
+        const route = await fetchTrackingDirections(token, pickupCoordinate, dropoffCoordinate);
+        if (cancelled) return;
+        setTripRouteCoordinates(
+          Array.isArray(route?.coordinates) && route.coordinates.length > 1
+            ? route.coordinates
+            : [pickupCoordinate, dropoffCoordinate].filter(Boolean)
+        );
+      } catch {
+        if (cancelled) return;
+        setTripRouteCoordinates([pickupCoordinate, dropoffCoordinate].filter(Boolean));
+      }
+    };
+
+    loadTripRoute();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dropoffCoordinate, getToken, isCompleted, pickupCoordinate]);
+
   const liveDriverDistanceKm = useMemo(
-    () => calculateDistanceKm(driverCoordinate, activeTarget),
-    [activeTarget, driverCoordinate]
+    () => (routeDistanceMeters > 0 ? routeDistanceMeters / 1000 : calculateDistanceKm(driverCoordinate, activeTarget)),
+    [activeTarget, driverCoordinate, routeDistanceMeters]
   );
 
   const liveEtaMinutes = useMemo(
-    () => Math.max(1, Math.round(liveDriverDistanceKm * 4)),
-    [liveDriverDistanceKm]
+    () => (routeDurationSeconds > 0 ? Math.max(1, Math.round(routeDurationSeconds / 60)) : Math.max(1, Math.round(liveDriverDistanceKm * 4))),
+    [liveDriverDistanceKm, routeDurationSeconds]
   );
+  const hasRoadDistance = routeDistanceMeters > 0;
+  const liveEtaText = hasDriverCoordinate ? `${liveEtaMinutes} min` : 'Locating';
+  const liveDistanceText = hasDriverCoordinate ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Waiting for driver location';
 
   const pickupWaitRemainingSeconds = useMemo(() => {
     if (stage !== 'waiting_at_pickup') return null;
@@ -311,7 +470,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       // allow UI to exit even if cancel sync fails
     }
     Alert.alert('Ride cancelled', 'Your ride request has been cancelled.');
-    navigation.popToTop?.();
+    exitToPassengerHome();
   };
 
   const handleDone = async () => {
@@ -323,7 +482,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     } catch (error) {
       // local UI still closes
     }
-    navigation.popToTop();
+    exitToPassengerHome();
   };
 
   const handleConfirmPickup = async () => {
@@ -359,7 +518,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         passengerDriverReview: review,
       } : current);
       setShowDriverRatingModal(false);
-      Alert.alert('Thanks', 'Your driver rating was saved.', [{ text: 'OK', onPress: () => navigation.popToTop?.() }]);
+      Alert.alert('Thanks', 'Your driver rating was saved.', [{ text: 'OK', onPress: exitToPassengerHome }]);
     } catch (error) {
       Alert.alert('Rating failed', error?.message || 'Could not save your rating.');
     } finally {
@@ -387,6 +546,32 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     }
   };
 
+  const handleReportLostItem = async () => {
+    const itemDescription = String(lostItemDescription || '').trim();
+    const contactPhone = String(lostItemContactPhone || '').trim();
+    if (!itemDescription) {
+      Alert.alert('Missing details', 'Please describe the lost item.');
+      return;
+    }
+
+    try {
+      setSubmittingLostItem(true);
+      const token = await getToken();
+      if (!token || !rideRequestId) throw new Error('Not signed in');
+      await reportLostItem(token, rideRequestId, {
+        itemDescription,
+        contactPhone: contactPhone || undefined,
+      });
+      setLostItemDescription('');
+      setLostItemContactPhone('');
+      Alert.alert('Reported', 'Your lost item report has been sent to support.');
+    } catch (error) {
+      Alert.alert('Report failed', error?.message || 'Could not submit your lost item report.');
+    } finally {
+      setSubmittingLostItem(false);
+    }
+  };
+
   if (loading) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
@@ -397,7 +582,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-white" edges={['top', 'left', 'right']}>
       <View className="flex-1">
         <MapView
           ref={mapRef}
@@ -409,7 +594,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           pitchEnabled={false}
         >
           {driverCoordinate ? (
-            <Marker coordinate={driverCoordinate} title="Driver">
+            <Marker coordinate={driverCoordinate} title="Driver" tracksViewChanges={false}>
               <View className="items-center">
                 <View
                   className="h-12 w-12 items-center justify-center rounded-full border-4 border-white"
@@ -418,15 +603,29 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   <Ionicons name="car-sport" size={22} color="#fff" />
                 </View>
                 <View className="mt-1 rounded-full bg-white px-2 py-1">
-                  <Text className="text-xs font-bold text-gray-900">{liveEtaMinutes} min</Text>
+                  <Text className="text-xs font-bold text-gray-900">{liveEtaText}</Text>
                 </View>
               </View>
             </Marker>
           ) : null}
-          <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" />
-          <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" />
+          <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+          <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
           <Polyline
-            coordinates={stage === 'on_trip' ? [driverCoordinate, dropoffCoordinate] : [driverCoordinate, pickupCoordinate]}
+            coordinates={
+              stage === 'on_trip'
+                ? (
+                    tripRouteCoordinates.length > 1
+                      ? tripRouteCoordinates
+                      : routeCoordinates.length > 1
+                        ? routeCoordinates
+                        : [pickupCoordinate, dropoffCoordinate].filter(Boolean)
+                  )
+                : (
+                    routeCoordinates.length > 1
+                      ? routeCoordinates
+                      : [driverCoordinate, pickupCoordinate].filter(Boolean)
+                  )
+            }
             strokeColor={PRIMARY_BLUE}
             strokeWidth={5}
           />
@@ -446,7 +645,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   : stage === 'waiting_at_pickup'
                     ? 'Your driver has arrived'
                     : stage === 'on_trip'
-                      ? 'You are on the trip'
+                      ? 'Trip in progress'
                       : 'Driver is on the way'}
               </Text>
               <Text className="mt-1 text-sm text-gray-500">
@@ -458,211 +657,360 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       : rideStatus?.passengerConfirmedAt
                         ? `Confirmed! ${pickupWaitCountdownText} remaining.`
                         : `${pickupWaitCountdownText} to meet your driver at pickup.`
-                    : `${liveEtaMinutes} min away - ${liveDriverDistanceKm.toFixed(1)} km`}
+                    : stage === 'on_trip'
+                      ? (dropoffLabel || 'Heading to your destination')
+                    : hasDriverCoordinate
+                      ? `${liveEtaText} away - ${liveDistanceText}`
+                      : liveDistanceText}
               </Text>
             </View>
           </View>
         </View>
-
-        {!isCompleted && (
-          <View className="absolute left-5 right-5" style={{ bottom: 360 }}>
-            <View className="self-start rounded-[22px] bg-white/95 px-4 py-3">
-              <Text className="text-sm font-medium text-gray-500">
-                {stage === 'on_trip' ? 'Trip progress' : 'Driver location'}
-              </Text>
-              <Text className="mt-1 text-base font-bold text-gray-900">
-                {stage === 'waiting_at_pickup'
-                  ? pickupWaitExpired
-                    ? 'Pickup wait time has ended.'
-                    : `${pickupWaitCountdownText} to meet your driver.`
-                  : `${liveEtaMinutes} min away - ${liveDriverDistanceKm.toFixed(1)} km`}
-              </Text>
-            </View>
-          </View>
-        )}
 
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={insets.top + 80}
           style={{ flex: 1, justifyContent: 'flex-end' }}
         >
-          <View className="mt-auto rounded-t-[30px] bg-[#f8fafc] px-5 pt-4" style={{ height: '78%' }}>
-            <View className="items-center">
-              <View className="h-2 w-16 rounded-full bg-gray-300" />
-            </View>
-
-            {stage === 'on_trip' ? (
-              <View className="mt-4 rounded-[22px] border border-blue-100 bg-[#eff5ff] px-4 py-3">
-                <Text className="text-xs font-semibold uppercase tracking-[2px]" style={{ color: PRIMARY_BLUE }}>
-                  You are on a ride
-                </Text>
-                <Text className="mt-1 text-sm text-gray-600">
-                  Stay connected with your driver while you are on the way to your drop-off.
-                </Text>
-              </View>
-            ) : null}
-
-            {stage === 'waiting_at_pickup' ? (
-              <View className="mt-4 rounded-[22px] border border-amber-200 bg-[#fff7ed] px-4 py-3">
-                <Text className="text-xs font-semibold uppercase tracking-[2px] text-amber-600">
-                  Pickup timer
-                </Text>
-                <Text className="mt-1 text-3xl font-bold text-gray-900">{pickupWaitCountdownText}</Text>
-                <Text className="mt-1 text-sm text-gray-600">
-                  {pickupWaitExpired
-                    ? 'The pickup wait time has ended. Message or call your driver now.'
-                    : rideStatus?.passengerConfirmedAt
-                      ? 'You confirmed you\'re coming. Your driver is waiting.'
-                      : 'Please meet your driver at the pickup point.'}
-                </Text>
-              </View>
-            ) : null}
-
+          <View
+            className="mt-auto rounded-t-[30px] bg-[#f8fafc]"
+            style={{ height: rideSheetCollapsed ? collapsedSheetHeight : '78%' }}
+          >
             <ScrollView
-              className="flex-1"
+              className="flex-1 px-5 pt-4"
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ paddingBottom: bottomActionInset + 20 }}
             >
-              <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
-              <View className="flex-row items-center">
-                <View className="items-center">
-                  {driverProfileImageUrl ? (
-                    <Image
-                      source={{ uri: driverProfileImageUrl }}
-                      style={{ width: 62, height: 62, borderRadius: 31 }}
-                    />
-                  ) : (
-                    <View className="h-[62px] w-[62px] items-center justify-center rounded-full bg-[#e0e7ff]">
-                      <Ionicons name="person" size={26} color={PRIMARY_BLUE} />
-                    </View>
-                  )}
-                  <Image
-                    source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80' }}
-                    style={{ marginTop: 10, width: 96, height: 72, borderRadius: 18 }}
+              <TouchableOpacity
+                onPress={() => setRideSheetCollapsed((current) => !current)}
+                activeOpacity={0.8}
+                className="items-center"
+              >
+                <View className="h-2 w-16 rounded-full bg-gray-300" />
+                <View className="mt-3 flex-row items-center">
+                  <Text className="text-sm font-semibold text-gray-500">
+                    {rideSheetCollapsed ? 'Show trip details' : 'Hide trip details'}
+                  </Text>
+                  <Ionicons
+                    name={rideSheetCollapsed ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color="#6b7280"
+                    style={{ marginLeft: 6 }}
                   />
                 </View>
-                <View className="ml-4 flex-1">
-                  <Text className="text-xl font-bold text-gray-900">{driver?.driverName || 'Driver'}</Text>
-                  <View className="mt-1 flex-row items-center">
-                    <Ionicons name="star" size={16} color="#f59e0b" />
-                    <Text className="ml-2 text-sm text-gray-500">{driver?.rating?.toFixed?.(2) || '4.90'} rating</Text>
-                  </View>
-                  <Text className="mt-2 text-sm text-gray-500">{driver?.carName} - {driver?.plate}</Text>
-                  <Text className="mt-1 text-sm font-medium" style={{ color: PRIMARY_BLUE }}>
-                    {driver?.phoneNumber || 'Phone not shared'}
+              </TouchableOpacity>
+
+              {stage !== 'on_trip' ? (
+                <View className="mt-4 rounded-[22px] bg-white px-4 py-3">
+                  <Text className="text-xs font-semibold uppercase tracking-[1px] text-gray-400">
+                    {stage === 'waiting_at_pickup' ? 'Pickup status' : 'Driver status'}
+                  </Text>
+                  <Text className="mt-1 text-base font-bold text-gray-900">
+                    {stage === 'waiting_at_pickup'
+                      ? pickupWaitExpired
+                        ? 'Pickup wait time ended'
+                        : `${pickupWaitCountdownText} at pickup`
+                      : hasDriverCoordinate
+                        ? `${liveEtaText} away - ${liveDistanceText}`
+                        : liveDistanceText}
                   </Text>
                 </View>
-              </View>
-
-              <View className="mt-5 flex-row items-center justify-between rounded-[22px] bg-[#eff5ff] px-4 py-4">
-                <View>
-                  <Text className="text-sm font-medium text-gray-500">{stage === 'on_trip' ? 'Trip status' : 'Live arrival'}</Text>
-                  <Text className="mt-1 text-2xl font-bold text-gray-900">
-                    {stage === 'waiting_at_pickup' ? 'Arrived' : stage === 'on_trip' ? 'On trip' : `${liveEtaMinutes} min`}
-                  </Text>
-                </View>
-                <View className="items-end">
-                  <Text className="text-sm font-medium text-gray-500">Driver distance</Text>
-                  <Text className="mt-1 text-2xl font-bold text-gray-900">{liveDriverDistanceKm.toFixed(1)} km</Text>
-                </View>
-              </View>
-
-              <View className="mt-5 border-t border-gray-100 pt-4">
-                <Text className="text-sm font-medium text-gray-500">Fare</Text>
-                <Text className="mt-1 text-3xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
-                <Text className="mt-1 text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
-                {tipAmount > 0 ? (
-                  <Text className="mt-2 text-sm font-medium text-green-600">
-                    Includes ${tipAmount.toFixed(2)} tip
-                  </Text>
-                ) : null}
-              </View>
-
-              <View className="mt-5 rounded-[22px] bg-[#f8fafc] p-4">
-                <Text className="text-sm font-medium text-gray-500">Trip</Text>
-                <Text className="mt-2 text-base font-bold text-gray-900">{pickupLabel}</Text>
-                <Text className="mt-1 text-sm text-gray-500">to</Text>
-                <Text className="mt-1 text-base font-bold text-gray-900">{dropoffLabel}</Text>
-              </View>
-              </View>
-
-              {stage === 'completed' ? (
-                <>
-                  <TouchableOpacity
-                    onPress={handleDone}
-                    className="mt-4 h-14 rounded-[22px] items-center justify-center"
-                    style={{ backgroundColor: PRIMARY_BLUE }}
-                  >
-                    <Text className="text-lg font-bold text-white">Done</Text>
-                  </TouchableOpacity>
-                </>
               ) : null}
-            </ScrollView>
 
-            {!isCompleted ? (
-              <View
-                className="border-t border-gray-200 bg-[#f8fafc] pt-4"
-                style={{ paddingBottom: bottomActionInset }}
-              >
-                {stage === 'on_trip' ? (
-                  <View className="flex-row items-center gap-3">
+              {stage === 'on_trip' ? (
+                <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
+                  <View className="flex-row items-center justify-between">
+                    <View className="flex-1 pr-3">
+                      <Text className="text-sm font-medium text-gray-500">
+                        {hasRoadDistance ? 'Distance to destination' : 'Estimated distance'}
+                      </Text>
+                      <Text className="mt-1 text-2xl font-bold text-gray-900">{liveDistanceText}</Text>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-sm font-medium text-gray-500">Fare</Text>
+                      <Text className="mt-1 text-2xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+
+              {!rideSheetCollapsed ? (
+                <>
+                  {stage === 'waiting_at_pickup' ? (
+                    <View className="mt-4 rounded-[22px] border border-amber-200 bg-[#fff7ed] px-4 py-3">
+                      <Text className="text-xs font-semibold uppercase tracking-[2px] text-amber-600">
+                        Pickup timer
+                      </Text>
+                      <Text className="mt-1 text-3xl font-bold text-gray-900">{pickupWaitCountdownText}</Text>
+                      <Text className="mt-1 text-sm text-gray-600">
+                        {pickupWaitExpired
+                          ? 'The pickup wait time has ended. Message or call your driver now.'
+                          : rideStatus?.passengerConfirmedAt
+                            ? 'You confirmed you\'re coming. Your driver is waiting.'
+                            : 'Please meet your driver at the pickup point.'}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {stage !== 'on_trip' ? (
+                    <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
+                      <View className="flex-row items-center justify-between">
+                        <Text className="text-xs font-semibold uppercase tracking-[1px] text-gray-400">
+                          Trip status
+                        </Text>
+                        {routeLoading ? <ActivityIndicator size="small" color={PRIMARY_BLUE} /> : null}
+                      </View>
+                      <Text className="mt-2 text-base font-bold text-gray-900">
+                        {stage === 'waiting_at_pickup'
+                          ? 'Driver is at your pickup point.'
+                          : 'Driver is heading to your pickup.'}
+                      </Text>
+                      <Text className="mt-1 text-sm text-gray-500">
+                        {hasDriverCoordinate
+                          ? `${liveEtaText} - ${liveDistanceText} ${hasRoadDistance ? 'road distance' : 'estimated distance'}`
+                          : liveDistanceText}
+                      </Text>
+                      <Text className="mt-1 text-xs text-gray-400">
+                        Road distance refreshes after the driver moves about 1 km.
+                      </Text>
+                      {routeError ? (
+                        <Text className="mt-2 text-sm text-amber-600">{routeError}</Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
+                    <View className="flex-row items-center">
+                      <View className="items-center">
+                        {driverProfileImageUrl ? (
+                          <Image
+                            source={{ uri: driverProfileImageUrl }}
+                            style={{ width: 62, height: 62, borderRadius: 31 }}
+                          />
+                        ) : (
+                          <View className="h-[62px] w-[62px] items-center justify-center rounded-full bg-[#e0e7ff]">
+                            <Ionicons name="person" size={26} color={PRIMARY_BLUE} />
+                          </View>
+                        )}
+                        <Image
+                          source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80' }}
+                          style={{ marginTop: 10, width: 96, height: 72, borderRadius: 18 }}
+                        />
+                      </View>
+                      <View className="ml-4 flex-1">
+                        <Text className="text-xl font-bold text-gray-900">{driver?.driverName || 'Driver'}</Text>
+                        <View className="mt-1 flex-row items-center">
+                          <Ionicons name="star" size={16} color="#f59e0b" />
+                          <Text className="ml-2 text-sm text-gray-500">{driver?.rating?.toFixed?.(2) || '4.90'} rating</Text>
+                        </View>
+                        <Text className="mt-2 text-sm text-gray-500">{driver?.carName} - {driver?.plate}</Text>
+                        <Text className="mt-1 text-sm font-medium" style={{ color: PRIMARY_BLUE }}>
+                          {driver?.phoneNumber || 'Phone not shared'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View className="mt-5 rounded-[22px] bg-[#eff5ff] px-4 py-4">
+                      <View className={stage === 'on_trip' ? 'items-center' : 'flex-row items-center justify-between'}>
+                        {stage === 'on_trip' ? (
+                          <>
+                            <Text className="text-sm font-medium text-gray-500">
+                              {hasRoadDistance ? 'Distance to destination' : 'Estimated distance to destination'}
+                            </Text>
+                            <Text className="mt-1 text-3xl font-bold text-gray-900">{liveDistanceText}</Text>
+                          </>
+                        ) : (
+                          <>
+                            <View>
+                              <Text className="text-sm font-medium text-gray-500">{stage === 'waiting_at_pickup' ? 'Live arrival' : 'Driver arrival'}</Text>
+                              <Text className="mt-1 text-2xl font-bold text-gray-900">
+                                {stage === 'waiting_at_pickup' ? 'Arrived' : liveEtaText}
+                              </Text>
+                            </View>
+                            <View className="items-end">
+                              <Text className="text-sm font-medium text-gray-500">
+                                {hasRoadDistance ? 'Road distance' : 'Estimated distance'}
+                              </Text>
+                              <Text className="mt-1 text-2xl font-bold text-gray-900">{liveDistanceText}</Text>
+                            </View>
+                          </>
+                        )}
+                      </View>
+                    </View>
+
+                    {stage === 'on_trip' ? (
+                      <View className="mt-5 border-t border-gray-100 pt-4">
+                        <Text className="text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
+                        {tipAmount > 0 ? (
+                          <Text className="mt-2 text-sm font-medium text-green-600">
+                            Includes ${tipAmount.toFixed(2)} tip
+                          </Text>
+                        ) : null}
+                      </View>
+                    ) : null}
+
+                    {!rideSheetCollapsed && stage !== 'on_trip' ? (
+                      <View className="mt-5 border-t border-gray-100 pt-4">
+                        <Text className="text-sm font-medium text-gray-500">Fare</Text>
+                        <Text className="mt-1 text-3xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
+                        <Text className="mt-1 text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
+                        {tipAmount > 0 ? (
+                          <Text className="mt-2 text-sm font-medium text-green-600">
+                            Includes ${tipAmount.toFixed(2)} tip
+                          </Text>
+                        ) : null}
+                      </View>
+                    ) : null}
+
+                    {stage !== 'on_trip' ? (
+                      <View className="mt-5 rounded-[22px] bg-[#f8fafc] p-4">
+                        <Text className="text-sm font-medium text-gray-500">Trip</Text>
+                        <Text className="mt-2 text-base font-bold text-gray-900">{pickupLabel}</Text>
+                        <Text className="mt-1 text-sm text-gray-500">to</Text>
+                        <Text className="mt-1 text-base font-bold text-gray-900">{dropoffLabel}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {isCompleted ? (
+                    <>
+                      {(rideStatus?.canTipDriver || tipAmount > 0) ? (
+                        <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+                          <Text className="text-xl font-bold text-gray-900">Tip driver</Text>
+                          <Text className="mt-2 text-sm text-gray-500">
+                            Add an optional thank-you tip for {driver?.driverName || 'your driver'}.
+                          </Text>
+                          {tipAmount > 0 ? (
+                            <Text className="mt-4 text-2xl font-bold text-green-600">${tipAmount.toFixed(2)} added</Text>
+                          ) : (
+                            <View className="mt-5 flex-row flex-wrap">
+                              {tipOptions.map((amount) => (
+                                <TouchableOpacity
+                                  key={amount}
+                                  onPress={() => handleSendTip(amount)}
+                                  disabled={submittingTip}
+                                  className="mb-3 mr-3 h-12 min-w-[72px] items-center justify-center rounded-full border border-blue-200 bg-[#eff6ff] px-4"
+                                >
+                                  <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
+                                    ${amount.toFixed(2)}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                          )}
+                          {submittingTip ? (
+                            <View className="mt-2 flex-row items-center">
+                              <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+                              <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : null}
+
+                      <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+                        <Text className="text-xl font-bold text-gray-900">Lost item</Text>
+                        <Text className="mt-2 text-sm text-gray-500">
+                          Left something in the car? Send the details to support.
+                        </Text>
+                        <TextInput
+                          value={lostItemDescription}
+                          onChangeText={setLostItemDescription}
+                          placeholder="Describe the item you lost"
+                          multiline
+                          textAlignVertical="top"
+                          className="mt-4 min-h-[110px] rounded-[18px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
+                        />
+                        <TextInput
+                          value={lostItemContactPhone}
+                          onChangeText={setLostItemContactPhone}
+                          placeholder="Contact phone (optional)"
+                          keyboardType="phone-pad"
+                          className="mt-3 h-12 rounded-[18px] bg-[#f8fafc] px-4 text-base text-gray-900"
+                        />
+                        <TouchableOpacity
+                          onPress={handleReportLostItem}
+                          disabled={submittingLostItem}
+                          className="mt-4 h-12 items-center justify-center rounded-[18px]"
+                          style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingLostItem ? 0.7 : 1 }}
+                        >
+                          {submittingLostItem ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text className="text-sm font-bold uppercase text-white">Report lost item</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : null}
+
+                  {stage === 'completed' ? (
                     <TouchableOpacity
-                      onPress={() => navigation.navigate('RideChat', {
-                        rideRequestId,
-                        role: 'passenger',
-                        chatTitle: driver?.driverName || 'Driver chat',
-                      })}
-                      className="flex-1 h-14 rounded-[22px] items-center justify-center"
+                      onPress={handleDone}
+                      className="mt-4 h-14 rounded-[22px] items-center justify-center"
                       style={{ backgroundColor: PRIMARY_BLUE }}
                     >
-                      <Text className="text-lg font-bold text-white">Message driver</Text>
+                      <Text className="text-lg font-bold text-white">Done</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
-                      className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
-                    >
-                      <Ionicons name="call" size={22} color={PRIMARY_BLUE} />
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <View className="flex-row items-center gap-3">
-                    {!rideStatus?.passengerConfirmedAt ? (
-                      <TouchableOpacity
-                        onPress={handleConfirmPickup}
-                        className="flex-1 h-14 rounded-[22px] items-center justify-center"
-                        style={{ backgroundColor: PRIMARY_BLUE }}
-                      >
-                        <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
-                      </TouchableOpacity>
-                    ) : (
+                  ) : null}
+
+                </>
+              ) : null}
+
+              {!isCompleted ? (
+                <View
+                  className="border-t border-gray-200 bg-[#f8fafc] pt-4"
+                  style={{ paddingBottom: bottomActionInset }}
+                >
+                  {stage === 'on_trip' ? (
+                    <View className="flex-row items-center gap-3">
                       <TouchableOpacity
                         onPress={handleCancelRide}
                         className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
                       >
                         <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
                       </TouchableOpacity>
-                    )}
-                    <TouchableOpacity
-                      onPress={() => navigation.navigate('RideChat', {
-                        rideRequestId,
-                        role: 'passenger',
-                        chatTitle: driver?.driverName || 'Driver chat',
-                      })}
-                      className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
-                    >
-                      <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
-                      className="h-14 w-14 rounded-[22px] items-center justify-center"
-                      style={{ backgroundColor: PRIMARY_BLUE }}
-                    >
-                      <Ionicons name="call" size={22} color="#fff" />
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
-            ) : null}
+                    </View>
+                  ) : stage !== 'on_trip' ? (
+                    <View className="flex-row items-center gap-3">
+                      {!rideStatus?.passengerConfirmedAt ? (
+                        <TouchableOpacity
+                          onPress={handleConfirmPickup}
+                          className="flex-1 h-14 rounded-[22px] items-center justify-center"
+                          style={{ backgroundColor: PRIMARY_BLUE }}
+                        >
+                          <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          onPress={handleCancelRide}
+                          className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                        >
+                          <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity
+                        onPress={() => navigation.navigate('RideChat', {
+                          rideRequestId,
+                          role: 'passenger',
+                          chatTitle: driver?.driverName || 'Driver chat',
+                        })}
+                        className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
+                      >
+                        <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
+                        className="h-14 w-14 rounded-[22px] items-center justify-center"
+                        style={{ backgroundColor: PRIMARY_BLUE }}
+                      >
+                        <Ionicons name="call" size={22} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </View>

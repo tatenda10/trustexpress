@@ -26,6 +26,29 @@ export function getPrimaryPhone(user) {
   return user.phoneNumbers?.[0]?.phoneNumber || null;
 }
 
+export function getDriverProfileImageReview(privateMeta = {}, role = 'passenger') {
+  if (role !== 'driver') return null;
+
+  const status = String(privateMeta.driverProfileImageReviewStatus || '').trim().toLowerCase();
+  const pendingImageUrl = privateMeta.pendingDriverProfileImageUrl || null;
+  const approvedImageUrl = privateMeta.profileImageUrl || null;
+
+  if (!pendingImageUrl && !approvedImageUrl && !status) {
+    return null;
+  }
+
+  return {
+    status: pendingImageUrl
+      ? (status || 'pending')
+      : (status === 'rejected' ? 'rejected' : approvedImageUrl ? 'approved' : null),
+    approvedImageUrl,
+    pendingImageUrl,
+    rejectionReason: privateMeta.driverProfileImageRejectionReason || null,
+    submittedAt: privateMeta.driverProfileImageSubmittedAt || null,
+    reviewedAt: privateMeta.driverProfileImageReviewedAt || null,
+  };
+}
+
 export function toAppUser(user) {
   const publicMeta = user?.publicMetadata || {};
   const privateMeta = user?.privateMetadata || {};
@@ -54,6 +77,7 @@ export function toAppUser(user) {
     settings: {
       phoneVisibleToDrivers: privateMeta.phoneVisibleToDrivers === true,
     },
+    profileImageReview: getDriverProfileImageReview(privateMeta, role),
     publicMetadata: publicMeta,
     privateMetadata: privateMeta,
   };

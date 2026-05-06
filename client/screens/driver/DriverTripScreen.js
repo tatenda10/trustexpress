@@ -1,14 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Dimensions, TextInput, Platform, Image } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Dimensions, Platform } from 'react-native';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
 import {
+  cancelDriverCurrentRide,
   completeDriverCurrentRide,
   getDirectionsRoute,
   getDriverCurrentRide,
@@ -19,41 +18,59 @@ import {
   updateDriverAvailability,
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { connectRealtime } from '../../realtime';
 import {
-  hideTripOverlay,
-  isTripOverlaySupported,
-  openTripOverlaySettings,
-  showTripOverlay,
-} from '../../services/tripOverlay';
+  DriverTripEmptyState,
+  DriverTripLoadingState,
+  DriverTripMapPanel,
+  DriverTripReceiptView,
+} from './components/DriverTripComponents';
 
 const ROUTE_REFRESH_DISTANCE_METERS = 2000;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 90000;
 const LOCATION_UPDATE_DISTANCE_METERS = 35;
 const LOCATION_UPDATE_INTERVAL_MS = 12000;
-const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.38);
+const AUTO_ARRIVAL_DISTANCE_METERS = 90;
+const AUTO_ARRIVAL_STABLE_MS = 3500;
+const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.34);
 const TRIP_STATUS_REFRESH_MS = 8000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
+const FALLBACK_DRIVER_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 const DEFAULT_LAT_DELTA = 0.03;
 const DEFAULT_LNG_DELTA = 0.03;
-const DRIVER_FOLLOW_LAT_DELTA = 0.012;
-const DRIVER_FOLLOW_LNG_DELTA = 0.012;
 const SPEECH_MIN_INTERVAL_MS = 3500;
 const SPEECH_STABILIZE_MS = 900;
 const SPEECH_MIN_CHARS = 8;
+const TRIP_DEBUG_PREFIX = '[DriverTrip]';
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
 }
 
+function normalizeCoordinate(value) {
+  const latitude = Number(value?.latitude);
+  const longitude = Number(value?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
+}
+
+function normalizeCoordinates(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(normalizeCoordinate).filter(Boolean);
+}
+
 function calculateDistanceKm(start, end) {
-  if (!start || !end) return 0;
+  const safeStart = normalizeCoordinate(start);
+  const safeEnd = normalizeCoordinate(end);
+  if (!safeStart || !safeEnd) return 0;
   const earthRadiusKm = 6371;
-  const dLat = toRadians(end.latitude - start.latitude);
-  const dLng = toRadians(end.longitude - start.longitude);
-  const lat1 = toRadians(start.latitude);
-  const lat2 = toRadians(end.latitude);
+  const dLat = toRadians(safeEnd.latitude - safeStart.latitude);
+  const dLng = toRadians(safeEnd.longitude - safeStart.longitude);
+  const lat1 = toRadians(safeStart.latitude);
+  const lat2 = toRadians(safeEnd.latitude);
   const a = (
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
@@ -67,6 +84,22 @@ function formatCountdown(totalSeconds) {
   const minutes = Math.floor(safeSeconds / 60);
   const seconds = safeSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatCurrency(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function formatDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-ZW', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function parseTimestampMs(value) {
@@ -106,7 +139,15 @@ function normalizeInstructionForSpeech(value) {
 }
 
 function buildRegionFromCoordinates(coordinates) {
-  const valid = coordinates.filter(Boolean);
+  const valid = normalizeCoordinates(coordinates);
+  if (!valid.length) {
+    return {
+      latitude: FALLBACK_DRIVER_COORDINATE.latitude,
+      longitude: FALLBACK_DRIVER_COORDINATE.longitude,
+      latitudeDelta: DEFAULT_LAT_DELTA,
+      longitudeDelta: DEFAULT_LNG_DELTA,
+    };
+  }
   const latitudes = valid.map((item) => item.latitude);
   const longitudes = valid.map((item) => item.longitude);
 
@@ -119,10 +160,13 @@ function buildRegionFromCoordinates(coordinates) {
 }
 
 function getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate) {
-  if (Array.isArray(routeCoordinates) && routeCoordinates.length > 1) {
-    return [driverCoordinate, ...routeCoordinates.slice(0, 18), targetCoordinate].filter(Boolean);
+  const safeDriverCoordinate = normalizeCoordinate(driverCoordinate);
+  const safeTargetCoordinate = normalizeCoordinate(targetCoordinate);
+  const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
+  if (safeRouteCoordinates.length > 1) {
+    return [safeDriverCoordinate, ...safeRouteCoordinates.slice(0, 18), safeTargetCoordinate].filter(Boolean);
   }
-  return [driverCoordinate, targetCoordinate].filter(Boolean);
+  return [safeDriverCoordinate, safeTargetCoordinate].filter(Boolean);
 }
 
 function toGoogleMapsLink(label, coordinate) {
@@ -161,18 +205,30 @@ function toGoogleMapsOpenUrls(label, coordinate) {
 
 async function fetchTripDirections(token, origin, destination) {
   if (!token || !origin || !destination) {
+    console.log(TRIP_DEBUG_PREFIX, 'fetchTripDirections skipped', {
+      hasToken: !!token,
+      origin,
+      destination,
+    });
     return null;
   }
 
+  console.log(TRIP_DEBUG_PREFIX, 'fetchTripDirections start', { origin, destination });
   const data = await getDirectionsRoute(token, {
     origin,
     destination,
     cacheTtlSeconds: 120,
   });
   const route = data?.route || {};
+  console.log(TRIP_DEBUG_PREFIX, 'fetchTripDirections success', {
+    coordinateCount: Array.isArray(route.coordinates) ? route.coordinates.length : 0,
+    distanceMeters: Number(route.distanceMeters || 0),
+    durationSeconds: Number(route.durationSeconds || 0),
+    nextInstruction: route.nextInstruction || '',
+  });
 
   return {
-    coordinates: Array.isArray(route.coordinates) ? route.coordinates : [],
+    coordinates: normalizeCoordinates(route.coordinates),
     distanceMeters: Number(route.distanceMeters || 0),
     durationSeconds: Number(route.durationSeconds || 0),
     nextInstruction: route.nextInstruction || '',
@@ -182,12 +238,16 @@ async function fetchTripDirections(token, origin, destination) {
 export default function DriverTripScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
   const mapRef = useRef(null);
+  const realtimeSocketRef = useRef(null);
   const lastRouteOriginRef = useRef(null);
   const lastRouteTargetRef = useRef(null);
   const lastRouteFetchedAtRef = useRef(0);
   const locationSubscriptionRef = useRef(null);
+  const activeLocationRideIdRef = useRef(null);
   const routeRequestIdRef = useRef(0);
+  const mapReadyRef = useRef(false);
   const availabilitySyncInFlightRef = useRef(false);
   const rideLoadInFlightRef = useRef(false);
   const hasAutoFocusedRef = useRef(false);
@@ -196,19 +256,20 @@ export default function DriverTripScreen({ navigation }) {
   const lastSpokenAtRef = useRef(0);
   const lastArrivalAnnouncementStageRef = useRef('');
   const speechDebounceTimeoutRef = useRef(null);
-  const overlayPermissionPromptedRef = useRef(false);
+  const autoArrivalTimerRef = useRef(null);
+  const autoArrivalRideIdRef = useRef(null);
   const [ride, setRide] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [cancellingRide, setCancellingRide] = useState(false);
   const [voiceGuidanceEnabled, setVoiceGuidanceEnabled] = useState(true);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
-  const [routeLoading, setRouteLoading] = useState(false);
-  const [routeError, setRouteError] = useState('');
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
   const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
   const [nextInstruction, setNextInstruction] = useState('');
   const [liveDriverCoordinate, setLiveDriverCoordinate] = useState(null);
+  const [mapRegion, setMapRegion] = useState(() => buildRegionFromCoordinates([FALLBACK_DRIVER_COORDINATE]));
   const [nowTick, setNowTick] = useState(Date.now());
   const [showPassengerRating, setShowPassengerRating] = useState(false);
   const [completedRideId, setCompletedRideId] = useState(null);
@@ -216,6 +277,20 @@ export default function DriverTripScreen({ navigation }) {
   const [passengerRating, setPassengerRating] = useState(0);
   const [passengerReview, setPassengerReview] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
+
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
+  const stopDriverVoice = useCallback(() => {
+    if (speechDebounceTimeoutRef.current) {
+      clearTimeout(speechDebounceTimeoutRef.current);
+      speechDebounceTimeoutRef.current = null;
+    }
+    lastSpokenInstructionRef.current = '';
+    lastSpokenAtRef.current = 0;
+    Speech.stop();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -238,22 +313,36 @@ export default function DriverTripScreen({ navigation }) {
     const loadRide = async () => {
       if (rideLoadInFlightRef.current) return;
       rideLoadInFlightRef.current = true;
+      console.log(TRIP_DEBUG_PREFIX, 'loadRide start');
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await getDriverCurrentRide(token, { suppressAuthErrorHandler: true });
         if (!active) return;
+        console.log(TRIP_DEBUG_PREFIX, 'loadRide success', {
+          rideId: data?.ride?.id || null,
+          status: data?.ride?.status || null,
+          stage: data?.ride?.stage || null,
+          pickupCoordinate: data?.ride?.pickupCoordinate || null,
+          dropoffCoordinate: data?.ride?.dropoffCoordinate || null,
+          driverCoordinate: data?.ride?.driverCoordinate || null,
+        });
         if (data?.ride || !showPassengerRating) {
           setRide(data?.ride || null);
         }
-        if (data?.ride?.driverCoordinate) {
-          setLiveDriverCoordinate(data.ride.driverCoordinate);
+        const safeDriverCoordinate = normalizeCoordinate(data?.ride?.driverCoordinate);
+        if (safeDriverCoordinate) {
+          setLiveDriverCoordinate(safeDriverCoordinate);
         }
-      } catch {
+      } catch (error) {
+        console.log(TRIP_DEBUG_PREFIX, 'loadRide failed', {
+          message: error?.message || 'unknown error',
+        });
         if (!active) return;
         setRide(null);
       } finally {
         rideLoadInFlightRef.current = false;
+        console.log(TRIP_DEBUG_PREFIX, 'loadRide end');
         if (active) setLoading(false);
       }
     };
@@ -265,7 +354,7 @@ export default function DriverTripScreen({ navigation }) {
       active = false;
       clearInterval(interval);
     };
-  }, [getToken, realtimeSignal, showPassengerRating]);
+  }, [realtimeSignal, showPassengerRating]);
 
   useEffect(() => {
     let active = true;
@@ -273,13 +362,20 @@ export default function DriverTripScreen({ navigation }) {
 
     const initRealtime = async () => {
       try {
-        const token = await getToken();
+        if (realtimeSocketRef.current) {
+          console.log(TRIP_DEBUG_PREFIX, 'realtime init skipped: already connected');
+          return;
+        }
+        const token = await getTokenRef.current();
         if (!active || !token) return;
         localSocket = connectRealtime(token);
         if (!localSocket) return;
+        realtimeSocketRef.current = localSocket;
+        console.log(TRIP_DEBUG_PREFIX, 'realtime connected');
 
         const handleRideUpdate = () => {
           if (!active) return;
+          console.log(TRIP_DEBUG_PREFIX, 'realtime driver_ride:updated');
           setRealtimeSignal((current) => current + 1);
         };
 
@@ -288,7 +384,10 @@ export default function DriverTripScreen({ navigation }) {
         localSocket.__driverTripCleanup = () => {
           localSocket.off('driver_ride:updated', handleRideUpdate);
         };
-      } catch {
+      } catch (error) {
+        console.log(TRIP_DEBUG_PREFIX, 'realtime setup failed', {
+          message: error?.message || 'unknown error',
+        });
         // Polling remains the fallback.
       }
     };
@@ -298,21 +397,17 @@ export default function DriverTripScreen({ navigation }) {
     return () => {
       active = false;
       localSocket?.__driverTripCleanup?.();
-      if (speechDebounceTimeoutRef.current) {
-        clearTimeout(speechDebounceTimeoutRef.current);
-        speechDebounceTimeoutRef.current = null;
+      if (realtimeSocketRef.current === localSocket) {
+        realtimeSocketRef.current = null;
       }
-      Speech.stop();
+      stopDriverVoice();
     };
-  }, [getToken]);
+  }, [stopDriverVoice]);
 
   useEffect(() => {
     const normalizedInstruction = normalizeInstructionForSpeech(nextInstruction);
     if (!voiceGuidanceEnabled) {
-      if (speechDebounceTimeoutRef.current) {
-        clearTimeout(speechDebounceTimeoutRef.current);
-        speechDebounceTimeoutRef.current = null;
-      }
+      stopDriverVoice();
       return undefined;
     }
     if (!normalizedInstruction || ride?.stage === 'waiting_for_customer') return undefined;
@@ -347,7 +442,7 @@ export default function DriverTripScreen({ navigation }) {
         speechDebounceTimeoutRef.current = null;
       }
     };
-  }, [nextInstruction, ride?.stage, voiceGuidanceEnabled]);
+  }, [nextInstruction, ride?.stage, stopDriverVoice, voiceGuidanceEnabled]);
 
   useEffect(() => {
     if (!voiceGuidanceEnabled) return undefined;
@@ -381,20 +476,38 @@ export default function DriverTripScreen({ navigation }) {
 
     const startLocationTracking = async () => {
       try {
+        if (locationSubscriptionRef.current && activeLocationRideIdRef.current === ride?.id) {
+          console.log(TRIP_DEBUG_PREFIX, 'location tracking skipped: already subscribed for ride', {
+            rideId: ride?.id || null,
+          });
+          return;
+        }
+        console.log(TRIP_DEBUG_PREFIX, 'location tracking start', {
+          rideId: ride?.id || null,
+          stage: ride?.stage || null,
+        });
         const permission = await Location.requestForegroundPermissionsAsync();
+        console.log(TRIP_DEBUG_PREFIX, 'location permission result', {
+          status: permission?.status || 'unknown',
+        });
         if (permission.status !== 'granted') return;
 
         const currentPosition = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.BestForNavigation,
         });
+        console.log(TRIP_DEBUG_PREFIX, 'location current position success', {
+          latitude: currentPosition?.coords?.latitude,
+          longitude: currentPosition?.coords?.longitude,
+        });
         if (active) {
-          const currentCoordinate = {
+          const currentCoordinate = normalizeCoordinate({
             latitude: currentPosition.coords.latitude,
             longitude: currentPosition.coords.longitude,
-          };
+          });
+          if (!currentCoordinate) return;
           setLiveDriverCoordinate(currentCoordinate);
           try {
-            const token = await getToken();
+            const token = await getTokenRef.current();
             if (token && !availabilitySyncInFlightRef.current) {
               availabilitySyncInFlightRef.current = true;
               await updateDriverAvailability(token, {
@@ -403,7 +516,11 @@ export default function DriverTripScreen({ navigation }) {
                 longitude: currentCoordinate.longitude,
               });
             }
-          } catch {
+            console.log(TRIP_DEBUG_PREFIX, 'availability bootstrap sync success', currentCoordinate);
+          } catch (error) {
+            console.log(TRIP_DEBUG_PREFIX, 'availability bootstrap sync failed', {
+              message: error?.message || 'unknown error',
+            });
             // Ignore bootstrap location sync errors and continue with live routing.
           } finally {
             availabilitySyncInFlightRef.current = false;
@@ -419,15 +536,17 @@ export default function DriverTripScreen({ navigation }) {
           async (position) => {
             if (!active) return;
 
-            const nextCoordinate = {
+            const nextCoordinate = normalizeCoordinate({
               latitude: position.coords.latitude,
               longitude: position.coords.longitude,
-            };
+            });
+            if (!nextCoordinate) return;
 
+            console.log(TRIP_DEBUG_PREFIX, 'location watcher update', nextCoordinate);
             setLiveDriverCoordinate(nextCoordinate);
 
             try {
-              const token = await getToken();
+              const token = await getTokenRef.current();
               if (!token || availabilitySyncInFlightRef.current) return;
               availabilitySyncInFlightRef.current = true;
               await updateDriverAvailability(token, {
@@ -435,14 +554,23 @@ export default function DriverTripScreen({ navigation }) {
                 latitude: nextCoordinate.latitude,
                 longitude: nextCoordinate.longitude,
               });
-            } catch {
+              console.log(TRIP_DEBUG_PREFIX, 'availability watcher sync success', nextCoordinate);
+            } catch (error) {
+              console.log(TRIP_DEBUG_PREFIX, 'availability watcher sync failed', {
+                message: error?.message || 'unknown error',
+              });
               // Keep the route screen responsive even if the backend write fails.
             } finally {
               availabilitySyncInFlightRef.current = false;
             }
           }
         );
-      } catch {
+        activeLocationRideIdRef.current = ride?.id || null;
+        console.log(TRIP_DEBUG_PREFIX, 'location watcher subscribed');
+      } catch (error) {
+        console.log(TRIP_DEBUG_PREFIX, 'location tracking failed', {
+          message: error?.message || 'unknown error',
+        });
         // Ignore location tracking startup failures and keep server-fed coordinates.
       }
     };
@@ -455,12 +583,40 @@ export default function DriverTripScreen({ navigation }) {
         locationSubscriptionRef.current.remove();
         locationSubscriptionRef.current = null;
       }
+      activeLocationRideIdRef.current = null;
       availabilitySyncInFlightRef.current = false;
     };
-  }, [getToken, ride]);
+  }, [ride?.id]);
 
-  const driverCoordinate = liveDriverCoordinate || ride?.driverCoordinate || ride?.pickupCoordinate || ride?.dropoffCoordinate;
-  const targetCoordinate = ride?.stage === 'on_trip' ? ride?.dropoffCoordinate : ride?.pickupCoordinate;
+  const pickupCoordinate = normalizeCoordinate(ride?.pickupCoordinate);
+  const dropoffCoordinate = normalizeCoordinate(ride?.dropoffCoordinate);
+  const driverCoordinate = normalizeCoordinate(liveDriverCoordinate)
+    || normalizeCoordinate(ride?.driverCoordinate)
+    || pickupCoordinate
+    || dropoffCoordinate;
+  const targetCoordinate = ride?.stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
+
+  useEffect(() => {
+    console.log(TRIP_DEBUG_PREFIX, 'coordinate snapshot', {
+      rideId: ride?.id || null,
+      stage: ride?.stage || null,
+      pickupCoordinate,
+      dropoffCoordinate,
+      liveDriverCoordinate,
+      resolvedDriverCoordinate: driverCoordinate,
+      targetCoordinate,
+    });
+  }, [driverCoordinate, dropoffCoordinate, liveDriverCoordinate, pickupCoordinate, ride?.id, ride?.stage, targetCoordinate]);
+
+  useEffect(() => {
+    if (!ride || ['completed', 'cancelled', 'expired'].includes(String(ride?.status || '').toLowerCase())) {
+      stopDriverVoice();
+      setRouteCoordinates([]);
+      setRouteDistanceMeters(0);
+      setRouteDurationSeconds(0);
+      setNextInstruction('');
+    }
+  }, [ride, stopDriverVoice]);
 
   useEffect(() => {
     if (!driverCoordinate || !targetCoordinate) return undefined;
@@ -492,29 +648,32 @@ export default function DriverTripScreen({ navigation }) {
 
     const loadDirections = async () => {
       try {
-        setRouteLoading(true);
-        setRouteError('');
-        const token = await getToken();
+        const token = await getTokenRef.current();
         const route = await fetchTripDirections(token, driverCoordinate, targetCoordinate);
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
 
         setRouteCoordinates(Array.isArray(route?.coordinates) && route.coordinates.length > 1
-          ? route.coordinates
+          ? normalizeCoordinates(route.coordinates)
           : [driverCoordinate, targetCoordinate].filter(Boolean));
         setRouteDistanceMeters(route?.distanceMeters || 0);
         setRouteDurationSeconds(route?.durationSeconds || 0);
         setNextInstruction(route?.nextInstruction || '');
+        console.log(TRIP_DEBUG_PREFIX, 'route state updated', {
+          routeCoordinateCount: Array.isArray(route?.coordinates) ? route.coordinates.length : 0,
+          routeDistanceMeters: route?.distanceMeters || 0,
+          routeDurationSeconds: route?.durationSeconds || 0,
+        });
       } catch (error) {
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
+        console.log(TRIP_DEBUG_PREFIX, 'route fetch failed', {
+          message: error?.message || 'unknown error',
+          driverCoordinate,
+          targetCoordinate,
+        });
         setRouteCoordinates([driverCoordinate, targetCoordinate].filter(Boolean));
         setRouteDistanceMeters(Math.round(calculateDistanceKm(driverCoordinate, targetCoordinate) * 1000));
         setRouteDurationSeconds(0);
         setNextInstruction('');
-        setRouteError(error?.message || 'Could not load Google road directions.');
-      } finally {
-        if (!cancelled && routeRequestIdRef.current === currentRequestId) {
-          setRouteLoading(false);
-        }
       }
     };
 
@@ -523,33 +682,66 @@ export default function DriverTripScreen({ navigation }) {
     return () => {
       cancelled = true;
     };
-  }, [driverCoordinate, getToken, ride?.stage, routeCoordinates.length, targetCoordinate]);
+  }, [driverCoordinate, ride?.stage, routeCoordinates.length, targetCoordinate]);
+
+  useEffect(() => {
+    const nextRegion = buildRegionFromCoordinates([driverCoordinate, targetCoordinate].filter(Boolean));
+    setMapRegion((current) => {
+      const latChanged = Math.abs(Number(current?.latitude || 0) - Number(nextRegion.latitude || 0));
+      const lngChanged = Math.abs(Number(current?.longitude || 0) - Number(nextRegion.longitude || 0));
+      const latDeltaChanged = Math.abs(Number(current?.latitudeDelta || 0) - Number(nextRegion.latitudeDelta || 0));
+      const lngDeltaChanged = Math.abs(Number(current?.longitudeDelta || 0) - Number(nextRegion.longitudeDelta || 0));
+
+      if (
+        latChanged < 0.0001 &&
+        lngChanged < 0.0001 &&
+        latDeltaChanged < 0.0001 &&
+        lngDeltaChanged < 0.0001
+      ) {
+        return current;
+      }
+
+      return nextRegion;
+    });
+  }, [driverCoordinate, targetCoordinate]);
 
   useEffect(() => {
     const coordinatesToFit = getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate);
 
-    if (!mapRef.current || coordinatesToFit.length < 2) return;
+    if (!mapReadyRef.current || !mapRef.current || coordinatesToFit.length < 2) return;
 
     const stageChanged = lastAutoFocusStageRef.current !== String(ride?.stage || '');
     if (hasAutoFocusedRef.current && !stageChanged) return;
 
     const timeout = setTimeout(() => {
-      mapRef.current?.fitToCoordinates(coordinatesToFit, {
-        edgePadding: { top: 90, right: 28, bottom: 180, left: 28 },
-        animated: true,
-      });
-      hasAutoFocusedRef.current = true;
-      lastAutoFocusStageRef.current = String(ride?.stage || '');
-    }, 250);
+      try {
+        console.log(TRIP_DEBUG_PREFIX, 'fitToCoordinates start', {
+          coordinateCount: coordinatesToFit.length,
+          stage: ride?.stage || null,
+        });
+        mapRef.current?.fitToCoordinates(coordinatesToFit, {
+          edgePadding: { top: 90, right: 28, bottom: 180, left: 28 },
+          animated: true,
+        });
+        hasAutoFocusedRef.current = true;
+        lastAutoFocusStageRef.current = String(ride?.stage || '');
+        console.log(TRIP_DEBUG_PREFIX, 'fitToCoordinates success');
+      } catch {
+        console.log(TRIP_DEBUG_PREFIX, 'fitToCoordinates failed');
+        // Avoid hard-crashing the trip screen if the native map rejects a fit request.
+      }
+    }, 400);
 
     return () => clearTimeout(timeout);
-  }, [driverCoordinate, ride?.stage, routeCoordinates, targetCoordinate]);
+  }, [ride?.stage, routeCoordinates.length, targetCoordinate]);
 
   // Live distance from current position to the active target so it updates every location tick.
   const distanceKmText = useMemo(() => {
-    const kilometers = calculateDistanceKm(driverCoordinate, targetCoordinate);
+    const kilometers = routeDistanceMeters > 0
+      ? routeDistanceMeters / 1000
+      : calculateDistanceKm(driverCoordinate, targetCoordinate);
     return `${Math.max(0, kilometers).toFixed(1)} km left`;
-  }, [driverCoordinate, targetCoordinate]);
+  }, [driverCoordinate, routeDistanceMeters, targetCoordinate]);
 
   const etaText = useMemo(() => {
     if (routeDurationSeconds > 0) {
@@ -569,69 +761,11 @@ export default function DriverTripScreen({ navigation }) {
   const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
   const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
 
-  useEffect(() => () => {
-    hideTripOverlay();
-  }, []);
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return undefined;
-    if (!ride?.id) {
-      hideTripOverlay();
-      return undefined;
-    }
-
-    let active = true;
-    const stageLabel = ride.stage === 'on_trip'
-      ? 'On trip'
-      : ride.stage === 'waiting_for_customer'
-        ? 'At pickup'
-        : 'To pickup';
-    const targetLabel = ride.stage === 'on_trip'
-      ? ride.dropoffLabel
-      : ride.pickupLabel;
-    const meta = ride.stage === 'waiting_for_customer'
-      ? pickupWaitExpired
-        ? 'Pickup wait ended'
-        : `Pickup wait ${pickupWaitCountdownText}`
-      : `${distanceKmText} · ${etaText}`;
-
-    const syncOverlay = async () => {
-      const shown = await showTripOverlay({
-        title: 'Trust Express',
-        subtitle: `${stageLabel}: ${targetLabel || 'Trip route'}`,
-        meta,
-      });
-
-      if (
-        active &&
-        !shown &&
-        isTripOverlaySupported() &&
-        !overlayPermissionPromptedRef.current
-      ) {
-        overlayPermissionPromptedRef.current = true;
-        Alert.alert(
-          'Floating trip bubble',
-          'Allow Trust Express to display over other apps to show a small active trip bubble while you use navigation.',
-          [
-            { text: 'Not now', style: 'cancel' },
-            { text: 'Open settings', onPress: openTripOverlaySettings },
-          ],
-        );
-      }
-    };
-
-    syncOverlay();
-
-    return () => {
-      active = false;
-    };
-  }, [distanceKmText, etaText, pickupWaitCountdownText, pickupWaitExpired, ride?.dropoffLabel, ride?.id, ride?.pickupLabel, ride?.stage]);
-
-  const handleMarkArrived = async () => {
+  const handleMarkArrived = useCallback(async () => {
     try {
       if (!ride?.id) return;
       setSubmitting(true);
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
       await markDriverCurrentRideArrived(token, ride.id, { suppressAuthErrorHandler: true });
       setRide((current) => (current ? { ...current, stage: 'waiting_for_customer', arrivedAt: new Date().toISOString() } : current));
@@ -648,13 +782,46 @@ export default function DriverTripScreen({ navigation }) {
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [ride?.id]);
+
+  useEffect(() => {
+    if (autoArrivalTimerRef.current) {
+      clearTimeout(autoArrivalTimerRef.current);
+      autoArrivalTimerRef.current = null;
+    }
+
+    if (ride?.stage !== 'to_pickup') {
+      autoArrivalRideIdRef.current = null;
+      return undefined;
+    }
+    if (!ride?.id || !driverCoordinate || !pickupCoordinate || submitting) return undefined;
+    if (autoArrivalRideIdRef.current === ride.id) return undefined;
+
+    const distanceToPickupMeters = calculateDistanceKm(driverCoordinate, pickupCoordinate) * 1000;
+    if (!Number.isFinite(distanceToPickupMeters) || distanceToPickupMeters > AUTO_ARRIVAL_DISTANCE_METERS) {
+      return undefined;
+    }
+
+    autoArrivalTimerRef.current = setTimeout(() => {
+      autoArrivalTimerRef.current = null;
+      if (autoArrivalRideIdRef.current === ride.id) return;
+      autoArrivalRideIdRef.current = ride.id;
+      handleMarkArrived();
+    }, AUTO_ARRIVAL_STABLE_MS);
+
+    return () => {
+      if (autoArrivalTimerRef.current) {
+        clearTimeout(autoArrivalTimerRef.current);
+        autoArrivalTimerRef.current = null;
+      }
+    };
+  }, [driverCoordinate, handleMarkArrived, pickupCoordinate, ride?.id, ride?.stage, submitting]);
 
   const handleStartRide = async () => {
     try {
       if (!ride?.id) return;
       setSubmitting(true);
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
       await startDriverCurrentRide(token, ride.id, { suppressAuthErrorHandler: true });
       setRide((current) => (current ? { ...current, stage: 'on_trip' } : current));
@@ -673,16 +840,71 @@ export default function DriverTripScreen({ navigation }) {
     }
   };
 
+  const handleCancelRide = useCallback(() => {
+    if (!ride?.id || cancellingRide || submitting) return;
+
+    const preferredReasons = [
+      DRIVER_CANCELLATION_REASONS.find((item) => item.id === 'passenger_no_show')?.label,
+      DRIVER_CANCELLATION_REASONS.find((item) => item.id === 'safety_concern')?.label,
+      DRIVER_CANCELLATION_REASONS.find((item) => item.id === 'other')?.label,
+    ].filter(Boolean);
+
+    Alert.alert(
+      'Cancel ride',
+      'Are you sure you want to cancel this ride?',
+      [
+        { text: 'Keep ride', style: 'cancel' },
+        ...preferredReasons.slice(0, 2).map((reasonLabel) => ({
+          text: reasonLabel,
+          onPress: async () => {
+            try {
+              setCancellingRide(true);
+              const token = await getTokenRef.current();
+              if (!token) throw new Error('Not signed in');
+              await cancelDriverCurrentRide(token, ride.id, reasonLabel);
+              stopDriverVoice();
+              setRouteCoordinates([]);
+              setRouteDistanceMeters(0);
+              setRouteDurationSeconds(0);
+              setNextInstruction('');
+              setRide(null);
+              setRealtimeSignal((current) => current + 1);
+              Alert.alert('Ride cancelled', 'The ride has been cancelled.');
+              const parentNavigator = navigation.getParent?.();
+              if (parentNavigator) parentNavigator.navigate('DriverActivity');
+              else navigation.goBack();
+            } catch (error) {
+              Alert.alert('Cancel ride failed', error?.message || 'Could not cancel this ride.');
+            } finally {
+              setCancellingRide(false);
+            }
+          },
+          style: 'destructive',
+        })),
+      ],
+    );
+  }, [cancellingRide, navigation, ride?.id, stopDriverVoice, submitting]);
+
   const handleCompleteRide = async () => {
     try {
       if (!ride?.id) return;
       setSubmitting(true);
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
       await completeDriverCurrentRide(token, ride.id, {
         completedRoutePolyline: null,
       }, { suppressAuthErrorHandler: true });
-      setCompletedRideSnapshot(ride);
+      stopDriverVoice();
+      setRouteCoordinates([]);
+      setRouteDistanceMeters(0);
+      setRouteDurationSeconds(0);
+      setNextInstruction('');
+      setCompletedRideSnapshot({
+        ...ride,
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        totalAmount: Number(ride.estimatedAmount || 0) + Number(ride.tipAmount || 0),
+      });
       setCompletedRideId(ride.id);
       setRide(null);
       setRealtimeSignal((current) => current + 1);
@@ -701,10 +923,12 @@ export default function DriverTripScreen({ navigation }) {
     }
     try {
       setSubmittingRating(true);
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token || !completedRideId) throw new Error('Not signed in');
       await submitDriverPassengerRating(token, completedRideId, { rating: passengerRating, review: passengerReview.trim() || undefined });
-      navigation.goBack();
+      const parentNavigator = navigation.getParent?.();
+      if (parentNavigator) parentNavigator.navigate('DriverActivity');
+      else navigation.goBack();
     } catch (error) {
       Alert.alert('Rating failed', error?.message || 'Could not submit rating.');
     } finally {
@@ -713,7 +937,9 @@ export default function DriverTripScreen({ navigation }) {
   };
 
   const handleSkipPassengerRating = () => {
-    navigation.goBack();
+    const parentNavigator = navigation.getParent?.();
+    if (parentNavigator) parentNavigator.navigate('DriverActivity');
+    else navigation.goBack();
   };
 
   const handleToggleVoiceGuidance = async () => {
@@ -742,88 +968,63 @@ export default function DriverTripScreen({ navigation }) {
   };
 
   if (loading) {
-    return (
-      <View className="flex-1 items-center justify-center bg-white px-5">
-        <ActivityIndicator size="large" color={PRIMARY_BLUE} />
-        <Text className="mt-4 text-base text-gray-500">Loading live trip route...</Text>
-      </View>
-    );
+    return <DriverTripLoadingState color={PRIMARY_BLUE} />;
   }
 
   const ratingRide = ride || completedRideSnapshot;
 
   if (showPassengerRating && completedRideId && ratingRide) {
+    const fareAmount = Number(ratingRide.estimatedAmount || 0);
+    const tipAmount = Number(ratingRide.tipAmount || 0);
+    const totalAmount = Number(ratingRide.totalAmount || (fareAmount + tipAmount));
     return (
-      <View className="flex-1 bg-white px-5" style={{ paddingTop: insets.top + 24 }}>
-        <Text className="text-xl font-bold text-gray-900">Rate your passenger</Text>
-        <Text className="mt-1 text-base text-gray-500">{ratingRide.passengerName}</Text>
-        <View className="mt-6 flex-row items-center justify-between">
-          {[1, 2, 3, 4, 5].map((value) => (
-            <TouchableOpacity
-              key={value}
-              onPress={() => setPassengerRating(value)}
-              activeOpacity={0.8}
-              className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
-            >
-              <Ionicons
-                name={value <= passengerRating ? 'star' : 'star-outline'}
-                size={30}
-                color={value <= passengerRating ? '#f59e0b' : '#9ca3af'}
-              />
-            </TouchableOpacity>
-          ))}
-        </View>
-        <TextInput
-          className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-4 text-base text-gray-900"
-          placeholder="Optional review"
-          placeholderTextColor="#9ca3af"
-          value={passengerReview}
-          onChangeText={setPassengerReview}
-          multiline
-          numberOfLines={3}
-        />
-        <TouchableOpacity
-          onPress={handleSubmitPassengerRating}
-          disabled={submittingRating || passengerRating < 1}
-          className="mt-6 h-14 items-center justify-center rounded-xl bg-[#2f73c9]"
-          style={{ opacity: passengerRating < 1 ? 0.6 : 1 }}
-        >
-          {submittingRating ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Done</Text>}
-        </TouchableOpacity>
-        <TouchableOpacity onPress={handleSkipPassengerRating} className="mt-4 items-center py-3">
-          <Text className="text-base text-gray-500">Skip</Text>
-        </TouchableOpacity>
-      </View>
+      <DriverTripReceiptView
+        insets={insets}
+        ratingRide={ratingRide}
+        fareAmount={fareAmount}
+        tipAmount={tipAmount}
+        totalAmount={totalAmount}
+        passengerRating={passengerRating}
+        passengerReview={passengerReview}
+        submittingRating={submittingRating}
+        onSetPassengerRating={setPassengerRating}
+        onSetPassengerReview={setPassengerReview}
+        onSubmit={handleSubmitPassengerRating}
+        onSkip={handleSkipPassengerRating}
+        formatCurrency={formatCurrency}
+        formatDateTime={formatDateTime}
+      />
     );
   }
 
   if (!ride) {
-    return (
-      <View className="flex-1 items-center justify-center bg-white px-5">
-        <Text className="text-xl font-bold text-gray-900">No active trip</Text>
-        <TouchableOpacity onPress={() => navigation.goBack()} className="mt-6 rounded-[18px] bg-[#2f73c9] px-6 py-4">
-          <Text className="text-base font-bold text-white">Back to Home</Text>
-        </TouchableOpacity>
-      </View>
-    );
+    return <DriverTripEmptyState onBack={() => navigation.goBack()} />;
   }
 
-  const mapRegion = buildRegionFromCoordinates([
-    driverCoordinate,
-    targetCoordinate,
-  ].filter(Boolean));
-
-  const initialCamera = driverCoordinate ? {
-    center: driverCoordinate,
-    pitch: 0,
-    heading: 0,
-    altitude: 1200,
-    zoom: 16,
-  } : null;
-
-  const destinationForMaps = ride.stage === 'on_trip' ? ride.dropoffCoordinate : ride.pickupCoordinate;
+  const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
+  const destinationForMaps = ride.stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
   const destinationLabelForMaps = ride.stage === 'on_trip' ? ride.dropoffLabel : ride.pickupLabel;
-  const passengerProfileImageUrl = resolveUploadedMediaUrl(ride.passengerProfileImageUrl);
+  let passengerProfileImageUrl = null;
+  try {
+    passengerProfileImageUrl = resolveUploadedMediaUrl(ride.passengerProfileImageUrl);
+  } catch (error) {
+    console.log(TRIP_DEBUG_PREFIX, 'resolveUploadedMediaUrl failed', {
+      message: error?.message || 'unknown error',
+      rawValue: ride?.passengerProfileImageUrl,
+    });
+  }
+  const isWaitingAtPickup = ride.stage === 'waiting_for_customer';
+  const stageTitle = ride.stage === 'on_trip' ? 'Drive' : isWaitingAtPickup ? 'Pickup wait' : 'To pickup';
+  const targetLabel = ride.stage === 'on_trip' ? ride.dropoffLabel : ride.pickupLabel;
+  const primaryMetric = isWaitingAtPickup ? pickupWaitCountdownText : etaText;
+  const secondaryMetric = isWaitingAtPickup
+    ? pickupWaitExpired
+      ? 'Wait time ended'
+      : 'Passenger pickup timer'
+    : distanceKmText;
+  const guidanceText = normalizeInstructionForSpeech(nextInstruction) || (ride.stage === 'on_trip'
+    ? `Continue toward ${ride.dropoffLabel || 'the drop-off point'}`
+    : `Continue toward ${ride.pickupLabel || 'the pickup point'}`);
 
   const handleOpenGoogleMaps = async () => {
     try {
@@ -848,191 +1049,75 @@ export default function DriverTripScreen({ navigation }) {
     }
   };
 
+  const handleCallPassenger = async () => {
+    const phone = String(ride?.passengerPhone || '').trim();
+    if (!phone) {
+      Alert.alert('Call unavailable', 'No passenger phone number is available for this ride.');
+      return;
+    }
+
+    const phoneUrl = `tel:${phone.replace(/[^\d+]/g, '')}`;
+    try {
+      const supported = await Linking.canOpenURL(phoneUrl);
+      if (!supported) {
+        Alert.alert('Call unavailable', 'Your device could not open the phone dialer.');
+        return;
+      }
+      await Linking.openURL(phoneUrl);
+    } catch {
+      Alert.alert('Call unavailable', 'Could not open the phone dialer right now.');
+    }
+  };
+
   return (
-    <View className="flex-1 bg-white">
-      <View className="flex-row items-center justify-between bg-white px-5 pb-3" style={{ paddingTop: insets.top + 8 }}>
-        <TouchableOpacity onPress={() => navigation.goBack()} className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f6fb]">
-          <Ionicons name="arrow-back" size={22} color="#111827" />
-        </TouchableOpacity>
-        <Text className="text-lg font-bold text-gray-900">
-          {ride.stage === 'on_trip' ? 'Google Trip Route' : ride.stage === 'waiting_for_customer' ? 'Waiting for Customer' : 'Google Pickup Route'}
-        </Text>
-        <View className="w-11" />
-      </View>
-
-      <MapView
-        ref={mapRef}
-        style={{ flex: 1 }}
-        initialRegion={mapRegion}
-        initialCamera={initialCamera || undefined}
-        showsCompass={false}
-        toolbarEnabled={false}
-        rotateEnabled={true}
-        showsTraffic={true}
-      >
-        {driverCoordinate ? (
-          <Marker coordinate={driverCoordinate} title="Driver">
-            <View className="h-12 w-12 items-center justify-center rounded-full border-4 border-white" style={{ backgroundColor: PRIMARY_BLUE }}>
-              <Ionicons name="car-sport" size={22} color="#fff" />
-            </View>
-          </Marker>
-        ) : null}
-        <Marker coordinate={ride.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" />
-        <Marker coordinate={ride.dropoffCoordinate} title="Drop-off" pinColor="#111827" />
-        {routeCoordinates.length > 1 ? (
-          <>
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeColor="rgba(32,110,255,0.22)"
-              strokeWidth={12}
-            />
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeColor={PRIMARY_BLUE}
-              strokeWidth={6}
-            />
-          </>
-        ) : null}
-      </MapView>
-
-      <View
-        className="absolute bottom-0 left-0 right-0 rounded-t-[30px] bg-[#f8fafc]"
-        style={{ maxHeight: TRIP_PANEL_MAX_HEIGHT }}
-      >
-        <ScrollView
-          bounces={false}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 }}
-        >
-          <Text className="text-sm font-semibold uppercase tracking-wide text-[#2f73c9]">
-            {ride.stage === 'on_trip' ? 'Destination' : ride.stage === 'waiting_for_customer' ? 'Pickup wait timer' : 'Pickup'}
-          </Text>
-          <Text className="mt-1 text-[30px] font-bold text-gray-900">
-            {ride.stage === 'waiting_for_customer' ? pickupWaitCountdownText : distanceKmText}
-          </Text>
-          <Text className="mt-1 text-base text-gray-500">
-            {ride.stage === 'waiting_for_customer'
-              ? pickupWaitExpired
-                ? 'Pickup wait time has ended.'
-                : `${ride.pickupLabel} - passenger has 5 minutes to come out.`
-              : etaText}
-          </Text>
-
-          <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm font-semibold uppercase tracking-wide text-gray-400">Directions</Text>
-              {routeLoading ? <ActivityIndicator size="small" color={PRIMARY_BLUE} /> : null}
-            </View>
-            <Text className="mt-2 text-base font-semibold text-gray-900">
-              {ride.stage === 'waiting_for_customer'
-                ? pickupWaitExpired
-                  ? 'Pickup wait time has ended. Message or call the passenger before starting.'
-                  : ride.passengerConfirmedAt
-                    ? 'Passenger confirmed they\'re coming. Ready to start the ride.'
-                    : 'Passenger pickup point reached. Wait for the passenger to come out.'
-                : nextInstruction || 'Following the live Google Maps road route.'}
-            </Text>
-            {routeError ? (
-              <Text className="mt-2 text-sm text-amber-600">{routeError}</Text>
-            ) : null}
-          </View>
-
-          <View className="mt-4 rounded-[24px] bg-white p-5">
-            <View className="flex-row items-center">
-              {passengerProfileImageUrl ? (
-                <Image
-                  source={{ uri: passengerProfileImageUrl }}
-                  style={{ width: 52, height: 52, borderRadius: 26 }}
-                />
-              ) : (
-                <View className="h-[52px] w-[52px] items-center justify-center rounded-full bg-[#e0e7ff]">
-                  <Ionicons name="person" size={22} color={PRIMARY_BLUE} />
-                </View>
-              )}
-              <View className="ml-3 flex-1">
-                <Text className="text-xl font-bold text-gray-900">{ride.passengerName}</Text>
-                <Text className="mt-1 text-sm text-gray-500">{ride.passengerPhone || 'Phone not shared yet'}</Text>
-              </View>
-            </View>
-            <Text className="mt-4 text-sm font-semibold uppercase text-gray-400">Pickup</Text>
-            <Text className="mt-1 text-base font-bold text-gray-900">{ride.pickupLabel}</Text>
-            <Text className="mt-4 text-sm font-semibold uppercase text-gray-400">Destination</Text>
-            <Text className="mt-1 text-base font-bold text-gray-900">{ride.dropoffLabel}</Text>
-
-            <TouchableOpacity
-              onPress={handleOpenGoogleMaps}
-              className="mt-5 h-12 items-center justify-center rounded-[18px] border border-blue-200 bg-white"
-            >
-              <Text style={{ color: PRIMARY_BLUE }} className="text-base font-bold">Open in Google Maps</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => navigation.navigate('RideChat', {
-                rideRequestId: ride.id,
-                role: 'driver',
-                chatTitle: ride.passengerName || 'Passenger chat',
-              })}
-              className="mt-3 h-12 items-center justify-center rounded-[18px] border border-blue-200 bg-white"
-            >
-              <Text style={{ color: PRIMARY_BLUE }} className="text-base font-bold">Message passenger</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View className="mt-4 rounded-[20px] border border-[#d7d9df] bg-white px-4 py-4">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm font-semibold uppercase tracking-wide text-gray-400">Voice guidance</Text>
-              <TouchableOpacity
-                onPress={handleToggleVoiceGuidance}
-                className={`rounded-full px-3 py-1.5 ${voiceGuidanceEnabled ? 'bg-[#dbeafe]' : 'bg-gray-100'}`}
-              >
-                <Text className={`text-xs font-bold uppercase ${voiceGuidanceEnabled ? 'text-[#1d4ed8]' : 'text-gray-500'}`}>
-                  {voiceGuidanceEnabled ? 'On' : 'Off'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <Text className="mt-2 text-base font-semibold text-gray-900">
-              {!voiceGuidanceEnabled
-                ? 'Voice guidance is paused. Turn it back on anytime.'
-                : ride.stage === 'waiting_for_customer'
-                ? 'Voice guidance will continue when the trip starts moving again.'
-                : nextInstruction || 'Turn-by-turn voice guidance is active inside the app.'}
-            </Text>
-          </View>
-
-          {ride.stage === 'to_pickup' ? (
-            <TouchableOpacity
-              onPress={handleMarkArrived}
-              disabled={submitting}
-              className="mt-4 h-14 items-center justify-center rounded-[20px]"
-              style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
-            >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Mark Arrived</Text>}
-            </TouchableOpacity>
-          ) : null}
-
-          {ride.stage === 'waiting_for_customer' ? (
-            <TouchableOpacity
-              onPress={handleStartRide}
-              disabled={submitting}
-              className="mt-4 h-14 items-center justify-center rounded-[20px]"
-              style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
-            >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Start Ride</Text>}
-            </TouchableOpacity>
-          ) : null}
-
-          {ride.stage === 'on_trip' ? (
-            <TouchableOpacity
-              onPress={handleCompleteRide}
-              disabled={submitting}
-              className="mt-4 h-14 items-center justify-center rounded-[20px]"
-              style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
-            >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Complete Ride</Text>}
-            </TouchableOpacity>
-          ) : null}
-        </ScrollView>
-      </View>
-    </View>
+    <DriverTripMapPanel
+      mapRef={mapRef}
+      mapRegion={mapRegion}
+      onMapReady={() => {
+        mapReadyRef.current = true;
+        console.log(TRIP_DEBUG_PREFIX, 'map ready');
+      }}
+      driverCoordinate={driverCoordinate}
+      pickupCoordinate={pickupCoordinate}
+      dropoffCoordinate={dropoffCoordinate}
+      safeRouteCoordinates={safeRouteCoordinates}
+      primaryBlue={PRIMARY_BLUE}
+      insets={insets}
+      targetLabel={targetLabel}
+      voiceGuidanceEnabled={voiceGuidanceEnabled}
+      onToggleVoiceGuidance={handleToggleVoiceGuidance}
+      showCallPassenger={ride.stage === 'waiting_for_customer'}
+      onCallPassenger={handleCallPassenger}
+      onOpenChat={() => navigation.navigate('RideChat', {
+        rideRequestId: ride.id,
+        role: 'driver',
+        chatTitle: ride.passengerName || 'Passenger chat',
+      })}
+      onOpenGoogleMaps={handleOpenGoogleMaps}
+      tripPanelMaxHeight={TRIP_PANEL_MAX_HEIGHT}
+      onCenterDriver={() => {
+        if (!mapRef.current || !driverCoordinate) return;
+        mapRef.current.animateCamera?.({ center: driverCoordinate, zoom: 17 }, { duration: 450 });
+      }}
+      stageTitle={stageTitle}
+      primaryMetric={primaryMetric}
+      secondaryMetric={secondaryMetric}
+      fareText={formatCurrency(ride.estimatedAmount)}
+      passengerProfileImageUrl={passengerProfileImageUrl}
+      passengerName={ride.passengerName}
+      passengerSubtitle={ride.passengerPhone || targetLabel}
+      guidanceText={guidanceText}
+      showGuidance={Boolean(ride.stage === 'on_trip' || nextInstruction)}
+      showMarkArrived={ride.stage === 'to_pickup'}
+      showStartRide={ride.stage === 'waiting_for_customer'}
+      showCompleteRide={ride.stage === 'on_trip'}
+      showCancelRide={ride.stage === 'waiting_for_customer' || ride.stage === 'on_trip'}
+      submitting={submitting}
+      cancellingRide={cancellingRide}
+      onMarkArrived={handleMarkArrived}
+      onStartRide={handleStartRide}
+      onCompleteRide={handleCompleteRide}
+      onCancelRide={handleCancelRide}
+    />
   );
 }

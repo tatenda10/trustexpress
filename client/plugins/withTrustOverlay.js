@@ -78,6 +78,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -91,6 +92,7 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -98,7 +100,8 @@ import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.UiThreadUtil;
 
-public class TrustOverlayModule extends ReactContextBaseJavaModule {
+public class TrustOverlayModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
+  private static final String TAG = "TrustOverlay";
   private final ReactApplicationContext reactContext;
   private WindowManager windowManager;
   private View overlayView;
@@ -110,10 +113,13 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
   private float initialTouchX;
   private float initialTouchY;
   private long touchStartedAt;
+  private long overlayCreatedAt;
 
   public TrustOverlayModule(ReactApplicationContext reactContext) {
     super(reactContext);
     this.reactContext = reactContext;
+    this.reactContext.addLifecycleEventListener(this);
+    Log.d(TAG, "TrustOverlayModule initialized");
   }
 
   @NonNull
@@ -140,6 +146,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
   private String getVariant(ReadableMap config) {
     String variant = getMapString(config, "variant", "online").trim().toLowerCase();
     if (variant.equals("request")) return "request";
+    if (variant.equals("trip")) return "trip";
     return "online";
   }
 
@@ -149,19 +156,25 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     currentVariant = variant;
     container.removeAllViews();
 
+    if (variant.equals("trip")) {
+      container.addView(createPulseRing(94, "#66F97316", 1.58f, 0.52f, 0.08f, 920, 0));
+      container.addView(createPulseRing(74, "#88FB923C", 1.34f, 0.42f, 0.10f, 920, 160));
+      container.addView(createCenterCircle("#F97316", "#FFEDD5", 66));
+      container.addView(createBadge("#FFFFFF", "#F97316", 18, 18, 18));
+      return;
+    }
+
     if (variant.equals("request")) {
-      container.addView(createPulseRing(88, "#5522C55E", 1.55f, 0.46f, 0.06f, 820, 0));
-      container.addView(createPulseRing(70, "#7722C55E", 1.32f, 0.36f, 0.08f, 820, 180));
-      container.addView(createCenterCircle("#16A34A", "#DCFCE7", 64));
-      container.addView(createBadge());
-      container.addView(createCloseButton());
+      container.addView(createPulseRing(94, "#66F59E0B", 1.6f, 0.52f, 0.08f, 780, 0));
+      container.addView(createPulseRing(74, "#99F97316", 1.36f, 0.44f, 0.10f, 780, 140));
+      container.addView(createCenterCircle("#F59E0B", "#FEF3C7", 66));
+      container.addView(createBadge("#EF4444", "#FFFFFF", 24, 14, 14));
       return;
     }
 
     container.addView(createPulseRing(86, "#33206EFF", 1.28f, 0.32f, 0.04f, 1600, 0));
     container.addView(createPulseRing(70, "#55206EFF", 1.18f, 0.26f, 0.06f, 1600, 420));
     container.addView(createCenterCircle("#206EFF", "#E8F0FF", 58));
-    container.addView(createCloseButton());
   }
 
   private void updateOverlay(ReadableMap config) {
@@ -242,17 +255,17 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     return circle;
   }
 
-  private View createBadge() {
+  private View createBadge(String fillColor, String strokeColor, int sizeDp, int topDp, int endDp) {
     View badge = new View(reactContext);
     GradientDrawable background = new GradientDrawable();
     background.setShape(GradientDrawable.OVAL);
-    background.setColor(Color.parseColor("#EF4444"));
-    background.setStroke(dp(3), Color.WHITE);
+    background.setColor(Color.parseColor(fillColor));
+    background.setStroke(dp(3), Color.parseColor(strokeColor));
     badge.setBackground(background);
     badge.setElevation(dp(12));
 
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.END);
-    params.setMargins(0, dp(16), dp(16), 0);
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(sizeDp), dp(sizeDp), Gravity.TOP | Gravity.END);
+    params.setMargins(0, dp(topDp), dp(endDp), 0);
     badge.setLayoutParams(params);
     return badge;
   }
@@ -290,7 +303,6 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     FrameLayout container = new FrameLayout(reactContext);
     container.setClipChildren(false);
     container.setClipToPadding(false);
-    container.setPadding(dp(4), dp(4), dp(4), dp(4));
     container.setLayoutParams(new FrameLayout.LayoutParams(dp(116), dp(116)));
     container.setMinimumWidth(dp(116));
     container.setMinimumHeight(dp(116));
@@ -318,7 +330,8 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
           float dx = Math.abs(event.getRawX() - initialTouchX);
           float dy = Math.abs(event.getRawY() - initialTouchY);
           long elapsed = System.currentTimeMillis() - touchStartedAt;
-          if (dx < dp(10) && dy < dp(10) && elapsed < 350) {
+          long overlayAge = System.currentTimeMillis() - overlayCreatedAt;
+          if (overlayAge > 1200 && dx < dp(10) && dy < dp(10) && elapsed < 350) {
             openApp();
           }
           return true;
@@ -332,12 +345,30 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
 
   @ReactMethod
   public void canDrawOverlays(Promise promise) {
-    promise.resolve(canDrawOverlaysInternal());
+    boolean canDraw = canDrawOverlaysInternal();
+    Log.d(TAG, "canDrawOverlays=" + canDraw + " sdk=" + Build.VERSION.SDK_INT);
+    promise.resolve(canDraw);
+  }
+
+  @Override
+  public void onHostResume() {
+    Log.d(TAG, "onHostResume (no-op - overlay managed by JS)");
+  }
+
+  @Override
+  public void onHostPause() {
+    Log.d(TAG, "onHostPause");
+  }
+
+  @Override
+  public void onHostDestroy() {
+    UiThreadUtil.runOnUiThread(() -> hideOverlay());
   }
 
   @ReactMethod
   public void openOverlaySettings(Promise promise) {
     try {
+      Log.d(TAG, "openOverlaySettings");
       Intent intent = new Intent(
         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
         Uri.parse("package:" + reactContext.getPackageName())
@@ -346,12 +377,14 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
       reactContext.startActivity(intent);
       promise.resolve(true);
     } catch (Exception error) {
+      Log.e(TAG, "openOverlaySettings failed", error);
       promise.reject("overlay_settings_failed", error);
     }
   }
 
   @ReactMethod
   public void show(ReadableMap config, Promise promise) {
+    Log.d(TAG, "show called variant=" + getVariant(config) + " canDraw=" + canDrawOverlaysInternal());
     if (!canDrawOverlaysInternal()) {
       promise.reject("overlay_permission_missing", "Display over other apps permission is not enabled.");
       return;
@@ -361,10 +394,13 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
       try {
         if (windowManager == null) {
           windowManager = (WindowManager) reactContext.getSystemService(Context.WINDOW_SERVICE);
+          Log.d(TAG, "windowManager initialized=" + (windowManager != null));
         }
 
         if (overlayView == null) {
+          Log.d(TAG, "creating overlay view");
           overlayView = createOverlayView();
+          overlayCreatedAt = System.currentTimeMillis();
           int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
             ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             : WindowManager.LayoutParams.TYPE_PHONE;
@@ -380,11 +416,14 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
           layoutParams.x = dp(16);
           layoutParams.y = dp(120);
           windowManager.addView(overlayView, layoutParams);
+          Log.d(TAG, "overlay view added x=" + layoutParams.x + " y=" + layoutParams.y);
         }
 
         updateOverlay(config);
+        Log.d(TAG, "show resolved variant=" + getVariant(config));
         promise.resolve(true);
       } catch (Exception error) {
+        Log.e(TAG, "show failed", error);
         promise.reject("overlay_show_failed", error);
       }
     });
@@ -395,12 +434,15 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
     UiThreadUtil.runOnUiThread(() -> {
       try {
         if (overlayView == null) {
+          Log.d(TAG, "update skipped: no overlay view");
           promise.resolve(false);
           return;
         }
         updateOverlay(config);
+        Log.d(TAG, "update resolved variant=" + getVariant(config));
         promise.resolve(true);
       } catch (Exception error) {
+        Log.e(TAG, "update failed", error);
         promise.reject("overlay_update_failed", error);
       }
     });
@@ -410,9 +452,11 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule {
   public void hide(Promise promise) {
     UiThreadUtil.runOnUiThread(() -> {
       try {
+        Log.d(TAG, "hide called");
         hideOverlay();
         promise.resolve(true);
       } catch (Exception error) {
+        Log.e(TAG, "hide failed", error);
         promise.reject("overlay_hide_failed", error);
       }
     });

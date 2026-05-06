@@ -14,7 +14,7 @@ import "./global.css"
 
 // Config
 import { CLERK_PUBLISHABLE_KEY, tokenCache } from './config/clerk';
-import { setApiAuthErrorHandler } from './api';
+import { getDriverCurrentRide, getDriverRideRequests, setApiAuthErrorHandler } from './api';
 
 // Screens - Shared
 import SplashScreen from './screens/shared/SplashScreen';
@@ -52,18 +52,22 @@ import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
 import {
   isTripOverlaySupported,
-  getTripOverlaySupportInfo,
-  canUseTripOverlay,
   showTripOverlay,
   updateTripOverlay,
   hideTripOverlay,
 } from './services/tripOverlay';
+
+const BACKGROUND_OVERLAY_SHOW_DELAY_MS = 0;
 
 const Stack = createNativeStackNavigator();
 
 function isDriverStatusOnline(status) {
   const value = status?.availability?.isOnline ?? status?.isOnline;
   return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function hasDriverActiveRide(status) {
+  return !!(status?.currentRide?.id || status?.ride?.id || status?.activeRide?.id);
 }
 
 // Auth Stack (for unauthenticated users)
@@ -114,7 +118,7 @@ const ROLE_STORAGE_KEY = 'trust_express_role';
 const getDriverStatusCacheKey = (userId) => `trust_express_driver_status:${userId}`;
 
 // App Stack (for authenticated users)
-function AppStack() {
+function AppStack({ currentRouteName }) {
   const { getToken } = useAuth();
   const { user } = useUser();
   const { inviteToken, attachedUserId, markInviteAttached, clearInvite } = useAgentInvite();
@@ -129,6 +133,12 @@ function AppStack() {
   const [driverStatus, setDriverStatus] = useState(null);
   /** Latest driver status for refetch error paths (avoids stale useCallback closure wiping state). */
   const driverStatusRef = useRef(null);
+  const backgroundOverlayVisibleRef = useRef(false);
+  const backgroundOverlayShowTimerRef = useRef(null);
+  const backgroundOverlayLastBackgroundAtRef = useRef(0);
+  const backgroundOverlayLastVariantRef = useRef('online');
+  const appStateRef = useRef(AppState.currentState);
+  const lastDriverStatusForegroundFetchAtRef = useRef(0);
   const [driverLoading, setDriverLoading] = useState(true);
   const [driverSkippedOnboarding, setDriverSkippedOnboarding] = useState(false);
   const [driverSkippedEnhancedSelfie, setDriverSkippedEnhancedSelfie] = useState(false);
@@ -138,14 +148,23 @@ function AppStack() {
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
   const [roleBootstrapped, setRoleBootstrapped] = useState(false);
 
-  // Cleanup overlay on unmount
   useEffect(() => {
-    return () => {
-      if (Platform.OS === 'android') {
-        hideTripOverlay();
-      }
-    };
-  }, []);
+    driverStatusRef.current = driverStatus;
+  }, [driverStatus]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (currentRouteName !== 'DriverTrip') return;
+    if (AppState.currentState !== 'active') return;
+
+    if (backgroundOverlayShowTimerRef.current) {
+      clearTimeout(backgroundOverlayShowTimerRef.current);
+      backgroundOverlayShowTimerRef.current = null;
+    }
+    hideTripOverlay().finally(() => {
+      backgroundOverlayVisibleRef.current = false;
+    });
+  }, [currentRouteName]);
 
   const resolveExplicitRole = useCallback((profile) => {
     const metaRole = String(profile?.publicMetadata?.role || '').trim().toLowerCase();
@@ -218,6 +237,11 @@ function AppStack() {
     referralAttachKeyRef.current = '';
   }, [user?.id]);
 
+  // Role: backend first, then stored choice from the auth flow. Never default an authenticated
+  // user to passenger here, otherwise fresh driver signups can be mis-registered during bootstrap.
+  const userRole = userProfile?.role || storedRole || null;
+  const isDriver = userRole === 'driver';
+
   // Register push notifications once we know the user and role
   useEffect(() => {
     let cancelled = false;
@@ -287,21 +311,6 @@ function AppStack() {
     };
   }, [user?.id, isDriver, storageLoaded, roleLoading, roleBootstrapped, userRole]);
 
-  // Role: backend first, then stored choice from the auth flow. Never default an authenticated
-  // user to passenger here, otherwise fresh driver signups can be mis-registered during bootstrap.
-  const userRole = userProfile?.role || storedRole || null;
-  const isDriver = userRole === 'driver';
-
-  useEffect(() => {
-    console.log('[AppStack] state:', {
-      storageLoaded,
-      roleLoading,
-      userRole,
-      isDriver,
-      driverStatus: driverStatus ? { isOnline: driverStatus.isOnline, id: driverStatus.id } : null,
-    });
-  }, [storageLoaded, roleLoading, userRole, isDriver, driverStatus]);
-
   useEffect(() => {
     const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification?.request?.content?.data || {};
@@ -311,8 +320,26 @@ function AppStack() {
         data,
       });
       if (data?.type === 'driver_new_ride_request' && isDriver) {
-        updateTripOverlay({ variant: 'request' }).catch(() => {});
+        backgroundOverlayLastVariantRef.current = 'request';
+        if (AppState.currentState === 'background' && backgroundOverlayVisibleRef.current) {
+          updateTripOverlay({ variant: 'request' }).catch(() => {});
+        }
         openDriverIncomingRequest();
+      } else if (data?.type === 'ride_status' && isDriver) {
+        const rideStatus = String(data?.status || '').toLowerCase();
+        if (['driver_assigned', 'driver_arrived', 'in_progress'].includes(rideStatus)) {
+          backgroundOverlayLastVariantRef.current = 'trip';
+          if (AppState.currentState === 'background' && backgroundOverlayVisibleRef.current) {
+            hideTripOverlay().finally(() => {
+              backgroundOverlayVisibleRef.current = false;
+            });
+          }
+        } else if (['completed', 'cancelled', 'expired'].includes(rideStatus)) {
+          backgroundOverlayLastVariantRef.current = 'online';
+          if (AppState.currentState === 'background' && backgroundOverlayVisibleRef.current) {
+            updateTripOverlay({ variant: 'online' }).catch(() => {});
+          }
+        }
       }
     });
 
@@ -336,62 +363,263 @@ function AppStack() {
 
   // Background overlay for online drivers
   useEffect(() => {
+    if (!isDriver) {
+      return undefined;
+    }
+
     const driverIsOnline = isDriverStatusOnline(driverStatus);
     const overlaySupported = Platform.OS === 'android' && isTripOverlaySupported();
+    console.log('[BackgroundOverlay] effect init', {
+      appState: AppState.currentState,
+      isDriver,
+      driverIsOnline,
+      overlaySupported,
+      driverStatusOnline: driverStatus?.availability?.isOnline ?? driverStatus?.isOnline ?? null,
+    });
     if (!overlaySupported) {
-      console.log('[BackgroundOverlay] Not supported', getTripOverlaySupportInfo());
+      console.log('[BackgroundOverlay] unsupported or missing native module');
       return;
     }
 
-    const handleAppStateChange = async (nextAppState) => {
-      console.log('[BackgroundOverlay] App state changed:', nextAppState, { isDriver, driverIsOnline });
-      if (nextAppState === 'background' && isDriver && driverIsOnline) {
-        console.log('[BackgroundOverlay] Showing overlay for online driver');
-        // Show overlay when going to background and driver is online
-        const canShow = await canUseTripOverlay();
-        console.log('[BackgroundOverlay] Can show overlay:', canShow);
-        if (canShow) {
-          await showTripOverlay({
-            title: 'Trust Express',
-            subtitle: 'Online - Ready for rides',
-            meta: 'Tap to return to app',
-            variant: 'online',
-          });
-          console.log('[BackgroundOverlay] Overlay shown');
-        } else {
-          console.log('[BackgroundOverlay] Cannot show overlay - permission denied');
-        }
-      } else if (nextAppState === 'active') {
-        console.log('[BackgroundOverlay] Hiding overlay');
-        // Hide overlay when coming back to foreground
-        await hideTripOverlay();
+    let active = true;
+
+    const clearShowTimer = () => {
+      if (backgroundOverlayShowTimerRef.current) {
+        clearTimeout(backgroundOverlayShowTimerRef.current);
+        backgroundOverlayShowTimerRef.current = null;
       }
     };
+
+    const resolveBackgroundOverlayVariant = async () => {
+      try {
+        console.log('[BackgroundOverlay] variant resolve:start');
+        const token = await getTokenRef.current?.();
+        if (!token) {
+          console.log('[BackgroundOverlay] variant fallback: missing auth token');
+          return backgroundOverlayLastVariantRef.current || 'online';
+        }
+
+        const currentRideData = await getDriverCurrentRide(token, { suppressAuthErrorHandler: true });
+        if (currentRideData?.ride?.id) {
+          console.log('[BackgroundOverlay] variant resolved: trip', { rideId: currentRideData.ride.id });
+          return 'trip';
+        }
+
+        const requestsData = await getDriverRideRequests(token);
+        const hasRequests = Array.isArray(requestsData?.requests) && requestsData.requests.length > 0;
+        console.log('[BackgroundOverlay] variant resolved', {
+          variant: hasRequests ? 'request' : 'online',
+          requestCount: Array.isArray(requestsData?.requests) ? requestsData.requests.length : 0,
+        });
+        return hasRequests ? 'request' : 'online';
+      } catch (error) {
+        console.log('[BackgroundOverlay] variant fallback after error', {
+          message: error?.message || null,
+          status: error?.status ?? null,
+        });
+        return backgroundOverlayLastVariantRef.current || 'online';
+      }
+    };
+
+    const getOverlayCopy = (variant) => {
+      if (variant === 'trip') {
+        return {
+          title: 'Trust Express',
+          subtitle: 'Active trip',
+          meta: 'Tap to return to trip',
+          variant: 'trip',
+        };
+      }
+      if (variant === 'request') {
+        return {
+          title: 'Trust Express',
+          subtitle: 'New ride request',
+          meta: 'Tap to respond',
+          variant: 'request',
+        };
+      }
+      return {
+        title: 'Trust Express',
+        subtitle: 'Online - Ready for rides',
+        meta: 'Tap to return to app',
+        variant: 'online',
+      };
+    };
+
+    const getCurrentRouteName = () => {
+      if (currentRouteName) return currentRouteName;
+      try {
+        return navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name || null : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const showOnlineOverlay = async (source) => {
+      const driverOnlineNow = driverIsOnline || isDriverStatusOnline(driverStatusRef.current);
+      const routeName = getCurrentRouteName();
+      console.log('[BackgroundOverlay] show attempt', {
+        source,
+        active,
+        visible: backgroundOverlayVisibleRef.current,
+        appStateRef: appStateRef.current,
+        appState: AppState.currentState,
+        isDriver,
+        driverIsOnline,
+        driverOnlineRef: isDriverStatusOnline(driverStatusRef.current),
+        driverOnlineNow,
+        routeName,
+      });
+      if (!active || backgroundOverlayVisibleRef.current) return;
+      if (appStateRef.current !== 'background' || AppState.currentState !== 'background') {
+        console.log('[BackgroundOverlay] show skipped: app is not backgrounded');
+        return;
+      }
+      if (!isDriver || !driverOnlineNow) {
+        console.log('[BackgroundOverlay] show skipped: not an online driver');
+        return;
+      }
+      const hasKnownActiveRide = hasDriverActiveRide(driverStatusRef.current);
+      if (hasKnownActiveRide && routeName !== 'DriverTrip') {
+        console.log('[BackgroundOverlay] show skipped: active ride already known outside trip screen');
+        return;
+      }
+
+      const initialVariant = routeName === 'DriverTrip'
+        ? 'trip'
+        : backgroundOverlayLastVariantRef.current === 'request'
+          ? 'request'
+          : 'online';
+      backgroundOverlayLastVariantRef.current = initialVariant;
+
+      if (appStateRef.current !== 'background' || AppState.currentState !== 'background') {
+        console.log('[BackgroundOverlay] show skipped after resolve: app is not backgrounded');
+        return;
+      }
+
+      const payload = getOverlayCopy(backgroundOverlayLastVariantRef.current || 'online');
+      console.log('[BackgroundOverlay] calling native show', payload);
+      const shown = await showTripOverlay(payload);
+      console.log('[BackgroundOverlay] native show result', {
+        shown,
+        variant: backgroundOverlayLastVariantRef.current,
+      });
+
+      if (active && shown) {
+        backgroundOverlayVisibleRef.current = true;
+        if (appStateRef.current !== 'background' || AppState.currentState !== 'background') {
+          console.log('[BackgroundOverlay] native show finished after foreground; hiding immediately');
+          await hideTripOverlay();
+          backgroundOverlayVisibleRef.current = false;
+          return;
+        }
+      }
+
+      if (routeName !== 'DriverTrip') {
+        resolveBackgroundOverlayVariant().then((resolvedVariant) => {
+          if (!active || !backgroundOverlayVisibleRef.current) return;
+          if (!resolvedVariant || resolvedVariant === backgroundOverlayLastVariantRef.current) return;
+
+          backgroundOverlayLastVariantRef.current = resolvedVariant;
+          if (resolvedVariant === 'trip') {
+            console.log('[BackgroundOverlay] hiding native overlay: active trip resolved');
+            hideTripOverlay().finally(() => {
+              backgroundOverlayVisibleRef.current = false;
+            });
+            return;
+          }
+
+          if (appStateRef.current !== 'background' || AppState.currentState !== 'background') return;
+
+          const nextPayload = getOverlayCopy(resolvedVariant);
+          console.log('[BackgroundOverlay] updating native overlay variant', nextPayload);
+          updateTripOverlay(nextPayload).catch((error) => {
+            console.log('[BackgroundOverlay] update variant failed', {
+              message: error?.message || null,
+            });
+          });
+        });
+      }
+    };
+
+    const scheduleShowOverlay = (source) => {
+      clearShowTimer();
+      if (BACKGROUND_OVERLAY_SHOW_DELAY_MS <= 0) {
+        showOnlineOverlay(source);
+        return;
+      }
+      backgroundOverlayShowTimerRef.current = setTimeout(() => {
+        backgroundOverlayShowTimerRef.current = null;
+        showOnlineOverlay(source);
+      }, BACKGROUND_OVERLAY_SHOW_DELAY_MS);
+    };
+
+    const hideOnlineOverlay = async (force = false) => {
+      clearShowTimer();
+      if (!force && !backgroundOverlayVisibleRef.current) return;
+      await hideTripOverlay();
+      backgroundOverlayVisibleRef.current = false;
+    };
+
+    const openOverlayTargetIfNeeded = () => {
+      const lastVariant = backgroundOverlayLastVariantRef.current;
+      if (lastVariant === 'request') {
+        openDriverIncomingRequest();
+        return;
+      }
+    };
+
+    const handleAppStateChange = (nextAppState) => {
+      const routeName = getCurrentRouteName();
+      console.log('[BackgroundOverlay] app state change', {
+        from: appStateRef.current,
+        to: nextAppState,
+        isDriver,
+        driverIsOnline,
+        routeName,
+        variant: backgroundOverlayLastVariantRef.current,
+      });
+      appStateRef.current = nextAppState;
+      const driverOnlineNow = driverIsOnline || isDriverStatusOnline(driverStatusRef.current);
+      if (nextAppState === 'background' && isDriver && driverOnlineNow) {
+        backgroundOverlayLastBackgroundAtRef.current = Date.now();
+        scheduleShowOverlay('app-state-background');
+      } else if (nextAppState === 'active') {
+        const backgroundDurationMs = Date.now() - backgroundOverlayLastBackgroundAtRef.current;
+        const wasVisible = backgroundOverlayVisibleRef.current;
+        clearShowTimer();
+        if (backgroundDurationMs < BACKGROUND_OVERLAY_SHOW_DELAY_MS && !backgroundOverlayVisibleRef.current) {
+          return;
+        }
+        hideOnlineOverlay(false).then(() => {
+          if (wasVisible) openOverlayTargetIfNeeded();
+        });
+      } else {
+        clearShowTimer();
+      }
+    };
+
+    if (!isDriver || !driverIsOnline) {
+      hideOnlineOverlay(true);
+    }
 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
 
     // Initial check in case app starts in background (unlikely but safe)
-    if (AppState.currentState === 'background' && isDriver && driverIsOnline) {
-      console.log('[BackgroundOverlay] App started in background with online driver');
-      canUseTripOverlay().then(async (canShow) => {
-        console.log('[BackgroundOverlay] Initial canShow:', canShow);
-        if (canShow) {
-          await showTripOverlay({
-            title: 'Trust Express',
-            subtitle: 'Online - Ready for rides',
-            meta: 'Tap to return to app',
-            variant: 'online',
-          });
-          console.log('[BackgroundOverlay] Initial overlay shown');
-        }
-      });
+    if (
+      AppState.currentState === 'background' &&
+      isDriver &&
+      driverIsOnline
+    ) {
+      scheduleShowOverlay('initial-background');
     }
 
     return () => {
-      console.log('[BackgroundOverlay] Cleaning up subscription');
+      active = false;
+      clearShowTimer();
       subscription?.remove();
     };
-  }, [isDriver, driverStatus?.availability?.isOnline, driverStatus?.isOnline]);
+  }, [isDriver, driverStatus?.availability?.isOnline, driverStatus?.isOnline, openDriverIncomingRequest, currentRouteName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -599,10 +827,15 @@ function AppStack() {
   useEffect(() => {
     if (!isDriver) return;
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') refetchDriverStatus();
+      if (nextState !== 'active') return;
+      if (currentRouteName === 'DriverTrip') return;
+      const now = Date.now();
+      if (now - lastDriverStatusForegroundFetchAtRef.current < 5000) return;
+      lastDriverStatusForegroundFetchAtRef.current = now;
+      refetchDriverStatus();
     });
     return () => sub.remove();
-  }, [isDriver, refetchDriverStatus]);
+  }, [isDriver, refetchDriverStatus, currentRouteName]);
 
   const refetchUserProfile = useCallback(async () => {
     const fallbackProfile = {
@@ -902,6 +1135,15 @@ function AppContent() {
   const { isLoaded, isSignedIn } = useAuth();
   const { setInviteFromToken, hydrateStoredInvite } = useAgentInvite();
   const pendingInviteNavigationRef = useRef(null);
+  const [currentRouteName, setCurrentRouteName] = useState(null);
+
+  const syncCurrentRouteName = useCallback(() => {
+    try {
+      setCurrentRouteName(navigationRef.getCurrentRoute?.()?.name || null);
+    } catch {
+      setCurrentRouteName(null);
+    }
+  }, []);
 
   const navigateToOnboardingIfAvailable = useCallback((target) => {
     if (!navigationRef.isReady()) return false;
@@ -978,6 +1220,7 @@ function AppContent() {
     <NavigationContainer
       ref={navigationRef}
       onReady={() => {
+        syncCurrentRouteName();
         if (pendingInviteNavigationRef.current && !isSignedIn) {
           const pendingTarget = pendingInviteNavigationRef.current;
           if (navigateToOnboardingIfAvailable(pendingTarget)) {
@@ -985,10 +1228,11 @@ function AppContent() {
           }
         }
       }}
+      onStateChange={syncCurrentRouteName}
     >
       <SafeAreaProvider>
         <KeyboardProvider>
-          {!isLoaded ? <AuthStack /> : isSignedIn ? <AppStack /> : <AuthStack />}
+          {!isLoaded ? <AuthStack /> : isSignedIn ? <AppStack currentRouteName={currentRouteName} /> : <AuthStack />}
           <StatusBar style="auto" />
         </KeyboardProvider>
       </SafeAreaProvider>

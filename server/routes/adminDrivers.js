@@ -3,7 +3,7 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getClerkClient } from '../lib/clerk-client.js';
-import { getPrimaryEmail, getPrimaryPhone, normalizeRole } from '../lib/clerk-user.js';
+import { getDriverProfileImageReview, getPrimaryEmail, getPrimaryPhone, mergePrivateMetadata, normalizeRole } from '../lib/clerk-user.js';
 import { evaluateVehicleAgainstTiers, loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { query } from '../db/connection.js';
 import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib/driver-verification-mysql.js';
@@ -89,6 +89,7 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
     phoneVerified: !!identityRow?.phone_verified_at,
     phoneVerifiedAt: identityRow?.phone_verified_at || null,
     profile,
+    profileImageReview: getDriverProfileImageReview(privateMeta, 'driver'),
     vehicle,
     _role: normalizeRole(publicMeta.role),
   };
@@ -171,11 +172,13 @@ function toDateValue(value) {
 function deriveVerificationBucket(item) {
   const profileStatus = item.profile?.status || null;
   const vehicleStatus = item.vehicle?.status || null;
+  const profileImageReviewStatus = item.profileImageReview?.status || null;
   const hasIncomingProfile = profileStatus === 'pending' && !!item.profile?.submittedAt && !!item.profile?.hasDocuments;
   const hasIncomingVehicle = vehicleStatus === 'pending' && !!item.vehicle?.submittedAt && !!item.vehicle?.hasDocuments;
+  const hasIncomingProfileImage = profileImageReviewStatus === 'pending' && !!item.profileImageReview?.pendingImageUrl;
   const hasApprovedProfile = profileStatus === 'approved' && !!item.profile?.hasDocuments;
   const hasApprovedVehicle = vehicleStatus === 'approved' && !!item.vehicle?.hasDocuments;
-  const hasIncoming = hasIncomingProfile || hasIncomingVehicle;
+  const hasIncoming = hasIncomingProfile || hasIncomingVehicle || hasIncomingProfileImage;
   const isVerified = hasApprovedProfile || hasApprovedVehicle;
 
   if (hasIncoming) return 'incoming';
@@ -186,10 +189,16 @@ function deriveVerificationBucket(item) {
 function deriveVerificationType(item) {
   const profileStatus = item.profile?.status || null;
   const vehicleStatus = item.vehicle?.status || null;
+  const profileImageReviewStatus = item.profileImageReview?.status || null;
   const hasIncomingProfile = profileStatus === 'pending' && !!item.profile?.submittedAt && !!item.profile?.hasDocuments;
   const hasIncomingVehicle = vehicleStatus === 'pending' && !!item.vehicle?.submittedAt && !!item.vehicle?.hasDocuments;
+  const hasIncomingProfileImage = profileImageReviewStatus === 'pending' && !!item.profileImageReview?.pendingImageUrl;
   const hasApprovedProfile = profileStatus === 'approved' && !!item.profile?.hasDocuments;
   const hasApprovedVehicle = vehicleStatus === 'approved' && !!item.vehicle?.hasDocuments;
+
+  if (hasIncomingProfileImage) {
+    return 'profile_image';
+  }
 
   if (hasIncomingVehicle || hasApprovedVehicle) {
     return 'vehicle';
@@ -311,7 +320,7 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
       drivers = drivers.filter((item) => deriveVerificationBucket(item) === verificationBucket);
     }
 
-    if (['identity', 'vehicle'].includes(verificationType)) {
+    if (['identity', 'vehicle', 'profile_image'].includes(verificationType)) {
       drivers = drivers.filter((item) => deriveVerificationType(item) === verificationType);
     }
 
@@ -592,8 +601,8 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
     if (!driverId) {
       return res.status(400).json({ error: 'Invalid driver id' });
     }
-    if (!['profile', 'vehicle'].includes(target)) {
-      return res.status(400).json({ error: 'target must be profile or vehicle' });
+    if (!['profile', 'vehicle', 'profile_image'].includes(target)) {
+      return res.status(400).json({ error: 'target must be profile, vehicle, or profile_image' });
     }
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ error: 'action must be approve or reject' });
@@ -612,6 +621,37 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
       getDriverIdentity(driverId),
       getDriverVehicle(driverId),
     ]);
+
+    if (target === 'profile_image') {
+      const privateMeta = user.privateMetadata || {};
+      const pendingImageUrl = String(privateMeta.pendingDriverProfileImageUrl || '').trim();
+      if (!pendingImageUrl) {
+        return res.status(400).json({ error: 'Driver has not submitted a new profile picture' });
+      }
+
+      const nextPrivateMetadata = {
+        ...privateMeta,
+        driverProfileImageReviewStatus: action === 'approve' ? 'approved' : 'rejected',
+        driverProfileImageReviewedAt: new Date().toISOString(),
+        driverProfileImageRejectionReason: action === 'reject' ? rejectionReason : null,
+      };
+
+      if (action === 'approve') {
+        nextPrivateMetadata.profileImageUrl = pendingImageUrl;
+        nextPrivateMetadata.pendingDriverProfileImageUrl = null;
+      }
+
+      await mergePrivateMetadata(driverId, nextPrivateMetadata);
+
+      return res.json({
+        ok: true,
+        target,
+        action,
+        profileImageReview: getDriverProfileImageReview(nextPrivateMetadata, 'driver'),
+        driverProfile: null,
+        vehicle: null,
+      });
+    }
 
     if (target === 'profile') {
       if (

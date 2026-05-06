@@ -21,6 +21,21 @@ const DOCS = [
   { key: 'nationalIdBack', label: 'National ID back', subtitle: 'Back side of your ID card', icon: 'document-outline' },
 ];
 
+function chooseImageSource() {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Upload document',
+      'Use your camera or choose an existing photo from your gallery.',
+      [
+        { text: 'Take photo', onPress: () => resolve('camera') },
+        { text: 'Choose from gallery', onPress: () => resolve('gallery') },
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(null) }
+    );
+  });
+}
+
 export default function PassengerIdentityVerificationScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
@@ -103,17 +118,39 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
   const pickImage = async (key) => {
     try {
       const imagePicker = await import('expo-image-picker');
-      const result = await imagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        quality: 0.8,
-      });
+      const source = await chooseImageSource();
+      if (!source) return;
+
+      let result;
+      if (source === 'camera') {
+        const permission = await imagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Camera permission needed', 'Allow camera access to take a photo of your ID.');
+          return;
+        }
+        result = await imagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          quality: 0.8,
+        });
+      } else {
+        const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Gallery permission needed', 'Allow photo library access to choose an ID image from your gallery.');
+          return;
+        }
+        result = await imagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          quality: 0.8,
+        });
+      }
 
       if (!result.canceled && result.assets?.[0]) {
         setUris((prev) => ({ ...prev, [key]: result.assets[0].uri }));
       }
     } catch {
-      Alert.alert('Error', 'Could not open image picker');
+      Alert.alert('Error', 'Could not open the document picker');
     }
   };
 

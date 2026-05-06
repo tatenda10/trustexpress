@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql.js';
+import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
 import {
   emitRideRequestRemovedFromDriver,
@@ -431,14 +432,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     );
 
     if (!availability || !availability.is_online || availability.current_lat === null || availability.current_lng === null) {
-      console.log('[drivers.rideRequests] unavailable for requests', {
-        driverUserId: req.userId,
-        hasAvailability: !!availability,
-        isOnline: !!availability?.is_online,
-        currentLat: availability?.current_lat ?? null,
-        currentLng: availability?.current_lng ?? null,
-        vehicleTierKey: availability?.vehicle_tier_key ?? null,
-      });
       return res.json({ requests: [] });
     }
 
@@ -451,10 +444,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       [req.userId]
     );
     if (activeRide) {
-      console.log('[drivers.rideRequests] blocked by active ride', {
-        driverUserId: req.userId,
-        activeRideId: activeRide.id,
-      });
       return res.json({ requests: [] });
     }
 
@@ -531,39 +520,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       [req.userId]
     );
 
-    console.log('[drivers.rideRequests] fetched pending rows', {
-      driverUserId: req.userId,
-      vehicleTierKey: availability.vehicle_tier_key || null,
-      coordinate: {
-        latitude: Number(availability.current_lat),
-        longitude: Number(availability.current_lng),
-      },
-      pendingRowCount: rows.length,
-      pendingRows: rows.map((row) => ({
-        rideRequestId: row.id,
-        publicId: row.public_id,
-        requestedTierKey: row.requested_tier_key,
-        requestedTierName: row.requested_tier_name,
-        rideStatus: row.status,
-        requestedAt: row.requested_at,
-        passengerUserId: row.passenger_user_id,
-      })),
-    });
-    console.log('[drivers.rideRequests] ttl snapshot', {
-      driverUserId: req.userId,
-      openRequestTtlMinutes: OPEN_REQUEST_TTL_MINUTES,
-      driverFoundSelectionTtlMinutes: DRIVER_FOUND_SELECTION_TTL_MINUTES,
-      minRemainingSeconds: OPEN_REQUEST_MIN_REMAINING_SECONDS,
-      nowIso: new Date().toISOString(),
-      rows: rows.map((row) => ({
-        rideRequestId: row.id,
-        status: row.status,
-        requestedAt: row.requested_at,
-        driverFoundAt: row.driver_found_at || null,
-        remainingSeconds: Number(row.remaining_seconds || 0),
-      })),
-    });
-
     const resolvedRequests = await Promise.all(rows.map(async (row) => {
       const passengerProfileImageUrl = await getUserProfileImageUrl(row.passenger_user_id);
       const pickupCoordinate = {
@@ -612,12 +568,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     const requests = resolvedRequests
       .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
       .slice(0, 8);
-
-    console.log('[drivers.rideRequests] returning requests', {
-      driverUserId: req.userId,
-      requestCount: requests.length,
-      requestIds: requests.map((request) => request.id),
-    });
 
     return res.json({ requests });
   } catch (err) {
@@ -1411,6 +1361,53 @@ router.get('/history', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/drivers/history', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/ride-requests/:rideRequestId/receipt-pdf', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT
+         id,
+         public_id,
+         passenger_name,
+         driver_name,
+         requested_tier_name,
+         pickup_label,
+         dropoff_label,
+         estimated_amount,
+         tip_amount,
+         status,
+         requested_at,
+         completed_at
+       FROM ride_requests
+       WHERE id = ? AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const fileName = `trustcars-driver-receipt-${ride.public_id || ride.id}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    writeRideReceiptPdf(res, ride, {
+      statusLabel: mapDriverRideStatus(ride.status),
+      footerText: 'Thank you for driving with Trust Express!',
+    });
+  } catch (err) {
+    console.error('GET /api/drivers/ride-requests/:rideRequestId/receipt-pdf', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

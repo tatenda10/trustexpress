@@ -38,6 +38,7 @@ export default function RideChatScreen({ navigation, route }) {
   const { getToken } = useAuth();
   const { user } = useUser();
   const getTokenRef = useRef(getToken);
+  const flatListRef = useRef(null);
   const { rideRequestId, chatTitle, role = 'passenger' } = route.params || {};
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -156,8 +157,8 @@ export default function RideChatScreen({ navigation, route }) {
     <SafeAreaView className="flex-1 bg-white">
       <KeyboardAvoidingView
         className="flex-1"
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={8}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
           <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
@@ -182,14 +183,17 @@ export default function RideChatScreen({ navigation, route }) {
             )}
 
             <FlatList
+              ref={flatListRef}
               data={sortedMessages}
               keyExtractor={(item) => String(item.id)}
               renderItem={({ item }) => <MessageBubble item={item} isMine={String(item.senderUserId) === String(user?.id)} />}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: composerBottomInset + 12, flexGrow: sortedMessages.length ? 0 : 1 }}
+              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 20, paddingBottom: composerBottomInset + 12 }}
               onRefresh={() => loadMessages(true)}
               refreshing={refreshing}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd?.({ animated: true })}
+              onLayout={() => flatListRef.current?.scrollToEnd?.({ animated: true })}
               ListEmptyComponent={
                 <View className="flex-1 items-center justify-center py-24">
                   <Ionicons name="chatbubble-ellipses-outline" size={36} color="#9ca3af" />

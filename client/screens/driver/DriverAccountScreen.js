@@ -214,13 +214,24 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const driverEmail = user?.primaryEmailAddress?.emailAddress || 'No email connected';
   // API merges Clerk OAuth avatar into `image_url`; only `privateMetadata.profileImageUrl` is an in-app upload.
   const appProfileImageUrl = resolveUploadedMediaUrl(profileData?.privateMetadata?.profileImageUrl);
+  const driverProfileImageReview = profileData?.profileImageReview || null;
+  const pendingProfileImageUrl = resolveUploadedMediaUrl(
+    driverProfileImageReview?.pendingImageUrl || profileData?.privateMetadata?.pendingDriverProfileImageUrl
+  );
+  const profileImageReviewStatus = String(
+    driverProfileImageReview?.status || profileData?.privateMetadata?.driverProfileImageReviewStatus || ''
+  ).trim().toLowerCase();
+  const profileImageReviewRejectionReason =
+    driverProfileImageReview?.rejectionReason || profileData?.privateMetadata?.driverProfileImageRejectionReason || '';
+  const hasPendingProfileImageReview = profileImageReviewStatus === 'pending' && !!pendingProfileImageUrl;
+  const hasRejectedProfileImageReview = profileImageReviewStatus === 'rejected' && !!pendingProfileImageUrl;
   const clerkFallback = String(user?.imageUrl || '').trim();
   const displayProfileImageUrl =
     appProfileImageUrl ||
     resolveUploadedMediaUrl(profileData?.image_url) ||
     clerkFallback ||
     null;
-  const hasAppProfilePicture = !!appProfileImageUrl;
+  const profileImagePreviewUrl = pendingProfileImageUrl || appProfileImageUrl || displayProfileImageUrl;
 
   const verificationHeadline = allVerified ? 'Ready to drive' : 'Verification in progress';
   const verificationTone = allVerified
@@ -427,7 +438,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
       const { url } = await uploadFile(token, formData);
       const nextProfile = await updateMe(token, { profileImageUrl: url });
       setProfileData(nextProfile);
-      Alert.alert('Profile updated', 'Your profile picture has been updated.');
+      Alert.alert('Submitted for review', 'Your new profile picture was submitted for admin approval.');
     } catch (error) {
       Alert.alert('Update failed', error?.message || 'Could not update your profile picture.');
     } finally {
@@ -488,7 +499,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
           <TouchableOpacity
             activeOpacity={0.75}
             onPress={() => {
-              if (hasAppProfilePicture) {
+              if (profileImagePreviewUrl) {
                 setShowProfileImagePreview(true);
               } else {
                 handleChangeProfilePhoto();
@@ -497,9 +508,26 @@ const DriverAccountScreen = ({ navigation, route }) => {
             disabled={updatingProfileImage}
           >
             <Text className="mt-3 text-sm font-semibold text-[#2f73c9]">
-              {hasAppProfilePicture ? 'View profile picture' : 'Add profile picture'}
+              {profileImagePreviewUrl ? (hasPendingProfileImageReview ? 'View pending profile picture' : 'View profile picture') : 'Add profile picture'}
             </Text>
           </TouchableOpacity>
+          {hasPendingProfileImageReview ? (
+            <View className="mt-3 rounded-full bg-amber-50 px-4 py-2">
+              <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-amber-700">
+                New profile picture pending admin approval
+              </Text>
+            </View>
+          ) : null}
+          {hasRejectedProfileImageReview ? (
+            <View className="mt-3 rounded-2xl bg-red-50 px-4 py-3">
+              <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-red-700">
+                Profile picture update rejected
+              </Text>
+              <Text className="mt-1 text-sm text-red-600">
+                {profileImageReviewRejectionReason || 'Upload a clearer photo and submit it again for review.'}
+              </Text>
+            </View>
+          ) : null}
           <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{driverName}</Text>
           {averageRating !== null ? (
             <View className="mt-2 flex-row items-center rounded-full bg-white px-3 py-1.5">
@@ -673,9 +701,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
           >
             <Ionicons name="close" size={24} color="#fff" />
           </TouchableOpacity>
-          {appProfileImageUrl ? (
+          {profileImagePreviewUrl ? (
             <Image
-              source={{ uri: appProfileImageUrl }}
+              source={{ uri: profileImagePreviewUrl }}
               style={{ width: 320, height: 320, borderRadius: 160 }}
               resizeMode="cover"
             />
