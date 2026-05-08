@@ -245,6 +245,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const LABEL_UPDATE_INTERVAL_MS = 120000; // at most every 2 minutes
   const LABEL_UPDATE_MIN_DISTANCE_KM = 0.3; // or every ~300m
   const placeLabelCacheRef = useRef(new Map());
+  const suppressTripAutoOpenUntilRef = useRef(0);
+
+  useEffect(() => {
+    const until = Number(route?.params?.suppressTripAutoOpenUntil || 0);
+    if (Number.isFinite(until) && until > 0) {
+      suppressTripAutoOpenUntilRef.current = Math.max(suppressTripAutoOpenUntilRef.current, until);
+    }
+  }, [route?.params?.suppressTripAutoOpenUntil]);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -343,6 +351,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
   useEffect(() => {
     if (!currentRide?.id) {
       forwardedRideIdRef.current = null;
+      return;
+    }
+    if (Date.now() < suppressTripAutoOpenUntilRef.current) {
       return;
     }
     if (forwardedRideIdRef.current === currentRide.id) return;

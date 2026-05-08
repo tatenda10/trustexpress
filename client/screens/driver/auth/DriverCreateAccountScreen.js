@@ -59,6 +59,28 @@ const DriverCreateAccountScreen = ({ navigation }) => {
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  const registerDriverProfile = async ({ emailAddress = null } = {}) => {
+    let lastError = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const token = await getToken();
+        if (!token) {
+          await sleep(350);
+          continue;
+        }
+        return await registerUser(token, {
+          role: 'driver',
+          email: emailAddress,
+          inviteToken: inviteToken || undefined,
+        });
+      } catch (error) {
+        lastError = error;
+        await sleep(450);
+      }
+    }
+    throw lastError || new Error('Could not finish creating the driver profile.');
+  };
+
   /**
    * After registerUser, Clerk + GET /me can briefly return stale role metadata.
    * Trust the server response from registerUser first, then retry getMe before signing out.
@@ -106,19 +128,16 @@ const DriverCreateAccountScreen = ({ navigation }) => {
     await setActive({ session: sessionId });
     let registeredProfile = null;
     try {
-      const token = await getToken();
-      if (token) {
-        registeredProfile = await registerUser(token, {
-          role: 'driver',
-          email,
-          inviteToken: inviteToken || undefined,
-        });
-      }
+      registeredProfile = await registerDriverProfile({ emailAddress: email });
     } catch (e) {
-      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
-      await signOut().catch(() => {});
-      showErrorModal(e, 'signup');
-      return;
+      console.warn('[DriverCreateAccountScreen] registerUser after signup failed', e);
+      setModalState({
+        visible: true,
+        title: 'Account created',
+        message:
+          'Your driver account was created, but syncing your profile is taking longer than expected. Stay signed in and try again in a moment if any onboarding step does not load correctly.',
+        tone: 'info',
+      });
     }
     const allowed = await ensureDriverRole(registeredProfile);
     if (!allowed) return;
@@ -213,17 +232,16 @@ const DriverCreateAccountScreen = ({ navigation }) => {
         await setActiveSession({ session: createdSessionId });
         let registeredProfile = null;
         try {
-          const token = await getToken();
-          if (token) {
-            registeredProfile = await registerUser(token, {
-              role: 'driver',
-              email: null,
-              inviteToken: inviteToken || undefined,
-            });
-          }
+          registeredProfile = await registerDriverProfile({ emailAddress: null });
         } catch (e) {
-          showErrorModal(e, 'signup');
-          return;
+          console.warn('[DriverCreateAccountScreen] registerUser after Google signup failed', e);
+          setModalState({
+            visible: true,
+            title: 'Account created',
+            message:
+              'Your driver account was created, but syncing your profile is taking longer than expected. Stay signed in and try again in a moment if any onboarding step does not load correctly.',
+            tone: 'info',
+          });
         }
         const allowed = await ensureDriverRole(registeredProfile);
         if (!allowed) return;
@@ -247,17 +265,16 @@ const DriverCreateAccountScreen = ({ navigation }) => {
         await setActiveSession({ session: createdSessionId });
         let registeredProfile = null;
         try {
-          const token = await getToken();
-          if (token) {
-            registeredProfile = await registerUser(token, {
-              role: 'driver',
-              email: null,
-              inviteToken: inviteToken || undefined,
-            });
-          }
+          registeredProfile = await registerDriverProfile({ emailAddress: null });
         } catch (e) {
-          showErrorModal(e, 'signup');
-          return;
+          console.warn('[DriverCreateAccountScreen] registerUser after Apple signup failed', e);
+          setModalState({
+            visible: true,
+            title: 'Account created',
+            message:
+              'Your driver account was created, but syncing your profile is taking longer than expected. Stay signed in and try again in a moment if any onboarding step does not load correctly.',
+            tone: 'info',
+          });
         }
         const allowed = await ensureDriverRole(registeredProfile);
         if (!allowed) return;

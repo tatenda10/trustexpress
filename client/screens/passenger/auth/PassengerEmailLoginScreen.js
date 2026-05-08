@@ -9,6 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { useSignIn } from '@clerk/clerk-expo';
+import { lookupAccountRole } from '../../../api';
 
 const PassengerEmailLoginScreen = ({ navigation }) => {
   const { signIn, setActive, isLoaded } = useSignIn();
@@ -19,6 +20,24 @@ const PassengerEmailLoginScreen = ({ navigation }) => {
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+  const guardPassengerIdentifier = async (identifier) => {
+    const normalized = String(identifier || '').trim();
+    if (!normalized) return true;
+    try {
+      const result = await lookupAccountRole(normalized);
+      if (result?.exists && result?.role === 'driver') {
+        Alert.alert(
+          'Driver account detected',
+          'This account is already registered as a driver. Please use a different account for passenger access.',
+        );
+        return false;
+      }
+    } catch {
+      // Lookup issues should not block the normal sign-in attempt.
+    }
+    return true;
+  };
 
   const handleForgotPassword = async () => {
     if (!isLoaded) return;
@@ -89,6 +108,9 @@ const PassengerEmailLoginScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      const allowedIdentifier = await guardPassengerIdentifier(email);
+      if (!allowedIdentifier) return;
+
       const result = await signIn.create({
         strategy: 'password',
         identifier: email.trim(),

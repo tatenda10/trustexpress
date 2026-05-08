@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AuthFeedbackModal from '../../../components/AuthFeedbackModal';
 import { getAuthErrorContent } from '../../../services/authFeedback';
-import { getMe } from '../../../api';
+import { getMe, lookupAccountRole } from '../../../api';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HEADER_IMAGE_HEIGHT = Dimensions.get('window').height * 0.36;
@@ -53,6 +53,26 @@ const PassengerLoginScreen = ({ navigation }) => {
   const showErrorModal = (error, context = 'login') => {
     const content = getAuthErrorContent(error, context);
     setModalState({ visible: true, title: content.title, message: content.message, tone: 'error' });
+  };
+
+  const guardPassengerIdentifier = async (identifier) => {
+    const normalized = String(identifier || '').trim();
+    if (!normalized) return true;
+    try {
+      const result = await lookupAccountRole(normalized);
+      if (result?.exists && result?.role === 'driver') {
+        setModalState({
+          visible: true,
+          title: 'Driver account detected',
+          message: 'This account is already registered as a driver. Please use a different account for passenger access.',
+          tone: 'error',
+        });
+        return false;
+      }
+    } catch {
+      // If lookup is temporarily unavailable, do not block sign-in here.
+    }
+    return true;
   };
 
   const ensurePassengerRole = async () => {
@@ -90,6 +110,9 @@ const PassengerLoginScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      const allowedIdentifier = await guardPassengerIdentifier(emailOrPhone);
+      if (!allowedIdentifier) return;
+
       const result = await signIn.create({
         strategy: 'password',
         identifier: emailOrPhone.trim(),

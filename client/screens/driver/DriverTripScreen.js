@@ -278,6 +278,27 @@ export default function DriverTripScreen({ navigation }) {
   const [passengerReview, setPassengerReview] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
 
+  const exitPassengerRatingFlow = useCallback(() => {
+    setShowPassengerRating(false);
+    setCompletedRideId(null);
+    setCompletedRideSnapshot(null);
+    setPassengerRating(0);
+    setPassengerReview('');
+
+    const parentNavigator = navigation.getParent?.();
+    if (parentNavigator) {
+      parentNavigator.navigate('DriverHome', {
+        screen: 'DriverHomeMain',
+        params: {
+          suppressTripAutoOpenUntil: Date.now() + 8000,
+        },
+      });
+      return;
+    }
+
+    navigation.popToTop();
+  }, [navigation]);
+
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
@@ -926,9 +947,7 @@ export default function DriverTripScreen({ navigation }) {
       const token = await getTokenRef.current();
       if (!token || !completedRideId) throw new Error('Not signed in');
       await submitDriverPassengerRating(token, completedRideId, { rating: passengerRating, review: passengerReview.trim() || undefined });
-      const parentNavigator = navigation.getParent?.();
-      if (parentNavigator) parentNavigator.navigate('DriverActivity');
-      else navigation.goBack();
+      exitPassengerRatingFlow();
     } catch (error) {
       Alert.alert('Rating failed', error?.message || 'Could not submit rating.');
     } finally {
@@ -937,9 +956,7 @@ export default function DriverTripScreen({ navigation }) {
   };
 
   const handleSkipPassengerRating = () => {
-    const parentNavigator = navigation.getParent?.();
-    if (parentNavigator) parentNavigator.navigate('DriverActivity');
-    else navigation.goBack();
+    exitPassengerRatingFlow();
   };
 
   const handleToggleVoiceGuidance = async () => {

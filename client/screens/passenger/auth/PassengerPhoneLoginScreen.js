@@ -9,6 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { useSignIn } from '@clerk/clerk-expo';
+import { lookupAccountRole } from '../../../api';
 
 const PassengerPhoneLoginScreen = ({ navigation }) => {
   const { signIn, setActive, isLoaded } = useSignIn();
@@ -16,6 +17,24 @@ const PassengerPhoneLoginScreen = ({ navigation }) => {
   const [code, setCode] = useState('');
   const [pendingVerification, setPendingVerification] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const guardPassengerIdentifier = async (identifier) => {
+    const normalized = String(identifier || '').trim();
+    if (!normalized) return true;
+    try {
+      const result = await lookupAccountRole(normalized);
+      if (result?.exists && result?.role === 'driver') {
+        Alert.alert(
+          'Driver account detected',
+          'This account is already registered as a driver. Please use a different account for passenger access.',
+        );
+        return false;
+      }
+    } catch {
+      // Ignore lookup failures and allow the regular sign-in flow.
+    }
+    return true;
+  };
 
   const handleSendCode = async () => {
     if (!isLoaded) return;
@@ -27,6 +46,9 @@ const PassengerPhoneLoginScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      const allowedIdentifier = await guardPassengerIdentifier(phoneNumber);
+      if (!allowedIdentifier) return;
+
       await signIn.create({
         identifier: phoneNumber,
       });

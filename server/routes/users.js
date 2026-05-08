@@ -15,6 +15,51 @@ import {
 
 const router = Router();
 
+function normalizeLookupIdentifier(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('@')) return raw.toLowerCase();
+
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
+  if (digits.startsWith('263')) return `+${digits}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
+  return raw;
+}
+
+router.post('/lookup-role', async (req, res) => {
+  try {
+    const identifier = normalizeLookupIdentifier(req.body?.identifier);
+    if (!identifier) {
+      return res.status(400).json({ error: 'identifier is required' });
+    }
+
+    const clerkClient = getClerkClient();
+    let users = [];
+    if (identifier.includes('@')) {
+      const list = await clerkClient.users.getUserList({ emailAddress: [identifier], limit: 10 });
+      users = list.data || [];
+    } else {
+      const list = await clerkClient.users.getUserList({ phoneNumber: [identifier], limit: 10 });
+      users = list.data || [];
+    }
+
+    const user = users.find(Boolean);
+    if (!user) {
+      return res.json({ exists: false, role: null });
+    }
+
+    return res.json({
+      exists: true,
+      role: normalizeRole(user.publicMetadata?.role),
+    });
+  } catch (err) {
+    console.error('POST /api/users/lookup-role', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/me', requireAuth, async (req, res) => {
   try {
     const user = await getClerkUserById(req.userId);
