@@ -1,16 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
-import { DirectionsRenderer, GoogleMap, MarkerF, useJsApiLoader } from '@react-google-maps/api'
 import BASE_URL from '../context/Api'
 import { useAuth } from '../authcontext/AuthContext'
-import {
-  DEFAULT_BULAWAYO_CENTER,
-  GOOGLE_MAPS_API_KEY,
-  GOOGLE_MAPS_LIBRARIES,
-  GOOGLE_MAPS_LOADER_ID,
-} from '../lib/googleMaps'
-
+import GeoPlotMap from '../components/GeoPlotMap'
 
 function DetailField({ label, value }) {
   return (
@@ -82,20 +75,11 @@ export default function RideOperationDetailPage() {
   const location = useLocation()
   const { rideId } = useParams()
   const { token } = useAuth()
-  const mapRef = useRef(null)
   const [ride, setRide] = useState(null)
-  const [directions, setDirections] = useState(null)
-  const [directionsError, setDirectionsError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const fromDriverId = location.state?.fromDriverId || ''
   const fromDriverName = location.state?.fromDriverName || 'driver'
-
-  const { isLoaded: isMapLoaded, loadError } = useJsApiLoader({
-    id: GOOGLE_MAPS_LOADER_ID,
-    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-    libraries: GOOGLE_MAPS_LIBRARIES,
-  })
 
   useEffect(() => {
     let active = true
@@ -137,7 +121,7 @@ export default function RideOperationDetailPage() {
       ride?.dropoffLng === null ||
       ride?.dropoffLng === undefined
     ) {
-      return null
+      return []
     }
     return [
       { lat: Number(ride.pickupLat), lng: Number(ride.pickupLng) },
@@ -145,50 +129,34 @@ export default function RideOperationDetailPage() {
     ]
   }, [ride])
 
-  useEffect(() => {
-    if (!isMapLoaded || !mapRef.current || !routePath || !window.google?.maps) return
-    if (directions?.routes?.[0]?.bounds) {
-      mapRef.current.fitBounds(directions.routes[0].bounds, 72)
-      return
-    }
-    const bounds = new window.google.maps.LatLngBounds()
-    routePath.forEach((point) => bounds.extend(point))
-    if (!bounds.isEmpty()) {
-      mapRef.current.fitBounds(bounds, 72)
-    }
-  }, [directions, isMapLoaded, routePath])
+  const mapMarkers = useMemo(() => {
+    if (routePath.length < 2) return []
+    return [
+      {
+        id: 'pickup',
+        lat: routePath[0].lat,
+        lng: routePath[0].lng,
+        color: '#111827',
+        title: 'Pickup',
+        label: 'Pickup',
+        selected: true,
+      },
+      {
+        id: 'dropoff',
+        lat: routePath[routePath.length - 1].lat,
+        lng: routePath[routePath.length - 1].lng,
+        color: '#059669',
+        title: 'Drop-off',
+        label: 'Drop-off',
+      },
+    ]
+  }, [routePath])
 
-  useEffect(() => {
-    let active = true
-
-    const loadDirections = async () => {
-      if (!isMapLoaded || !routePath || !window.google?.maps || ride?.routePolyline) {
-        setDirections(null)
-        return
-      }
-
-      try {
-        const service = new window.google.maps.DirectionsService()
-        const result = await service.route({
-          origin: routePath[0],
-          destination: routePath[1],
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        })
-        if (!active) return
-        setDirections(result)
-        setDirectionsError('')
-      } catch (err) {
-        if (!active) return
-        setDirections(null)
-        setDirectionsError(err?.message || 'Could not load road route')
-      }
-    }
-
-    loadDirections()
-    return () => {
-      active = false
-    }
-  }, [isMapLoaded, ride?.routePolyline, routePath])
+  const mapPaths = useMemo(() => (
+    routePath.length > 1
+      ? [{ id: 'ride-route', points: routePath, color: '#2563eb', width: 0.8 }]
+      : []
+  ), [routePath])
 
   if (loading) {
     return <section className="border border-slate-300 bg-white p-6 text-sm text-slate-600">Loading ride details...</section>
@@ -214,7 +182,7 @@ export default function RideOperationDetailPage() {
           </button>
         ) : null}
         <h1 className="text-sm font-semibold text-slate-900">Ride Details</h1>
-        <p className="text-xs text-slate-500">View the full trip route, trip state, and timing from pickup to dropoff.</p>
+        <p className="text-xs text-slate-500">View the full trip route, trip state, and timing from pickup to drop-off.</p>
       </div>
 
       <div className="overflow-hidden border border-slate-300 bg-white">
@@ -229,80 +197,13 @@ export default function RideOperationDetailPage() {
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Trip Map</h2>
               </div>
               <div className="h-[420px] bg-slate-100">
-                {GOOGLE_MAPS_API_KEY && isMapLoaded && !loadError && routePath ? (
-                  <GoogleMap
-                    mapContainerClassName="h-full w-full"
-                    center={DEFAULT_BULAWAYO_CENTER}
-                    zoom={12}
-                    onLoad={(map) => {
-                      mapRef.current = map
-                    }}
-                    onUnmount={() => {
-                      mapRef.current = null
-                    }}
-                    options={{
-                      streetViewControl: false,
-                      mapTypeControl: false,
-                      fullscreenControl: false,
-                      gestureHandling: 'greedy',
-                    }}
-                  >
-                    {directions && !ride?.routePolyline ? (
-                      <DirectionsRenderer
-                        directions={directions}
-                        options={{
-                          suppressMarkers: true,
-                          polylineOptions: {
-                            strokeColor: '#2563eb',
-                            strokeOpacity: 0.95,
-                            strokeWeight: 5,
-                          },
-                        }}
-                      />
-                    ) : null}
-                    <MarkerF
-                      position={routePath[0]}
-                      icon={{
-                        path: window.google.maps.SymbolPath.CIRCLE,
-                        scale: 7,
-                        fillColor: '#111827',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2,
-                      }}
-                    />
-                    <MarkerF
-                      position={routePath[1]}
-                      icon={{
-                        path: window.google.maps.SymbolPath.CIRCLE,
-                        scale: 7,
-                        fillColor: '#059669',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2,
-                      }}
-                    />
-                  </GoogleMap>
-                ) : (
-                  <div className="flex h-full items-center justify-center px-6 text-center">
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold text-slate-900">Trip map unavailable.</p>
-                      <p className="text-xs text-slate-600">
-                        {routePath
-                          ? 'Add VITE_GOOGLE_MAPS_API_KEY to the admin environment to view the full trip map.'
-                          : 'Pickup and dropoff coordinates are missing for this ride.'}
-                      </p>
-                    </div>
-                  </div>
-                )}
+                <GeoPlotMap
+                  markers={mapMarkers}
+                  paths={mapPaths}
+                  emptyMessage={routePath.length ? 'Map points are still being prepared.' : 'Pickup and drop-off coordinates are missing for this ride.'}
+                />
               </div>
             </div>
-
-            {directionsError ? (
-              <div className="border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
-                Showing saved pickup and dropoff points only because Google road directions could not be loaded.
-              </div>
-            ) : null}
 
             <div className="grid gap-3 md:grid-cols-2">
               <DetailField label="Pickup" value={ride.pickupLabel} />

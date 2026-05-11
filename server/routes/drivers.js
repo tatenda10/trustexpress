@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
@@ -492,6 +493,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.dropoff_label,
          r.dropoff_lat,
          r.dropoff_lng,
+         r.route_distance_km,
+         r.route_duration_minutes,
          r.estimated_distance_km,
          r.estimated_minutes,
          r.estimated_amount,
@@ -520,7 +523,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       [req.userId]
     );
 
-    const resolvedRequests = await Promise.all(rows.map(async (row) => {
+    const baseRequests = await Promise.all(rows.map(async (row) => {
       const passengerProfileImageUrl = await getUserProfileImageUrl(row.passenger_user_id);
       const pickupCoordinate = {
         latitude: Number(row.pickup_lat),
@@ -553,6 +556,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         dropoff: row.dropoff_label,
         pickupCoordinate,
         dropoffCoordinate,
+        tripDistanceKm: Number(row.route_distance_km || row.estimated_distance_km || 0),
+        tripDurationMinutes: Number(row.route_duration_minutes || row.estimated_minutes || 0),
         estimatedDistanceKm: Number(row.estimated_distance_km || 0),
         estimatedMinutes: Number(row.estimated_minutes || 0),
         estimatedAmount: Number(row.estimated_amount || 0),
@@ -565,9 +570,39 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       };
     }));
 
-    const requests = resolvedRequests
+    const nearestRequests = baseRequests
       .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
       .slice(0, 8);
+
+    const requests = await Promise.all(nearestRequests.map(async (request) => {
+      try {
+        const route = await fetchCachedDirections({
+          origin: driverPoint,
+          destination: request.pickupCoordinate,
+          cachePrecision: 3,
+          cacheTtlSeconds: 120,
+        });
+        const pickupRouteDistanceKm = Number(route?.distanceKm || 0);
+        const pickupRouteMinutes = Number(route?.durationMinutes || 0);
+        return {
+          ...request,
+          pickupRouteDistanceKm: pickupRouteDistanceKm > 0 ? pickupRouteDistanceKm : request.driverDistanceKm,
+          pickupRouteMinutes: pickupRouteMinutes > 0 ? pickupRouteMinutes : request.etaMinutes,
+        };
+      } catch (routeError) {
+        console.warn('[drivers.ride-requests] pickup route calculation fallback', {
+          driverUserId: req.userId,
+          rideRequestId: request.id,
+          message: routeError?.message || null,
+          status: routeError?.status ?? null,
+        });
+        return {
+          ...request,
+          pickupRouteDistanceKm: request.driverDistanceKm,
+          pickupRouteMinutes: request.etaMinutes,
+        };
+      }
+    }));
 
     return res.json({ requests });
   } catch (err) {

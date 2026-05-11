@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, TextInput, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline } from '../../../components/maps/MapViewCompat';
 
 export function DriverTripLoadingState({ color }) {
   return (
@@ -132,7 +132,7 @@ export function DriverTripMapPanel({
   showCallPassenger,
   onCallPassenger,
   onOpenChat,
-  onOpenGoogleMaps,
+  onOpenExternalNavigation,
   tripPanelMaxHeight,
   onCenterDriver,
   stageTitle,
@@ -230,7 +230,7 @@ export function DriverTripMapPanel({
           <Ionicons name="chatbubble-ellipses-outline" size={19} color="#111827" />
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={onOpenGoogleMaps}
+          onPress={onOpenExternalNavigation}
           activeOpacity={0.85}
           className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-gray-100"
         >
@@ -284,6 +284,22 @@ export function DriverTripMapPanel({
               <Text className="mt-0.5 text-sm text-gray-500" numberOfLines={1}>{passengerSubtitle}</Text>
             </View>
           </View>
+
+          {showGuidance ? (
+            <View className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-4">
+              <View className="flex-row items-center">
+                <View className="h-10 w-10 items-center justify-center rounded-full bg-white">
+                  <Ionicons name="navigate" size={18} color="#4338ca" />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className="text-xs font-bold uppercase tracking-widest text-indigo-500">Next direction</Text>
+                  <Text className="mt-1 text-base font-bold text-gray-900">
+                    {guidanceText || 'Follow the route to your destination.'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
 
           {showMarkArrived ? (
             <TouchableOpacity

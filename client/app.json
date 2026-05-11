@@ -1,6 +1,7 @@
 {
   "expo": {
     "plugins": [
+      "@maplibre/maplibre-react-native",
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       [
@@ -42,9 +43,6 @@
       "supportsTablet": true,
       "googleServicesFile": "./GoogleService-Info.plist",
       "bundleIdentifier": "com.tatenda10.trustexpress",
-      "config": {
-        "googleMapsApiKey": "AIzaSyAFvd2lhakPBSdDoBw8rVlA2Q4HcUnLSIc"
-      },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

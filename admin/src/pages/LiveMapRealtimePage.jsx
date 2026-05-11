@@ -1,15 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { GoogleMap, InfoWindowF, MarkerF, Polyline, useJsApiLoader } from '@react-google-maps/api'
 import BASE_URL from '../context/Api'
 import { useAuth } from '../authcontext/AuthContext'
-import {
-  DEFAULT_BULAWAYO_CENTER,
-  GOOGLE_MAPS_API_KEY,
-  GOOGLE_MAPS_LIBRARIES,
-  GOOGLE_MAPS_LOADER_ID,
-} from '../lib/googleMaps'
+import GeoPlotMap from '../components/GeoPlotMap'
 
 const DEFAULT_AREA = 'Bulawayo'
 
@@ -27,25 +21,6 @@ function driverPinColor(status) {
   return '#64748b'
 }
 
-function driverCarIcon(status, selected = false) {
-  const body = selected ? '#1d4ed8' : driverPinColor(status)
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
-      <circle cx="18" cy="18" r="15" fill="white" stroke="${selected ? '#0f172a' : '#cbd5e1'}" stroke-width="${selected ? 3 : 2}"/>
-      <path d="M10 19.5v-4.1c0-1.4.8-2.6 2-3.2l1.9-1 1.3-3.1c.4-.9 1.2-1.5 2.2-1.5h2.8c1 0 1.9.6 2.2 1.5l1.3 3.1 1.9 1c1.2.6 2 1.9 2 3.2v4.1c0 .8-.7 1.5-1.5 1.5h-.8a2.6 2.6 0 0 1-5.2 0h-5a2.6 2.6 0 0 1-5.2 0h-.8c-.8 0-1.5-.7-1.5-1.5Z" fill="${body}" stroke="#ffffff" stroke-width="1.1" stroke-linejoin="round"/>
-      <circle cx="14.1" cy="21.1" r="2.1" fill="#0f172a"/>
-      <circle cx="21.9" cy="21.1" r="2.1" fill="#0f172a"/>
-      <rect x="13.4" y="11.2" width="9.2" height="3.3" rx="1.4" fill="#dbeafe"/>
-    </svg>
-  `.trim()
-
-  return {
-    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
-    scaledSize: new window.google.maps.Size(selected ? 36 : 32, selected ? 36 : 32),
-    anchor: new window.google.maps.Point(selected ? 18 : 16, selected ? 18 : 16),
-  }
-}
-
 function isSpecificDriverSearch(value) {
   const term = String(value || '').trim()
   if (!term) return false
@@ -59,14 +34,6 @@ function formatRefreshTime(value) {
   return `Last refresh: ${new Date(value).toLocaleTimeString()}`
 }
 
-function mapBoundsFromApi(bounds) {
-  if (!bounds || typeof window === 'undefined' || !window.google?.maps) return null
-  return new window.google.maps.LatLngBounds(
-    { lat: Number(bounds.minLat), lng: Number(bounds.minLng) },
-    { lat: Number(bounds.maxLat), lng: Number(bounds.maxLng) }
-  )
-}
-
 function tripPath(trip) {
   if (!trip?.pickupCoordinate || !trip?.dropoffCoordinate) return null
   return [
@@ -78,7 +45,6 @@ function tripPath(trip) {
 export default function LiveMapRealtimePage() {
   const navigate = useNavigate()
   const { token } = useAuth()
-  const mapRef = useRef(null)
   const [drivers, setDrivers] = useState([])
   const [trips, setTrips] = useState([])
   const [summary, setSummary] = useState({ totalDrivers: 0, availableDrivers: 0, pickupDrivers: 0, onTripDrivers: 0, activeTrips: 0 })
@@ -95,12 +61,6 @@ export default function LiveMapRealtimePage() {
   const [driverPage, setDriverPage] = useState(1)
   const [driversPerPage, setDriversPerPage] = useState(6)
   const [searchContext, setSearchContext] = useState(null)
-
-  const { isLoaded: isMapLoaded, loadError } = useJsApiLoader({
-    id: GOOGLE_MAPS_LOADER_ID,
-    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-    libraries: GOOGLE_MAPS_LIBRARIES,
-  })
 
   useEffect(() => {
     let active = true
@@ -157,21 +117,17 @@ export default function LiveMapRealtimePage() {
 
   const filteredTrips = useMemo(() => {
     const term = search.trim().toLowerCase()
-    return trips.filter((trip) => {
-      return (
-        !term ||
-        [trip.id, trip.rider, trip.driver, trip.route, trip.stage, trip.tierName]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase()
-          .includes(term)
-      )
-    })
+    return trips.filter((trip) => (
+      !term ||
+      [trip.id, trip.rider, trip.driver, trip.route, trip.stage, trip.tierName]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(term)
+    ))
   }, [trips, search])
 
-  const shouldShowDriverLabels = useMemo(() => {
-    return isSpecificDriverSearch(search)
-  }, [search])
+  const shouldShowDriverLabels = useMemo(() => isSpecificDriverSearch(search), [search])
 
   const selectedDriver = filteredDrivers.find((driver) => driver.id === selectedDriverId) || null
   const selectedTrip = filteredTrips.find((trip) => trip.id === selectedTripId) || null
@@ -183,25 +139,74 @@ export default function LiveMapRealtimePage() {
     setDriverPage(1)
   }, [search, statusFilter, driversPerPage, appliedPlaceSearch])
 
-  useEffect(() => {
-    if (!isMapLoaded || !mapRef.current) return
-
-    const nextBounds = mapBoundsFromApi(bounds)
-    if (nextBounds && !nextBounds.isEmpty()) {
-      mapRef.current.fitBounds(nextBounds, 64)
-      return
-    }
-
-    mapRef.current.setCenter(DEFAULT_BULAWAYO_CENTER)
-    mapRef.current.setZoom(12)
-  }, [bounds, isMapLoaded, filteredDrivers.length, filteredTrips.length])
-
   const handlePlaceSearch = () => {
     setAppliedPlaceSearch(placeSearchInput.trim() || DEFAULT_AREA)
     setSelectedDriverId('')
     setSelectedTripId('')
     setDriverPage(1)
   }
+
+  const mapPaths = useMemo(() => (
+    filteredTrips
+      .map((trip) => {
+        const path = tripPath(trip)
+        if (!path) return null
+        return { id: `trip-line-${trip.id}`, points: path, color: '#2563eb', width: 0.45, dashed: true, opacity: 0.9 }
+      })
+      .filter(Boolean)
+  ), [filteredTrips])
+
+  const mapMarkers = useMemo(() => {
+    const tripMarkers = filteredTrips.flatMap((trip) => {
+      const markers = []
+      if (trip.pickupCoordinate) {
+        markers.push({
+          id: `pickup-${trip.id}`,
+          lat: Number(trip.pickupCoordinate.lat),
+          lng: Number(trip.pickupCoordinate.lng),
+          color: '#111827',
+          title: `Pickup for ${trip.id}`,
+          onClick: () => {
+            setSelectedTripId(trip.id)
+            navigate(`/dashboard/ride-operations/${trip.id}`)
+          },
+        })
+      }
+      if (trip.dropoffCoordinate) {
+        markers.push({
+          id: `dropoff-${trip.id}`,
+          lat: Number(trip.dropoffCoordinate.lat),
+          lng: Number(trip.dropoffCoordinate.lng),
+          color: '#059669',
+          title: `Drop-off for ${trip.id}`,
+          onClick: () => {
+            setSelectedTripId(trip.id)
+            navigate(`/dashboard/ride-operations/${trip.id}`)
+          },
+        })
+      }
+      return markers
+    })
+
+    const driverMarkers = filteredDrivers
+      .filter((driver) => driver.lat !== null && driver.lng !== null && driver.lat !== undefined && driver.lng !== undefined)
+      .map((driver) => ({
+        id: `driver-${driver.id}`,
+        lat: Number(driver.lat),
+        lng: Number(driver.lng),
+        color: driverPinColor(driver.status),
+        title: driver.name || 'Driver',
+        label: shouldShowDriverLabels ? (driver.name || 'Driver') : '',
+        variant: 'driver',
+        selected: selectedDriverId === driver.id,
+        onClick: () => {
+          setSelectedDriverId(driver.id)
+          setSelectedTripId(driver.publicId || '')
+        },
+      }))
+
+    return [...tripMarkers, ...driverMarkers]
+  }, [filteredDrivers, filteredTrips, navigate, selectedDriverId, shouldShowDriverLabels])
 
   return (
     <section className="space-y-3">
@@ -296,176 +301,47 @@ export default function LiveMapRealtimePage() {
               </div>
             ) : null}
 
-            {GOOGLE_MAPS_API_KEY && isMapLoaded && !loadError ? (
-              <GoogleMap
-                mapContainerClassName="h-full w-full"
-                center={DEFAULT_BULAWAYO_CENTER}
-                zoom={12}
-                onLoad={(map) => {
-                  mapRef.current = map
-                }}
-                onUnmount={() => {
-                  mapRef.current = null
-                }}
-                options={{
-                  streetViewControl: false,
-                  mapTypeControl: false,
-                  fullscreenControl: false,
-                  gestureHandling: 'greedy',
-                }}
-              >
-                {filteredTrips.map((trip) => {
-                  const path = tripPath(trip)
-                  if (!path) return null
-                  return (
-                    <Polyline
-                      key={`trip-line-${trip.id}`}
-                      path={path}
-                      options={{
-                        strokeColor: '#2563eb',
-                        strokeOpacity: 0.85,
-                        strokeWeight: 3,
-                        icons: [
-                          {
-                            icon: {
-                              path: 'M 0,-1 0,1',
-                              strokeOpacity: 1,
-                              scale: 3,
-                            },
-                            offset: '0',
-                            repeat: '14px',
-                          },
-                        ],
-                      }}
-                    />
-                  )
-                })}
+            <GeoPlotMap
+              bounds={bounds}
+              markers={mapMarkers}
+              paths={mapPaths}
+              emptyMessage="Live coordinates will appear here once drivers or trips are available."
+            />
 
-                {filteredTrips.map((trip) => {
-                  if (!trip.pickupCoordinate || !trip.dropoffCoordinate) return null
-                  return (
-                    <MarkerF
-                      key={`pickup-${trip.id}`}
-                      position={{ lat: Number(trip.pickupCoordinate.lat), lng: Number(trip.pickupCoordinate.lng) }}
-                      onClick={() => {
-                        setSelectedTripId(trip.id)
-                        navigate(`/dashboard/ride-operations/${trip.id}`)
-                      }}
-                      icon={{
-                        path: window.google.maps.SymbolPath.CIRCLE,
-                        scale: 6,
-                        fillColor: '#111827',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2,
-                      }}
-                    />
-                  )
-                })}
-
-                {filteredTrips.map((trip) => {
-                  if (!trip.dropoffCoordinate) return null
-                  return (
-                    <MarkerF
-                      key={`dropoff-${trip.id}`}
-                      position={{ lat: Number(trip.dropoffCoordinate.lat), lng: Number(trip.dropoffCoordinate.lng) }}
-                      onClick={() => {
-                        setSelectedTripId(trip.id)
-                        navigate(`/dashboard/ride-operations/${trip.id}`)
-                      }}
-                      icon={{
-                        path: window.google.maps.SymbolPath.CIRCLE,
-                        scale: 6,
-                        fillColor: '#059669',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2,
-                      }}
-                    />
-                  )
-                })}
-
-                {filteredDrivers.map((driver) => {
-                  if (driver.lat === null || driver.lng === null || driver.lat === undefined || driver.lng === undefined) return null
-                  return (
-                    <MarkerF
-                      key={driver.id}
-                      position={{ lat: Number(driver.lat), lng: Number(driver.lng) }}
-                      zIndex={selectedDriverId === driver.id ? 1300 : 1000}
-                      onClick={() => {
-                        setSelectedDriverId(driver.id)
-                        setSelectedTripId(driver.publicId || '')
-                      }}
-                      label={
-                        shouldShowDriverLabels
-                          ? {
-                              text: driver.name || 'Driver',
-                              color: '#0f172a',
-                              fontSize: '11px',
-                              fontWeight: '600',
-                            }
-                          : undefined
-                      }
-                      icon={driverCarIcon(driver.status, selectedDriverId === driver.id)}
-                    />
-                  )
-                })}
-
-                {selectedDriver ? (
-                  <InfoWindowF
-                    position={{ lat: Number(selectedDriver.lat), lng: Number(selectedDriver.lng) }}
-                    onCloseClick={() => setSelectedDriverId('')}
+            {selectedDriver ? (
+              <div className="absolute bottom-14 left-4 z-10 min-w-[220px] max-w-sm space-y-2 border border-slate-200 bg-white/95 px-4 py-3 text-xs text-slate-700 shadow-sm">
+                <p className="text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
+                <p>{selectedDriver.route || 'Waiting for trip'}</p>
+                <p className="text-slate-500">Status: {selectedDriver.status}</p>
+                {selectedDriver.publicId ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/dashboard/ride-operations/${selectedDriver.publicId}`)}
+                    className="h-8 rounded-sm bg-slate-900 px-3 text-[11px] font-semibold text-white"
                   >
-                    <div className="min-w-[220px] space-y-2 pr-2">
-                      <p className="text-sm font-semibold text-slate-900">{selectedDriver.name}</p>
-                      <p className="text-xs text-slate-600">{selectedDriver.route || 'Waiting for trip'}</p>
-                      <p className="text-xs text-slate-500">Status: {selectedDriver.status}</p>
-                      {selectedDriver.publicId ? (
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/dashboard/ride-operations/${selectedDriver.publicId}`)}
-                          className="h-8 rounded-sm bg-slate-900 px-3 text-[11px] font-semibold text-white"
-                        >
-                          Track Ride
-                        </button>
-                      ) : null}
-                    </div>
-                  </InfoWindowF>
+                    Track Ride
+                  </button>
                 ) : null}
-
-                {selectedTrip && selectedTrip.pickupCoordinate ? (
-                  <InfoWindowF
-                    position={{ lat: Number(selectedTrip.pickupCoordinate.lat), lng: Number(selectedTrip.pickupCoordinate.lng) }}
-                    onCloseClick={() => setSelectedTripId('')}
-                  >
-                    <div className="min-w-[220px] space-y-2 pr-2">
-                      <p className="text-sm font-semibold text-slate-900">{selectedTrip.id}</p>
-                      <p className="text-xs text-slate-600">{selectedTrip.route}</p>
-                      <p className="text-xs text-slate-500">{selectedTrip.rider} • {selectedTrip.driver}</p>
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/dashboard/ride-operations/${selectedTrip.id}`)}
-                        className="h-8 rounded-sm bg-slate-900 px-3 text-[11px] font-semibold text-white"
-                      >
-                        Track Ride
-                      </button>
-                    </div>
-                  </InfoWindowF>
-                ) : null}
-              </GoogleMap>
-            ) : (
-              <div className="flex h-full items-center justify-center bg-[linear-gradient(135deg,#dbeafe_0%,#eff6ff_40%,#f8fafc_100%)] px-6 text-center">
-                <div className="max-w-lg space-y-2">
-                  <p className="text-sm font-semibold text-slate-900">Google Maps background is not configured yet.</p>
-                  <p className="text-xs text-slate-600">
-                    Add <code>VITE_GOOGLE_MAPS_API_KEY</code> to the admin environment to show the real map background here.
-                  </p>
-                </div>
               </div>
-            )}
+            ) : null}
+
+            {selectedTrip ? (
+              <div className="absolute bottom-14 right-4 z-10 min-w-[220px] max-w-sm space-y-2 border border-slate-200 bg-white/95 px-4 py-3 text-xs text-slate-700 shadow-sm">
+                <p className="text-sm font-semibold text-slate-900">{selectedTrip.id}</p>
+                <p>{selectedTrip.route}</p>
+                <p className="text-slate-500">{selectedTrip.rider} · {selectedTrip.driver}</p>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/dashboard/ride-operations/${selectedTrip.id}`)}
+                  className="h-8 rounded-sm bg-slate-900 px-3 text-[11px] font-semibold text-white"
+                >
+                  Track Ride
+                </button>
+              </div>
+            ) : null}
 
             <div className="absolute bottom-3 right-3 z-10 border border-slate-200 bg-white/90 px-3 py-2 text-[11px] text-slate-600">
-              {loading ? 'Loading live drivers...' : `${filteredDrivers.length} drivers • ${filteredTrips.length} active trips`}
+              {loading ? 'Loading live drivers...' : `${filteredDrivers.length} drivers · ${filteredTrips.length} active trips`}
             </div>
           </div>
         </article>
@@ -560,7 +436,7 @@ export default function LiveMapRealtimePage() {
                       <p className="text-sm font-semibold text-slate-800">{trip.id}</p>
                       <span className="text-[11px] font-semibold text-indigo-700">{trip.stage}</span>
                     </div>
-                    <p className="text-xs text-slate-600">{trip.rider} • {trip.driver}</p>
+                    <p className="text-xs text-slate-600">{trip.rider} · {trip.driver}</p>
                     <p className="text-[11px] text-slate-500">{trip.route}</p>
                   </li>
                 ))

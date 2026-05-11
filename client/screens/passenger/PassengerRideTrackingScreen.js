@@ -4,9 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import * as Speech from 'expo-speech';
-import { cancelRideRequest, completeRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
+import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -14,7 +14,8 @@ import { connectRealtime } from '../../realtime';
 
 const TRACKING_STATUS_REFRESH_MS = 5000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
-const ROUTE_REFRESH_DISTANCE_METERS = 1000;
+const ROUTE_REFRESH_DISTANCE_METERS = 250;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 30000;
 
 function mapRideStatusToStage(status) {
   switch (String(status || '').toLowerCase()) {
@@ -121,6 +122,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const lastRouteTargetRef = useRef(null);
   const lastRouteFetchedAtRef = useRef(0);
   const routeRequestIdRef = useRef(0);
+  const hasAutoFitMapRef = useRef(false);
+  const lastAutoFitStageRef = useRef('');
   const {
     pickupCoordinate: initialPickupCoordinate,
     dropoffCoordinate: initialDropoffCoordinate,
@@ -148,6 +151,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [tripRouteCoordinates, setTripRouteCoordinates] = useState([]);
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
   const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
+  const [tripDistanceMeters, setTripDistanceMeters] = useState(0);
+  const [tripDurationSeconds, setTripDurationSeconds] = useState(0);
   const [nextInstruction, setNextInstruction] = useState('');
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState('');
@@ -326,14 +331,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [rideRequestId, stage]);
 
   useEffect(() => {
-    if (!driverCoordinate || !activeTarget || !mapRef.current) return;
-    mapRef.current.animateToRegion(
-      buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, stage),
-      700
-    );
-  }, [activeTarget, driverCoordinate, dropoffCoordinate, pickupCoordinate, stage]);
-
-  useEffect(() => {
     if (!driverCoordinate || !activeTarget || isCompleted) {
       setRouteCoordinates([]);
       setRouteDistanceMeters(0);
@@ -351,10 +348,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     const targetChanged = previousTarget
       ? calculateDistanceKm(previousTarget, activeTarget) * 1000 >= 30
       : true;
+    const routeAgeMs = Date.now() - lastRouteFetchedAtRef.current;
     if (
       !targetChanged &&
       routeCoordinates.length > 0 &&
-      movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS
+      movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
+      routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
       return undefined;
     }
@@ -404,6 +403,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   useEffect(() => {
     if (!pickupCoordinate || !dropoffCoordinate || isCompleted) {
       setTripRouteCoordinates([]);
+      setTripDistanceMeters(0);
+      setTripDurationSeconds(0);
       return undefined;
     }
 
@@ -419,9 +420,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             ? route.coordinates
             : [pickupCoordinate, dropoffCoordinate].filter(Boolean)
         );
+        setTripDistanceMeters(Number(route?.distanceMeters || 0));
+        setTripDurationSeconds(Number(route?.durationSeconds || 0));
       } catch {
         if (cancelled) return;
         setTripRouteCoordinates([pickupCoordinate, dropoffCoordinate].filter(Boolean));
+        setTripDistanceMeters(0);
+        setTripDurationSeconds(0);
       }
     };
 
@@ -433,17 +438,48 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [dropoffCoordinate, getToken, isCompleted, pickupCoordinate]);
 
   const liveDriverDistanceKm = useMemo(
-    () => (routeDistanceMeters > 0 ? routeDistanceMeters / 1000 : calculateDistanceKm(driverCoordinate, activeTarget)),
-    [activeTarget, driverCoordinate, routeDistanceMeters]
+    () => {
+      if (routeDistanceMeters > 0) return routeDistanceMeters / 1000;
+      if (Number(rideStatus?.driverDistanceKm || 0) > 0 && stage !== 'on_trip') {
+        return Number(rideStatus.driverDistanceKm);
+      }
+      return calculateDistanceKm(driverCoordinate, activeTarget);
+    },
+    [activeTarget, driverCoordinate, rideStatus?.driverDistanceKm, routeDistanceMeters, stage]
   );
 
   const liveEtaMinutes = useMemo(
-    () => (routeDurationSeconds > 0 ? Math.max(1, Math.round(routeDurationSeconds / 60)) : Math.max(1, Math.round(liveDriverDistanceKm * 4))),
-    [liveDriverDistanceKm, routeDurationSeconds]
+    () => {
+      if (routeDurationSeconds > 0) return Math.max(1, Math.round(routeDurationSeconds / 60));
+      if (Number(rideStatus?.driverEtaMinutes || 0) > 0 && stage !== 'on_trip') {
+        return Number(rideStatus.driverEtaMinutes);
+      }
+      return Math.max(1, Math.round(liveDriverDistanceKm * 4));
+    },
+    [liveDriverDistanceKm, rideStatus?.driverEtaMinutes, routeDurationSeconds, stage]
   );
+  const tripDistanceKm = useMemo(() => {
+    if (tripDistanceMeters > 0) return tripDistanceMeters / 1000;
+    const estimated = Number(rideStatus?.estimatedDistanceKm || 0);
+    return estimated > 0 ? estimated : 0;
+  }, [rideStatus?.estimatedDistanceKm, tripDistanceMeters]);
+  const tripEtaMinutes = useMemo(() => {
+    if (tripDurationSeconds > 0) return Math.max(1, Math.round(tripDurationSeconds / 60));
+    const estimated = Number(rideStatus?.estimatedMinutes || 0);
+    return estimated > 0 ? estimated : 0;
+  }, [rideStatus?.estimatedMinutes, tripDurationSeconds]);
   const hasRoadDistance = routeDistanceMeters > 0;
   const liveEtaText = hasDriverCoordinate ? `${liveEtaMinutes} min` : 'Locating';
   const liveDistanceText = hasDriverCoordinate ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Waiting for driver location';
+  const activeRouteCoordinates = useMemo(() => {
+    if (stage === 'on_trip') {
+      if (tripRouteCoordinates.length > 1) return tripRouteCoordinates;
+      if (routeCoordinates.length > 1) return routeCoordinates;
+      return [pickupCoordinate, dropoffCoordinate].filter(Boolean);
+    }
+    if (routeCoordinates.length > 1) return routeCoordinates;
+    return [driverCoordinate, pickupCoordinate].filter(Boolean);
+  }, [driverCoordinate, dropoffCoordinate, pickupCoordinate, routeCoordinates, stage, tripRouteCoordinates]);
 
   const pickupWaitRemainingSeconds = useMemo(() => {
     if (stage !== 'waiting_at_pickup') return null;
@@ -454,6 +490,27 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [nowTick, rideStatus?.arrivedAt, stage]);
   const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
   const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
+
+  useEffect(() => {
+    if (!mapRef.current || activeRouteCoordinates.length < 2) return undefined;
+    const stageChanged = lastAutoFitStageRef.current !== String(stage || '');
+    if (hasAutoFitMapRef.current && !stageChanged) return undefined;
+    hasAutoFitMapRef.current = true;
+    lastAutoFitStageRef.current = String(stage || '');
+
+    const timeout = setTimeout(() => {
+      try {
+        mapRef.current?.fitToCoordinates(activeRouteCoordinates, {
+          edgePadding: { top: 90, right: 28, bottom: 220, left: 28 },
+          animated: true,
+        });
+      } catch {
+        // Keep tracking UI resilient if the map rejects a fit request.
+      }
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [activeRouteCoordinates, stage]);
 
   const handleCancelRide = () => {
     setShowCancelReasonModal(true);
@@ -474,14 +531,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   };
 
   const handleDone = async () => {
-    try {
-      const token = await getToken();
-      if (token && rideRequestId) {
-        await completeRideRequest(token, rideRequestId);
-      }
-    } catch (error) {
-      // local UI still closes
-    }
+    exitToPassengerHome();
+  };
+
+  const handleSkipRating = () => {
+    ratingDraftTouchedRef.current = false;
+    setShowDriverRatingModal(false);
     exitToPassengerHome();
   };
 
@@ -611,27 +666,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
           <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
           <Polyline
-            coordinates={
-              stage === 'on_trip'
-                ? (
-                    tripRouteCoordinates.length > 1
-                      ? tripRouteCoordinates
-                      : routeCoordinates.length > 1
-                        ? routeCoordinates
-                        : [pickupCoordinate, dropoffCoordinate].filter(Boolean)
-                  )
-                : (
-                    routeCoordinates.length > 1
-                      ? routeCoordinates
-                      : [driverCoordinate, pickupCoordinate].filter(Boolean)
-                  )
-            }
+            coordinates={activeRouteCoordinates}
             strokeColor={PRIMARY_BLUE}
             strokeWidth={5}
           />
         </MapView>
 
-        <View className="absolute inset-0 bg-white/10" />
+        <View pointerEvents="none" className="absolute inset-0 bg-white/10" />
 
         <View className="px-5" style={{ paddingTop: insets.top + 10 }}>
           <View className="flex-row items-center justify-between rounded-[28px] bg-white/95 px-4 py-4">
@@ -650,7 +691,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               </Text>
               <Text className="mt-1 text-sm text-gray-500">
                 {isCompleted
-                  ? 'Please rate your driver for this trip.'
+                  ? 'You can rate your driver now or skip and do it later.'
                   : stage === 'waiting_at_pickup'
                     ? pickupWaitExpired
                       ? 'Pickup wait time has ended. Please contact your driver.'
@@ -772,7 +813,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                           : liveDistanceText}
                       </Text>
                       <Text className="mt-1 text-xs text-gray-400">
-                        Road distance refreshes after the driver moves about 1 km.
+                        Road distance refreshes about every 30 seconds or sooner if the car changes direction.
                       </Text>
                       {routeError ? (
                         <Text className="mt-2 text-sm text-amber-600">{routeError}</Text>
@@ -819,6 +860,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                               {hasRoadDistance ? 'Distance to destination' : 'Estimated distance to destination'}
                             </Text>
                             <Text className="mt-1 text-3xl font-bold text-gray-900">{liveDistanceText}</Text>
+                            <Text className="mt-2 text-sm text-gray-500">
+                              {tripDistanceKm > 0
+                                ? `Trip route ${tripDistanceKm.toFixed(1)} km${tripEtaMinutes > 0 ? ` • ${tripEtaMinutes} min` : ''}`
+                                : 'Trip route details updating...'}
+                            </Text>
                           </>
                         ) : (
                           <>
@@ -1046,12 +1092,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         </TouchableOpacity>
       </Modal>
 
-      <Modal visible={showDriverRatingModal} transparent animationType="fade">
+      <Modal visible={showDriverRatingModal} transparent animationType="fade" onRequestClose={handleSkipRating}>
         <View className="flex-1 items-center justify-center bg-black/20 px-5">
           <View className="w-full max-w-[380px] rounded-[28px] bg-white px-5 pt-5 pb-5">
             <Text className="text-2xl font-bold text-gray-900">Rate Driver</Text>
             <Text className="mt-2 text-sm text-gray-500">
-              Tell us how this trip went before you finish.
+              Tell us how this trip went, or skip for now.
             </Text>
             <View className="mt-5 flex-row items-center justify-between">
               {[1, 2, 3, 4, 5].map((value) => (
@@ -1118,6 +1164,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingRating ? 0.7 : 1 }}
             >
               {submittingRating ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Done</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleSkipRating}
+              disabled={submittingRating}
+              className="mt-3 h-12 items-center justify-center"
+            >
+              <Text className="text-base font-semibold text-gray-500">Skip for now</Text>
             </TouchableOpacity>
           </View>
         </View>

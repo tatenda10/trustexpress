@@ -7,7 +7,7 @@ import { Audio } from 'expo-av';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import * as Location from 'expo-location';
 import { connectRealtime } from '../../realtime';
 import { showLocalRideNotification } from '../../notifications';
@@ -270,8 +270,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
         localSocket = connectRealtime(token);
         if (!localSocket) return;
 
-        const handleRealtimeRefresh = () => {
+        const handleRealtimeRefresh = (payload = {}) => {
           if (!active) return;
+          const removedRideRequestId = Number(payload?.rideRequestId || 0);
+          if (removedRideRequestId && Number(pendingSelectionRide?.id || 0) === removedRideRequestId) {
+            setPendingSelectionRide(null);
+          }
           setRealtimeSignal((current) => current + 1);
         };
 
@@ -314,7 +318,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       active = false;
       localSocket?.__driverHomeCleanup?.();
     };
-  }, [isFocused]);
+  }, [isFocused, pendingSelectionRide?.id]);
 
   useEffect(() => {
     const shouldKeepAwake = isOnline || !!currentRide || !!pendingSelectionRide;
@@ -772,7 +776,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
     );
   }, [currentRide?.id, nowTick, pendingSelectionRide]);
 
-  // Load a curved Google Maps route for the current ride or active request
+  // Load a route for the current ride or active request from the backend map provider.
   useEffect(() => {
     const hasRide = !!currentRide;
     const hasRequest = !currentRide && !!activeRequest;
@@ -1035,7 +1039,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
             locationSyncInFlightRef.current = false;
           }
 
-          // Optionally refresh the human-readable location label using Google Places/Geocode.
+          // Optionally refresh the human-readable location label using the configured geocoder.
           try {
             const labelNow = Date.now();
             const lastLabel = lastLabelFetchRef.current;
@@ -1064,7 +1068,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   cache.set(cacheKey, pretty);
                   setLocationLabel(pretty);
                 } else {
-                  // Keep last known label if Google couldn't resolve a name.
+                  // Keep last known label if the geocoder couldn't resolve a name.
                 }
               }
             }
@@ -1551,11 +1555,30 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   <View className="mt-4 flex-row items-center gap-6">
                     <View className="flex-row items-center">
                       <Ionicons name="navigate" size={15} color="#2f73c9" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">{req.driverDistanceKm.toFixed(1)} km away</Text>
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Number((req.pickupRouteDistanceKm ?? req.driverDistanceKm) || 0).toFixed(1)} km to pickup
+                      </Text>
                     </View>
                     <View className="flex-row items-center">
                       <Ionicons name="time" size={15} color="#2f73c9" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">{req.etaMinutes} min away</Text>
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Math.max(1, Number((req.pickupRouteMinutes ?? req.etaMinutes) || 0))} min to pickup
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View className="mt-2 flex-row items-center gap-6">
+                    <View className="flex-row items-center">
+                      <Ionicons name="swap-horizontal" size={15} color="#111827" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Number((req.tripDistanceKm ?? req.estimatedDistanceKm) || 0).toFixed(1)} km trip
+                      </Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      <Ionicons name="time-outline" size={15} color="#111827" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Math.max(1, Number((req.tripDurationMinutes ?? req.estimatedMinutes) || 0))} min trip
+                      </Text>
                     </View>
                   </View>
 
@@ -1639,13 +1662,28 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     <View className="flex-row items-center">
                       <Ionicons name="navigate" size={15} color="#2f73c9" />
                       <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Number(activeRequest?.driverDistanceKm || 0).toFixed(1)} km away
+                        {Number((activeRequest?.pickupRouteDistanceKm ?? activeRequest?.driverDistanceKm) || 0).toFixed(1)} km to pickup
                       </Text>
                     </View>
                     <View className="flex-row items-center">
                       <Ionicons name="time" size={15} color="#2f73c9" />
                       <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {activeRequest?.etaMinutes || 0} min away
+                        {Math.max(1, Number((activeRequest?.pickupRouteMinutes ?? activeRequest?.etaMinutes) || 0))} min to pickup
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View className="mt-2 flex-row items-center gap-6">
+                    <View className="flex-row items-center">
+                      <Ionicons name="swap-horizontal" size={15} color="#111827" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Number((activeRequest?.tripDistanceKm ?? activeRequest?.estimatedDistanceKm) || 0).toFixed(1)} km trip
+                      </Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      <Ionicons name="time-outline" size={15} color="#111827" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Math.max(1, Number((activeRequest?.tripDurationMinutes ?? activeRequest?.estimatedMinutes) || 0))} min trip
                       </Text>
                     </View>
                   </View>

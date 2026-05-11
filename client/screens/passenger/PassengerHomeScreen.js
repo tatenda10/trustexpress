@@ -16,7 +16,7 @@ import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useIsFocused } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import * as Location from 'expo-location';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -115,16 +115,6 @@ function areCoordinatesClose(left, right) {
   return (
     Math.abs(Number(left.latitude) - Number(right.latitude)) < 0.0002 &&
     Math.abs(Number(left.longitude) - Number(right.longitude)) < 0.0002
-  );
-}
-
-function areRegionsClose(left, right) {
-  if (!left || !right) return false;
-  return (
-    Math.abs(Number(left.latitude) - Number(right.latitude)) < 0.00001 &&
-    Math.abs(Number(left.longitude) - Number(right.longitude)) < 0.00001 &&
-    Math.abs(Number(left.latitudeDelta) - Number(right.latitudeDelta)) < 0.00001 &&
-    Math.abs(Number(left.longitudeDelta) - Number(right.longitudeDelta)) < 0.00001
   );
 }
 
@@ -700,10 +690,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
     mapRef.current?.animateToRegion(nextRegion, 400);
   };
 
-  const handleRegionChangeComplete = (region) => {
-    setMapRegion((current) => (areRegionsClose(current, region) ? current : region));
-  };
-
   const openChooseRideScreen = () => {
     if (!pickupCoordinate || !dropoffCoordinate) {
       Alert.alert('Missing route', 'Set your pickup and destination first.');
@@ -732,7 +718,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={mapRegion}
-          onRegionChangeComplete={handleRegionChangeComplete}
           onPress={handleMapPress}
           showsCompass={false}
           toolbarEnabled={false}
@@ -1178,7 +1163,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     <View className="rounded-[22px] bg-white px-4 py-5">
                       <Text className="text-base font-semibold text-gray-900">No matching places yet</Text>
                       <Text className="mt-2 text-sm text-gray-500">
-                        Try a street, suburb, landmark, or business name the way you would search in Google Maps.
+                        Try a street, suburb, landmark, or business name the way you would search in any map app.
                       </Text>
                     </View>
                   ) : (

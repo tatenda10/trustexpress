@@ -13,10 +13,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import { useAuth } from '@clerk/clerk-expo';
 import {
   cancelRideRequest,
+  declineRideDriver,
   getApiUrl,
   getDirectionsRoute,
   getPassengerRideRequestStatus,
@@ -337,6 +338,33 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     }
   };
 
+  const handleDeclineDriver = async (driver) => {
+    try {
+      const driverUserId = String(driver?.id || '').trim();
+      if (!driverUserId || !rideRequest?.id) return;
+      setIsSubmittingDriverId(driverUserId);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      await declineRideDriver(token, rideRequest.id, driverUserId);
+      let nextAcceptedCount = 0;
+      setAcceptedDrivers((current) => {
+        const next = current.filter((item) => String(item?.id) !== driverUserId);
+        nextAcceptedCount = next.length;
+        return next;
+      });
+      setAssignedDriver((current) => (String(current?.id || '') === driverUserId ? null : current));
+      setRideStatus((current) => current ? {
+        ...current,
+        status: nextAcceptedCount > 0 ? 'driver_found' : 'requested',
+      } : current);
+      setRealtimeSignal((c) => c + 1);
+    } catch (error) {
+      Alert.alert('Decline failed', error?.message || 'Could not decline this driver.');
+    } finally {
+      setIsSubmittingDriverId('');
+    }
+  };
+
   const handleCancelRequest = () => { setSelectedCancelReason(''); setShowCancelReasonModal(true); };
 
   const handleConfirmCancelWithReason = async () => {
@@ -459,7 +487,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                     estimatedAmount={estimatedAmount}
                     remainingSeconds={remainingSeconds}
                     onAccept={handleAccept}
-                    onDecline={handleCancelRequest}
+                    onDecline={() => handleDeclineDriver(driver)}
                     isSubmitting={isSubmittingDriverId === driver.id}
                   />
                 ))}

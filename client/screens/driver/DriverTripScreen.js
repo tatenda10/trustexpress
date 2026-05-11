@@ -27,8 +27,8 @@ import {
   DriverTripReceiptView,
 } from './components/DriverTripComponents';
 
-const ROUTE_REFRESH_DISTANCE_METERS = 2000;
-const ROUTE_REFRESH_MIN_INTERVAL_MS = 90000;
+const ROUTE_REFRESH_DISTANCE_METERS = 250;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 30000;
 const LOCATION_UPDATE_DISTANCE_METERS = 35;
 const LOCATION_UPDATE_INTERVAL_MS = 12000;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
@@ -169,16 +169,16 @@ function getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCo
   return [safeDriverCoordinate, safeTargetCoordinate].filter(Boolean);
 }
 
-function toGoogleMapsLink(label, coordinate) {
+function toExternalNavigationLink(label, coordinate) {
   if (!coordinate) return '';
   const lat = Number(coordinate.latitude);
   const lng = Number(coordinate.longitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
-  const query = encodeURIComponent(label ? `${label} (${lat},${lng})` : `${lat},${lng}`);
-  return `https://www.google.com/maps/search/?api=1&query=${query}`;
+  const labelQuery = encodeURIComponent(label ? `${label} (${lat},${lng})` : `${lat},${lng}`);
+  return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}&query=${labelQuery}`;
 }
 
-function toGoogleMapsOpenUrls(label, coordinate) {
+function toExternalNavigationUrls(label, coordinate) {
   if (!coordinate) return [];
   const lat = Number(coordinate.latitude);
   const lng = Number(coordinate.longitude);
@@ -189,17 +189,15 @@ function toGoogleMapsOpenUrls(label, coordinate) {
 
   if (Platform.OS === 'android') {
     return [
-      `google.navigation:q=${latLng}`,
       `geo:${latLng}?q=${latLng}(${encodedLabel})`,
-      `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
-      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${label || 'Destination'} (${lat},${lng})`)}`,
+      `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`,
     ];
   }
 
   return [
-    `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`,
-    `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
-    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${label || 'Destination'} (${lat},${lng})`)}`,
+    `maps://?daddr=${lat},${lng}&dirflg=d`,
+    `https://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`,
+    `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`,
   ];
 }
 
@@ -655,7 +653,8 @@ export default function DriverTripScreen({ navigation }) {
     if (
       !targetChanged &&
       routeCoordinates.length > 0 &&
-      (movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS || routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS)
+      movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
+      routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
       return undefined;
     }
@@ -1043,10 +1042,10 @@ export default function DriverTripScreen({ navigation }) {
     ? `Continue toward ${ride.dropoffLabel || 'the drop-off point'}`
     : `Continue toward ${ride.pickupLabel || 'the pickup point'}`);
 
-  const handleOpenGoogleMaps = async () => {
+  const handleOpenExternalNavigation = async () => {
     try {
-      const fallbackLink = toGoogleMapsLink(destinationLabelForMaps, destinationForMaps);
-      const candidateUrls = toGoogleMapsOpenUrls(destinationLabelForMaps, destinationForMaps);
+      const fallbackLink = toExternalNavigationLink(destinationLabelForMaps, destinationForMaps);
+      const candidateUrls = toExternalNavigationUrls(destinationLabelForMaps, destinationForMaps);
       if (!fallbackLink || !candidateUrls.length) {
         Alert.alert('Navigation unavailable', 'Could not open navigation for this trip.');
         return;
@@ -1062,7 +1061,7 @@ export default function DriverTripScreen({ navigation }) {
 
       await Linking.openURL(fallbackLink);
     } catch {
-      Alert.alert('Navigation unavailable', 'Could not open Google Maps right now.');
+      Alert.alert('Navigation unavailable', 'Could not open a navigation app right now.');
     }
   };
 
@@ -1110,7 +1109,7 @@ export default function DriverTripScreen({ navigation }) {
         role: 'driver',
         chatTitle: ride.passengerName || 'Passenger chat',
       })}
-      onOpenGoogleMaps={handleOpenGoogleMaps}
+      onOpenExternalNavigation={handleOpenExternalNavigation}
       tripPanelMaxHeight={TRIP_PANEL_MAX_HEIGHT}
       onCenterDriver={() => {
         if (!mapRef.current || !driverCoordinate) return;

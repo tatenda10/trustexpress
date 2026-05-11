@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
-import { fetchCachedGoogleDirections } from '../lib/google-directions.js';
+import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import {
@@ -597,7 +597,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
     const dropoffPoint = { latitude: dropoffLat, longitude: dropoffLng };
     let authoritativeRoute = null;
     try {
-      authoritativeRoute = await fetchCachedGoogleDirections({
+      authoritativeRoute = await fetchCachedDirections({
         origin: pickupPoint,
         destination: dropoffPoint,
         cacheTtlSeconds: 1800,
@@ -770,9 +770,11 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
               ) AS remaining_seconds
        FROM ride_requests
        WHERE passenger_user_id = ?
-         AND status IN ('requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress')
+         AND (
+           status IN ('requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress')
+         )
        ORDER BY
-         COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC,
+         COALESCE(completed_at, started_at, arrived_at, assigned_at, requested_at) DESC,
          id DESC
        LIMIT 1`,
       [req.userId]
@@ -1532,6 +1534,95 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
     });
   } catch (err) {
     console.error('PATCH /api/rides/passenger/:rideRequestId/select-driver', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    const driverUserId = String(req.body?.driverUserId || '').trim();
+    if (!Number.isInteger(rideRequestId) || !driverUserId) {
+      return res.status(400).json({ error: 'rideRequestId and driverUserId are required' });
+    }
+
+    const [ride] = await query(
+      `SELECT *
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ? AND status IN ('requested', 'driver_found')
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const [driverResponse] = await query(
+      `SELECT status
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ? AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, driverUserId]
+    );
+    if (!driverResponse || String(driverResponse.status || '') !== 'accepted') {
+      return res.status(409).json({ error: 'This driver is no longer awaiting your selection' });
+    }
+
+    await query(
+      `UPDATE ride_request_driver_responses
+       SET status = 'declined',
+           responded_at = CURRENT_TIMESTAMP
+       WHERE ride_request_id = ?
+         AND driver_user_id = ?
+         AND status = 'accepted'`,
+      [rideRequestId, driverUserId]
+    );
+
+    const [acceptedCountRow] = await query(
+      `SELECT COUNT(*) AS total
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?
+         AND status IN ('accepted', 'selected')`,
+      [rideRequestId]
+    );
+    const acceptedCount = Number(acceptedCountRow?.total || 0);
+
+    if (acceptedCount === 0) {
+      await query(
+        `UPDATE ride_requests
+         SET status = 'requested',
+             driver_found_at = NULL
+         WHERE id = ?
+           AND passenger_user_id = ?
+           AND status = 'driver_found'
+           AND driver_user_id IS NULL`,
+        [rideRequestId, req.userId]
+      );
+    }
+
+    emitRideRequestRemovedFromDriver(driverUserId, {
+      rideRequestId,
+      reason: 'declined_by_passenger',
+    });
+    emitRideStatusToDriver(driverUserId, {
+      rideRequestId,
+      status: 'requested',
+      passengerUserId: req.userId,
+      reason: 'declined_by_passenger',
+    });
+
+    return res.json({
+      ok: true,
+      rideRequest: {
+        id: rideRequestId,
+        status: acceptedCount > 0 ? 'driver_found' : 'requested',
+      },
+    });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/decline-driver', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

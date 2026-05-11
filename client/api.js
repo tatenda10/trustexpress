@@ -335,6 +335,13 @@ export async function selectRideDriver(token, rideRequestId, driverUserId) {
   }, token);
 }
 
+export async function declineRideDriver(token, rideRequestId, driverUserId) {
+  return apiFetch(`/api/rides/passenger/${rideRequestId}/decline-driver`, {
+    method: 'PATCH',
+    body: JSON.stringify({ driverUserId }),
+  }, token);
+}
+
 export async function getPassengerRideRequestStatus(token, rideRequestId) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/status`, {}, token);
 }

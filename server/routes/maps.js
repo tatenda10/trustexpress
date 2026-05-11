@@ -1,14 +1,14 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { fetchCachedGoogleDirections } from '../lib/google-directions.js';
+import { fetchCachedDirections } from '../lib/maps-directions.js';
 import {
   fetchCachedPlaceAutocomplete,
   fetchCachedPlaceDetails,
-} from '../lib/google-places.js';
+} from '../lib/maps-places.js';
 
 const router = Router();
 
-// Track API calls for Google Maps and Places
+// Track API calls for the configured maps providers.
 const apiCallStats = {
   directions: { count: 0, cacheHits: 0, errors: 0 },
   placesAutocomplete: { count: 0, cacheHits: 0, errors: 0 },
@@ -36,7 +36,7 @@ router.post('/directions', requireAuth, async (req, res) => {
       cacheTtlSeconds,
     } = req.body || {};
 
-    const route = await fetchCachedGoogleDirections({
+    const route = await fetchCachedDirections({
       origin,
       destination,
       includeTraffic: includeTraffic === true,

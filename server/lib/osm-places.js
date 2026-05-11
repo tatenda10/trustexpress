@@ -1,19 +1,18 @@
 const DEFAULT_AUTOCOMPLETE_CACHE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
+const DEFAULT_NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
 
 const autocompleteCache = new Map();
 const detailsCache = new Map();
 const inFlightRequests = new Map();
 
-function getPlacesApiKey() {
+function getNominatimBaseUrl() {
   return (
-    process.env.GOOGLE_MAPS_PLACES_API_KEY ||
-    process.env.GOOGLE_MAPS_API_KEY ||
-    process.env.ANDROID_GOOGLE_MAPS_API_KEY ||
-    process.env.IOS_GOOGLE_MAPS_API_KEY ||
-    ''
-  );
+    process.env.NOMINATIM_BASE_URL ||
+    process.env.OSM_GEOCODER_BASE_URL ||
+    DEFAULT_NOMINATIM_BASE_URL
+  ).replace(/\/+$/, '');
 }
 
 function clampCacheTtlMs(value, fallbackMs) {
@@ -32,6 +31,25 @@ function normalizeCoordinate(coordinate) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
   return { latitude, longitude };
+}
+
+function toRadians(value) {
+  return (value * Math.PI) / 180;
+}
+
+function calculateDistanceKm(start, end) {
+  if (!start || !end) return 0;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(end.latitude - start.latitude);
+  const dLng = toRadians(end.longitude - start.longitude);
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const a = (
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
+  );
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusKm * c;
 }
 
 function coordinateKey(coordinate, precision = 3) {
@@ -72,6 +90,13 @@ function detailsCacheKey(placeId) {
   return String(placeId || '').trim();
 }
 
+function toPlaceId(item) {
+  const osmType = String(item?.osm_type || '').trim().toUpperCase().charAt(0);
+  const osmId = String(item?.osm_id || '').trim();
+  if (!osmType || !osmId) return null;
+  return `${osmType}${osmId}`;
+}
+
 function cloneSuggestions(suggestions) {
   return (Array.isArray(suggestions) ? suggestions : []).map((suggestion) => ({
     ...suggestion,
@@ -79,64 +104,93 @@ function cloneSuggestions(suggestions) {
   }));
 }
 
-function mapPrediction(prediction, index, query) {
-  const title = prediction?.structured_formatting?.main_text || prediction?.description || query;
-  const subtitle = prediction?.structured_formatting?.secondary_text || prediction?.description || 'Zimbabwe';
+function buildTitle(item, query) {
+  const address = item?.address || {};
+  return (
+    item?.name ||
+    address?.amenity ||
+    address?.building ||
+    address?.road ||
+    address?.suburb ||
+    address?.city ||
+    address?.town ||
+    item?.display_name?.split(',')?.[0] ||
+    query
+  );
+}
 
+function buildSubtitle(item) {
+  const address = item?.address || {};
+  const parts = [
+    address?.suburb,
+    address?.city || address?.town || address?.village,
+    address?.state,
+    address?.country || 'Zimbabwe',
+  ].filter(Boolean);
+  return parts.join(', ') || item?.display_name || 'Zimbabwe';
+}
+
+function mapSearchResult(item, index, query, originCoordinate) {
+  const coordinate = {
+    latitude: Number(item?.lat),
+    longitude: Number(item?.lon),
+  };
   return {
-    id: prediction?.place_id || `${title}-${index}`,
-    placeId: prediction?.place_id || null,
-    title,
-    subtitle,
-    coordinate: null,
-    distanceKm: 0,
+    id: toPlaceId(item) || `${buildTitle(item, query)}-${index}`,
+    placeId: toPlaceId(item),
+    title: buildTitle(item, query),
+    subtitle: buildSubtitle(item),
+    coordinate,
+    distanceKm: originCoordinate ? calculateDistanceKm(originCoordinate, coordinate) : 0,
   };
 }
 
-function mapPlaceDetails(result) {
-  const location = result?.geometry?.location;
-  if (!location) return null;
-
-  const components = Array.isArray(result?.address_components) ? result.address_components : [];
-  const district = components.find((item) => item.types?.includes('sublocality') || item.types?.includes('locality'))?.long_name;
-  const city = components.find((item) => item.types?.includes('administrative_area_level_2') || item.types?.includes('locality'))?.long_name;
-  const region = components.find((item) => item.types?.includes('administrative_area_level_1'))?.long_name;
-
+function mapLookupResult(item) {
+  const coordinate = {
+    latitude: Number(item?.lat),
+    longitude: Number(item?.lon),
+  };
   return {
-    coordinate: {
-      latitude: Number(location.lat),
-      longitude: Number(location.lng),
-    },
-    title: result?.name || result?.formatted_address || 'Selected place',
-    subtitle: result?.formatted_address || '',
+    coordinate,
+    title: buildTitle(item, 'Selected place'),
+    subtitle: item?.display_name || buildSubtitle(item),
     context: {
-      district: district || null,
-      city: city || null,
-      region: region || null,
-      country: 'Zimbabwe',
+      district: item?.address?.suburb || item?.address?.county || null,
+      city: item?.address?.city || item?.address?.town || item?.address?.village || null,
+      region: item?.address?.state || null,
+      country: item?.address?.country || 'Zimbabwe',
     },
   };
 }
 
-export function hasGooglePlacesApiKey() {
-  return Boolean(getPlacesApiKey());
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'TrustCars/1.0',
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload?.error || payload?.message || `Nominatim request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
 }
 
-export async function fetchCachedPlaceAutocomplete({
+export function hasOsmPlacesProvider() {
+  return Boolean(getNominatimBaseUrl());
+}
+
+export async function fetchCachedOsmPlaceAutocomplete({
   query,
   originCoordinate,
-  sessionToken,
   cacheTtlSeconds,
 }) {
-  const apiKey = getPlacesApiKey();
   const normalizedQuery = normalizeQuery(query);
   const normalizedOrigin = normalizeCoordinate(originCoordinate);
 
-  if (!apiKey) {
-    const error = new Error('Google Places API key is not configured');
-    error.status = 503;
-    throw error;
-  }
   if (normalizedQuery.length < 3) {
     return { suggestions: [], cacheHit: false };
   }
@@ -152,38 +206,24 @@ export async function fetchCachedPlaceAutocomplete({
   }
 
   const requestPromise = (async () => {
+    const baseUrl = getNominatimBaseUrl();
     const params = new URLSearchParams({
-      input: normalizedQuery,
-      components: 'country:zw',
-      key: apiKey,
+      q: normalizedQuery,
+      format: 'jsonv2',
+      addressdetails: '1',
+      limit: '6',
+      countrycodes: 'zw',
+      namedetails: '1',
     });
-
     if (normalizedOrigin) {
-      params.append('location', `${normalizedOrigin.latitude},${normalizedOrigin.longitude}`);
-      params.append('radius', '35000');
-    }
-    if (sessionToken) {
-      params.append('sessiontoken', String(sessionToken));
+      params.set('viewbox', `${normalizedOrigin.longitude - 0.3},${normalizedOrigin.latitude + 0.3},${normalizedOrigin.longitude + 0.3},${normalizedOrigin.latitude - 0.3}`);
+      params.set('bounded', '0');
     }
 
-    const response = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`);
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const error = new Error(payload?.error_message || `Places autocomplete request failed (${response.status})`);
-      error.status = response.status;
-      throw error;
-    }
-
-    if (payload?.status !== 'OK' && payload?.status !== 'ZERO_RESULTS') {
-      const error = new Error(payload?.error_message || `Places autocomplete failed (${payload?.status || 'UNKNOWN'})`);
-      error.status = 502;
-      throw error;
-    }
-
-    const suggestions = (Array.isArray(payload?.predictions) ? payload.predictions : [])
+    const payload = await fetchJson(`${baseUrl}/search?${params.toString()}`);
+    const suggestions = (Array.isArray(payload) ? payload : [])
       .slice(0, 6)
-      .map((prediction, index) => mapPrediction(prediction, index, normalizedQuery));
+      .map((item, index) => mapSearchResult(item, index, normalizedQuery, normalizedOrigin));
 
     setCached(autocompleteCache, cacheKey, suggestions);
     return suggestions;
@@ -199,19 +239,12 @@ export async function fetchCachedPlaceAutocomplete({
   }
 }
 
-export async function fetchCachedPlaceDetails({
+export async function fetchCachedOsmPlaceDetails({
   placeId,
-  sessionToken,
   cacheTtlSeconds,
 }) {
-  const apiKey = getPlacesApiKey();
   const normalizedPlaceId = detailsCacheKey(placeId);
 
-  if (!apiKey) {
-    const error = new Error('Google Places API key is not configured');
-    error.status = 503;
-    throw error;
-  }
   if (!normalizedPlaceId) {
     const error = new Error('placeId is required');
     error.status = 400;
@@ -229,33 +262,19 @@ export async function fetchCachedPlaceDetails({
   }
 
   const requestPromise = (async () => {
+    const baseUrl = getNominatimBaseUrl();
     const params = new URLSearchParams({
-      place_id: normalizedPlaceId,
-      fields: 'geometry/location,formatted_address,name,address_component',
-      key: apiKey,
+      osm_ids: normalizedPlaceId,
+      format: 'jsonv2',
+      addressdetails: '1',
+      namedetails: '1',
     });
 
-    if (sessionToken) {
-      params.append('sessiontoken', String(sessionToken));
-    }
+    const payload = await fetchJson(`${baseUrl}/lookup?${params.toString()}`);
+    const item = Array.isArray(payload) ? payload[0] : null;
+    const place = item ? mapLookupResult(item) : null;
 
-    const response = await fetch(`https://maps.googleapis.com/maps/api/place/details/json?${params.toString()}`);
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const error = new Error(payload?.error_message || `Place details request failed (${response.status})`);
-      error.status = response.status;
-      throw error;
-    }
-
-    if (payload?.status !== 'OK' || !payload?.result) {
-      const error = new Error(payload?.error_message || `Place details failed (${payload?.status || 'UNKNOWN'})`);
-      error.status = 502;
-      throw error;
-    }
-
-    const place = mapPlaceDetails(payload.result);
-    if (!place?.coordinate) {
+    if (!place?.coordinate || !Number.isFinite(place.coordinate.latitude) || !Number.isFinite(place.coordinate.longitude)) {
       const error = new Error('Place details did not include coordinates');
       error.status = 502;
       throw error;
