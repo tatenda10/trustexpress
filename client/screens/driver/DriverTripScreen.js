@@ -28,9 +28,10 @@ import {
 } from './components/DriverTripComponents';
 
 const ROUTE_REFRESH_DISTANCE_METERS = 250;
-const ROUTE_REFRESH_MIN_INTERVAL_MS = 30000;
-const LOCATION_UPDATE_DISTANCE_METERS = 35;
-const LOCATION_UPDATE_INTERVAL_MS = 12000;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 8000;
+const LOCATION_UPDATE_DISTANCE_METERS = 15;
+const LOCATION_UPDATE_INTERVAL_MS = 8000;
+const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
 const AUTO_ARRIVAL_STABLE_MS = 3500;
 const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.34);
@@ -215,7 +216,7 @@ async function fetchTripDirections(token, origin, destination) {
   const data = await getDirectionsRoute(token, {
     origin,
     destination,
-    cacheTtlSeconds: 120,
+    cacheTtlSeconds: LIVE_DIRECTIONS_CACHE_TTL_SECONDS,
   });
   const route = data?.route || {};
   console.log(TRIP_DEBUG_PREFIX, 'fetchTripDirections success', {

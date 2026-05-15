@@ -16,6 +16,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 
 function getTierIconName(tier) {
   const tierName = String(tier?.tierName || '').toLowerCase();
@@ -252,6 +253,10 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const handleFindRide = async () => {
     if (!pickupCoordinate || !dropoffCoordinate || !selectedTier) {
       Alert.alert('Missing route', 'Set your pickup, destination, and ride tier first.');
+      return;
+    }
+    if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
+      Alert.alert('Outside Bulawayo', 'Trust Express currently supports rides within Bulawayo only.');
       return;
     }
     if (!(Number(distanceKm) > 0)) {

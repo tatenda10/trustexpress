@@ -4,6 +4,7 @@ import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
+import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import {
@@ -595,6 +596,12 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
 
     const pickupPoint = { latitude: pickupLat, longitude: pickupLng };
     const dropoffPoint = { latitude: dropoffLat, longitude: dropoffLng };
+    if (!isCoordinateInBulawayoServiceArea(pickupPoint) || !isCoordinateInBulawayoServiceArea(dropoffPoint)) {
+      return res.status(422).json({
+        error: 'Trust Express currently supports rides within Bulawayo only. Please choose pickup and drop-off points in Bulawayo.',
+      });
+    }
+
     let authoritativeRoute = null;
     try {
       authoritativeRoute = await fetchCachedDirections({

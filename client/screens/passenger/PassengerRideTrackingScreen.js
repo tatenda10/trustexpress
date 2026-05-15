@@ -9,13 +9,15 @@ import * as Speech from 'expo-speech';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
+import { BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 
 const TRACKING_STATUS_REFRESH_MS = 5000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const ROUTE_REFRESH_DISTANCE_METERS = 250;
-const ROUTE_REFRESH_MIN_INTERVAL_MS = 30000;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 8000;
+const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 
 function mapRideStatusToStage(status) {
   switch (String(status || '').toLowerCase()) {
@@ -100,7 +102,7 @@ async function fetchTrackingDirections(token, origin, destination) {
   const data = await getDirectionsRoute(token, {
     origin,
     destination,
-    cacheTtlSeconds: 180,
+    cacheTtlSeconds: LIVE_DIRECTIONS_CACHE_TTL_SECONDS,
   });
   const route = data?.route || {};
 
@@ -473,8 +475,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const liveDistanceText = hasDriverCoordinate ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Waiting for driver location';
   const activeRouteCoordinates = useMemo(() => {
     if (stage === 'on_trip') {
-      if (tripRouteCoordinates.length > 1) return tripRouteCoordinates;
       if (routeCoordinates.length > 1) return routeCoordinates;
+      if (tripRouteCoordinates.length > 1) return tripRouteCoordinates;
       return [pickupCoordinate, dropoffCoordinate].filter(Boolean);
     }
     if (routeCoordinates.length > 1) return routeCoordinates;
@@ -490,6 +492,29 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [nowTick, rideStatus?.arrivedAt, stage]);
   const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
   const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
+  const trackingRegion = useMemo(
+    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, stage),
+    [driverCoordinate, dropoffCoordinate, pickupCoordinate, stage]
+  );
+  const currentMapRegionRef = useRef(trackingRegion);
+
+  const handleMapRegionChangeComplete = (nextRegion) => {
+    currentMapRegionRef.current = nextRegion;
+  };
+
+  const handleAdjustMapZoom = (deltaMultiplier) => {
+    const sourceRegion = currentMapRegionRef.current || trackingRegion;
+    if (!sourceRegion || !mapRef.current?.animateToRegion) return;
+
+    const nextRegion = {
+      ...sourceRegion,
+      latitudeDelta: Math.min(Math.max(sourceRegion.latitudeDelta * deltaMultiplier, 0.0025), 2.5),
+      longitudeDelta: Math.min(Math.max(sourceRegion.longitudeDelta * deltaMultiplier, 0.0025), 2.5),
+    };
+
+    currentMapRegionRef.current = nextRegion;
+    mapRef.current.animateToRegion(nextRegion, 250);
+  };
 
   useEffect(() => {
     if (!mapRef.current || activeRouteCoordinates.length < 2) return undefined;
@@ -642,9 +667,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         <MapView
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-          initialRegion={buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, stage)}
+          initialRegion={trackingRegion}
+          maxBounds={BULAWAYO_SERVICE_BOUNDS_ARRAY}
           showsCompass={false}
           toolbarEnabled={false}
+          onRegionChangeComplete={handleMapRegionChangeComplete}
+          scrollEnabled
+          zoomEnabled
           rotateEnabled={false}
           pitchEnabled={false}
         >
@@ -674,7 +703,28 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
         <View pointerEvents="none" className="absolute inset-0 bg-white/10" />
 
-        <View className="px-5" style={{ paddingTop: insets.top + 10 }}>
+        <View
+          pointerEvents="box-none"
+          className="absolute right-5"
+          style={{ bottom: collapsedSheetHeight + bottomActionInset + 24 }}
+        >
+          <TouchableOpacity
+            onPress={() => handleAdjustMapZoom(0.6)}
+            activeOpacity={0.85}
+            className="h-14 w-14 items-center justify-center rounded-[20px] bg-white"
+          >
+            <Ionicons name="add" size={26} color="#111827" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => handleAdjustMapZoom(1.6)}
+            activeOpacity={0.85}
+            className="mt-3 h-14 w-14 items-center justify-center rounded-[20px] bg-white"
+          >
+            <Ionicons name="remove" size={26} color="#111827" />
+          </TouchableOpacity>
+        </View>
+
+        <View pointerEvents="box-none" className="px-5" style={{ paddingTop: insets.top + 10 }}>
           <View className="flex-row items-center justify-between rounded-[28px] bg-white/95 px-4 py-4">
             <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-12 w-12 items-center justify-center rounded-full bg-[#f3f6fb]">
               <Ionicons name="arrow-back" size={24} color="#111827" />
@@ -711,6 +761,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={insets.top + 80}
+          pointerEvents="box-none"
           style={{ flex: 1, justifyContent: 'flex-end' }}
         >
           <View

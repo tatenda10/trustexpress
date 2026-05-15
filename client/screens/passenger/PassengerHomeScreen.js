@@ -21,6 +21,13 @@ import * as Location from 'expo-location';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import {
+  BULAWAYO_DEFAULT_REGION,
+  BULAWAYO_SERVICE_BOUNDS_ARRAY,
+  BULAWAYO_CENTER_COORDINATE,
+  filterBulawayoSuggestions,
+  isCoordinateInBulawayoServiceArea,
+} from '../../constants/serviceArea';
+import {
   getDirectionsRoute,
   getNearbyPassengerDrivers,
   getPassengerCurrentRide,
@@ -29,12 +36,7 @@ import {
   getPlaceDetails,
 } from '../../api';
 
-const HARARE_FALLBACK = {
-  latitude: -20.1535,
-  longitude: 28.5870,
-  latitudeDelta: 0.12,
-  longitudeDelta: 0.12,
-};
+const HARARE_FALLBACK = BULAWAYO_DEFAULT_REGION;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -237,7 +239,7 @@ async function searchZimbabweFirst(token, query, originCoordinate, sessionToken)
       sessionToken,
       cacheTtlSeconds: PLACE_SEARCH_CACHE_TTL_MS / 1000,
     });
-    return Array.isArray(data?.suggestions) ? data.suggestions : [];
+    return filterBulawayoSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
   } catch {
     return [];
   }
@@ -366,6 +368,18 @@ export default function PassengerHomeScreen({ navigation, route }) {
           latitude: current.coords.latitude,
           longitude: current.coords.longitude,
         };
+        if (!isCoordinateInBulawayoServiceArea(coordinate)) {
+          setCurrentLocationCoordinate(null);
+          setPickupCoordinate(null);
+          setMapRegion(BULAWAYO_DEFAULT_REGION);
+          setPickupLabel('Choose pickup in Bulawayo');
+          setPickupQuery('');
+          setLocationError('Trust Express currently supports rides within Bulawayo only.');
+          setTimeout(() => {
+            mapRef.current?.animateToRegion(BULAWAYO_DEFAULT_REGION, 500);
+          }, 50);
+          return;
+        }
         const label = await getReadableLocationLabel('Pickup', coordinate);
         const nextRegion = buildRouteRegion(coordinate, null);
 
@@ -518,7 +532,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
       return undefined;
     }
 
-    const originCoordinate = currentLocationCoordinate || pickupCoordinate;
+    const originCoordinate = isCoordinateInBulawayoServiceArea(currentLocationCoordinate)
+      ? currentLocationCoordinate
+      : pickupCoordinate || BULAWAYO_CENTER_COORDINATE;
     const cacheKey = placeSearchCacheKey({
       field: activeField,
       query,
@@ -577,6 +593,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
   );
 
   const applyPickup = async (coordinate, label) => {
+    if (!isCoordinateInBulawayoServiceArea(coordinate)) {
+      Alert.alert('Outside Bulawayo', 'Trust Express currently supports pickup points within Bulawayo only.');
+      return;
+    }
     setPickupCoordinate(coordinate);
     setPickupLabel(label);
     if (!pickupQuery.trim()) setPickupQuery(label.replace('Pickup: ', ''));
@@ -586,6 +606,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
   };
 
   const applyDestination = async (coordinate, label, closeModal = false) => {
+    if (!isCoordinateInBulawayoServiceArea(coordinate)) {
+      Alert.alert('Outside Bulawayo', 'Trust Express currently supports drop-off points within Bulawayo only.');
+      return;
+    }
     setDropoffCoordinate(coordinate);
     setDropoffLabel(label);
     setDestinationQuery(String(label || '').replace(/^Drop-?off:\s*/i, '').trim());
@@ -598,6 +622,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const handleMapPress = async (event) => {
     if (!showRouteModal) return;
     const coordinate = event.nativeEvent.coordinate;
+    if (!isCoordinateInBulawayoServiceArea(coordinate)) {
+      Alert.alert('Outside Bulawayo', 'Please choose a location inside Bulawayo.');
+      return;
+    }
     const label = await getReadableLocationLabel(activeField === 'pickup' ? 'Pickup' : 'Drop-off', coordinate);
 
     if (activeField === 'pickup') {
@@ -660,6 +688,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
       Alert.alert('Location unavailable', 'We could not load that place. Please try another result.');
       return;
     }
+    if (!isCoordinateInBulawayoServiceArea(resolvedSuggestion.coordinate)) {
+      Alert.alert('Outside Bulawayo', 'Please choose a place inside Bulawayo.');
+      return;
+    }
 
     if (activeField === 'pickup') {
       await applyPickup(resolvedSuggestion.coordinate, `Pickup: ${resolvedSuggestion.title}`);
@@ -695,6 +727,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
       Alert.alert('Missing route', 'Set your pickup and destination first.');
       return;
     }
+    if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
+      Alert.alert('Outside Bulawayo', 'Trust Express currently supports rides within Bulawayo only.');
+      return;
+    }
     if (!(routeDistanceKm > 0)) {
       Alert.alert('Calculating road distance', 'Please wait for the road distance to finish calculating, then choose your ride.');
       return;
@@ -718,6 +754,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={mapRegion}
+          maxBounds={BULAWAYO_SERVICE_BOUNDS_ARRAY}
           onPress={handleMapPress}
           showsCompass={false}
           toolbarEnabled={false}
@@ -1161,9 +1198,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     </View>
                   ) : !suggestions.length && (activeField === 'pickup' ? pickupQuery : destinationQuery).trim().length >= PLACE_SEARCH_MIN_CHARS ? (
                     <View className="rounded-[22px] bg-white px-4 py-5">
-                      <Text className="text-base font-semibold text-gray-900">No matching places yet</Text>
+                      <Text className="text-base font-semibold text-gray-900">No Bulawayo places found</Text>
                       <Text className="mt-2 text-sm text-gray-500">
-                        Try a street, suburb, landmark, or business name the way you would search in any map app.
+                        Try a street, suburb, landmark, or business name inside Bulawayo.
                       </Text>
                     </View>
                   ) : (

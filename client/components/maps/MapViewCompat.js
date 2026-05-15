@@ -183,6 +183,7 @@ const MapView = forwardRef(function MapView(
   {
     children,
     initialRegion,
+    maxBounds,
     onMapReady,
     onPress,
     onRegionChangeComplete,
@@ -205,6 +206,12 @@ const MapView = forwardRef(function MapView(
   const safeInitialRegion = useMemo(
     () => buildRegion(initialRegion) || buildRegion(region),
     [initialRegion, region]
+  );
+  const safeMaxBounds = useMemo(
+    () => (Array.isArray(maxBounds) && maxBounds.length === 4
+      ? maxBounds.map((value) => Number(value))
+      : undefined),
+    [maxBounds]
   );
 
   const handleRegionDidChange = (event) => {
@@ -305,6 +312,7 @@ const MapView = forwardRef(function MapView(
       >
         <Camera
           ref={cameraRef}
+          maxBounds={safeMaxBounds}
           initialViewState={safeInitialRegion ? {
             center: [safeInitialRegion.longitude, safeInitialRegion.latitude],
             zoom: regionToZoom(safeInitialRegion),

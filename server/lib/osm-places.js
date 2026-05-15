@@ -1,7 +1,18 @@
+import {
+  BULAWAYO_SERVICE_BOUNDS,
+  isCoordinateInBulawayoServiceArea,
+} from './service-area.js';
+
 const DEFAULT_AUTOCOMPLETE_CACHE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
 const DEFAULT_NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
+const BULAWAYO_VIEWBOX = [
+  BULAWAYO_SERVICE_BOUNDS.west,
+  BULAWAYO_SERVICE_BOUNDS.north,
+  BULAWAYO_SERVICE_BOUNDS.east,
+  BULAWAYO_SERVICE_BOUNDS.south,
+].join(',');
 
 const autocompleteCache = new Map();
 const detailsCache = new Map();
@@ -81,13 +92,14 @@ function setCached(cache, key, value) {
 
 function autocompleteCacheKey({ query, originCoordinate }) {
   return [
+    'bulawayo',
     normalizeQuery(query).toLowerCase(),
     coordinateKey(originCoordinate),
   ].join('|');
 }
 
 function detailsCacheKey(placeId) {
-  return String(placeId || '').trim();
+  return ['bulawayo', String(placeId || '').trim()].join('|');
 }
 
 function toPlaceId(item) {
@@ -214,16 +226,15 @@ export async function fetchCachedOsmPlaceAutocomplete({
       limit: '6',
       countrycodes: 'zw',
       namedetails: '1',
+      viewbox: BULAWAYO_VIEWBOX,
+      bounded: '1',
     });
-    if (normalizedOrigin) {
-      params.set('viewbox', `${normalizedOrigin.longitude - 0.3},${normalizedOrigin.latitude + 0.3},${normalizedOrigin.longitude + 0.3},${normalizedOrigin.latitude - 0.3}`);
-      params.set('bounded', '0');
-    }
 
     const payload = await fetchJson(`${baseUrl}/search?${params.toString()}`);
     const suggestions = (Array.isArray(payload) ? payload : [])
-      .slice(0, 6)
-      .map((item, index) => mapSearchResult(item, index, normalizedQuery, normalizedOrigin));
+      .map((item, index) => mapSearchResult(item, index, normalizedQuery, normalizedOrigin))
+      .filter((suggestion) => isCoordinateInBulawayoServiceArea(suggestion.coordinate))
+      .slice(0, 6);
 
     setCached(autocompleteCache, cacheKey, suggestions);
     return suggestions;
@@ -243,7 +254,8 @@ export async function fetchCachedOsmPlaceDetails({
   placeId,
   cacheTtlSeconds,
 }) {
-  const normalizedPlaceId = detailsCacheKey(placeId);
+  const normalizedPlaceId = String(placeId || '').trim();
+  const cacheKey = detailsCacheKey(normalizedPlaceId);
 
   if (!normalizedPlaceId) {
     const error = new Error('placeId is required');
@@ -252,10 +264,13 @@ export async function fetchCachedOsmPlaceDetails({
   }
 
   const ttlMs = clampCacheTtlMs(cacheTtlSeconds, DEFAULT_DETAILS_CACHE_TTL_MS);
-  const cached = getCached(detailsCache, normalizedPlaceId, ttlMs);
-  if (cached) return { place: { ...cached, coordinate: { ...cached.coordinate } }, cacheHit: true };
+  const cached = getCached(detailsCache, cacheKey, ttlMs);
+  if (cached && isCoordinateInBulawayoServiceArea(cached.coordinate)) {
+    return { place: { ...cached, coordinate: { ...cached.coordinate } }, cacheHit: true };
+  }
+  if (cached) detailsCache.delete(cacheKey);
 
-  const inFlightKey = `details|${normalizedPlaceId}`;
+  const inFlightKey = `details|${cacheKey}`;
   if (inFlightRequests.has(inFlightKey)) {
     const place = await inFlightRequests.get(inFlightKey);
     return { place: { ...place, coordinate: { ...place.coordinate } }, cacheHit: true };
@@ -279,8 +294,13 @@ export async function fetchCachedOsmPlaceDetails({
       error.status = 502;
       throw error;
     }
+    if (!isCoordinateInBulawayoServiceArea(place.coordinate)) {
+      const error = new Error('That place is outside the Bulawayo service area');
+      error.status = 422;
+      throw error;
+    }
 
-    setCached(detailsCache, normalizedPlaceId, place);
+    setCached(detailsCache, cacheKey, place);
     return place;
   })();
 

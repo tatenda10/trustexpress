@@ -34,7 +34,8 @@
     "db:migrate:ride-route-actuals": "node scripts/run-migration.js sql/migrations/021_add_ride_route_and_actuals.sql",
     "recovery:sync-users": "node scripts/sync-clerk-users-to-db.js",
     "recovery:mark-drivers-verified": "node scripts/mark-all-drivers-verified.js",
-    "drivers:docs:list": "node scripts/list-driver-document-submissions.js"
+    "drivers:docs:list": "node scripts/list-driver-document-submissions.js",
+    "contacts:export": "node scripts/export-user-contacts-to-excel.js"
   },
   "author": "",
   "license": "ISC",

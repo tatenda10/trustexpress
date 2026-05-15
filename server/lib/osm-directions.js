@@ -30,6 +30,7 @@ function clampPrecision(value) {
 
 function clampCacheTtlMs(value) {
   const ttlSeconds = Number(value);
+  if (Number.isFinite(ttlSeconds) && ttlSeconds <= 0) return 0;
   if (!Number.isFinite(ttlSeconds)) return DEFAULT_CACHE_TTL_MS;
   return Math.min(Math.max(ttlSeconds * 1000, 60 * 1000), 24 * 60 * 60 * 1000);
 }
@@ -152,11 +153,12 @@ export async function fetchCachedOsmDirections({
     includeTraffic,
     cachePrecision,
   });
-  const cached = routeCache.get(cacheKey);
-  if (cached && (Date.now() - cached.createdAt) < ttlMs) {
+  const useCache = ttlMs > 0;
+  const cached = useCache ? routeCache.get(cacheKey) : null;
+  if (useCache && cached && (Date.now() - cached.createdAt) < ttlMs) {
     return { ...cloneRoute(cached.route), cacheHit: true };
   }
-  if (cached) routeCache.delete(cacheKey);
+  if (cached || !useCache) routeCache.delete(cacheKey);
 
   if (inFlightRequests.has(cacheKey)) {
     const route = await inFlightRequests.get(cacheKey);
@@ -208,8 +210,10 @@ export async function fetchCachedOsmDirections({
       includeTraffic: false,
     };
 
-    routeCache.set(cacheKey, { createdAt: Date.now(), route });
-    pruneCache();
+    if (useCache) {
+      routeCache.set(cacheKey, { createdAt: Date.now(), route });
+      pruneCache();
+    }
 
     return route;
   })();
