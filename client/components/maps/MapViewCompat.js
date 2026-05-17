@@ -111,6 +111,26 @@ function buildLineFeature(coordinates = []) {
   };
 }
 
+function coordinateRenderKey(coordinate) {
+  const lngLat = coordinateToLngLat(coordinate);
+  if (!lngLat) return 'none';
+  return `${lngLat[0].toFixed(6)},${lngLat[1].toFixed(6)}`;
+}
+
+function coordinatesRenderKey(coordinates = []) {
+  const points = coordinates.map(coordinateToLngLat).filter(Boolean);
+  if (!points.length) return 'empty';
+  const first = points[0];
+  const last = points[points.length - 1];
+  return [
+    points.length,
+    first[0].toFixed(6),
+    first[1].toFixed(6),
+    last[0].toFixed(6),
+    last[1].toFixed(6),
+  ].join(':');
+}
+
 function DefaultMarkerPin({ pinColor = '#2563eb' }) {
   return (
     <View collapsable={false} style={styles.defaultMarkerWrap}>
@@ -131,6 +151,7 @@ function CompatMarker({
 
   return (
     <MapLibreMarker
+      key={coordinateRenderKey(coordinate)}
       anchor="center"
       lngLat={lngLat}
       onPress={onPress}
@@ -149,11 +170,13 @@ function CompatPolyline({
 }) {
   const context = useContext(MapCompatContext);
   const feature = useMemo(() => buildLineFeature(coordinates), [coordinates]);
+  const renderKey = useMemo(() => coordinatesRenderKey(coordinates), [coordinates]);
   const id = useId().replace(/:/g, '');
   if (!context || !feature) return null;
 
   return (
     <GeoJSONSource
+      key={renderKey}
       id={`trustcars-polyline-source-${id}`}
       data={{
         type: 'FeatureCollection',

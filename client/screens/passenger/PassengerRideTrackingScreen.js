@@ -240,11 +240,20 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           if (!active || Number(payload.rideRequestId) !== Number(rideRequestId)) return;
           const nextStatus = String(payload.status || '').toLowerCase();
           const nextStage = mapRideStatusToStage(nextStatus);
-          if (nextStatus) {
+          const nextDriverCoordinate = payload?.driverCoordinate &&
+            Number.isFinite(Number(payload.driverCoordinate.latitude)) &&
+            Number.isFinite(Number(payload.driverCoordinate.longitude))
+            ? {
+                latitude: Number(payload.driverCoordinate.latitude),
+                longitude: Number(payload.driverCoordinate.longitude),
+              }
+            : null;
+          if (nextStatus || nextDriverCoordinate) {
             setRideStatus((current) => (current ? {
               ...current,
-              status: nextStatus,
+              ...(nextStatus ? { status: nextStatus } : null),
               stage: nextStage || current.stage,
+              ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
               ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
               ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
             } : current));
