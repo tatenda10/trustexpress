@@ -9,7 +9,7 @@ import * as Speech from 'expo-speech';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
-import { BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
+import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 
@@ -677,7 +677,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={trackingRegion}
-          maxBounds={BULAWAYO_SERVICE_BOUNDS_ARRAY}
+          maxBounds={BULAWAYO_GEO_LOCK_ENABLED ? BULAWAYO_SERVICE_BOUNDS_ARRAY : undefined}
           showsCompass={false}
           toolbarEnabled={false}
           onRegionChangeComplete={handleMapRegionChangeComplete}

@@ -1,4 +1,5 @@
 import {
+  BULAWAYO_GEO_LOCK_ENABLED,
   BULAWAYO_SERVICE_BOUNDS,
   isCoordinateInBulawayoServiceArea,
 } from './service-area.js';
@@ -92,14 +93,14 @@ function setCached(cache, key, value) {
 
 function autocompleteCacheKey({ query, originCoordinate }) {
   return [
-    'bulawayo',
+    BULAWAYO_GEO_LOCK_ENABLED ? 'bulawayo' : 'unbounded',
     normalizeQuery(query).toLowerCase(),
     coordinateKey(originCoordinate),
   ].join('|');
 }
 
 function detailsCacheKey(placeId) {
-  return ['bulawayo', String(placeId || '').trim()].join('|');
+  return [BULAWAYO_GEO_LOCK_ENABLED ? 'bulawayo' : 'unbounded', String(placeId || '').trim()].join('|');
 }
 
 function toPlaceId(item) {
@@ -226,9 +227,14 @@ export async function fetchCachedOsmPlaceAutocomplete({
       limit: '6',
       countrycodes: 'zw',
       namedetails: '1',
-      viewbox: BULAWAYO_VIEWBOX,
-      bounded: '1',
     });
+    if (BULAWAYO_GEO_LOCK_ENABLED) {
+      params.set('viewbox', BULAWAYO_VIEWBOX);
+      params.set('bounded', '1');
+    } else if (normalizedOrigin) {
+      params.set('viewbox', `${normalizedOrigin.longitude - 0.3},${normalizedOrigin.latitude + 0.3},${normalizedOrigin.longitude + 0.3},${normalizedOrigin.latitude - 0.3}`);
+      params.set('bounded', '0');
+    }
 
     const payload = await fetchJson(`${baseUrl}/search?${params.toString()}`);
     const suggestions = (Array.isArray(payload) ? payload : [])

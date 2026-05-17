@@ -351,6 +351,27 @@ router.post('/availability', requireAuth, async (req, res) => {
       ]
     );
 
+    if (isOnline && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      const [activeRide] = await query(
+        `SELECT id, passenger_user_id, status
+         FROM ride_requests
+         WHERE driver_user_id = ?
+           AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+         ORDER BY COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC, id DESC
+         LIMIT 1`,
+        [req.userId]
+      );
+
+      if (activeRide?.passenger_user_id) {
+        emitRideStatusToPassenger(activeRide.passenger_user_id, {
+          rideRequestId: activeRide.id,
+          status: activeRide.status,
+          driverUserId: req.userId,
+          driverCoordinate: { latitude, longitude },
+        });
+      }
+    }
+
     return res.json({
       isOnline,
       latitude: Number.isFinite(latitude) ? latitude : null,

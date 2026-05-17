@@ -21,6 +21,7 @@ import * as Location from 'expo-location';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import {
+  BULAWAYO_GEO_LOCK_ENABLED,
   BULAWAYO_DEFAULT_REGION,
   BULAWAYO_SERVICE_BOUNDS_ARRAY,
   BULAWAYO_CENTER_COORDINATE,
@@ -754,7 +755,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={mapRegion}
-          maxBounds={BULAWAYO_SERVICE_BOUNDS_ARRAY}
+          maxBounds={BULAWAYO_GEO_LOCK_ENABLED ? BULAWAYO_SERVICE_BOUNDS_ARRAY : undefined}
           onPress={handleMapPress}
           showsCompass={false}
           toolbarEnabled={false}

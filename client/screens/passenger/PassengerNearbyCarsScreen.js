@@ -25,7 +25,7 @@ import {
 } from '../../api';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
+import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { connectRealtime } from '../../realtime';
 
 const REQUEST_EXPIRY_POLL_MS = 1000;
@@ -398,7 +398,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             latitudeDelta: 0.08,
             longitudeDelta: 0.08,
           }}
-          maxBounds={BULAWAYO_SERVICE_BOUNDS_ARRAY}
+          maxBounds={BULAWAYO_GEO_LOCK_ENABLED ? BULAWAYO_SERVICE_BOUNDS_ARRAY : undefined}
           showsCompass={false}
           toolbarEnabled={false}
           rotateEnabled={false}

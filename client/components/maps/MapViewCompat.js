@@ -289,9 +289,10 @@ const MapView = forwardRef(function MapView(
     if (!readyRef.current || !safeRegion) return;
     if (areRegionsClose(lastRegionRef.current, safeRegion)) return;
     lastRegionRef.current = safeRegion;
-    cameraRef.current?.jumpTo({
+    cameraRef.current?.easeTo({
       center: [safeRegion.longitude, safeRegion.latitude],
       zoom: regionToZoom(safeRegion),
+      duration: 450,
     });
   }, [region]);
 

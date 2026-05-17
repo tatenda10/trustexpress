@@ -161,6 +161,7 @@ export function DriverTripMapPanel({
         ref={mapRef}
         style={{ flex: 1 }}
         initialRegion={mapRegion}
+        region={mapRegion}
         onMapReady={onMapReady}
         showsCompass={false}
         toolbarEnabled={false}

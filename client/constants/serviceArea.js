@@ -5,6 +5,9 @@ export const BULAWAYO_SERVICE_BOUNDS = {
   north: -19.82,
 };
 
+export const BULAWAYO_GEO_LOCK_ENABLED =
+  String(process.env.EXPO_PUBLIC_ENABLE_BULAWAYO_GEO_LOCK ?? 'true').toLowerCase() !== 'false';
+
 export const BULAWAYO_SERVICE_BOUNDS_ARRAY = [
   BULAWAYO_SERVICE_BOUNDS.west,
   BULAWAYO_SERVICE_BOUNDS.south,
@@ -24,6 +27,8 @@ export const BULAWAYO_DEFAULT_REGION = {
 };
 
 export function isCoordinateInBulawayoServiceArea(coordinate) {
+  if (!BULAWAYO_GEO_LOCK_ENABLED) return true;
+
   const latitude = Number(coordinate?.latitude);
   const longitude = Number(coordinate?.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
@@ -37,6 +42,8 @@ export function isCoordinateInBulawayoServiceArea(coordinate) {
 }
 
 export function filterBulawayoSuggestions(suggestions = []) {
+  if (!BULAWAYO_GEO_LOCK_ENABLED) return Array.isArray(suggestions) ? suggestions : [];
+
   return (Array.isArray(suggestions) ? suggestions : []).filter((suggestion) => {
     if (!suggestion?.coordinate) return true;
     return isCoordinateInBulawayoServiceArea(suggestion.coordinate);
