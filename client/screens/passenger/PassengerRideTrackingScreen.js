@@ -6,17 +6,18 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import * as Speech from 'expo-speech';
-import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
+import * as Location from 'expo-location';
+import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 
-const TRACKING_STATUS_REFRESH_MS = 5000;
+const TRACKING_STATUS_REFRESH_MS = 3000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
-const ROUTE_REFRESH_DISTANCE_METERS = 250;
-const ROUTE_REFRESH_MIN_INTERVAL_MS = 8000;
+const ROUTE_REFRESH_DISTANCE_METERS = 10;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
 const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 
 function mapRideStatusToStage(status) {
@@ -49,6 +50,57 @@ function calculateDistanceKm(start, end) {
   );
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadiusKm * c;
+}
+
+function normalizeCoordinate(value) {
+  const latitude = Number(value?.latitude);
+  const longitude = Number(value?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
+}
+
+function normalizeCoordinates(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(normalizeCoordinate).filter(Boolean);
+}
+
+function findNearestRouteIndex(routeCoordinates, coordinate) {
+  const safeCoordinate = normalizeCoordinate(coordinate);
+  const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
+  if (!safeCoordinate || !safeRouteCoordinates.length) return -1;
+
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  safeRouteCoordinates.forEach((routeCoordinate, index) => {
+    const distanceMeters = calculateDistanceKm(routeCoordinate, safeCoordinate) * 1000;
+    if (distanceMeters < nearestDistance) {
+      nearestDistance = distanceMeters;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+}
+
+function buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destination) {
+  const safeOrigin = normalizeCoordinate(origin);
+  const safeDestination = normalizeCoordinate(destination);
+  const safeRouteCoordinates = normalizeCoordinates(currentRouteCoordinates);
+  if (!safeOrigin || !safeDestination) return [];
+  if (safeRouteCoordinates.length < 2) return [safeOrigin, safeDestination];
+
+  const nearestIndex = findNearestRouteIndex(safeRouteCoordinates, safeOrigin);
+  const remainingRoute = nearestIndex >= 0
+    ? safeRouteCoordinates.slice(Math.min(nearestIndex + 1, safeRouteCoordinates.length - 1))
+    : [];
+  const lastRemaining = remainingRoute[remainingRoute.length - 1];
+  const shouldAppendDestination = !lastRemaining || calculateDistanceKm(lastRemaining, safeDestination) * 1000 > 5;
+
+  return [
+    safeOrigin,
+    ...remainingRoute,
+    ...(shouldAppendDestination ? [safeDestination] : []),
+  ];
 }
 
 function formatCountdown(totalSeconds) {
@@ -161,6 +213,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [lostItemDescription, setLostItemDescription] = useState('');
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
   const [submittingLostItem, setSubmittingLostItem] = useState(false);
+  const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
   const bottomActionInset = Math.max(insets.bottom + tabBarHeight - 8, 20);
@@ -366,6 +419,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
       routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
+      setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, activeTarget));
       return undefined;
     }
 
@@ -375,6 +429,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     lastRouteOriginRef.current = driverCoordinate;
     lastRouteTargetRef.current = activeTarget;
     lastRouteFetchedAtRef.current = Date.now();
+    setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, activeTarget));
 
     const loadDirections = async () => {
       try {
@@ -661,6 +716,57 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     }
   };
 
+  const handleSendPanicAlert = () => {
+    Alert.alert(
+      'Send panic alert?',
+      'This will send your active ride details to admin immediately.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send alert',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setSubmittingPanicAlert(true);
+              const token = await getToken();
+              if (!token || !rideRequestId) throw new Error('Not signed in');
+
+              let currentCoordinate = null;
+              try {
+                const permission = await Location.getForegroundPermissionsAsync();
+                if (permission?.granted) {
+                  const position = await Location.getCurrentPositionAsync({
+                    accuracy: Location.Accuracy.Balanced,
+                  });
+                  if (position?.coords) {
+                    currentCoordinate = {
+                      latitude: Number(position.coords.latitude),
+                      longitude: Number(position.coords.longitude),
+                    };
+                  }
+                }
+              } catch {
+                // If device location is unavailable, still send the ride-linked alert.
+              }
+
+              await sendRidePanicAlert(token, rideRequestId, {
+                alertStage: stage,
+                message: 'Passenger used the panic button during an active ride.',
+                latitude: currentCoordinate?.latitude,
+                longitude: currentCoordinate?.longitude,
+              });
+              Alert.alert('Alert sent', 'Admin has been notified about this ride.');
+            } catch (error) {
+              Alert.alert('Alert failed', error?.message || 'Could not send the panic alert.');
+            } finally {
+              setSubmittingPanicAlert(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   if (loading) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
@@ -718,9 +824,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           style={{ bottom: collapsedSheetHeight + bottomActionInset + 24 }}
         >
           <TouchableOpacity
+            onPress={handleSendPanicAlert}
+            disabled={submittingPanicAlert}
+            activeOpacity={0.85}
+            className="h-14 w-14 items-center justify-center rounded-[20px] bg-[#dc2626]"
+            style={{ opacity: submittingPanicAlert ? 0.7 : 1 }}
+          >
+            {submittingPanicAlert ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="warning" size={24} color="#fff" />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
             onPress={() => handleAdjustMapZoom(0.6)}
             activeOpacity={0.85}
-            className="h-14 w-14 items-center justify-center rounded-[20px] bg-white"
+            className="mt-3 h-14 w-14 items-center justify-center rounded-[20px] bg-white"
           >
             <Ionicons name="add" size={26} color="#111827" />
           </TouchableOpacity>

@@ -80,6 +80,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         ...current,
         passengerDriverRating: rating,
         passengerDriverReview: review,
+        canRateDriver: false,
       } : current);
       Alert.alert('Thanks', 'Your rating was saved.');
     } catch (error) {

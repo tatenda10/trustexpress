@@ -19,6 +19,12 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString()
 }
 
+function formatRating(value, review) {
+  if (value === null || value === undefined) return '-'
+  const ratingText = `${Number(value).toFixed(1)} / 5`
+  return review ? `${ratingText} - ${review}` : ratingText
+}
+
 function coalesceNumber(...values) {
   for (const value of values) {
     if (value !== null && value !== undefined) {
@@ -76,6 +82,8 @@ export default function RideOperationDetailPage() {
   const { rideId } = useParams()
   const { token } = useAuth()
   const [ride, setRide] = useState(null)
+  const [lostItems, setLostItems] = useState([])
+  const [panicAlerts, setPanicAlerts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const fromDriverId = location.state?.fromDriverId || ''
@@ -94,6 +102,8 @@ export default function RideOperationDetailPage() {
         })
         if (!active) return
         setRide(data.ride || null)
+        setLostItems(Array.isArray(data.lostItems) ? data.lostItems : [])
+        setPanicAlerts(Array.isArray(data.panicAlerts) ? data.panicAlerts : [])
       } catch (err) {
         if (!active) return
         setError(err?.response?.data?.error || err?.message || 'Failed to load ride details')
@@ -222,6 +232,8 @@ export default function RideOperationDetailPage() {
               <DetailField label="Fare" value={`$${Number(ride.estimatedAmount || 0).toFixed(2)}`} />
               <DetailField label="Estimated Distance" value={`${Number(ride.estimatedDistanceKm || 0).toFixed(1)} km`} />
               <DetailField label="Estimated Time" value={`${Number(ride.estimatedMinutes || 0)} min`} />
+              <DetailField label="Driver Rating" value={formatRating(ride.passengerDriverRating, ride.passengerDriverReview)} />
+              <DetailField label="Passenger Rating" value={formatRating(ride.driverPassengerRating, ride.driverPassengerReview)} />
               <DetailField label="Requested At" value={formatDateTime(ride.requestedAt)} />
               <DetailField label="Assigned At" value={formatDateTime(ride.assignedAt)} />
               <DetailField label="Arrived At" value={formatDateTime(ride.arrivedAt)} />
@@ -236,6 +248,57 @@ export default function RideOperationDetailPage() {
                 <p className="mt-1 text-sm text-slate-700">{ride.cancellationReason}</p>
               </div>
             ) : null}
+
+            <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Panic Alerts</p>
+                <span className="text-xs font-semibold text-slate-600">{panicAlerts.length}</span>
+              </div>
+              {panicAlerts.length ? (
+                <div className="mt-3 space-y-3">
+                  {panicAlerts.map((alert) => (
+                    <div key={alert.id} className="border border-rose-200 bg-white px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">{alert.actorName || alert.actorRole}</p>
+                        <span className="inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium uppercase text-rose-700 ring-1 ring-rose-200">
+                          {alert.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">{formatDateTime(alert.createdAt)}</p>
+                      <p className="mt-2 text-sm text-slate-700">{alert.message || 'Panic alert sent.'}</p>
+                      <p className="mt-2 text-xs text-slate-500">
+                        Stage: {alert.alertStage || '-'} {alert.latitude !== null && alert.longitude !== null ? `- ${alert.latitude}, ${alert.longitude}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No panic alerts recorded for this ride.</p>
+              )}
+            </div>
+
+            <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Lost Items</p>
+                <span className="text-xs font-semibold text-slate-600">{lostItems.length}</span>
+              </div>
+              {lostItems.length ? (
+                <div className="mt-3 space-y-3">
+                  {lostItems.map((item) => (
+                    <div key={item.id} className="border border-amber-200 bg-white px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">{item.status}</p>
+                        <span className="text-xs text-slate-500">{formatDateTime(item.createdAt)}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-700">{item.itemDescription}</p>
+                      <p className="mt-2 text-xs text-slate-500">Contact: {item.contactPhone || '-'}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No lost item reports for this ride.</p>
+              )}
+            </div>
           </div>
         </div>
       </div>

@@ -353,6 +353,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   }, []);
 
   useEffect(() => {
+    if (!isFocused) return;
     if (!currentRide?.id) {
       forwardedRideIdRef.current = null;
       return;
@@ -363,8 +364,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
     if (forwardedRideIdRef.current === currentRide.id) return;
 
     forwardedRideIdRef.current = currentRide.id;
-    navigation.navigate('DriverTrip');
-  }, [currentRide?.id, navigation]);
+    navigation.navigate('DriverTrip', { initialRide: currentRide });
+  }, [currentRide, isFocused, navigation]);
 
   // One-time prompt: ask driver to enable sound/vibration for ride request alerts
   useEffect(() => {
@@ -1455,7 +1456,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
               </Text>
 
               <TouchableOpacity
-                onPress={() => navigation.navigate('DriverTrip')}
+                onPress={() => navigation.navigate('DriverTrip', { initialRide: currentRide })}
                 className="mt-5 h-14 items-center justify-center rounded-[20px]"
                 style={{ backgroundColor: PRIMARY_BLUE }}
               >

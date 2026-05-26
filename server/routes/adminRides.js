@@ -85,24 +85,38 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
     const offset = (page - 1) * pageSize;
     const { whereSql, params } = buildRideFilters(req);
 
-    const [rows, summaryRows, countRows] = await Promise.all([
+    const [rows, summaryRows, countRows, panicAlertRows, lostItemRows] = await Promise.all([
       query(
         `SELECT
-          id,
-          public_id,
-          passenger_name,
-          driver_name,
-          pickup_label,
-          dropoff_label,
-          estimated_amount,
-          status,
-          requested_tier_name,
-          requested_at,
-          completed_at,
-          cancelled_at
-        FROM ride_requests
+          rr.id,
+          rr.public_id,
+          rr.passenger_name,
+          rr.driver_name,
+          rr.pickup_label,
+          rr.dropoff_label,
+          rr.estimated_amount,
+          rr.status,
+          rr.requested_tier_name,
+          rr.requested_at,
+          rr.completed_at,
+          rr.cancelled_at,
+          COALESCE(li.open_lost_items, 0) AS open_lost_items,
+          COALESCE(pa.open_panic_alerts, 0) AS open_panic_alerts
+        FROM ride_requests rr
+        LEFT JOIN (
+          SELECT ride_request_id, COUNT(*) AS open_lost_items
+          FROM ride_lost_items
+          WHERE status IN ('open', 'contacted')
+          GROUP BY ride_request_id
+        ) li ON li.ride_request_id = rr.id
+        LEFT JOIN (
+          SELECT ride_request_id, COUNT(*) AS open_panic_alerts
+          FROM ride_panic_alerts
+          WHERE status = 'open'
+          GROUP BY ride_request_id
+        ) pa ON pa.ride_request_id = rr.id
         ${whereSql}
-        ORDER BY requested_at DESC, id DESC
+        ORDER BY rr.requested_at DESC, rr.id DESC
         LIMIT ${pageSize} OFFSET ${offset}`,
         params
       ),
@@ -119,6 +133,16 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
          ${whereSql}`,
         params
       ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM ride_panic_alerts
+         WHERE status = 'open'`
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM ride_lost_items
+         WHERE status IN ('open', 'contacted')`
+      ),
     ]);
 
     const summary = {
@@ -126,6 +150,8 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
       completed: 0,
       cancelled: 0,
       requested: 0,
+      panicAlerts: Number(panicAlertRows?.[0]?.total || 0),
+      lostItems: Number(lostItemRows?.[0]?.total || 0),
     };
 
     for (const row of summaryRows) {
@@ -153,6 +179,8 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
         status: mapRideStatus(row.status),
         rawStatus: row.status,
         tierName: row.requested_tier_name,
+        openLostItems: Number(row.open_lost_items || 0),
+        openPanicAlerts: Number(row.open_panic_alerts || 0),
         requestedAt: row.requested_at,
         completedAt: row.completed_at,
         cancelledAt: row.cancelled_at,
@@ -401,8 +429,9 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
       return res.status(400).json({ error: 'Invalid ride id' });
     }
 
-    const [row] = await query(
-      `SELECT
+    const [rideRows, lostItems, panicAlerts] = await Promise.all([
+      query(
+        `SELECT
         id,
         public_id,
         passenger_user_id,
@@ -433,12 +462,55 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         actual_distance_km,
         actual_minutes,
         cancelled_at,
-        cancellation_reason
+        cancellation_reason,
+        passenger_driver_rating,
+        passenger_driver_review,
+        passenger_driver_rated_at,
+        driver_passenger_rating,
+        driver_passenger_review,
+        driver_passenger_rated_at
       FROM ride_requests
       WHERE public_id = ? OR id = ?
       LIMIT 1`,
-      [rideId, Number(rideId) || -1]
-    );
+        [rideId, Number(rideId) || -1]
+      ),
+      query(
+        `SELECT
+           id,
+           item_description,
+           contact_phone,
+           status,
+           admin_note,
+           created_at,
+           updated_at
+         FROM ride_lost_items
+         WHERE ride_public_id = ? OR ride_request_id = ?
+         ORDER BY created_at DESC, id DESC`,
+        [rideId, Number(rideId) || -1]
+      ),
+      query(
+        `SELECT
+           id,
+           actor_role,
+           actor_user_id,
+           actor_name,
+           ride_status,
+           alert_stage,
+           message,
+           latitude,
+           longitude,
+           status,
+           admin_note,
+           created_at,
+           updated_at
+         FROM ride_panic_alerts
+         WHERE ride_public_id = ? OR ride_request_id = ?
+         ORDER BY created_at DESC, id DESC`,
+        [rideId, Number(rideId) || -1]
+      ),
+    ]);
+
+    const row = rideRows?.[0];
 
     if (!row) {
       return res.status(404).json({ error: 'Ride not found' });
@@ -478,7 +550,37 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         actualMinutes: row.actual_minutes === null ? null : Number(row.actual_minutes),
         cancelledAt: row.cancelled_at || null,
         cancellationReason: row.cancellation_reason || null,
+        passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
+        passengerDriverReview: row.passenger_driver_review || '',
+        passengerDriverRatedAt: row.passenger_driver_rated_at || null,
+        driverPassengerRating: row.driver_passenger_rating === null ? null : Number(row.driver_passenger_rating),
+        driverPassengerReview: row.driver_passenger_review || '',
+        driverPassengerRatedAt: row.driver_passenger_rated_at || null,
       },
+      lostItems: (lostItems || []).map((item) => ({
+        id: item.id,
+        itemDescription: item.item_description,
+        contactPhone: item.contact_phone || null,
+        status: item.status,
+        adminNote: item.admin_note || null,
+        createdAt: item.created_at || null,
+        updatedAt: item.updated_at || null,
+      })),
+      panicAlerts: (panicAlerts || []).map((alert) => ({
+        id: alert.id,
+        actorRole: alert.actor_role,
+        actorUserId: alert.actor_user_id,
+        actorName: alert.actor_name || null,
+        rideStatus: alert.ride_status,
+        alertStage: alert.alert_stage || null,
+        message: alert.message || null,
+        latitude: alert.latitude === null ? null : Number(alert.latitude),
+        longitude: alert.longitude === null ? null : Number(alert.longitude),
+        status: alert.status,
+        adminNote: alert.admin_note || null,
+        createdAt: alert.created_at || null,
+        updatedAt: alert.updated_at || null,
+      })),
     });
   } catch (err) {
     console.error('GET /api/admin/rides/:rideId', err);

@@ -13,6 +13,7 @@ import {
   getDriverCurrentRide,
   markDriverCurrentRideArrived,
   resolveUploadedMediaUrl,
+  sendRidePanicAlert,
   startDriverCurrentRide,
   submitDriverPassengerRating,
   updateDriverAvailability,
@@ -27,10 +28,10 @@ import {
   DriverTripReceiptView,
 } from './components/DriverTripComponents';
 
-const ROUTE_REFRESH_DISTANCE_METERS = 250;
-const ROUTE_REFRESH_MIN_INTERVAL_MS = 8000;
-const LOCATION_UPDATE_DISTANCE_METERS = 15;
-const LOCATION_UPDATE_INTERVAL_MS = 8000;
+const ROUTE_REFRESH_DISTANCE_METERS = 10;
+const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
+const LOCATION_UPDATE_DISTANCE_METERS = 1;
+const LOCATION_UPDATE_INTERVAL_MS = 1000;
 const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
 const AUTO_ARRIVAL_STABLE_MS = 3500;
@@ -41,6 +42,9 @@ const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
 const FALLBACK_DRIVER_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 const DEFAULT_LAT_DELTA = 0.03;
 const DEFAULT_LNG_DELTA = 0.03;
+const DRIVER_FOLLOW_LAT_DELTA = 0.012;
+const DRIVER_FOLLOW_LNG_DELTA = 0.012;
+const SERVER_DRIVER_COORDINATE_FALLBACK_MS = Math.max(LOCATION_UPDATE_INTERVAL_MS * 2, 15000);
 const SPEECH_MIN_INTERVAL_MS = 3500;
 const SPEECH_STABILIZE_MS = 900;
 const SPEECH_MIN_CHARS = 8;
@@ -160,6 +164,57 @@ function buildRegionFromCoordinates(coordinates) {
   };
 }
 
+function buildDriverFollowRegion(driverCoordinate, fallbackCoordinate) {
+  const safeDriverCoordinate = normalizeCoordinate(driverCoordinate);
+  const safeFallbackCoordinate = normalizeCoordinate(fallbackCoordinate) || FALLBACK_DRIVER_COORDINATE;
+  const center = safeDriverCoordinate || safeFallbackCoordinate;
+
+  return {
+    latitude: center.latitude,
+    longitude: center.longitude,
+    latitudeDelta: DRIVER_FOLLOW_LAT_DELTA,
+    longitudeDelta: DRIVER_FOLLOW_LNG_DELTA,
+  };
+}
+
+function findNearestRouteIndex(routeCoordinates, coordinate) {
+  const safeCoordinate = normalizeCoordinate(coordinate);
+  const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
+  if (!safeCoordinate || !safeRouteCoordinates.length) return -1;
+
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  safeRouteCoordinates.forEach((routeCoordinate, index) => {
+    const distanceMeters = calculateDistanceKm(routeCoordinate, safeCoordinate) * 1000;
+    if (distanceMeters < nearestDistance) {
+      nearestDistance = distanceMeters;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+}
+
+function buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destination) {
+  const safeOrigin = normalizeCoordinate(origin);
+  const safeDestination = normalizeCoordinate(destination);
+  const safeRouteCoordinates = normalizeCoordinates(currentRouteCoordinates);
+  if (!safeOrigin || !safeDestination) return [];
+  if (safeRouteCoordinates.length < 2) return [safeOrigin, safeDestination];
+
+  const nearestIndex = findNearestRouteIndex(safeRouteCoordinates, safeOrigin);
+  const remainingRoute = nearestIndex >= 0
+    ? safeRouteCoordinates.slice(Math.min(nearestIndex + 1, safeRouteCoordinates.length - 1))
+    : [];
+  const lastRemaining = remainingRoute[remainingRoute.length - 1];
+  const shouldAppendDestination = !lastRemaining || calculateDistanceKm(lastRemaining, safeDestination) * 1000 > 5;
+
+  return [
+    safeOrigin,
+    ...remainingRoute,
+    ...(shouldAppendDestination ? [safeDestination] : []),
+  ];
+}
+
 function getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate) {
   const safeDriverCoordinate = normalizeCoordinate(driverCoordinate);
   const safeTargetCoordinate = normalizeCoordinate(targetCoordinate);
@@ -234,7 +289,7 @@ async function fetchTripDirections(token, origin, destination) {
   };
 }
 
-export default function DriverTripScreen({ navigation }) {
+export default function DriverTripScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -257,8 +312,10 @@ export default function DriverTripScreen({ navigation }) {
   const speechDebounceTimeoutRef = useRef(null);
   const autoArrivalTimerRef = useRef(null);
   const autoArrivalRideIdRef = useRef(null);
-  const [ride, setRide] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const lastLocalLocationAtRef = useRef(0);
+  const initialRide = route?.params?.initialRide || null;
+  const [ride, setRide] = useState(() => initialRide);
+  const [loading, setLoading] = useState(() => !initialRide);
   const [submitting, setSubmitting] = useState(false);
   const [cancellingRide, setCancellingRide] = useState(false);
   const [voiceGuidanceEnabled, setVoiceGuidanceEnabled] = useState(true);
@@ -276,6 +333,7 @@ export default function DriverTripScreen({ navigation }) {
   const [passengerRating, setPassengerRating] = useState(0);
   const [passengerReview, setPassengerReview] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
+  const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
 
   const exitPassengerRatingFlow = useCallback(() => {
     setShowPassengerRating(false);
@@ -301,6 +359,13 @@ export default function DriverTripScreen({ navigation }) {
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    const nextRide = route?.params?.initialRide || null;
+    if (!nextRide?.id) return;
+    setRide((current) => (Number(current?.id || 0) === Number(nextRide.id || 0) ? current : nextRide));
+    setLoading(false);
+  }, [route?.params?.initialRide]);
 
   const stopDriverVoice = useCallback(() => {
     if (speechDebounceTimeoutRef.current) {
@@ -351,8 +416,17 @@ export default function DriverTripScreen({ navigation }) {
           setRide(data?.ride || null);
         }
         const safeDriverCoordinate = normalizeCoordinate(data?.ride?.driverCoordinate);
-        if (safeDriverCoordinate) {
+        const hasRecentLocalLocation = (
+          lastLocalLocationAtRef.current > 0 &&
+          Date.now() - lastLocalLocationAtRef.current < SERVER_DRIVER_COORDINATE_FALLBACK_MS
+        );
+        if (safeDriverCoordinate && !hasRecentLocalLocation) {
           setLiveDriverCoordinate(safeDriverCoordinate);
+        } else if (safeDriverCoordinate) {
+          console.log(TRIP_DEBUG_PREFIX, 'skipping stale server driver coordinate because local GPS is fresh', {
+            ageMs: Date.now() - lastLocalLocationAtRef.current,
+            serverCoordinate: safeDriverCoordinate,
+          });
         }
       } catch (error) {
         console.log(TRIP_DEBUG_PREFIX, 'loadRide failed', {
@@ -525,6 +599,7 @@ export default function DriverTripScreen({ navigation }) {
             longitude: currentPosition.coords.longitude,
           });
           if (!currentCoordinate) return;
+          lastLocalLocationAtRef.current = Date.now();
           setLiveDriverCoordinate(currentCoordinate);
           try {
             const token = await getTokenRef.current();
@@ -563,6 +638,7 @@ export default function DriverTripScreen({ navigation }) {
             if (!nextCoordinate) return;
 
             console.log(TRIP_DEBUG_PREFIX, 'location watcher update', nextCoordinate);
+            lastLocalLocationAtRef.current = Date.now();
             setLiveDriverCoordinate(nextCoordinate);
 
             try {
@@ -657,6 +733,7 @@ export default function DriverTripScreen({ navigation }) {
       movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
       routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
+      setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, targetCoordinate));
       return undefined;
     }
 
@@ -666,6 +743,7 @@ export default function DriverTripScreen({ navigation }) {
     lastRouteOriginRef.current = driverCoordinate;
     lastRouteTargetRef.current = targetCoordinate;
     lastRouteFetchedAtRef.current = Date.now();
+    setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, targetCoordinate));
 
     const loadDirections = async () => {
       try {
@@ -706,7 +784,7 @@ export default function DriverTripScreen({ navigation }) {
   }, [driverCoordinate, ride?.stage, routeCoordinates.length, targetCoordinate]);
 
   useEffect(() => {
-    const nextRegion = buildRegionFromCoordinates([driverCoordinate, targetCoordinate].filter(Boolean));
+    const nextRegion = buildDriverFollowRegion(driverCoordinate, targetCoordinate);
     setMapRegion((current) => {
       const latChanged = Math.abs(Number(current?.latitude || 0) - Number(nextRegion.latitude || 0));
       const lngChanged = Math.abs(Number(current?.longitude || 0) - Number(nextRegion.longitude || 0));
@@ -714,8 +792,8 @@ export default function DriverTripScreen({ navigation }) {
       const lngDeltaChanged = Math.abs(Number(current?.longitudeDelta || 0) - Number(nextRegion.longitudeDelta || 0));
 
       if (
-        latChanged < 0.0001 &&
-        lngChanged < 0.0001 &&
+        latChanged < 0.00001 &&
+        lngChanged < 0.00001 &&
         latDeltaChanged < 0.0001 &&
         lngDeltaChanged < 0.0001
       ) {
@@ -959,6 +1037,29 @@ export default function DriverTripScreen({ navigation }) {
     exitPassengerRatingFlow();
   };
 
+  const handleSendPanicAlert = async () => {
+    try {
+      if (!ride?.id) return;
+      setSubmittingPanicAlert(true);
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      const currentCoordinate = normalizeCoordinate(liveDriverCoordinate)
+        || normalizeCoordinate(ride?.driverCoordinate)
+        || null;
+      await sendRidePanicAlert(token, ride.id, {
+        alertStage: ride?.stage || null,
+        message: 'Driver used the panic button during an active ride.',
+        latitude: currentCoordinate?.latitude,
+        longitude: currentCoordinate?.longitude,
+      });
+      Alert.alert('Alert sent', 'Admin has been notified about this ride.');
+    } catch (error) {
+      Alert.alert('Alert failed', error?.message || 'Could not send the panic alert.');
+    } finally {
+      setSubmittingPanicAlert(false);
+    }
+  };
+
   const handleToggleVoiceGuidance = async () => {
     const nextValue = !voiceGuidanceEnabled;
     setVoiceGuidanceEnabled(nextValue);
@@ -1105,6 +1206,7 @@ export default function DriverTripScreen({ navigation }) {
       onToggleVoiceGuidance={handleToggleVoiceGuidance}
       showCallPassenger={ride.stage === 'waiting_for_customer'}
       onCallPassenger={handleCallPassenger}
+      onSendPanicAlert={handleSendPanicAlert}
       onOpenChat={() => navigation.navigate('RideChat', {
         rideRequestId: ride.id,
         role: 'driver',
@@ -1135,6 +1237,7 @@ export default function DriverTripScreen({ navigation }) {
       onStartRide={handleStartRide}
       onCompleteRide={handleCompleteRide}
       onCancelRide={handleCancelRide}
+      submittingPanicAlert={submittingPanicAlert}
     />
   );
 }

@@ -14,7 +14,7 @@ function statusClass(status) {
 export default function RideOperationsPage() {
   const navigate = useNavigate()
   const { token } = useAuth()
-  const [summary, setSummary] = useState({ activeTrips: 0, completed: 0, cancelled: 0, requested: 0 })
+  const [summary, setSummary] = useState({ activeTrips: 0, completed: 0, cancelled: 0, requested: 0, panicAlerts: 0, lostItems: 0 })
   const [rides, setRides] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -51,7 +51,7 @@ export default function RideOperationsPage() {
           },
         })
         if (!active) return
-        setSummary(data.summary || { activeTrips: 0, completed: 0, cancelled: 0, requested: 0 })
+        setSummary(data.summary || { activeTrips: 0, completed: 0, cancelled: 0, requested: 0, panicAlerts: 0, lostItems: 0 })
         setRides(Array.isArray(data.rides) ? data.rides : [])
         setTotal(Number(data.total) || 0)
         setTotalPages(Math.max(Number(data.totalPages) || 1, 1))
@@ -86,7 +86,7 @@ export default function RideOperationsPage() {
         <p className="text-xs text-slate-500">Monitor requested rides, assigned drivers, completions, and cancellations.</p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <article className="border border-slate-300 bg-white p-3">
           <p className="text-[11px] uppercase tracking-wide text-slate-500">Active Trips</p>
           <p className="mt-1 text-xl font-semibold text-slate-900">{summary.activeTrips}</p>
@@ -102,6 +102,14 @@ export default function RideOperationsPage() {
         <article className="border border-slate-300 bg-white p-3">
           <p className="text-[11px] uppercase tracking-wide text-slate-500">Cancelled</p>
           <p className="mt-1 text-xl font-semibold text-slate-900">{summary.cancelled}</p>
+        </article>
+        <article className="border border-rose-200 bg-white p-3">
+          <p className="text-[11px] uppercase tracking-wide text-rose-500">Open Panic Alerts</p>
+          <p className="mt-1 text-xl font-semibold text-rose-700">{summary.panicAlerts}</p>
+        </article>
+        <article className="border border-amber-200 bg-white p-3">
+          <p className="text-[11px] uppercase tracking-wide text-amber-600">Open Lost Items</p>
+          <p className="mt-1 text-xl font-semibold text-amber-700">{summary.lostItems}</p>
         </article>
       </div>
 
@@ -163,6 +171,7 @@ export default function RideOperationsPage() {
               <th className="px-4 py-2 font-semibold">Route</th>
               <th className="px-4 py-2 font-semibold">Tier</th>
               <th className="px-4 py-2 font-semibold">Fare</th>
+              <th className="px-4 py-2 font-semibold">Safety</th>
               <th className="px-4 py-2 font-semibold">Status</th>
               <th className="rounded-tr-sm px-4 py-2 font-semibold text-right">Actions</th>
             </tr>
@@ -170,11 +179,11 @@ export default function RideOperationsPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-6 text-center text-slate-500">Loading rides...</td>
+                <td colSpan={9} className="px-4 py-6 text-center text-slate-500">Loading rides...</td>
               </tr>
             ) : rides.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-6 text-center text-slate-500">No ride activity yet.</td>
+                <td colSpan={9} className="px-4 py-6 text-center text-slate-500">No ride activity yet.</td>
               </tr>
             ) : (
               rides.map((row) => (
@@ -185,6 +194,21 @@ export default function RideOperationsPage() {
                   <td className="px-4 py-3 text-slate-700">{row.route}</td>
                   <td className="px-4 py-3 text-slate-700">{row.tierName}</td>
                   <td className="px-4 py-3 text-slate-700">{row.fare}</td>
+                  <td className="px-4 py-3 text-slate-700">
+                    <div className="flex flex-wrap gap-2">
+                      {row.openPanicAlerts > 0 ? (
+                        <span className="inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200">
+                          {row.openPanicAlerts} panic
+                        </span>
+                      ) : null}
+                      {row.openLostItems > 0 ? (
+                        <span className="inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200">
+                          {row.openLostItems} lost item
+                        </span>
+                      ) : null}
+                      {row.openPanicAlerts <= 0 && row.openLostItems <= 0 ? <span>-</span> : null}
+                    </div>
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass(row.status)}`}>
                       {row.status}

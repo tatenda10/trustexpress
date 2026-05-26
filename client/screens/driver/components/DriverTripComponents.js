@@ -131,6 +131,7 @@ export function DriverTripMapPanel({
   onToggleVoiceGuidance,
   showCallPassenger,
   onCallPassenger,
+  onSendPanicAlert,
   onOpenChat,
   onOpenExternalNavigation,
   tripPanelMaxHeight,
@@ -154,6 +155,7 @@ export function DriverTripMapPanel({
   onStartRide,
   onCompleteRide,
   onCancelRide,
+  submittingPanicAlert,
 }) {
   return (
     <View className="flex-1 bg-[#eef2f7]">
@@ -223,6 +225,17 @@ export function DriverTripMapPanel({
             <Ionicons name="call-outline" size={19} color="#15803d" />
           </TouchableOpacity>
         ) : null}
+        <TouchableOpacity
+          onPress={onSendPanicAlert}
+          activeOpacity={0.85}
+          className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-red-50"
+        >
+          {submittingPanicAlert ? (
+            <ActivityIndicator size="small" color="#dc2626" />
+          ) : (
+            <Ionicons name="warning-outline" size={19} color="#dc2626" />
+          )}
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={onOpenChat}
           activeOpacity={0.85}

@@ -361,6 +361,13 @@ export async function sendRideMessage(token, rideRequestId, message) {
   }, token);
 }
 
+export async function sendRidePanicAlert(token, rideRequestId, payload = {}) {
+  return apiFetch(`/api/rides/${rideRequestId}/panic-alert`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
 export async function getSupportThread(token) {
   return apiFetch('/api/users/support/thread', {}, token);
 }

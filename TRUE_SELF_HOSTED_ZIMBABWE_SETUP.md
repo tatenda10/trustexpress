@@ -1,72 +1,76 @@
 # True Self-Hosted Zimbabwe Map Setup
 
-This guide shows how to run a fully self-hosted Zimbabwe map stack for `TrustCars` using:
+This is the updated `TrustCars` runbook for deploying the full Zimbabwe self-hosted map stack on a fresh Linux server.
 
-- `OpenStreetMap` data for Zimbabwe
-- `OSRM` for routing
-- `Nominatim` for geocoding and place search
-- `MapLibre` in the app/admin for rendering
-- optional self-hosted tiles later
+It is written to avoid the exact problems we hit last time:
 
-This removes vendor map billing. You use your own server and your own OSM data.
+- too-small VPS during build
+- old `cmake` causing `CMP0156` errors
+- missing `OSRM` dependencies from the old manual build flow
+- `Nominatim` install path issues
+- missing PostgreSQL roles like `nominatim` and `www-data`
+- `nominatim-db` failing because `country_osm_grid.sql.gz` was missing
+- confusion around `sudo` while inside the `nominatim` shell
+- `Nominatim` listening only on `127.0.0.1` when we wanted public access
+- backend env pointing at the wrong host or port
 
-## What Is Free
+This guide assumes:
 
-These are free and open source:
+- `Ubuntu 24.04` or `Ubuntu 22.04`
+- a fresh server
+- `Zimbabwe` only
+- native install, not Docker
 
-- `OpenStreetMap` data
-- `OSRM`
-- `Nominatim`
-- `MapLibre`
-- tile server software
+## Final Result
 
-What is not free:
+At the end you will have:
 
-- your server CPU/RAM/storage
-- bandwidth
-- backups
-- maintenance time
+- `OSRM` routing running on port `5000`
+- `Nominatim` search and reverse geocoding running on port `8088`
+- `systemd` services for both
+- backend env values ready for `TrustCars`
 
-## Recommended Rollout
+## Recommended Server Size
 
-Do this in phases:
-
-1. Set up `OSRM`
-2. Set up `Nominatim`
-3. Point the app/backend to your own endpoints
-4. Add self-hosted tiles if you want complete control
-
-This is the safest path because routing and search matter more to the ride flow than tiles.
-
-## Suggested Server Size
-
-For `Zimbabwe only`, a reasonable starting point is:
+Minimum practical size for `OSRM + Nominatim` on one box:
 
 - `4 vCPU`
-- `8 GB RAM` minimum
-- `16 GB RAM` is more comfortable if running `Nominatim`
-- `100+ GB SSD`
+- `8 GB RAM`
+- `80 GB+ SSD`
 
-If you want `OSRM + Nominatim + tiles` on one machine, more RAM is better.
+Better:
 
-## Low-Memory Warning
+- `4 vCPU`
+- `16 GB RAM`
+- `100 GB+ SSD`
 
-If you try to do this on a very small VPS such as:
+Do not repeat the tiny VPS path for full setup:
 
 - `1 vCPU`
 - `2 GB RAM`
 
-then expect problems during build and import.
+That size can sometimes build `OSRM` with swap, but it is a bad fit for `Nominatim`.
 
-What may still work:
+## Step 1: Confirm the Server Basics
 
-- `OSRM` can sometimes be built if you add swap and build slowly
+Run this first:
 
-What is not a good fit:
+```bash
+lsb_release -a
+uname -a
+free -h
+df -h
+```
 
-- `Nominatim` on the same tiny machine
+What you want to confirm:
 
-If you are on a low-memory VPS, add swap before heavy builds:
+- Ubuntu version
+- available RAM
+- enough disk
+
+## Step 2: Add Swap First
+
+Even on a decent server, add swap before heavy builds.
 
 ```bash
 sudo fallocate -l 4G /swapfile
@@ -78,14 +82,17 @@ free -h
 swapon --show
 ```
 
-## Download Zimbabwe OSM Data
+If you skip this and the build dies silently, check:
 
-Use Geofabrik:
+```bash
+dmesg | tail -n 50
+```
 
-- page: `https://download.geofabrik.de/africa/zimbabwe.html`
-- file: `https://download.geofabrik.de/africa/zimbabwe-latest.osm.pbf`
+If you see memory pressure or killed processes, rebuild with swap enabled.
 
-Create the data folders first:
+## Step 3: Create the Working Folders
+
+Use these exact folders:
 
 ```bash
 sudo mkdir -p /opt/src
@@ -96,7 +103,13 @@ sudo chown -R $USER:$USER /opt/src
 sudo chown -R $USER:$USER /opt/maps
 ```
 
-Download the extract:
+Verify:
+
+```bash
+ls -ld /opt/src /opt/maps /opt/maps/zimbabwe /opt/maps/osrm
+```
+
+## Step 4: Download Zimbabwe OSM Data
 
 ```bash
 cd /opt/maps/zimbabwe
@@ -104,40 +117,82 @@ wget https://download.geofabrik.de/africa/zimbabwe-latest.osm.pbf
 ls -lh /opt/maps/zimbabwe
 ```
 
-## Native Linux Setup
+Expected file:
 
-Use a Linux server directly.
+- `zimbabwe-latest.osm.pbf`
 
-Best choice:
+## Step 5: Upgrade `cmake` Before Building `OSRM`
 
-- `Ubuntu 22.04` or `Ubuntu 24.04`
-- dedicated VM or bare metal
-- do not try to run `OSRM` and `Nominatim` natively on Windows for production
+This is one of the most important fixes from last time.
 
-This path is more manual, but it works well and gives you full control.
+Newer `OSRM` source uses a CMake policy that older Ubuntu packages do not understand.
 
-## OSRM Setup
+Check your current version:
 
-### What OSRM Will Do
+```bash
+cmake --version
+```
 
-- route geometry
-- route distance
-- route duration
-- ETA basis
+If it is below `3.29`, upgrade it first.
 
-### Install Build Dependencies
+### Ubuntu 24.04
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates gpg wget
+
+test -f /usr/share/doc/kitware-archive-keyring/copyright || \
+wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+
+echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | \
+sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+
+sudo apt-get update
+sudo apt-get install -y kitware-archive-keyring cmake
+cmake --version
+```
+
+### Ubuntu 22.04
+
+Use `jammy` instead of `noble`:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates gpg wget
+
+test -f /usr/share/doc/kitware-archive-keyring/copyright || \
+wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+
+echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' | \
+sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+
+sudo apt-get update
+sudo apt-get install -y kitware-archive-keyring cmake
+cmake --version
+```
+
+Do not continue until `cmake --version` shows `3.29+`.
+
+## Step 6: Install `OSRM` Build Dependencies
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential git cmake ninja-build pkg-config \
+sudo apt install -y \
+  build-essential git cmake ninja-build pkg-config \
   autoconf automake libtool curl zip unzip tar \
   libbz2-dev libxml2-dev libzip-dev libboost-all-dev \
   lua5.2 liblua5.2-dev libtbb-dev libarchive-dev
 ```
 
-### Clone the Source and Install `vcpkg`
+## Step 7: Build `OSRM` Using the Supported Preset Flow
 
-Current `OSRM` builds are smoother with the preset flow plus `vcpkg`.
+Do not use the old `cmake ..` flow.
+
+That was what led to missing `libarchive`, `fmt`, and `RapidJSON` errors before.
+
+Use this exact method instead:
 
 ```bash
 cd /opt/src
@@ -147,13 +202,13 @@ git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
 export VCPKG_ROOT=~/vcpkg
 ```
 
-If you open a new shell later, set this again before rebuilding:
+If you open a new shell later, always re-export:
 
 ```bash
 export VCPKG_ROOT=~/vcpkg
 ```
 
-### Build and Install `OSRM`
+### Build and Install
 
 ```bash
 cd /opt/src/osrm-backend
@@ -164,14 +219,9 @@ sudo cmake --install build
 hash -r
 ```
 
-Why `-j1`:
+Use `-j1` unless you know you have plenty of RAM.
 
-- it is safer on small servers
-- it reduces RAM pressure during dependency builds
-
-If your server has comfortable RAM and CPU, you can omit `-- -j1`.
-
-### Verify the Install
+### Verify `OSRM`
 
 ```bash
 which osrm-routed
@@ -181,33 +231,33 @@ which osrm-customize
 osrm-routed --version
 ```
 
-If these are not found, check whether the build actually produced binaries:
+If commands are not found, check whether binaries were built:
 
 ```bash
 cd /opt/src/osrm-backend
 find build -type f \( -name "osrm-routed" -o -name "osrm-extract" -o -name "osrm-partition" -o -name "osrm-customize" \)
 ```
 
-If the build appears to stop during `vcpkg` dependencies such as `protobuf`, check memory:
-
-```bash
-free -h
-dmesg | tail -n 50
-```
-
-If you see memory pressure, enable swap and rebuild:
+If build failed, rebuild with logs:
 
 ```bash
 cd /opt/src/osrm-backend
 export VCPKG_ROOT=~/vcpkg
 rm -rf build
-cmake --preset ci-linux
+cmake --preset ci-linux 2>&1 | tee /root/osrm-configure.log
 cmake --build --preset ci-linux -- -j1 2>&1 | tee /root/osrm-build.log
 ```
 
-### Prepare the Zimbabwe Routing Graph
+Then inspect:
 
-Copy the Zimbabwe extract into the `OSRM` working folder:
+```bash
+tail -n 80 /root/osrm-configure.log
+tail -n 80 /root/osrm-build.log
+```
+
+## Step 8: Prepare the Zimbabwe Routing Graph
+
+Copy the `.pbf` into the `OSRM` work folder:
 
 ```bash
 cp /opt/maps/zimbabwe/zimbabwe-latest.osm.pbf /opt/maps/osrm/
@@ -215,7 +265,7 @@ cd /opt/maps/osrm
 ls -lh
 ```
 
-Use the built-in car profile from the source tree:
+Generate the routing graph:
 
 ```bash
 osrm-extract -p /opt/src/osrm-backend/profiles/car.lua zimbabwe-latest.osm.pbf
@@ -224,35 +274,37 @@ osrm-customize zimbabwe-latest.osrm
 ls -lh /opt/maps/osrm
 ```
 
-Expected output files in `/opt/maps/osrm` include files like:
+Expected outputs include files like:
 
 - `zimbabwe-latest.osrm`
-- `zimbabwe-latest.osrm.cells`
-- `zimbabwe-latest.osrm.ebg`
 - `zimbabwe-latest.osrm.partition`
+- `zimbabwe-latest.osrm.cells`
 - `zimbabwe-latest.osrm.mldgr`
 
-If `osrm-extract` succeeds but `osrm-partition` or `osrm-customize` feels slow, that is normal on a small server.
+## Step 9: Test `OSRM` Manually
 
-### Run `OSRM`
+Start it in the foreground:
 
 ```bash
 osrm-routed --algorithm mld /opt/maps/osrm/zimbabwe-latest.osrm
 ```
 
-Test it from another shell:
+Leave that shell running.
+
+From a second shell, test:
 
 ```bash
 curl "http://127.0.0.1:5000/route/v1/driving/28.581,-20.1596;28.600,-20.170?overview=full&geometries=polyline"
 ```
 
-If the response contains `routes`, `OSRM` is working.
+You want a JSON response with `routes`.
 
-### Run `OSRM` With `systemd`
+## Step 10: Create the `OSRM` `systemd` Service
 
-Create `/etc/systemd/system/osrm-zimbabwe.service`:
+Create the service file:
 
-```ini
+```bash
+sudo tee /etc/systemd/system/osrm-zimbabwe.service > /dev/null <<'EOF'
 [Unit]
 Description=OSRM Zimbabwe
 After=network.target
@@ -265,9 +317,10 @@ User=root
 
 [Install]
 WantedBy=multi-user.target
+EOF
 ```
 
-Then enable and start it:
+Enable and start it:
 
 ```bash
 sudo systemctl daemon-reload
@@ -276,39 +329,77 @@ sudo systemctl start osrm-zimbabwe
 sudo systemctl status osrm-zimbabwe
 ```
 
-## Nominatim Setup
+Verify listening:
 
-`Nominatim` is heavier than `OSRM`. If resources are tight, put it on a separate machine or use a larger server.
+```bash
+ss -tulpn | grep 5000
+```
 
-### What Nominatim Will Do
+## Step 11: Install `Nominatim` Dependencies
 
-- address search
-- reverse geocoding
-- place lookup
+This part differs by Ubuntu release.
 
-### Install Dependencies on Ubuntu 22.04
+### First, check your release
+
+```bash
+lsb_release -a
+```
+
+### Ubuntu 24.04
 
 ```bash
 sudo apt-get update -qq
-sudo apt-get install -y build-essential cmake g++ libboost-dev libboost-system-dev \
-  libboost-filesystem-dev libexpat1-dev zlib1g-dev libbz2-dev libpq-dev \
-  liblua5.3-dev lua5.3 lua-dkjson nlohmann-json3-dev postgresql-14-postgis-3 \
-  postgresql-contrib-14 postgresql-14-postgis-3-scripts libicu-dev virtualenv git
+sudo apt-get install -y \
+  build-essential cmake g++ git \
+  libboost-dev libboost-system-dev libboost-filesystem-dev \
+  libexpat1-dev zlib1g-dev libbz2-dev libpq-dev \
+  liblua5.3-dev lua5.3 lua-dkjson \
+  nlohmann-json3-dev libicu-dev virtualenv \
+  postgresql postgresql-contrib postgis \
+  postgresql-16-postgis-3 postgresql-16-postgis-3-scripts
 ```
 
-### Create a Dedicated User
+### Ubuntu 22.04
+
+```bash
+sudo apt-get update -qq
+sudo apt-get install -y \
+  build-essential cmake g++ git \
+  libboost-dev libboost-system-dev libboost-filesystem-dev \
+  libexpat1-dev zlib1g-dev libbz2-dev libpq-dev \
+  liblua5.3-dev lua5.3 lua-dkjson \
+  nlohmann-json3-dev libicu-dev virtualenv \
+  postgresql postgresql-contrib postgis \
+  postgresql-14-postgis-3 postgresql-14-postgis-3-scripts
+```
+
+If unsure which `postgresql-XX-postgis-3` package exists:
+
+```bash
+apt-cache search postgresql | grep postgis
+```
+
+## Step 12: Create the `nominatim` Linux User
+
+Use a dedicated Unix user.
 
 ```bash
 sudo useradd -d /srv/nominatim -s /bin/bash -m nominatim
-sudo -u nominatim bash
-export USERNAME=nominatim
+sudo -u nominatim -H bash
 export USERHOME=/srv/nominatim
-chmod a+x $USERHOME
+cd $USERHOME
 ```
 
-### Build `osm2pgsql`
+Important:
 
-`Nominatim` needs a recent `osm2pgsql`.
+- build as `nominatim`
+- install system-level pieces as `root`
+
+Do not use `sudo make install` inside the `nominatim` shell unless that user actually has sudo rights.
+
+## Step 13: Build `osm2pgsql`
+
+From the `nominatim` shell:
 
 ```bash
 cd $USERHOME
@@ -317,168 +408,370 @@ mkdir osm2pgsql-build
 cd osm2pgsql-build
 cmake ../osm2pgsql
 make
-sudo make install
 ```
 
-### Install `Nominatim`
+Then leave back to `root`:
 
 ```bash
+exit
+```
+
+Install from `root`:
+
+```bash
+cd /srv/nominatim/osm2pgsql-build
+make install
+```
+
+## Step 14: Install `Nominatim`
+
+Go back into the `nominatim` user:
+
+```bash
+sudo -u nominatim -H bash
+export USERHOME=/srv/nominatim
 cd $USERHOME
+```
+
+Clone and create the virtualenv:
+
+```bash
 git clone https://github.com/osm-search/Nominatim.git
-virtualenv $USERHOME/nominatim-venv
+python3 -m virtualenv $USERHOME/nominatim-venv
+$USERHOME/nominatim-venv/bin/pip install --upgrade pip
 $USERHOME/nominatim-venv/bin/pip install psycopg[binary]
+```
+
+### Important fix from last time: download the missing country grid file
+
+Without this, `packaging/nominatim-db` can fail.
+
+```bash
+cd $USERHOME/Nominatim
+wget -O data/country_osm_grid.sql.gz https://nominatim.org/data/country_grid.sql.gz
+ls -lh data/country_osm_grid.sql.gz
+```
+
+Now install the DB package from the repo root:
+
+```bash
 cd $USERHOME/Nominatim
 $USERHOME/nominatim-venv/bin/pip install packaging/nominatim-db
 ```
 
-### Create a Project Directory and Copy Zimbabwe Data
+## Step 15: Create the PostgreSQL Roles Before Import
+
+Leave the `nominatim` shell:
 
 ```bash
+exit
+whoami
+```
+
+You want to be `root`.
+
+Create the required PostgreSQL roles:
+
+```bash
+su - postgres -c "createuser -s nominatim"
+su - postgres -c "createuser www-data"
+su - postgres -c "psql -c '\du'"
+```
+
+You should see:
+
+- `nominatim`
+- `www-data`
+
+Why this matters:
+
+- `nominatim` is needed for the import
+- `www-data` is the read-only web/API role that `Nominatim` expects
+
+## Step 16: Create the Project Folder and Import Zimbabwe
+
+Back into the `nominatim` user:
+
+```bash
+su - nominatim
+export USERHOME=/srv/nominatim
 mkdir -p $USERHOME/nominatim-project
 cp /opt/maps/zimbabwe/zimbabwe-latest.osm.pbf $USERHOME/nominatim-project/
 cd $USERHOME/nominatim-project
 ```
 
-### Import the Zimbabwe Dataset
+Run the import:
 
 ```bash
 $USERHOME/nominatim-venv/bin/nominatim import --osm-file zimbabwe-latest.osm.pbf
 ```
 
-Initial import can take a while.
+If you previously had a failed partial import and see:
 
-### Serve the API With `gunicorn`
+- `database "nominatim" already exists`
 
-```bash
-$USERHOME/nominatim-venv/bin/pip install packaging/nominatim-api
-$USERHOME/nominatim-venv/bin/gunicorn \
-  -b 127.0.0.1:8080 \
-  -w 4 \
-  -k uvicorn.workers.UvicornWorker \
-  "nominatim_api.server.falcon.server:run_wsgi()"
-```
-
-For production, put `Nominatim` behind `nginx` and run it with `systemd`.
-
-### Test Search
+then leave the shell and drop the database:
 
 ```bash
-curl "http://127.0.0.1:8080/search?q=Bulawayo&format=jsonv2&limit=5"
+exit
+su - postgres -c "dropdb nominatim"
+su - nominatim
+cd /srv/nominatim/nominatim-project
+$USERHOME/nominatim-venv/bin/nominatim import --osm-file zimbabwe-latest.osm.pbf
 ```
 
-### Test Reverse Geocoding
+You want to end with something like:
+
+- `Import completed successfully`
+
+## Step 17: Install the API Package
+
+Still from the `nominatim` user:
 
 ```bash
-curl "http://127.0.0.1:8080/reverse?lat=-20.1596&lon=28.581&format=jsonv2"
+cd /srv/nominatim/Nominatim
+/srv/nominatim/nominatim-venv/bin/pip install packaging/nominatim-api
+/srv/nominatim/nominatim-venv/bin/pip install uvicorn falcon gunicorn
 ```
 
-## Optional: Self-Hosted Tiles
+Important:
 
-Your app can render OSM-based tiles. For true self-hosting, serve your own tiles too.
+- `packaging/nominatim-api` only works from inside `/srv/nominatim/Nominatim`
+- if you run it from `nominatim-project`, it fails because the relative path does not exist
 
-Two common options:
+## Step 18: Test `Nominatim` Manually
 
-- `TileServer GL`
-- `tegola`
+From the `nominatim` user:
 
-Simplest path:
+```bash
+cd /srv/nominatim/nominatim-project
+/srv/nominatim/nominatim-venv/bin/nominatim serve
+```
 
-1. generate or obtain MBTiles for Zimbabwe
-2. serve them with a native tile server
-3. point `MapLibre` to your own tile endpoint
+This usually binds to `127.0.0.1:8088`.
 
-If you want full raster tiles, bind your tile server to `127.0.0.1:8081` and reverse proxy it through `nginx` or `caddy`.
+From another shell on the server, test:
 
-## TrustCars Backend Configuration
+```bash
+curl "http://127.0.0.1:8088/search?q=Bulawayo&format=jsonv2&limit=5"
+curl "http://127.0.0.1:8088/reverse?lat=-20.1596&lon=28.581&format=jsonv2"
+```
 
-Point your backend to your own services with env vars.
+If both return JSON, the service is working.
 
-Recommended `.env` values:
+## Step 19: Create the `Nominatim` `systemd` Service
+
+You have two choices:
+
+- private bind on `127.0.0.1:8088`
+- public bind on `0.0.0.0:8088`
+
+### Recommended: private bind first
+
+```bash
+sudo tee /etc/systemd/system/nominatim-zimbabwe.service > /dev/null <<'EOF'
+[Unit]
+Description=Nominatim Zimbabwe
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+User=nominatim
+WorkingDirectory=/srv/nominatim/nominatim-project
+Environment="PATH=/srv/nominatim/nominatim-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+ExecStart=/srv/nominatim/nominatim-venv/bin/nominatim serve
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Enable and start it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable nominatim-zimbabwe
+sudo systemctl start nominatim-zimbabwe
+sudo systemctl status nominatim-zimbabwe
+```
+
+Verify:
+
+```bash
+ss -tulpn | grep 8088
+```
+
+If you see `127.0.0.1:8088`, it is internal-only, which is good if your backend runs on the same server.
+
+## Step 20: Optional Public Exposure
+
+If you want direct browser access before setting up `nginx`, bind publicly with `gunicorn`.
+
+Replace the service with:
+
+```bash
+sudo tee /etc/systemd/system/nominatim-zimbabwe.service > /dev/null <<'EOF'
+[Unit]
+Description=Nominatim Zimbabwe
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+User=nominatim
+WorkingDirectory=/srv/nominatim/nominatim-project
+Environment="PATH=/srv/nominatim/nominatim-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+ExecStart=/srv/nominatim/nominatim-venv/bin/gunicorn -b 0.0.0.0:8088 -w 4 -k uvicorn.workers.UvicornWorker "nominatim_api.server.falcon.server:run_wsgi()"
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart nominatim-zimbabwe
+sudo systemctl status nominatim-zimbabwe
+ss -tulpn | grep 8088
+```
+
+Open firewall if needed:
+
+```bash
+sudo ufw allow 8088/tcp
+sudo ufw allow 5000/tcp
+sudo ufw status
+```
+
+Then test from your browser:
+
+```text
+http://YOUR_SERVER_IP:8088/search?q=Bulawayo&format=jsonv2&limit=5
+http://YOUR_SERVER_IP:8088/reverse?lat=-20.1596&lon=28.581&format=jsonv2
+```
+
+## Step 21: `TrustCars` Backend Env
+
+### If backend runs on the same server
+
+Use loopback:
 
 ```env
 OSRM_BASE_URL=http://127.0.0.1:5000
 OSM_ROUTING_BASE_URL=http://127.0.0.1:5000
-
-NOMINATIM_BASE_URL=http://127.0.0.1:8080
-OSM_GEOCODER_BASE_URL=http://127.0.0.1:8080
+NOMINATIM_BASE_URL=http://127.0.0.1:8088
+OSM_GEOCODER_BASE_URL=http://127.0.0.1:8088
 ```
 
-If your backend and map services run on different machines, use their private network IPs instead of `127.0.0.1`.
+### If backend runs locally on your laptop
 
-## Reverse Proxy
+Use the remote server IP:
 
-Put `nginx` or `caddy` in front of these services.
-
-Recommended public routes:
-
-- `https://maps.yourdomain.com/osrm`
-- `https://maps.yourdomain.com/nominatim`
-- `https://maps.yourdomain.com/tiles`
-
-Example `nginx` shape:
-
-```nginx
-server {
-    server_name maps.yourdomain.com;
-
-    location /osrm/ {
-        proxy_pass http://127.0.0.1:5000/;
-    }
-
-    location /nominatim/ {
-        proxy_pass http://127.0.0.1:8080/;
-    }
-
-    location /tiles/ {
-        proxy_pass http://127.0.0.1:8081/;
-    }
-}
+```env
+OSRM_BASE_URL=http://YOUR_SERVER_IP:5000
+OSM_ROUTING_BASE_URL=http://YOUR_SERVER_IP:5000
+NOMINATIM_BASE_URL=http://YOUR_SERVER_IP:8088
+OSM_GEOCODER_BASE_URL=http://YOUR_SERVER_IP:8088
 ```
 
-## Production Notes
+Only use `127.0.0.1` if the backend is on the same machine as the map services.
 
-- do not expose raw `Nominatim` openly without rate limits
-- add caching for route and search requests
-- add firewall rules so only your app/backend can hit internal services if possible
-- monitor disk growth
-- re-import or update Zimbabwe data regularly
+## Step 22: Public Browser Test URLs
 
-## Updating Zimbabwe Data
+### `OSRM`
 
-At minimum, refresh periodically:
+```text
+http://YOUR_SERVER_IP:5000/route/v1/driving/28.581,-20.1596;28.600,-20.170?overview=full&geometries=polyline
+```
 
-1. download latest `zimbabwe-latest.osm.pbf`
-2. rebuild `OSRM` graph
-3. reimport or update `Nominatim`
-4. rebuild tiles if self-hosting tiles
+### `Nominatim` search
 
-If you want less downtime, do blue/green style map data deploys:
+```text
+http://YOUR_SERVER_IP:8088/search?q=Bulawayo&format=jsonv2&limit=5
+```
 
-- build new dataset in a second folder
-- start the second service
-- switch proxy
+### `Nominatim` reverse
 
-## What TrustCars Uses After This
+```text
+http://YOUR_SERVER_IP:8088/reverse?lat=-20.1596&lon=28.581&format=jsonv2
+```
 
-After full self-hosting:
+If `OSRM` works publicly but `Nominatim` does not, check:
 
-- routing requests go to your own `OSRM`
-- place search and place details go to your own `Nominatim`
-- map rendering can go to your own tiles
-- mobile/admin map UI uses `MapLibre`
+```bash
+ss -tulpn | grep 8088
+```
 
-That means:
+If it says `127.0.0.1:8088`, it is not exposed publicly yet.
 
-- no Google Maps billing
-- no per-request vendor map charges
-- full control over Zimbabwe-only map infrastructure
+## Step 23: Recommended Final Production Shape
 
-## Recommended Next Step
+After basic success, put `nginx` in front and expose:
 
-Start with this exact order:
+- `/osrm`
+- `/nominatim`
 
-1. deploy `OSRM`
-2. deploy `Nominatim`
-3. update backend `.env`
-4. test ride routing and place search
-5. self-host tiles last
+Instead of raw ports.
+
+That gives you:
+
+- cleaner URLs
+- easier TLS later
+- safer private internal ports
+
+## Step 24: Quick Rebuild / Migration Checklist for a New Server
+
+Use this order every time:
+
+1. provision the server
+2. add swap
+3. install base packages
+4. upgrade `cmake`
+5. download Zimbabwe extract
+6. build and install `OSRM`
+7. build the Zimbabwe routing graph
+8. test `OSRM`
+9. create `OSRM` `systemd`
+10. install PostgreSQL/PostGIS and `Nominatim` deps
+11. create Linux `nominatim` user
+12. build `osm2pgsql`
+13. install `Nominatim`
+14. create PostgreSQL roles `nominatim` and `www-data`
+15. import Zimbabwe into `Nominatim`
+16. test `Nominatim`
+17. create `Nominatim` `systemd`
+18. expose publicly only if needed
+19. update backend env
+20. test ride routing, place search, reverse geocoding
+
+## Step 25: Most Important Mistakes To Avoid
+
+Do not repeat these:
+
+- do not build `OSRM` with the old `cmake ..` path
+- do not skip the `cmake` upgrade check
+- do not try full install on a `2 GB RAM` VPS
+- do not run `sudo make install` from inside the `nominatim` shell unless that user actually has sudo access
+- do not forget `country_osm_grid.sql.gz`
+- do not forget PostgreSQL roles `nominatim` and `www-data`
+- do not assume `127.0.0.1` means the remote server when your backend is running locally
+- do not expect browser access to `Nominatim` if it is still bound to `127.0.0.1:8088`
+
+## Final `TrustCars` Result
+
+After this setup:
+
+- `/api/maps/directions` uses your own `OSRM`
+- `/api/maps/places/autocomplete` uses your own `Nominatim`
+- `/api/maps/places/details` uses your own `Nominatim`
+- passenger and driver route distance use your own map infrastructure
+- place search and reverse geocoding no longer depend on Google
+
+That gives you:
+
+- no per-request Google routing cost
+- no per-request Google place search cost
+- Zimbabwe-focused map infrastructure you control

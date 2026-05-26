@@ -50,6 +50,7 @@ const MAX_DRIVER_OFFERS = 8;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const LOST_ITEM_MAX_LENGTH = 2000;
 const MAX_RIDE_TIP_AMOUNT = 200;
+const PANIC_ALERT_MESSAGE_MAX_LENGTH = 500;
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
@@ -526,7 +527,7 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         driverPassengerRating: row.driver_passenger_rating === null ? null : Number(row.driver_passenger_rating),
         driverPassengerReview: row.driver_passenger_review || '',
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
-        canRateDriver: row.status === 'completed' && !!row.driver_name,
+        canRateDriver: row.status === 'completed' && !!row.driver_user_id && row.passenger_driver_rating === null,
         canTipDriver: row.status === 'completed' && !!row.driver_user_id && Number(row.tip_amount || 0) <= 0,
         requestedAt: row.requested_at,
         completedAt: row.completed_at,
@@ -1099,7 +1100,7 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
         driverPassengerRating: ride.driver_passenger_rating === null ? null : Number(ride.driver_passenger_rating),
         driverPassengerReview: ride.driver_passenger_review || '',
         driverPassengerRatedAt: ride.driver_passenger_rated_at || null,
-        canRateDriver: ride.status === 'completed' && !!ride.driver_user_id,
+        canRateDriver: ride.status === 'completed' && !!ride.driver_user_id && ride.passenger_driver_rating === null,
         canTipDriver: ride.status === 'completed' && !!ride.driver_user_id && Number(ride.tip_amount || 0) <= 0,
       },
     });
@@ -1260,6 +1261,115 @@ router.post('/passenger/:rideRequestId/lost-items', requireAuth, async (req, res
     });
   } catch (err) {
     console.error('POST /api/rides/passenger/:rideRequestId/lost-items', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/:rideRequestId/panic-alert', requireAuth, async (req, res) => {
+  try {
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const message = String(req.body?.message || '').trim();
+    const alertStage = String(req.body?.alertStage || '').trim().toLowerCase();
+    const latitude = req.body?.latitude === null || req.body?.latitude === undefined || req.body?.latitude === ''
+      ? null
+      : Number(req.body.latitude);
+    const longitude = req.body?.longitude === null || req.body?.longitude === undefined || req.body?.longitude === ''
+      ? null
+      : Number(req.body.longitude);
+
+    if (message.length > PANIC_ALERT_MESSAGE_MAX_LENGTH) {
+      return res.status(400).json({ error: `message must be ${PANIC_ALERT_MESSAGE_MAX_LENGTH} characters or less` });
+    }
+    if (latitude !== null && !Number.isFinite(latitude)) {
+      return res.status(400).json({ error: 'latitude must be a valid number' });
+    }
+    if (longitude !== null && !Number.isFinite(longitude)) {
+      return res.status(400).json({ error: 'longitude must be a valid number' });
+    }
+
+    const [ride] = await query(
+      `SELECT
+         id,
+         public_id,
+         passenger_user_id,
+         passenger_name,
+         driver_user_id,
+         driver_name,
+         status
+       FROM ride_requests
+       WHERE id = ?
+         AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+         AND (passenger_user_id = ? OR driver_user_id = ?)
+       LIMIT 1`,
+      [rideRequestId, req.userId, req.userId]
+    );
+
+    if (!ride) {
+      return res.status(404).json({ error: 'Active ride not found for this user' });
+    }
+
+    const actorRole = ride.driver_user_id && ride.driver_user_id === req.userId ? 'driver' : 'passenger';
+    const actorName = actorRole === 'driver' ? (ride.driver_name || 'Driver') : (ride.passenger_name || 'Passenger');
+    const defaultMessage = actorRole === 'driver'
+      ? 'Driver requested urgent admin assistance during an active ride.'
+      : 'Passenger requested urgent admin assistance during an active ride.';
+
+    const insertResult = await query(
+      `INSERT INTO ride_panic_alerts (
+         ride_request_id,
+         ride_public_id,
+         actor_role,
+         actor_user_id,
+         actor_name,
+         passenger_user_id,
+         passenger_name,
+         driver_user_id,
+         driver_name,
+         ride_status,
+         alert_stage,
+         message,
+         latitude,
+         longitude,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+      [
+        rideRequestId,
+        ride.public_id || null,
+        actorRole,
+        req.userId,
+        actorName,
+        ride.passenger_user_id,
+        ride.passenger_name || null,
+        ride.driver_user_id || null,
+        ride.driver_name || null,
+        ride.status,
+        alertStage || null,
+        message || defaultMessage,
+        latitude,
+        longitude,
+      ]
+    );
+
+    return res.status(201).json({
+      panicAlert: {
+        id: Number(insertResult?.insertId || 0),
+        rideRequestId,
+        actorRole,
+        actorName,
+        rideStatus: ride.status,
+        alertStage: alertStage || null,
+        message: message || defaultMessage,
+        latitude,
+        longitude,
+        status: 'open',
+      },
+    });
+  } catch (err) {
+    console.error('POST /api/rides/:rideRequestId/panic-alert', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });
