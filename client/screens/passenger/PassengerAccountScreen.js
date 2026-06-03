@@ -148,7 +148,11 @@ const PassengerAccountScreen = ({ navigation }) => {
   const phoneVerified = profile?.phoneVerified === true;
   const passengerIdentity = profile?.passengerIdentity || null;
   const identityStatus = passengerIdentity?.status || 'not_submitted';
-  const identityDocsSubmitted = !!(passengerIdentity?.nationalIdFrontUrl || passengerIdentity?.nationalIdBackUrl);
+  const identityDocsSubmitted = !!(
+    passengerIdentity?.selfieUrl &&
+    passengerIdentity?.nationalIdFrontUrl &&
+    passengerIdentity?.nationalIdBackUrl
+  );
   const identityApproved = identityStatus === 'approved';
   const identityPending = identityStatus === 'pending' && identityDocsSubmitted;
   const identityRejected = identityStatus === 'rejected';
@@ -174,9 +178,9 @@ const PassengerAccountScreen = ({ navigation }) => {
         ? 'Approved'
         : identityPending
           ? 'Under review'
-          : identityRejected
+        : identityRejected
             ? 'Needs resubmission'
-            : 'Upload your national ID',
+            : 'Upload selfie and national ID',
       icon: 'card-outline',
       identityReviewOnly: identityAwaitingReviewOnly,
       onPress: () => {

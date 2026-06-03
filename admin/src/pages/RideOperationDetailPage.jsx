@@ -230,6 +230,12 @@ export default function RideOperationDetailPage() {
               <DetailField label="Status" value={ride.status} />
               <DetailField label="Tier" value={ride.tierName || ride.tierKey} />
               <DetailField label="Fare" value={`$${Number(ride.estimatedAmount || 0).toFixed(2)}`} />
+              <DetailField label="Original Fare" value={`$${Number(ride.originalEstimatedAmount || ride.estimatedAmount || 0).toFixed(2)}`} />
+              <DetailField label="Discount Code" value={ride.discountCode || '-'} />
+              <DetailField label="Discount" value={`$${Number(ride.discountAmount || 0).toFixed(2)}`} />
+              <DetailField label="Driver Reimbursement" value={`$${Number(ride.driverReimbursementAmount || 0).toFixed(2)}`} />
+              <DetailField label="Tip" value={`$${Number(ride.tipAmount || 0).toFixed(2)}`} />
+              <DetailField label="Total" value={`$${Number(ride.totalAmount || 0).toFixed(2)}`} />
               <DetailField label="Estimated Distance" value={`${Number(ride.estimatedDistanceKm || 0).toFixed(1)} km`} />
               <DetailField label="Estimated Time" value={`${Number(ride.estimatedMinutes || 0)} min`} />
               <DetailField label="Driver Rating" value={formatRating(ride.passengerDriverRating, ride.passengerDriverReview)} />

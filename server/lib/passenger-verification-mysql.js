@@ -37,6 +37,7 @@ export function shapePassengerIdentityFromRow(row) {
     canResubmit: row.identity_can_resubmit === undefined ? true : !!row.identity_can_resubmit,
     nationalIdFrontUrl: normalizeUploadPath(row.national_id_front_url),
     nationalIdBackUrl: normalizeUploadPath(row.national_id_back_url),
+    selfieUrl: normalizeUploadPath(row.selfie_url),
   };
 }
 

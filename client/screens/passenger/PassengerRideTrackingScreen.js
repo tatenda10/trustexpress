@@ -12,6 +12,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { showLocalRideNotification } from '../../notifications';
 import { connectRealtime } from '../../realtime';
 
 const TRACKING_STATUS_REFRESH_MS = 3000;
@@ -170,11 +171,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
   const mapRef = useRef(null);
   const lastArrivalAnnouncementRef = useRef('');
   const lastRouteOriginRef = useRef(null);
   const lastRouteTargetRef = useRef(null);
   const lastRouteFetchedAtRef = useRef(0);
+  const routeCoordinatesRef = useRef([]);
   const routeRequestIdRef = useRef(0);
   const hasAutoFitMapRef = useRef(false);
   const lastAutoFitStageRef = useRef('');
@@ -219,6 +222,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const bottomActionInset = Math.max(insets.bottom + tabBarHeight - 8, 20);
   const collapsedSheetHeight = Math.max(300, bottomActionInset + 220);
 
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
+  useEffect(() => {
+    routeCoordinatesRef.current = routeCoordinates;
+  }, [routeCoordinates]);
+
   const exitToPassengerHome = () => {
     if (navigation?.canGoBack?.()) {
       try {
@@ -246,7 +257,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
     const loadStatus = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await getPassengerRideRequestStatus(token, rideRequestId);
         if (!active) return;
@@ -275,7 +286,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       active = false;
       clearInterval(interval);
     };
-  }, [getToken, initialDriver, rideRequestId, realtimeSignal]);
+  }, [initialDriver, rideRequestId, realtimeSignal]);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -284,7 +295,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
     const initRealtime = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         if (!active || !token) return;
         localSocket = connectRealtime(token);
         if (!localSocket) return;
@@ -330,7 +341,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       active = false;
       localSocket?.__passengerTrackingCleanup?.();
     };
-  }, [getToken, rideRequestId]);
+  }, [rideRequestId]);
 
   useEffect(() => {
     if (rideStatus?.status === 'cancelled') {
@@ -347,6 +358,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const totalAmount = Number(rideStatus?.totalAmount || (estimatedAmount + tipAmount) || 0);
   const stage = rideStatus?.stage || 'driver_on_the_way';
   const isCompleted = stage === 'completed';
+  const hasPassengerDriverRating = Number(rideStatus?.passengerDriverRating || 0) > 0;
+  const canPromptForTip = Boolean(rideStatus?.canTipDriver) && tipAmount <= 0;
+  const shouldPromptForRating = isCompleted && !hasPassengerDriverRating;
+  const shouldPromptForPostTrip = isCompleted && (shouldPromptForRating || canPromptForTip);
   const driverCoordinate = rideStatus?.driverCoordinate || driver?.coordinate || null;
   const hasDriverCoordinate = !!driverCoordinate;
   const activeTarget = stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
@@ -364,7 +379,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [stage]);
 
   useEffect(() => {
-    const shouldOpen = stage === 'completed' && !rideStatus?.passengerDriverRating;
+    const shouldOpen = shouldPromptForPostTrip;
     if (lastRatingModalStateRef.current !== shouldOpen) {
       lastRatingModalStateRef.current = shouldOpen;
       setShowDriverRatingModal(shouldOpen);
@@ -372,7 +387,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     if (!shouldOpen) {
       ratingDraftTouchedRef.current = false;
     }
-  }, [rideStatus?.passengerDriverRating, stage]);
+  }, [shouldPromptForPostTrip]);
 
   useEffect(() => {
     if (stage !== 'waiting_at_pickup') return undefined;
@@ -415,7 +430,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     const routeAgeMs = Date.now() - lastRouteFetchedAtRef.current;
     if (
       !targetChanged &&
-      routeCoordinates.length > 0 &&
+      routeCoordinatesRef.current.length > 0 &&
       movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
       routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
@@ -435,7 +450,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       try {
         setRouteLoading(true);
         setRouteError('');
-        const token = await getToken();
+        const token = await getTokenRef.current();
         const route = await fetchTrackingDirections(token, driverCoordinate, activeTarget);
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
 
@@ -464,7 +479,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [activeTarget, driverCoordinate, getToken, isCompleted, routeCoordinates.length]);
+  }, [activeTarget, driverCoordinate, isCompleted]);
 
   useEffect(() => {
     if (!pickupCoordinate || !dropoffCoordinate || isCompleted) {
@@ -478,7 +493,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
     const loadTripRoute = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         const route = await fetchTrackingDirections(token, pickupCoordinate, dropoffCoordinate);
         if (cancelled) return;
         setTripRouteCoordinates(
@@ -501,7 +516,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, getToken, isCompleted, pickupCoordinate]);
+  }, [dropoffCoordinate, isCompleted, pickupCoordinate]);
 
   const liveDriverDistanceKm = useMemo(
     () => {
@@ -661,6 +676,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         passengerDriverRating: rating,
         passengerDriverReview: review,
       } : current);
+      if (canPromptForTip) {
+        Alert.alert('Rating saved', 'You can add an optional tip now, or tap Finish to close this trip.');
+        return;
+      }
       setShowDriverRatingModal(false);
       Alert.alert('Thanks', 'Your driver rating was saved.', [{ text: 'OK', onPress: exitToPassengerHome }]);
     } catch (error) {
@@ -718,12 +737,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
   const handleSendPanicAlert = () => {
     Alert.alert(
-      'Send panic alert?',
-      'This will send your active ride details to admin immediately.',
+      'Are you in danger?',
+      'Tap Yes if you are in danger so admin can start emergency escalation and contact police or other responders.',
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'No', style: 'cancel' },
         {
-          text: 'Send alert',
+          text: 'Yes',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -751,9 +770,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
               await sendRidePanicAlert(token, rideRequestId, {
                 alertStage: stage,
-                message: 'Passenger used the panic button during an active ride.',
+                message: 'Passenger confirmed they are in danger and requested emergency escalation.',
                 latitude: currentCoordinate?.latitude,
                 longitude: currentCoordinate?.longitude,
+              });
+              await showLocalRideNotification({
+                title: 'Panic alert sent',
+                body: `Ride ${rideRequestId} was sent to admin for urgent attention.`,
+                data: { type: 'panic_alert', rideRequestId },
               });
               Alert.alert('Alert sent', 'Admin has been notified about this ride.');
             } catch (error) {
@@ -1274,39 +1298,47 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       <Modal visible={showDriverRatingModal} transparent animationType="fade" onRequestClose={handleSkipRating}>
         <View className="flex-1 items-center justify-center bg-black/20 px-5">
           <View className="w-full max-w-[380px] rounded-[28px] bg-white px-5 pt-5 pb-5">
-            <Text className="text-2xl font-bold text-gray-900">Rate Driver</Text>
-            <Text className="mt-2 text-sm text-gray-500">
-              Tell us how this trip went, or skip for now.
+            <Text className="text-2xl font-bold text-gray-900">
+              {shouldPromptForRating ? 'Rate & Tip Driver' : 'Trip Complete'}
             </Text>
-            <View className="mt-5 flex-row items-center justify-between">
-              {[1, 2, 3, 4, 5].map((value) => (
-                <Pressable
-                  key={value}
-                  onPress={() => {
+            <Text className="mt-2 text-sm text-gray-500">
+              {shouldPromptForRating
+                ? 'Tell us how this trip went and add an optional tip before you finish.'
+                : 'Add an optional thank-you tip for your driver, or finish your trip now.'}
+            </Text>
+            {shouldPromptForRating ? (
+              <>
+                <View className="mt-5 flex-row items-center justify-between">
+                  {[1, 2, 3, 4, 5].map((value) => (
+                    <Pressable
+                      key={value}
+                      onPress={() => {
+                        ratingDraftTouchedRef.current = true;
+                        setRating(value);
+                      }}
+                      hitSlop={8}
+                      className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
+                      style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
+                    >
+                      <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color={value <= rating ? '#f59e0b' : '#9ca3af'} />
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  value={review}
+                  onChangeText={(value) => {
                     ratingDraftTouchedRef.current = true;
-                    setRating(value);
+                    setReview(value);
                   }}
-                  hitSlop={8}
-                  className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
-                  style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
-                >
-                  <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color={value <= rating ? '#f59e0b' : '#9ca3af'} />
-                </Pressable>
-              ))}
-            </View>
-            <TextInput
-              value={review}
-              onChangeText={(value) => {
-                ratingDraftTouchedRef.current = true;
-                setReview(value);
-              }}
-              placeholder="Write optional feedback"
-              multiline
-              textAlignVertical="top"
-              className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
-            />
+                  placeholder="Write optional feedback"
+                  multiline
+                  textAlignVertical="top"
+                  className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
+                />
+              </>
+            ) : null}
             {(rideStatus?.canTipDriver || tipAmount > 0) ? (
-              <View className="mt-4 rounded-[22px] bg-[#f8fafc] px-4 py-4">
+              <View className={`${shouldPromptForRating ? 'mt-4' : 'mt-5'} rounded-[22px] bg-[#f8fafc] px-4 py-4`}>
                 <Text className="text-sm font-semibold uppercase tracking-[1px] text-gray-500">Optional tip</Text>
                 {tipAmount > 0 ? (
                   <Text className="mt-2 text-base font-bold text-green-600">
@@ -1337,19 +1369,27 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               </View>
             ) : null}
             <TouchableOpacity
-              onPress={handleSubmitRating}
+              onPress={shouldPromptForRating ? handleSubmitRating : handleSkipRating}
               disabled={submittingRating}
               className="mt-4 h-14 rounded-[22px] items-center justify-center"
               style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingRating ? 0.7 : 1 }}
             >
-              {submittingRating ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Done</Text>}
+              {submittingRating ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text className="text-lg font-bold text-white">
+                  {shouldPromptForRating ? 'Save rating' : 'Finish'}
+                </Text>
+              )}
             </TouchableOpacity>
             <TouchableOpacity
               onPress={handleSkipRating}
               disabled={submittingRating}
               className="mt-3 h-12 items-center justify-center"
             >
-              <Text className="text-base font-semibold text-gray-500">Skip for now</Text>
+              <Text className="text-base font-semibold text-gray-500">
+                {shouldPromptForRating ? 'Skip for now' : 'Close'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>

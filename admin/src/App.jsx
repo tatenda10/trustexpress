@@ -20,7 +20,8 @@ import ReportsPage from './pages/ReportsPage'
 import VehicleTiersPage from './pages/VehicleTiersPage'
 import AgentRewardsPage from './pages/AgentRewardsPage'
 import SupportInboxPage from './pages/SupportInboxPage'
-import ComingSoonPage from './pages/ComingSoonPage'
+import DiscountCodesPage from './pages/DiscountCodesPage'
+import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursementsPage'
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -124,7 +125,11 @@ function AppRoutes() {
         />
         <Route
           path="driver-payouts"
-          element={<PermissionRoute permission="payouts.read"><ComingSoonPage title="Driver Payouts" description="Driver payouts will be managed here once the payouts workflow is ready." /></PermissionRoute>}
+          element={<PermissionRoute permission="payouts.read"><DriverDiscountReimbursementsPage /></PermissionRoute>}
+        />
+        <Route
+          path="promotions"
+          element={<PermissionRoute permission="pricing.read"><DiscountCodesPage /></PermissionRoute>}
         />
         <Route
           path="reports"

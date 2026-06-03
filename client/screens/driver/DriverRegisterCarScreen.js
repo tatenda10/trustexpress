@@ -355,8 +355,8 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
     const yearNum = Number(year);
     const currentYear = new Date().getFullYear();
-    if (!Number.isInteger(yearNum) || yearNum < 1950 || yearNum > currentYear + 1) {
-      Alert.alert('Invalid year', `Enter a year between 1950 and ${currentYear + 1}.`);
+    if (!Number.isInteger(yearNum) || yearNum < 2010 || yearNum > currentYear + 1) {
+      Alert.alert('Invalid year', `Enter a year between 2010 and ${currentYear + 1}.`);
       return;
     }
     const seatsNum = Number(seatCount);

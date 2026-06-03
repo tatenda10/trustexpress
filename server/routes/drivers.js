@@ -16,7 +16,7 @@ import {
 
 const router = Router();
 const OPEN_REQUEST_TTL_MINUTES = 3;
-const DRIVER_FOUND_SELECTION_TTL_MINUTES = 2;
+const DRIVER_FOUND_SELECTION_TTL_SECONDS = 30;
 const OPEN_REQUEST_MIN_REMAINING_SECONDS = 30;
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DEADLOCK_RETRY_DELAY_MS = 120;
@@ -125,7 +125,7 @@ function computeRideExpiresAt(status, requestedAt, driverFoundAt = null) {
   if (normalized === 'driver_found') {
     if (!requestedAt && !driverFoundAt) return null;
     const date = new Date(driverFoundAt || requestedAt);
-    date.setMinutes(date.getMinutes() + DRIVER_FOUND_SELECTION_TTL_MINUTES);
+    date.setSeconds(date.getSeconds() + DRIVER_FOUND_SELECTION_TTL_SECONDS);
     return date.toISOString();
   }
   return computeExpiresAt(requestedAt);
@@ -212,6 +212,50 @@ router.get('/me', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/drivers/me', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/me/payout-details', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const ecocashNumberRaw = String(req.body?.ecocashNumber || '').trim();
+    const ecocashRegisteredName = String(req.body?.ecocashRegisteredName || '').trim();
+    const ecocashNumber = ecocashNumberRaw.replace(/\s+/g, '');
+
+    if (!ecocashNumber) {
+      return res.status(400).json({ error: 'EcoCash number is required' });
+    }
+    if (!/^\+?[0-9]{9,15}$/.test(ecocashNumber)) {
+      return res.status(400).json({ error: 'Enter a valid EcoCash number' });
+    }
+    if (!ecocashRegisteredName || ecocashRegisteredName.length < 3) {
+      return res.status(400).json({ error: 'Registered name is required' });
+    }
+
+    await query(
+      `INSERT INTO driver_identity (
+         driver_user_id,
+         profile_status,
+         ecocash_number,
+         ecocash_registered_name
+       ) VALUES (?, 'pending', ?, ?)
+       ON DUPLICATE KEY UPDATE
+         ecocash_number = VALUES(ecocash_number),
+         ecocash_registered_name = VALUES(ecocash_registered_name),
+         updated_at = CURRENT_TIMESTAMP`,
+      [req.userId, ecocashNumber, ecocashRegisteredName]
+    );
+
+    const verification = await getDriverVerificationFromMysql(req.userId, user);
+    return res.json({
+      ok: true,
+      driverProfile: verification.driverProfile,
+    });
+  } catch (err) {
+    console.error('PATCH /api/drivers/me/payout-details', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });
@@ -476,7 +520,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
          OR (
            status = 'driver_found'
-           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
          )`
     );
 
@@ -519,6 +563,11 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.estimated_distance_km,
          r.estimated_minutes,
          r.estimated_amount,
+         r.original_estimated_amount,
+         r.discount_amount,
+         r.final_estimated_amount,
+         r.driver_reimbursement_amount,
+         r.discount_code,
          r.status,
          r.requested_at,
          r.driver_found_at,
@@ -526,7 +575,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
            0,
            CASE
              WHEN r.status = 'driver_found'
-               THEN ${(DRIVER_FOUND_SELECTION_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, COALESCE(r.driver_found_at, r.requested_at), CURRENT_TIMESTAMP)
+               THEN ${DRIVER_FOUND_SELECTION_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, COALESCE(r.driver_found_at, r.requested_at), CURRENT_TIMESTAMP)
              ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP)
            END
          ) AS remaining_seconds,
@@ -581,7 +630,11 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         tripDurationMinutes: Number(row.route_duration_minutes || row.estimated_minutes || 0),
         estimatedDistanceKm: Number(row.estimated_distance_km || 0),
         estimatedMinutes: Number(row.estimated_minutes || 0),
-        estimatedAmount: Number(row.estimated_amount || 0),
+        estimatedAmount: Number(row.original_estimated_amount || row.estimated_amount || 0),
+        finalEstimatedAmount: Number(row.final_estimated_amount || row.estimated_amount || 0),
+        discountAmount: Number(row.discount_amount || 0),
+        driverReimbursementAmount: Number(row.driver_reimbursement_amount || 0),
+        discountCode: row.discount_code || null,
         status: row.status,
         requestedAt: toIsoOrNull(row.requested_at),
         expiresAt: computeRideExpiresAt(row.status, row.requested_at, row.driver_found_at),
@@ -696,7 +749,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       ageSeconds: Number(ride?.age_seconds || 0),
       nowIso: new Date().toISOString(),
       openRequestTtlMinutes: OPEN_REQUEST_TTL_MINUTES,
-      driverFoundSelectionTtlMinutes: DRIVER_FOUND_SELECTION_TTL_MINUTES,
+      driverFoundSelectionTtlSeconds: DRIVER_FOUND_SELECTION_TTL_SECONDS,
     });
     if (!['requested', 'driver_found'].includes(String(ride.status || ''))) {
       console.log('[drivers.accept] blocked by ride status', {
@@ -793,7 +846,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
            (status = 'requested' AND requested_at >= (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
            OR (
              status = 'driver_found'
-             AND COALESCE(driver_found_at, requested_at) >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+             AND COALESCE(driver_found_at, requested_at) >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
            )
          )`,
       [rideRequestId]
@@ -824,7 +877,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       const selectionAgeSeconds = Number(latestRide?.selection_age_seconds || 0);
       const stillEligibleNoop =
         (latestStatus === 'requested' && requestedAgeSeconds < OPEN_REQUEST_TTL_MINUTES * 60) ||
-        (latestStatus === 'driver_found' && selectionAgeSeconds < DRIVER_FOUND_SELECTION_TTL_MINUTES * 60);
+        (latestStatus === 'driver_found' && selectionAgeSeconds < DRIVER_FOUND_SELECTION_TTL_SECONDS);
       if (stillEligibleNoop) {
         console.log('[drivers.accept] ttl-gated update no-op but still eligible', {
           driverUserId: req.userId,
@@ -843,7 +896,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
              (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
              OR (
                status = 'driver_found'
-               AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+               AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
              )
            )`,
         [rideRequestId]
@@ -853,7 +906,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
         rideRequestId,
         latestRide: latestRide || null,
         openRequestTtlSeconds: OPEN_REQUEST_TTL_MINUTES * 60,
-        driverFoundSelectionTtlSeconds: DRIVER_FOUND_SELECTION_TTL_MINUTES * 60,
+        driverFoundSelectionTtlSeconds: DRIVER_FOUND_SELECTION_TTL_SECONDS,
         nowIso: new Date().toISOString(),
       });
       return res.status(409).json({ error: 'Ride request has expired' });
@@ -920,6 +973,11 @@ router.get('/current-ride', requireAuth, async (req, res) => {
          estimated_distance_km,
          estimated_minutes,
          estimated_amount,
+         original_estimated_amount,
+         discount_amount,
+         final_estimated_amount,
+         driver_reimbursement_amount,
+         discount_code,
          tip_amount,
          status,
          requested_at,
@@ -973,9 +1031,13 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         },
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
-        estimatedAmount: Number(ride.estimated_amount || 0),
+        estimatedAmount: Number(ride.original_estimated_amount || ride.estimated_amount || 0),
+        finalEstimatedAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
+        discountAmount: Number(ride.discount_amount || 0),
+        driverReimbursementAmount: Number(ride.driver_reimbursement_amount || 0),
+        discountCode: ride.discount_code || null,
         tipAmount: Number(ride.tip_amount || 0),
-        totalAmount: Number(ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.original_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         status: ride.status,
         stage: mapTripStage(ride.status),
         driverCoordinate,
@@ -1326,6 +1388,11 @@ router.get('/history', requireAuth, async (req, res) => {
          estimated_distance_km,
          estimated_minutes,
          estimated_amount,
+         original_estimated_amount,
+         discount_amount,
+         final_estimated_amount,
+         driver_reimbursement_amount,
+         discount_code,
          tip_amount,
          driver_distance_km,
          driver_eta_minutes,
@@ -1350,9 +1417,9 @@ router.get('/history', requireAuth, async (req, res) => {
          COUNT(*) AS total_rides,
          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides,
          SUM(CASE WHEN status IN ('driver_assigned', 'driver_arrived', 'in_progress') THEN 1 ELSE 0 END) AS active_rides,
-         COALESCE(SUM(CASE WHEN status = 'completed' THEN estimated_amount + COALESCE(tip_amount, 0) ELSE 0 END), 0) AS total_earnings,
+         COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(original_estimated_amount, estimated_amount) + COALESCE(tip_amount, 0) ELSE 0 END), 0) AS total_earnings,
          COALESCE(SUM(CASE
-           WHEN status = 'completed' AND DATE(completed_at) = CURRENT_DATE THEN estimated_amount + COALESCE(tip_amount, 0)
+           WHEN status = 'completed' AND DATE(completed_at) = CURRENT_DATE THEN COALESCE(original_estimated_amount, estimated_amount) + COALESCE(tip_amount, 0)
            ELSE 0
          END), 0) AS today_earnings,
          AVG(CASE WHEN passenger_driver_rating IS NOT NULL THEN passenger_driver_rating END) AS avg_rating,
@@ -1384,9 +1451,13 @@ router.get('/history', requireAuth, async (req, res) => {
         dropoffLabel: row.dropoff_label,
         estimatedDistanceKm: Number(row.estimated_distance_km || 0),
         estimatedMinutes: Number(row.estimated_minutes || 0),
-        estimatedAmount: Number(row.estimated_amount || 0),
+        estimatedAmount: Number(row.original_estimated_amount || row.estimated_amount || 0),
+        finalEstimatedAmount: Number(row.final_estimated_amount || row.estimated_amount || 0),
+        discountAmount: Number(row.discount_amount || 0),
+        driverReimbursementAmount: Number(row.driver_reimbursement_amount || 0),
+        discountCode: row.discount_code || null,
         tipAmount: Number(row.tip_amount || 0),
-        totalEarned: Number(row.estimated_amount || 0) + Number(row.tip_amount || 0),
+        totalEarned: Number(row.original_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0),
         driverDistanceKm: row.driver_distance_km === null ? null : Number(row.driver_distance_km),
         driverEtaMinutes: row.driver_eta_minutes === null ? null : Number(row.driver_eta_minutes),
         status: mapDriverRideStatus(row.status),
@@ -1421,6 +1492,72 @@ router.get('/history', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/discount-reimbursements', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const rows = await query(
+      `SELECT
+         id,
+         driver_user_id,
+         period_start,
+         period_end,
+         total_discount_reimbursement,
+         ride_count,
+         status,
+         admin_note,
+         approved_at,
+         paid_at,
+         created_at,
+         updated_at
+       FROM driver_discount_reimbursements
+       WHERE driver_user_id = ?
+       ORDER BY period_start DESC, id DESC`,
+      [req.userId]
+    );
+
+    const [summaryRow] = await query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN status IN ('pending', 'approved') THEN total_discount_reimbursement ELSE 0 END), 0) AS outstanding_total,
+         COALESCE(SUM(CASE WHEN status = 'approved' THEN total_discount_reimbursement ELSE 0 END), 0) AS approved_total,
+         COALESCE(SUM(CASE WHEN status = 'paid' THEN total_discount_reimbursement ELSE 0 END), 0) AS paid_total,
+         COALESCE(SUM(total_discount_reimbursement), 0) AS lifetime_total,
+         COUNT(*) AS total_batches
+       FROM driver_discount_reimbursements
+       WHERE driver_user_id = ?`,
+      [req.userId]
+    );
+
+    return res.json({
+      summary: {
+        outstandingTotal: Number(summaryRow?.outstanding_total || 0),
+        approvedTotal: Number(summaryRow?.approved_total || 0),
+        paidTotal: Number(summaryRow?.paid_total || 0),
+        lifetimeTotal: Number(summaryRow?.lifetime_total || 0),
+        totalBatches: Number(summaryRow?.total_batches || 0),
+      },
+      reimbursements: rows.map((row) => ({
+        id: row.id,
+        driverUserId: row.driver_user_id,
+        periodStart: row.period_start,
+        periodEnd: row.period_end,
+        totalDiscountReimbursement: Number(row.total_discount_reimbursement || 0),
+        rideCount: Number(row.ride_count || 0),
+        status: row.status,
+        adminNote: row.admin_note || '',
+        approvedAt: row.approved_at || null,
+        paidAt: row.paid_at || null,
+        createdAt: row.created_at || null,
+        updatedAt: row.updated_at || null,
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/drivers/discount-reimbursements', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/ride-requests/:rideRequestId/receipt-pdf', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -1441,6 +1578,11 @@ router.get('/ride-requests/:rideRequestId/receipt-pdf', requireAuth, async (req,
          pickup_label,
          dropoff_label,
          estimated_amount,
+         original_estimated_amount,
+         discount_amount,
+         final_estimated_amount,
+         driver_reimbursement_amount,
+         discount_code,
          tip_amount,
          status,
          requested_at,
@@ -1674,8 +1816,8 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     if (providedVehicleCount === 0) {
       return res.status(400).json({ error: 'Submit at least one vehicle detail or document to save progress' });
     }
-    if (nextYear !== null && (!Number.isInteger(Number(nextYear)) || Number(nextYear) < 1900)) {
-      return res.status(400).json({ error: 'A valid vehicle year is required when provided' });
+    if (nextYear !== null && (!Number.isInteger(Number(nextYear)) || Number(nextYear) < 2010)) {
+      return res.status(400).json({ error: 'Vehicle year must be 2010 or newer' });
     }
     if (nextSeatCount !== null && (!Number.isInteger(nextSeatCount) || nextSeatCount < 1)) {
       return res.status(400).json({ error: 'seatCount must be a valid whole number when provided' });

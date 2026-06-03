@@ -36,6 +36,8 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
         status: identityRow.profile_status || 'pending',
         submittedAt: identityRow.profile_submitted_at ? new Date(identityRow.profile_submitted_at).toISOString() : null,
         rejectionReason: identityRow.profile_rejection_reason || null,
+        ecocashNumber: identityRow.ecocash_number || null,
+        ecocashRegisteredName: identityRow.ecocash_registered_name || null,
         hasDocuments: hasProfileDocuments,
         missingRequiredCount: [
           identityRow?.national_id_front_url,

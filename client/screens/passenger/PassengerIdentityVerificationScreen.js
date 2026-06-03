@@ -16,19 +16,26 @@ import { useAuth } from '@clerk/clerk-expo';
 import { getMe, submitPassengerIdentity, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
+const SELFIE_DOC = {
+  key: 'selfie',
+  label: 'Passenger selfie',
+  subtitle: 'Take a clear live selfie with your camera',
+  icon: 'camera-outline',
+};
+
 const DOCS = [
   { key: 'nationalIdFront', label: 'National ID front', subtitle: 'Front side of your ID card', icon: 'document-outline' },
   { key: 'nationalIdBack', label: 'National ID back', subtitle: 'Back side of your ID card', icon: 'document-outline' },
 ];
 
-function chooseImageSource() {
+function chooseImageSource({ title = 'Upload document', message = 'Use your camera or choose an existing photo from your gallery.', allowGallery = true } = {}) {
   return new Promise((resolve) => {
     Alert.alert(
-      'Upload document',
-      'Use your camera or choose an existing photo from your gallery.',
+      title,
+      message,
       [
         { text: 'Take photo', onPress: () => resolve('camera') },
-        { text: 'Choose from gallery', onPress: () => resolve('gallery') },
+        ...(allowGallery ? [{ text: 'Choose from gallery', onPress: () => resolve('gallery') }] : []),
         { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
       ],
       { cancelable: true, onDismiss: () => resolve(null) }
@@ -36,17 +43,21 @@ function chooseImageSource() {
   });
 }
 
-export default function PassengerIdentityVerificationScreen({ navigation }) {
+export default function PassengerIdentityVerificationScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
+  const requiredInOnboarding = route?.params?.required === true;
+  const nextRouteName = String(route?.params?.nextRouteName || 'PassengerTabs');
+  const completionHandledRef = useRef(false);
 
   const [loading, setLoading] = useState(true);
   const [identityLoadFailed, setIdentityLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [profile, setProfile] = useState(null);
   const [uris, setUris] = useState({
+    selfie: null,
     nationalIdFront: null,
     nationalIdBack: null,
   });
@@ -88,7 +99,7 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
   }, [isFocused]);
 
   const status = profile?.status || 'not_submitted';
-  const hasSubmittedDocs = !!(profile?.nationalIdFrontUrl || profile?.nationalIdBackUrl);
+  const hasSubmittedDocs = !!(profile?.selfieUrl && profile?.nationalIdFrontUrl && profile?.nationalIdBackUrl);
   const isRejected = status === 'rejected';
   const isBlocked = isRejected && profile?.canResubmit === false;
   const isApproved = status === 'approved';
@@ -96,7 +107,19 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
 
   /** No leaving without submitting while ID is still required (rejected-with-resubmit counts as required). */
   const mustCompleteIdentity =
-    !loading && !identityLoadFailed && !isApproved && !isBlocked && !isPending;
+    requiredInOnboarding
+      ? !loading && !identityLoadFailed && !isApproved && !isPending
+      : !loading && !identityLoadFailed && !isApproved && !isBlocked && !isPending;
+
+  useEffect(() => {
+    if (!requiredInOnboarding) return;
+    if (loading || identityLoadFailed) return;
+    if (!isApproved && !isPending) return;
+    if (completionHandledRef.current) return;
+
+    completionHandledRef.current = true;
+    navigation.replace(nextRouteName);
+  }, [identityLoadFailed, isApproved, isPending, loading, navigation, nextRouteName, requiredInOnboarding]);
 
   useEffect(() => {
     if (!mustCompleteIdentity) return undefined;
@@ -112,13 +135,27 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
   useLayoutEffect(() => {
     if (!isPending || isBlocked) return;
     if (pendingSubmitAlertRef.current) return;
+    if (requiredInOnboarding) {
+      if (!completionHandledRef.current) {
+        completionHandledRef.current = true;
+        navigation.replace(nextRouteName);
+      }
+      return;
+    }
     navigation.goBack();
-  }, [isPending, isBlocked, navigation]);
+  }, [isPending, isBlocked, navigation, nextRouteName, requiredInOnboarding]);
 
   const pickImage = async (key) => {
     try {
       const imagePicker = await import('expo-image-picker');
-      const source = await chooseImageSource();
+      const isSelfie = key === 'selfie';
+      const source = isSelfie
+        ? await chooseImageSource({
+            title: 'Take passenger selfie',
+            message: 'For safety and identity review, your selfie must be taken live with the camera.',
+            allowGallery: false,
+          })
+        : await chooseImageSource();
       if (!source) return;
 
       let result;
@@ -162,8 +199,8 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
   };
 
   const handleSubmit = async () => {
-    if (!uris.nationalIdFront || !uris.nationalIdBack) {
-      Alert.alert('Missing documents', 'Please upload both the front and back of your national ID.');
+    if (!uris.selfie || !uris.nationalIdFront || !uris.nationalIdBack) {
+      Alert.alert('Missing documents', 'Please take your passenger selfie and upload both the front and back of your national ID.');
       return;
     }
 
@@ -172,21 +209,26 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
       const token = await getTokenRef.current({ skipCache: true });
       if (!token) throw new Error('Not signed in');
 
-      const [nationalIdFrontUrl, nationalIdBackUrl] = await Promise.all([
+      const [selfieUrl, nationalIdFrontUrl, nationalIdBackUrl] = await Promise.all([
+        uploadUri(token, uris.selfie),
         uploadUri(token, uris.nationalIdFront),
         uploadUri(token, uris.nationalIdBack),
       ]);
 
-      const data = await submitPassengerIdentity(token, { nationalIdFrontUrl, nationalIdBackUrl });
+      const data = await submitPassengerIdentity(token, { selfieUrl, nationalIdFrontUrl, nationalIdBackUrl });
       setProfile(data?.passengerIdentity || null);
-      setUris({ nationalIdFront: null, nationalIdBack: null });
+      setUris({ selfie: null, nationalIdFront: null, nationalIdBack: null });
       pendingSubmitAlertRef.current = true;
       let finishedAfterSubmit = false;
       const finishAfterSubmit = () => {
         if (finishedAfterSubmit) return;
         finishedAfterSubmit = true;
         pendingSubmitAlertRef.current = false;
-        navigation.goBack();
+        if (requiredInOnboarding) {
+          navigation.replace(nextRouteName);
+        } else {
+          navigation.goBack();
+        }
       };
       Alert.alert(
         'Documents under review',
@@ -201,7 +243,7 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
     }
   };
 
-  if (isPending && !isBlocked && !pendingSubmitAlertRef.current) {
+  if (!requiredInOnboarding && isPending && !isBlocked && !pendingSubmitAlertRef.current) {
     return <View className="flex-1 bg-[#f6f7f3]" />;
   }
 
@@ -239,7 +281,7 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
           <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
             <Text className="text-[22px] font-bold text-gray-950">Verify your identity</Text>
             <Text className="mt-2 text-sm leading-6 text-gray-500">
-              Upload the front and back of your national ID so support can review and confirm your passenger identity.
+              Take a live passenger selfie and upload the front and back of your national ID so support can review and confirm your passenger identity.
             </Text>
 
             <View className="mt-4 self-start rounded-full px-4 py-2" style={{ backgroundColor: statusTone.bg }}>
@@ -259,9 +301,14 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
           <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
             <Text className="mb-3 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Documents</Text>
 
-            {DOCS.map((doc) => {
+            {[SELFIE_DOC, ...DOCS].map((doc) => {
               const localUri = uris[doc.key];
-              const existingUrl = doc.key === 'nationalIdFront' ? profile?.nationalIdFrontUrl : profile?.nationalIdBackUrl;
+              const existingUrl =
+                doc.key === 'selfie'
+                  ? profile?.selfieUrl
+                  : doc.key === 'nationalIdFront'
+                    ? profile?.nationalIdFrontUrl
+                    : profile?.nationalIdBackUrl;
               return (
                 <View key={doc.key} className="mb-4 flex-row items-center rounded-[24px] border border-gray-200 bg-white px-4 py-4">
                   {localUri ? (
@@ -289,10 +336,10 @@ export default function PassengerIdentityVerificationScreen({ navigation }) {
               );
             })}
 
-            <View className="rounded-[20px] bg-[#f8fafc] px-4 py-4">
-              <Text className="text-sm font-medium text-gray-900">Photo tips</Text>
-              <Text className="mt-1 text-sm text-gray-500">Make sure all text is readable, there is no glare, and the full card is visible in the frame.</Text>
-            </View>
+          <View className="rounded-[20px] bg-[#f8fafc] px-4 py-4">
+            <Text className="text-sm font-medium text-gray-900">Photo tips</Text>
+            <Text className="mt-1 text-sm text-gray-500">Take the selfie live from the camera, keep your full face visible, and make sure your national ID text is readable with no glare.</Text>
+          </View>
           </View>
 
           <TouchableOpacity

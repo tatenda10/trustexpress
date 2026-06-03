@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import DriverAccountScreen from './DriverAccountScreen';
 import DriverPhoneVerificationPage from './DriverPhoneVerificationPage';
 import DriverReviewsScreen from './DriverReviewsScreen';
+import DriverEcoCashPayoutScreen from './DriverEcoCashPayoutScreen';
 import SupportChatScreen from '../shared/SupportChatScreen';
 import LegalDocumentScreen from '../shared/LegalDocumentScreen';
 import DriverDocumentationPage from './DriverDocumentationPage';
@@ -28,6 +29,11 @@ export default function DriverAccountStack({ route }) {
       <Stack.Screen
         name="DriverReviews"
         component={DriverReviewsScreen}
+        initialParams={{ driverStatus }}
+      />
+      <Stack.Screen
+        name="DriverEcoCashPayout"
+        component={DriverEcoCashPayoutScreen}
         initialParams={{ driverStatus }}
       />
       <Stack.Screen

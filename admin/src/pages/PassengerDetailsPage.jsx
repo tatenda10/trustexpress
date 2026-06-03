@@ -89,6 +89,7 @@ export default function PassengerDetailsPage() {
 
   const identity = passenger.passengerIdentity || null
   const identityDocs = [
+    { label: 'Passenger Selfie', url: resolveMediaUrl(identity?.selfieUrl) },
     { label: 'National ID Front', url: resolveMediaUrl(identity?.nationalIdFrontUrl) },
     { label: 'National ID Back', url: resolveMediaUrl(identity?.nationalIdBackUrl) },
   ].filter((item) => !!item.url)
@@ -193,7 +194,7 @@ export default function PassengerDetailsPage() {
             <div className="flex flex-col gap-3 border-b border-slate-300 px-4 py-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-sm font-semibold text-slate-800">Identity Verification</h2>
-                <p className="text-xs text-slate-500">Passenger national ID documents and review actions.</p>
+                <p className="text-xs text-slate-500">Passenger selfie, national ID documents, and review actions.</p>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -219,6 +220,12 @@ export default function PassengerDetailsPage() {
               {identity?.rejectionReason ? (
                 <p className="mb-4 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                   Rejection reason: {identity.rejectionReason}
+                </p>
+              ) : null}
+
+              {identity && !identity.selfieUrl ? (
+                <p className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  This passenger submitted older identity documents without a selfie. You can still review the available ID images below.
                 </p>
               ) : null}
 

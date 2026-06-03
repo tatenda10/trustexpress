@@ -48,6 +48,15 @@ function formatDate(value) {
   });
 }
 
+function getFareBreakdown(ride) {
+  const originalFare = Number(ride?.originalEstimatedAmount ?? ride?.estimatedAmount ?? 0);
+  const discountAmount = Number(ride?.discountAmount || 0);
+  const fareAfterDiscount = Number(ride?.finalEstimatedAmount ?? ride?.estimatedAmount ?? 0);
+  const tipAmount = Number(ride?.tipAmount || 0);
+  const totalAmount = Number(ride?.totalAmount ?? (fareAfterDiscount + tipAmount) ?? 0);
+  return { originalFare, discountAmount, fareAfterDiscount, tipAmount, totalAmount };
+}
+
 const PassengerActivityScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -200,6 +209,7 @@ const PassengerActivityScreen = ({ navigation }) => {
             <>
               {rides.map((ride) => {
                 const statusStyle = getStatusColors(ride.status);
+                const { discountAmount, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
                 return (
                   <TouchableOpacity
                     key={ride.id}
@@ -222,12 +232,23 @@ const PassengerActivityScreen = ({ navigation }) => {
                     </View>
 
                     <View className="mt-4 flex-row items-center justify-between">
-                      <Text className="text-2xl font-bold text-gray-900">{formatCurrency(ride.estimatedAmount)}</Text>
+                      <Text className="text-2xl font-bold text-gray-900">{formatCurrency(fareAfterDiscount)}</Text>
                       <View className="flex-row items-center">
                         <Ionicons name={statusStyle.icon} size={18} color={statusStyle.textColor} />
                         <Text className="ml-2 text-sm font-medium text-gray-600">{ride.tierName || 'Ride'}</Text>
                       </View>
                     </View>
+
+                    {discountAmount > 0 ? (
+                      <Text className="mt-2 text-sm font-medium text-emerald-600">
+                        Discount{ride.discountCode ? ` ${ride.discountCode}` : ''}: -{formatCurrency(discountAmount)}
+                      </Text>
+                    ) : null}
+                    {tipAmount > 0 ? (
+                      <Text className="mt-1 text-sm text-gray-500">
+                        Tip: {formatCurrency(tipAmount)} | Total: {formatCurrency(totalAmount)}
+                      </Text>
+                    ) : null}
 
                     <View className="mt-4 flex-row items-center justify-between">
                       <Text className="text-sm text-gray-500">{formatDate(ride.requestedAt)}</Text>

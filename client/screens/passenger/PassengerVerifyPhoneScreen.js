@@ -26,7 +26,7 @@ function normalizePhone(phone) {
   return `+${digits}`;
 }
 
-const PassengerVerifyPhoneScreen = ({ navigation, onVerified }) => {
+const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = null }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const [phone, setPhone] = useState('');
@@ -52,7 +52,13 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified }) => {
               try {
                 await onVerified?.();
               } finally {
-                navigation.replace('PassengerTabs');
+                if (nextRouteName) {
+                  navigation.replace(nextRouteName);
+                } else if (navigation?.canGoBack?.()) {
+                  navigation.goBack();
+                } else {
+                  navigation.replace('PassengerTabs');
+                }
               }
             })();
           },

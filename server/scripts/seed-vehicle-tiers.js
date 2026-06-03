@@ -9,7 +9,7 @@ const VEHICLE_TIERS = [
     vehicleRequirements: [
       '4-door vehicle',
       '4 passenger seats',
-      '2005 model or newer',
+      '2010 model or newer',
       'Clean interior and exterior',
       'Good mechanical condition',
       'Valid license, insurance, and registration',

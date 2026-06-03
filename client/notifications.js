@@ -15,7 +15,8 @@ const DRIVER_REQUEST_CHANNEL_ID = 'ride-requests';
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     // Keep only the normal OS foreground banner behavior.
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),

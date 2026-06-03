@@ -24,7 +24,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [profileData, setProfileData] = useState(null);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
   const [showProfileImagePreview, setShowProfileImagePreview] = useState(false);
-
   const refetchRef = useRef(refetchDriverStatus);
   refetchRef.current = refetchDriverStatus;
   const getTokenRef = useRef(getToken);
@@ -341,6 +340,16 @@ const DriverAccountScreen = ({ navigation, route }) => {
   // ];
 
   const supportRows = [
+    {
+      key: 'payout',
+      title: 'EcoCash payout details',
+      subtitle: driverStatus?.driverProfile?.ecocashNumber
+        ? `Saved number: ${driverStatus.driverProfile.ecocashNumber}`
+        : 'Add the EcoCash number registered in your own name',
+      icon: 'cash-outline',
+      onPress: () => navigation.navigate('DriverEcoCashPayout'),
+      danger: false,
+    },
     {
       key: 'reviews',
       title: 'Reviews',

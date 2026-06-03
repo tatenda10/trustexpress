@@ -193,7 +193,34 @@ export default function RideOperationsPage() {
                   <td className="px-4 py-3 text-slate-700">{row.driver}</td>
                   <td className="px-4 py-3 text-slate-700">{row.route}</td>
                   <td className="px-4 py-3 text-slate-700">{row.tierName}</td>
-                  <td className="px-4 py-3 text-slate-700">{row.fare}</td>
+                  <td className="px-4 py-3 text-slate-700">
+                    <div className="space-y-1">
+                      <div>{row.fare}</div>
+                      {Number(row.discountAmount || 0) > 0 ? (
+                        <>
+                          <div className="text-[11px] font-medium text-emerald-700">
+                            Promo{row.discountCode ? ` ${row.discountCode}` : ''}: -${Number(row.discountAmount || 0).toFixed(2)}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Original: ${Number(row.originalEstimatedAmount || 0).toFixed(2)}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Driver reimbursement: ${Number(row.driverReimbursementAmount || 0).toFixed(2)}
+                          </div>
+                        </>
+                      ) : null}
+                      {Number(row.tipAmount || 0) > 0 ? (
+                        <div className="text-[11px] font-medium text-emerald-700">
+                          Tip: ${Number(row.tipAmount || 0).toFixed(2)}
+                        </div>
+                      ) : null}
+                      {Number(row.tipAmount || 0) > 0 || Number(row.discountAmount || 0) > 0 ? (
+                        <div className="text-[11px] text-slate-500">
+                          Total: ${Number(row.totalAmount || 0).toFixed(2)}
+                        </div>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-slate-700">
                     <div className="flex flex-wrap gap-2">
                       {row.openPanicAlerts > 0 ? (

@@ -64,6 +64,8 @@ function shapeProfileFromRow(row) {
     driverLicenceUrl: normalizeUploadPath(row.driver_licence_url),
     selfieUrl: normalizeUploadPath(row.selfie_url),
     selfieWithIdCardUrl: normalizeUploadPath(row.selfie_with_id_card_url),
+    ecocashNumber: row.ecocash_number || null,
+    ecocashRegisteredName: row.ecocash_registered_name || null,
   };
 }
 

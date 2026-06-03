@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import DriverHomeStack from './DriverHomeStack';
 import DriverWalletScreen from './DriverWalletScreen';
+import DriverDiscountReimbursementsScreen from './DriverDiscountReimbursementsScreen';
 import DriverActivityScreen from './DriverActivityScreen';
 import DriverAccountStack from './DriverAccountStack';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -36,6 +37,14 @@ export default function DriverTabNavigator({ route }) {
         options={{
           title: 'Wallet',
           tabBarIcon: ({ color }) => <Ionicons name="wallet-outline" size={ICON_SIZE} color={color} />,
+        }}
+      />
+      <Tab.Screen
+        name="DriverReimbursements"
+        component={DriverDiscountReimbursementsScreen}
+        options={{
+          title: 'Discounts',
+          tabBarIcon: ({ color }) => <Ionicons name="cash-outline" size={ICON_SIZE} color={color} />,
         }}
       />
       <Tab.Screen

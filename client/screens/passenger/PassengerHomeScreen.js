@@ -95,6 +95,18 @@ async function fetchRideRoute(token, origin, destination) {
   };
 }
 
+function normalizeRouteCoordinate(value) {
+  const latitude = Number(value?.latitude ?? value?.lat);
+  const longitude = Number(value?.longitude ?? value?.lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
+
+function normalizeRouteCoordinates(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(normalizeRouteCoordinate).filter(Boolean);
+}
+
 function buildRouteRegion(start, end) {
   if (!start && !end) return HARARE_FALLBACK;
   if (!start) return { ...end, latitudeDelta: 0.08, longitudeDelta: 0.08 };
@@ -501,16 +513,13 @@ export default function PassengerHomeScreen({ navigation, route }) {
         const result = await fetchRideRoute(token, pickupCoordinate, dropoffCoordinate);
         if (cancelled) return;
 
-        if (Array.isArray(result.coordinates) && result.coordinates.length > 1) {
-          setRouteCoordinates(result.coordinates);
-        } else {
-          setRouteCoordinates([pickupCoordinate, dropoffCoordinate]);
-        }
+        const normalizedCoordinates = normalizeRouteCoordinates(result.coordinates);
+        setRouteCoordinates(normalizedCoordinates);
         setRouteDistanceKm(result.distanceKm);
         setRouteDurationMinutes(result.durationMinutes);
       } catch {
         if (cancelled) return;
-        setRouteCoordinates([pickupCoordinate, dropoffCoordinate]);
+        setRouteCoordinates([]);
         setRouteDistanceKm(null);
         setRouteDurationMinutes(null);
       } finally {
@@ -736,6 +745,10 @@ export default function PassengerHomeScreen({ navigation, route }) {
       Alert.alert('Calculating road distance', 'Please wait for the road distance to finish calculating, then choose your ride.');
       return;
     }
+    if (!Array.isArray(routeCoordinates) || routeCoordinates.length < 2) {
+      Alert.alert('Route unavailable', 'We could not load the real driving route yet. Please wait a moment and try again.');
+      return;
+    }
 
     navigation.navigate('PassengerChooseRide', {
       pickupCoordinate,
@@ -807,13 +820,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                   strokeWidth={5}
                 />
               </>
-            ) : (
-              <Polyline
-                coordinates={[pickupCoordinate, dropoffCoordinate]}
-                strokeColor={PRIMARY_BLUE}
-                strokeWidth={5}
-              />
-            )
+            ) : null
           ) : null}
         </MapView>
 

@@ -9,12 +9,13 @@ import {
   StyleSheet,
   Animated,
   Platform,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
-import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions } from '../../api';
+import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions, validatePassengerDiscount } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 
@@ -155,9 +156,13 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [tiers, setTiers] = useState([]);
   const [selectedTierKey, setSelectedTierKey] = useState('');
   const [isSubmittingRide, setIsSubmittingRide] = useState(false);
+  const [discountCodeInput, setDiscountCodeInput] = useState('');
+  const [appliedDiscount, setAppliedDiscount] = useState(null);
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
 
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const lastDiscountTierKeyRef = useRef('');
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -214,6 +219,18 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     const minimumFare = Number(selectedTier.minimumFare || 0);
     return Math.ceil(Math.max(baseFare + distanceKm * perKm, minimumFare));
   }, [distanceKm, selectedTier]);
+
+  useEffect(() => {
+    if (!selectedTierKey) return;
+    if (lastDiscountTierKeyRef.current && lastDiscountTierKeyRef.current !== selectedTierKey) {
+      setAppliedDiscount(null);
+    }
+    lastDiscountTierKeyRef.current = selectedTierKey;
+  }, [selectedTierKey]);
+
+  const originalEstimatedAmount = Number(estimatedAmount || 0);
+  const discountAmount = Number(appliedDiscount?.discountAmount || 0);
+  const finalEstimatedAmount = Number(appliedDiscount?.finalFareAmount || estimatedAmount || 0);
 
   const navigateToActiveRide = (data) => {
     const ride = data?.rideRequest;
@@ -280,13 +297,14 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         routeDurationMinutes: Number(estimatedMinutes || 0),
         distanceKm,
         estimatedMinutes,
-        estimatedAmount,
+        estimatedAmount: finalEstimatedAmount,
         selectedTier,
+        discountCode: appliedDiscount?.code || null,
       });
       const serverRide = data?.rideRequest || null;
       const nextDistanceKm = Number(serverRide?.estimatedDistanceKm || distanceKm || 0);
       const nextEstimatedMinutes = Number(serverRide?.estimatedMinutes || estimatedMinutes || 0);
-      const nextEstimatedAmount = Number(serverRide?.estimatedAmount || estimatedAmount || 0);
+      const nextEstimatedAmount = Number(serverRide?.estimatedAmount || finalEstimatedAmount || 0);
       const nextSelectedTier = serverRide?.requestedTierKey || serverRide?.requestedTierName
         ? { ...selectedTier, tierKey: serverRide.requestedTierKey || selectedTier.tierKey, tierName: serverRide.requestedTierName || selectedTier.tierName }
         : selectedTier;
@@ -318,6 +336,37 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   };
 
   const isDisabled = loadingTiers || isSubmittingRide || tiers.length === 0;
+
+  const handleApplyDiscount = async () => {
+    if (!selectedTier) {
+      Alert.alert('Choose a ride', 'Select a ride tier before applying a discount code.');
+      return;
+    }
+    const normalizedCode = String(discountCodeInput || '').trim().toUpperCase();
+    if (!normalizedCode) {
+      Alert.alert('Enter a code', 'Type a discount code first.');
+      return;
+    }
+
+    try {
+      setApplyingDiscount(true);
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      const data = await validatePassengerDiscount(token, {
+        discountCode: normalizedCode,
+        selectedTier,
+        originalFareAmount: originalEstimatedAmount,
+      });
+      setAppliedDiscount(data?.discount || null);
+      setDiscountCodeInput(normalizedCode);
+      Alert.alert('Discount applied', `You saved $${Number(data?.discount?.discountAmount || 0).toFixed(2)} on this trip.`);
+    } catch (error) {
+      setAppliedDiscount(null);
+      Alert.alert('Code not applied', error?.message || 'This discount code could not be applied.');
+    } finally {
+      setApplyingDiscount(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -357,8 +406,21 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             <Text style={styles.routeMetaText}>{estimatedMinutes} min</Text>
           </View>
           <View style={styles.routeMetaDot} />
-          <Text style={styles.routeMetaPrice}>${estimatedAmount.toFixed(2)}</Text>
+          <Text style={styles.routeMetaPrice}>${finalEstimatedAmount.toFixed(2)}</Text>
         </View>
+        {discountAmount > 0 ? (
+          <View style={styles.discountSummaryWrap}>
+            <Text style={styles.discountSummaryText}>
+              Original ${originalEstimatedAmount.toFixed(2)}
+            </Text>
+            <Text style={styles.discountSummaryText}>
+              Discount -${discountAmount.toFixed(2)}
+            </Text>
+            <Text style={styles.discountSummaryTextStrong}>
+              Code {appliedDiscount?.code}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       {/* ── Tiers ── */}
@@ -413,6 +475,47 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             <Text style={styles.infoPillText}>Price locked in • No surge pricing</Text>
           </View>
         )}
+
+        {selectedTier && !loadingTiers ? (
+          <View style={styles.discountCard}>
+            <Text style={styles.discountCardTitle}>Discount code</Text>
+            <View style={styles.discountInputRow}>
+              <TextInput
+                value={discountCodeInput}
+                onChangeText={setDiscountCodeInput}
+                placeholder="Enter promo code"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                style={styles.discountInput}
+              />
+              <TouchableOpacity
+                onPress={handleApplyDiscount}
+                disabled={applyingDiscount}
+                style={[styles.discountApplyBtn, applyingDiscount && styles.discountApplyBtnDisabled]}
+              >
+                {applyingDiscount ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.discountApplyBtnText}>Apply</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            <View style={styles.discountBreakdown}>
+              <View style={styles.discountBreakdownRow}>
+                <Text style={styles.discountBreakdownLabel}>Original fare</Text>
+                <Text style={styles.discountBreakdownValue}>${originalEstimatedAmount.toFixed(2)}</Text>
+              </View>
+              <View style={styles.discountBreakdownRow}>
+                <Text style={styles.discountBreakdownLabel}>Discount</Text>
+                <Text style={[styles.discountBreakdownValue, styles.discountBreakdownValueGreen]}>-${discountAmount.toFixed(2)}</Text>
+              </View>
+              <View style={styles.discountBreakdownRow}>
+                <Text style={styles.discountBreakdownTotalLabel}>Final total</Text>
+                <Text style={styles.discountBreakdownTotalValue}>${finalEstimatedAmount.toFixed(2)}</Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         <TouchableOpacity
           onPress={handleFindRide}
@@ -548,6 +651,25 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
     marginLeft: 'auto',
+  },
+  discountSummaryWrap: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#eef2f7',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  discountSummaryText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  discountSummaryTextStrong: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#15803d',
   },
 
   // ── Tiers Section ──
@@ -733,6 +855,90 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     color: PRIMARY_BLUE,
+  },
+  discountCard: {
+    marginBottom: 14,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  discountCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 10,
+  },
+  discountInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  discountInput: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    backgroundColor: '#f9fafb',
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  discountApplyBtn: {
+    marginLeft: 10,
+    height: 44,
+    minWidth: 78,
+    borderRadius: 14,
+    backgroundColor: PRIMARY_BLUE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  discountApplyBtnDisabled: {
+    opacity: 0.65,
+  },
+  discountApplyBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  discountBreakdown: {
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#eef2f7',
+    paddingTop: 12,
+    gap: 8,
+  },
+  discountBreakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  discountBreakdownLabel: {
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+  discountBreakdownValue: {
+    fontSize: 13,
+    color: '#111827',
+    fontWeight: '700',
+  },
+  discountBreakdownValueGreen: {
+    color: '#15803d',
+  },
+  discountBreakdownTotalLabel: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '800',
+  },
+  discountBreakdownTotalValue: {
+    fontSize: 16,
+    color: '#111827',
+    fontWeight: '900',
   },
   ctaBtn: {
     height: 56,

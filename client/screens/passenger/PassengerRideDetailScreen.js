@@ -23,6 +23,15 @@ function formatDate(value) {
   });
 }
 
+function getFareBreakdown(ride) {
+  const originalFare = Number(ride?.originalEstimatedAmount ?? ride?.estimatedAmount ?? 0);
+  const discountAmount = Number(ride?.discountAmount || 0);
+  const fareAfterDiscount = Number(ride?.finalEstimatedAmount ?? ride?.estimatedAmount ?? 0);
+  const tipAmount = Number(ride?.tipAmount || 0);
+  const totalAmount = Number(ride?.totalAmount ?? (fareAfterDiscount + tipAmount) ?? 0);
+  return { originalFare, discountAmount, fareAfterDiscount, tipAmount, totalAmount };
+}
+
 export default function PassengerRideDetailScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -155,7 +164,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
       setRide((current) => current ? {
         ...current,
         tipAmount: Number(amount),
-        totalAmount: Number(current.estimatedAmount || 0) + Number(amount),
+        totalAmount: Number(current.finalEstimatedAmount ?? current.estimatedAmount ?? 0) + Number(amount),
         canTipDriver: false,
       } : current);
       Alert.alert('Tip sent', `Your $${Number(amount).toFixed(2)} tip was added for ${ride.driverName || 'your driver'}.`);
@@ -183,6 +192,8 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     );
   }
 
+  const { originalFare, discountAmount, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
+
   return (
     <View className="flex-1 bg-white">
       <View className="border-b border-gray-100 bg-white px-5 pb-3" style={{ paddingTop: insets.top + 8 }}>
@@ -203,13 +214,40 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         <View className="rounded-[28px] border border-gray-100 bg-white px-5 py-5">
           <Text className="text-lg font-bold text-gray-900">{ride.pickupLabel}</Text>
           <Text className="mt-1 text-sm text-gray-500">to {ride.dropoffLabel}</Text>
-          <Text className="mt-4 text-3xl font-bold text-gray-900">{formatCurrency(ride.totalAmount || ride.estimatedAmount)}</Text>
+          <Text className="mt-4 text-3xl font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
           <Text className="mt-1 text-sm text-gray-500">{ride.tierName || 'Ride'}</Text>
-          {Number(ride.tipAmount || 0) > 0 ? (
+          {tipAmount > 0 ? (
             <Text className="mt-2 text-sm font-medium text-green-600">
-              Includes {formatCurrency(ride.tipAmount)} tip
+              Includes {formatCurrency(tipAmount)} tip
             </Text>
           ) : null}
+
+          <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-sm text-gray-500">Original fare</Text>
+              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(originalFare)}</Text>
+            </View>
+            {discountAmount > 0 ? (
+              <View className="mt-2 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-500">
+                  Discount{ride.discountCode ? ` (${ride.discountCode})` : ''}
+                </Text>
+                <Text className="text-sm font-semibold text-green-600">-{formatCurrency(discountAmount)}</Text>
+              </View>
+            ) : null}
+            <View className="mt-2 flex-row items-center justify-between">
+              <Text className="text-sm text-gray-500">Fare after discount</Text>
+              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(fareAfterDiscount)}</Text>
+            </View>
+            <View className="mt-2 flex-row items-center justify-between">
+              <Text className="text-sm text-gray-500">Tip</Text>
+              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(tipAmount)}</Text>
+            </View>
+            <View className="mt-3 flex-row items-center justify-between border-t border-gray-200 pt-3">
+              <Text className="text-sm font-bold text-gray-900">Passenger total</Text>
+              <Text className="text-base font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
+            </View>
+          </View>
 
           <View className="mt-5 border-t border-gray-100 pt-4">
             <Text className="text-sm text-gray-500">Driver</Text>

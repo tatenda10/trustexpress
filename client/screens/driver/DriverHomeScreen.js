@@ -236,6 +236,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const manualAvailabilityRequestRef = useRef(null);
   const availabilityLoadInFlightRef = useRef(false);
   const currentRideLoadInFlightRef = useRef(false);
+  const currentRideRefreshQueuedRef = useRef(false);
   const requestLoadInFlightRef = useRef(false);
   const overlayPermissionPromptOpenRef = useRef(false);
   const lastAvailabilityAttemptRef = useRef({ target: null, at: 0 });
@@ -258,6 +259,38 @@ const DriverHomeScreen = ({ navigation, route }) => {
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  const loadCurrentRide = useCallback(async ({ allowQueue = true } = {}) => {
+    if (currentRideLoadInFlightRef.current) {
+      if (allowQueue) currentRideRefreshQueuedRef.current = true;
+      return;
+    }
+
+    currentRideLoadInFlightRef.current = true;
+    try {
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      const data = await getDriverCurrentRide(token);
+      setCurrentRide(data?.ride || null);
+      patchDriverStatus({ currentRide: data?.ride || null });
+      if (data?.ride) {
+        setPendingSelectionRide(null);
+      }
+      if (data?.ride?.driverCoordinate) {
+        setDriverCoordinate(data.ride.driverCoordinate);
+      }
+    } catch {
+      setCurrentRide(null);
+    } finally {
+      currentRideLoadInFlightRef.current = false;
+      if (currentRideRefreshQueuedRef.current) {
+        currentRideRefreshQueuedRef.current = false;
+        setTimeout(() => {
+          loadCurrentRide({ allowQueue: false }).catch(() => {});
+        }, 0);
+      }
+    }
+  }, [patchDriverStatus]);
+
   useEffect(() => {
     if (!isFocused) return undefined;
     let active = true;
@@ -277,6 +310,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
             setPendingSelectionRide(null);
           }
           setRealtimeSignal((current) => current + 1);
+
+          const nextStatus = String(payload?.status || '').toLowerCase();
+          if (nextStatus === 'driver_assigned' || nextStatus === 'driver_arrived' || nextStatus === 'in_progress') {
+            loadCurrentRide().catch(() => {});
+          }
         };
 
         const handleDriverRating = (payload = {}) => {
@@ -318,7 +356,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       active = false;
       localSocket?.__driverHomeCleanup?.();
     };
-  }, [isFocused, pendingSelectionRide?.id]);
+  }, [isFocused, loadCurrentRide, pendingSelectionRide?.id]);
 
   useEffect(() => {
     const shouldKeepAwake = isOnline || !!currentRide || !!pendingSelectionRide;
@@ -478,31 +516,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
     if (!isFocused) return undefined;
     let active = true;
 
-    const loadCurrentRide = async () => {
-      if (currentRideLoadInFlightRef.current) return;
-      currentRideLoadInFlightRef.current = true;
-      try {
-        const token = await getTokenRef.current();
-        if (!token) throw new Error('Not signed in');
-        const data = await getDriverCurrentRide(token);
-        if (!active) return;
-        setCurrentRide(data?.ride || null);
-        patchDriverStatus({ currentRide: data?.ride || null });
-        if (data?.ride) {
-          setPendingSelectionRide(null);
-        }
-        if (data?.ride?.driverCoordinate) {
-          setDriverCoordinate(data.ride.driverCoordinate);
-        }
-      } catch {
-        if (!active) return;
-        setCurrentRide(null);
-      } finally {
-        currentRideLoadInFlightRef.current = false;
-      }
+    const loadCurrentRideWithGuard = async () => {
+      if (!active) return;
+      await loadCurrentRide();
     };
 
-    loadCurrentRide();
+    loadCurrentRideWithGuard();
     if (!currentRide?.id && !pendingSelectionRide) {
       return () => {
         active = false;
@@ -510,14 +529,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
     }
 
     const interval = setInterval(() => {
-      loadCurrentRide();
+      loadCurrentRideWithGuard();
     }, CURRENT_RIDE_REFRESH_INTERVAL_MS);
 
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, [currentRide?.id, isFocused, patchDriverStatus, pendingSelectionRide]);
+  }, [currentRide?.id, isFocused, loadCurrentRide, pendingSelectionRide]);
 
   useEffect(() => {
     if (!isOnline) {
@@ -1534,6 +1553,27 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     <View className="items-end">
                       <Text className="text-xs font-semibold uppercase tracking-wide text-[#5a6474]">Fare</Text>
                       <Text className="mt-1 text-3xl font-extrabold text-[#111111]">${Number(req.estimatedAmount || 0).toFixed(2)}</Text>
+                      {Number(req.discountAmount || 0) > 0 ? (
+                        <>
+                          <Text className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-[#15803d]">
+                            Passenger promo applied
+                          </Text>
+                          <Text className="mt-1 text-xs text-[#5a6474]">
+                            Passenger pays ${Number(req.finalEstimatedAmount || 0).toFixed(2)}
+                          </Text>
+                          <Text className="mt-0.5 text-xs text-[#5a6474]">
+                            Discount ${Number(req.discountAmount || 0).toFixed(2)}
+                          </Text>
+                          <Text className="mt-0.5 text-xs text-[#5a6474]">
+                            Admin reimbursement ${Number(req.driverReimbursementAmount || 0).toFixed(2)}
+                          </Text>
+                          {req.discountCode ? (
+                            <Text className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#2f73c9]">
+                              Code {req.discountCode}
+                            </Text>
+                          ) : null}
+                        </>
+                      ) : null}
                     </View>
                   </View>
 
@@ -1582,6 +1622,20 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       </Text>
                     </View>
                   </View>
+
+                  {Number(req.discountAmount || 0) > 0 ? (
+                    <View className="mt-4 rounded-[18px] border border-[#dbeafe] bg-[#eff6ff] px-4 py-3">
+                      <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                        Promo ride accounting
+                      </Text>
+                      <Text className="mt-2 text-sm text-[#1e3a8a]">
+                        Full fare ${Number(req.estimatedAmount || 0).toFixed(2)} | Passenger total ${Number(req.finalEstimatedAmount || 0).toFixed(2)}
+                      </Text>
+                      <Text className="mt-1 text-sm text-[#1e3a8a]">
+                        Discount ${Number(req.discountAmount || 0).toFixed(2)} reimbursed by admin later
+                      </Text>
+                    </View>
+                  ) : null}
 
                   <View className="mt-4 flex-row gap-3">
                     <TouchableOpacity
@@ -1650,6 +1704,27 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       <Text className="mt-1 text-3xl font-extrabold text-[#111111]">
                         ${Number(activeRequest?.estimatedAmount || 0).toFixed(2)}
                       </Text>
+                      {Number(activeRequest?.discountAmount || 0) > 0 ? (
+                        <>
+                          <Text className="mt-2 text-[11px] font-semibold uppercase tracking-[1px] text-[#15803d]">
+                            Passenger promo applied
+                          </Text>
+                          <Text className="mt-1 text-sm text-[#5a6474]">
+                            Passenger pays ${Number(activeRequest?.finalEstimatedAmount || 0).toFixed(2)}
+                          </Text>
+                          <Text className="mt-0.5 text-sm text-[#5a6474]">
+                            Discount ${Number(activeRequest?.discountAmount || 0).toFixed(2)}
+                          </Text>
+                          <Text className="mt-0.5 text-sm text-[#5a6474]">
+                            Admin reimbursement ${Number(activeRequest?.driverReimbursementAmount || 0).toFixed(2)}
+                          </Text>
+                          {activeRequest?.discountCode ? (
+                            <Text className="mt-0.5 text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
+                              Code {activeRequest.discountCode}
+                            </Text>
+                          ) : null}
+                        </>
+                      ) : null}
                     </View>
                     <View className="items-end">
                       <Text className="text-xs font-semibold uppercase tracking-[1px] text-[#5a6474]">Tier</Text>

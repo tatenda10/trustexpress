@@ -239,6 +239,8 @@ export default function DriverDetailsPage() {
           <Field label="Email" value={driver.email} />
           <Field label="Phone" value={driver.phoneNumber} />
           <Field label="Phone Verified" value={driver.phoneVerified ? 'Yes' : 'No'} />
+          <Field label="EcoCash Number" value={driver.profile?.ecocashNumber || '-'} />
+          <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
           <Field
             label="Referred By Agent"

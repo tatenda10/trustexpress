@@ -2,7 +2,7 @@
  * Backend connection - BASE_URL and helpers for API routes.
  */
 export const BASE_URL = 'https://ridehailcarsserver.online';
-//export const BASE_URL = 'http://192.168.100.35:5000';
+//export const BASE_URL = 'http://192.168.100.171:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {
@@ -146,6 +146,13 @@ export async function getDriverMe(token, options = {}) {
   );
 }
 
+export async function updateDriverPayoutDetails(token, payload) {
+  return apiFetch('/api/drivers/me/payout-details', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
 export async function saveDriverPushToken(token, pushToken) {
   return apiFetch(
     '/api/drivers/push-token',
@@ -178,6 +185,10 @@ export async function getDriverRideHistory(token, options = {}) {
   if (options.limit) params.set('limit', String(options.limit));
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return apiFetch(`/api/drivers/history${suffix}`, {}, token);
+}
+
+export async function getDriverDiscountReimbursements(token) {
+  return apiFetch('/api/drivers/discount-reimbursements', {}, token);
 }
 
 export async function getDriverCurrentRide(token, options = {}) {
@@ -300,6 +311,13 @@ export async function tipDriver(token, rideRequestId, amount) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/tip-driver`, {
     method: 'POST',
     body: JSON.stringify({ amount }),
+  }, token);
+}
+
+export async function validatePassengerDiscount(token, payload) {
+  return apiFetch('/api/rides/passenger/validate-discount', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   }, token);
 }
 

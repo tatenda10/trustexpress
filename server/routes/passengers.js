@@ -147,9 +147,10 @@ router.post('/identity', requireAuth, async (req, res) => {
 
     const nationalIdFrontUrl = String(req.body?.nationalIdFrontUrl || '').trim();
     const nationalIdBackUrl = String(req.body?.nationalIdBackUrl || '').trim();
+    const selfieUrl = String(req.body?.selfieUrl || '').trim();
 
-    if (!nationalIdFrontUrl || !nationalIdBackUrl) {
-      return res.status(400).json({ error: 'National ID front and back images are required' });
+    if (!nationalIdFrontUrl || !nationalIdBackUrl || !selfieUrl) {
+      return res.status(400).json({ error: 'Passenger selfie plus national ID front and back images are required' });
     }
 
     const existing = await query(
@@ -170,21 +171,23 @@ router.post('/identity', requireAuth, async (req, res) => {
          passenger_user_id,
          national_id_front_url,
          national_id_back_url,
+         selfie_url,
          identity_status,
          identity_submitted_at,
          identity_reviewed_at,
          identity_rejection_reason,
          identity_can_resubmit
-       ) VALUES (?, ?, ?, 'pending', CURRENT_TIMESTAMP, NULL, NULL, 1)
+       ) VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, NULL, NULL, 1)
        ON DUPLICATE KEY UPDATE
          national_id_front_url = VALUES(national_id_front_url),
          national_id_back_url = VALUES(national_id_back_url),
+         selfie_url = VALUES(selfie_url),
          identity_status = 'pending',
          identity_submitted_at = CURRENT_TIMESTAMP,
          identity_reviewed_at = NULL,
          identity_rejection_reason = NULL,
          identity_can_resubmit = 1`,
-      [req.userId, nationalIdFrontUrl, nationalIdBackUrl]
+      [req.userId, nationalIdFrontUrl, nationalIdBackUrl, selfieUrl]
     );
 
     const verification = await getPassengerVerificationFromMysql(req.userId);

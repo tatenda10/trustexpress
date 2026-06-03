@@ -31,6 +31,18 @@ import { connectRealtime } from '../../realtime';
 const REQUEST_EXPIRY_POLL_MS = 1000;
 const EMPTY_ROUTE_COORDINATES = [];
 
+function normalizeRouteCoordinate(value) {
+  const latitude = Number(value?.latitude ?? value?.lat);
+  const longitude = Number(value?.longitude ?? value?.lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
+
+function normalizeRouteCoordinates(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(normalizeRouteCoordinate).filter(Boolean);
+}
+
 function normalizeVehicleImageUrl(url) {
   const raw = String(url || '').trim();
   if (!raw) return null;
@@ -74,6 +86,10 @@ function formatCountdown(totalSeconds) {
   const m = Math.floor(safeSeconds / 60);
   const s = safeSeconds % 60;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function formatCurrency(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
 }
 
 // ── Driver card ──────────────────────────────────────────────────────────────
@@ -173,6 +189,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
   const navigatedToTrackingRef = useRef(false);
   const expiryNavigationHandledRef = useRef(false);
 
@@ -201,6 +218,10 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     rideRequest,
   } = route.params || {};
 
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   // ── Tick every second ──
   useEffect(() => {
     const interval = setInterval(() => setNowTick(Date.now()), 1000);
@@ -210,21 +231,22 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   // ── Load route polyline ──
   useEffect(() => {
     if (!pickupCoordinate || !dropoffCoordinate) { setRouteCoordinates([]); return; }
-    if (Array.isArray(initialRouteCoordinates) && initialRouteCoordinates.length > 1) {
-      setRouteCoordinates(initialRouteCoordinates); return;
+    const normalizedInitialCoordinates = normalizeRouteCoordinates(initialRouteCoordinates);
+    if (normalizedInitialCoordinates.length > 1) {
+      setRouteCoordinates(normalizedInitialCoordinates); return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         const coords = await fetchRouteCoordinates(token, pickupCoordinate, dropoffCoordinate);
-        if (!cancelled) setRouteCoordinates(coords || [pickupCoordinate, dropoffCoordinate]);
+        if (!cancelled) setRouteCoordinates(normalizeRouteCoordinates(coords));
       } catch {
-        if (!cancelled) setRouteCoordinates([pickupCoordinate, dropoffCoordinate]);
+        if (!cancelled) setRouteCoordinates([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [dropoffCoordinate, getToken, initialRouteCoordinates, pickupCoordinate]);
+  }, [dropoffCoordinate, initialRouteCoordinates, pickupCoordinate]);
 
   // ── Poll ride status ──
   useEffect(() => {
@@ -232,7 +254,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     let active = true;
     const loadStatus = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await getPassengerRideRequestStatus(token, rideRequest.id);
         if (!active) return;
@@ -246,7 +268,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     loadStatus();
     const interval = setInterval(loadStatus, REQUEST_EXPIRY_POLL_MS);
     return () => { active = false; clearInterval(interval); };
-  }, [getToken, rideRequest?.id, realtimeSignal]);
+  }, [rideRequest?.id, realtimeSignal]);
 
   // ── Realtime socket ──
   useEffect(() => {
@@ -255,7 +277,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     let localSocket = null;
     (async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         if (!active || !token) return;
         localSocket = connectRealtime(token);
         if (!localSocket) return;
@@ -277,7 +299,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       } catch { /* polling fallback */ }
     })();
     return () => { active = false; localSocket?.__cleanup?.(); };
-  }, [getToken, rideRequest?.id]);
+  }, [rideRequest?.id]);
 
   // ── Navigate to tracking when driver assigned ──
   useEffect(() => {
@@ -295,6 +317,34 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   // ── Handle expiry / cancellation ──
   const rideExpiresAt = rideStatus?.expiresAt || rideRequest?.expiresAt || null;
   const rideStatusValue = String(rideStatus?.status || rideRequest?.status || '').toLowerCase();
+  const driversViewingCount = Math.max(
+    0,
+    Number(rideStatus?.driversViewingCount ?? rideRequest?.driversViewingCount ?? 0)
+  );
+  const originalEstimatedAmount = Number(
+    rideStatus?.originalEstimatedAmount ??
+    rideRequest?.originalEstimatedAmount ??
+    estimatedAmount ??
+    0
+  );
+  const discountAmount = Number(
+    rideStatus?.discountAmount ??
+    rideRequest?.discountAmount ??
+    0
+  );
+  const finalEstimatedAmount = Number(
+    rideStatus?.finalEstimatedAmount ??
+    rideStatus?.estimatedAmount ??
+    rideRequest?.finalEstimatedAmount ??
+    rideRequest?.estimatedAmount ??
+    estimatedAmount ??
+    0
+  );
+  const appliedDiscountCode = String(
+    rideStatus?.discountCode ??
+    rideRequest?.discountCode ??
+    ''
+  ).trim();
 
   const remainingSeconds = useMemo(
     () => getEffectiveRemainingSeconds(
@@ -331,7 +381,28 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       setIsSubmittingDriverId(driver.id);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      if (rideRequest?.id) await selectRideDriver(token, rideRequest.id, driver.id);
+      if (!rideRequest?.id) return;
+      const data = await selectRideDriver(token, rideRequest.id, driver.id);
+      const assigned = data?.assignedDriver || driver || null;
+      const nextStatus = String(data?.rideRequest?.status || 'driver_assigned').toLowerCase();
+      setAssignedDriver(assigned);
+      setRideStatus((current) => current ? {
+        ...current,
+        status: nextStatus,
+        ...(data?.rideRequest?.driverDistanceKm !== undefined ? { driverDistanceKm: Number(data.rideRequest.driverDistanceKm || 0) } : null),
+        ...(data?.rideRequest?.driverEtaMinutes !== undefined ? { driverEtaMinutes: Number(data.rideRequest.driverEtaMinutes || 0) } : null),
+      } : current);
+      navigatedToTrackingRef.current = true;
+      navigation.replace('PassengerRideTracking', {
+        pickupCoordinate,
+        dropoffCoordinate,
+        pickupLabel,
+        dropoffLabel,
+        estimatedAmount: Number(rideStatus?.estimatedAmount || estimatedAmount || 0),
+        selectedTier: assigned?.tier || selectedTier,
+        driver: assigned,
+        rideRequestId: rideRequest.id,
+      });
     } catch (error) {
       Alert.alert('Driver selection failed', error?.message || 'Could not assign this driver.');
     } finally {
@@ -407,7 +478,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           <Marker coordinate={pickupCoordinate} title="Pickup" pinColor={PRIMARY_BLUE} />
           <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" />
           <Polyline
-            coordinates={routeCoordinates.length > 1 ? routeCoordinates : [pickupCoordinate, dropoffCoordinate]}
+            coordinates={routeCoordinates}
             strokeColor={PRIMARY_BLUE}
             strokeWidth={5}
           />
@@ -445,11 +516,16 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             {/* Trip meta */}
             <View className="ml-3 items-end gap-0.5">
               <Text className="text-[13px] font-extrabold tracking-tight text-gray-900">
-                ${Number(estimatedAmount || 0).toFixed(2)}
+                {formatCurrency(finalEstimatedAmount)}
               </Text>
               <Text className="text-[11px] text-gray-400">
                 {distanceKm?.toFixed(1)} km · {estimatedMinutes} min
               </Text>
+              {discountAmount > 0 ? (
+                <Text className="text-[11px] font-semibold text-emerald-600">
+                  Saved {formatCurrency(discountAmount)}
+                </Text>
+              ) : null}
             </View>
 
             {/* Countdown badge */}
@@ -460,6 +536,50 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
               </View>
             )}
           </View>
+
+          {isWaitingForDrivers ? (
+            <>
+              <View className="mt-3 flex-row items-center justify-between rounded-2xl border border-blue-100 bg-white/95 px-4 py-3">
+                <View className="flex-row items-center">
+                  <View className="h-9 w-9 items-center justify-center rounded-full bg-blue-50">
+                    <Ionicons name="people-outline" size={18} color={PRIMARY_BLUE} />
+                  </View>
+                  <View className="ml-3">
+                    <Text className="text-[11px] font-bold uppercase tracking-[1.2px] text-blue-600">
+                      Request visibility
+                    </Text>
+                    <Text className="mt-0.5 text-sm font-semibold text-gray-900">
+                      {driversViewingCount > 0
+                        ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} can currently see your request`
+                        : 'Waiting for nearby drivers to see your request'}
+                    </Text>
+                  </View>
+                </View>
+                <View className="rounded-full bg-blue-50 px-3 py-2">
+                  <Text className="text-base font-extrabold text-blue-700">{driversViewingCount}</Text>
+                </View>
+              </View>
+              {discountAmount > 0 ? (
+                <View className="mt-3 rounded-2xl border border-emerald-100 bg-white/95 px-4 py-3">
+                  <Text className="text-[11px] font-bold uppercase tracking-[1.2px] text-emerald-700">
+                    Discount applied{appliedDiscountCode ? ` - ${appliedDiscountCode}` : ''}
+                  </Text>
+                  <View className="mt-2 flex-row items-center justify-between">
+                    <Text className="text-sm text-gray-600">Original fare</Text>
+                    <Text className="text-sm font-semibold text-gray-900">{formatCurrency(originalEstimatedAmount)}</Text>
+                  </View>
+                  <View className="mt-1 flex-row items-center justify-between">
+                    <Text className="text-sm text-gray-600">Discount</Text>
+                    <Text className="text-sm font-semibold text-emerald-700">-{formatCurrency(discountAmount)}</Text>
+                  </View>
+                  <View className="mt-1 flex-row items-center justify-between">
+                    <Text className="text-sm font-semibold text-gray-900">Passenger total</Text>
+                    <Text className="text-sm font-bold text-gray-900">{formatCurrency(finalEstimatedAmount)}</Text>
+                  </View>
+                </View>
+              ) : null}
+            </>
+          ) : null}
         </View>
 
         {/* ── Accepted drivers overlay list ── */}

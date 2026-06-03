@@ -92,6 +92,7 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const status = String(req.query.status || 'all').toLowerCase();
+    const identityStatus = String(req.query.identityStatus || 'all').toLowerCase();
     const page = Math.max(Number(req.query.page) || 1, 1);
     const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 100);
     const sortBy = String(req.query.sortBy || 'createdAt');
@@ -125,6 +126,13 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
 
     if (['active', 'blocked', 'flagged'].includes(status)) {
       passengers = passengers.filter((item) => item.status === status);
+    }
+
+    if (['pending', 'approved', 'rejected', 'not_submitted'].includes(identityStatus)) {
+      passengers = passengers.filter((item) => {
+        const currentStatus = item.passengerIdentity?.status || 'not_submitted';
+        return currentStatus === identityStatus;
+      });
     }
 
     const sortDirection = sortOrder === 'asc' ? 1 : -1;
@@ -178,6 +186,7 @@ router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read')
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const status = String(req.query.status || 'all').toLowerCase();
+    const identityStatus = String(req.query.identityStatus || 'all').toLowerCase();
 
     const clerkClient = getClerkClient();
     const clerkPage = await clerkClient.users.getUserList({
@@ -207,6 +216,13 @@ router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read')
 
     if (['active', 'blocked', 'flagged'].includes(status)) {
       passengers = passengers.filter((item) => item.status === status);
+    }
+
+    if (['pending', 'approved', 'rejected', 'not_submitted'].includes(identityStatus)) {
+      passengers = passengers.filter((item) => {
+        const currentStatus = item.passengerIdentity?.status || 'not_submitted';
+        return currentStatus === identityStatus;
+      });
     }
 
     const payload = passengers.map(({ _role, ...rest }) => rest);

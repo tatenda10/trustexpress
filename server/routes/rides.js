@@ -7,6 +7,7 @@ import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
+import { syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideChatMessageToUser,
@@ -42,7 +43,7 @@ function createPublicRideId() {
 }
 
 const OPEN_REQUEST_TTL_MINUTES = 3;
-const DRIVER_FOUND_SELECTION_TTL_MINUTES = 2;
+const DRIVER_FOUND_SELECTION_TTL_SECONDS = 30;
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DRIVER_REQUEST_RADIUS_KM = 20;
@@ -189,9 +190,16 @@ function computeExpiresAt(value, ttlMinutes = OPEN_REQUEST_TTL_MINUTES) {
   return date.toISOString();
 }
 
+function computeExpiresAtSeconds(value, ttlSeconds) {
+  if (!value) return null;
+  const date = new Date(value);
+  date.setSeconds(date.getSeconds() + ttlSeconds);
+  return date.toISOString();
+}
+
 function computeRideExpiresAt(status, requestedAt, driverFoundAt = null) {
   if (String(status || '') === 'driver_found') {
-    return computeExpiresAt(driverFoundAt || requestedAt, DRIVER_FOUND_SELECTION_TTL_MINUTES);
+    return computeExpiresAtSeconds(driverFoundAt || requestedAt, DRIVER_FOUND_SELECTION_TTL_SECONDS);
   }
   return computeExpiresAt(requestedAt, OPEN_REQUEST_TTL_MINUTES);
 }
@@ -214,7 +222,9 @@ function mapRideMessage(row) {
 }
 
 function formatRideReceiptText(ride) {
-  const fareAmount = Number(ride.estimated_amount || 0);
+  const fareAmount = Number(ride.final_estimated_amount || ride.estimated_amount || 0);
+  const originalFareAmount = Number(ride.original_estimated_amount || fareAmount);
+  const discountAmount = Number(ride.discount_amount || 0);
   const tipAmount = Number(ride.tip_amount || 0);
   const totalAmount = fareAmount + tipAmount;
   const lines = [
@@ -232,11 +242,33 @@ function formatRideReceiptText(ride) {
     `Drop-off: ${ride.dropoff_label || '-'}`,
     '',
     `Tier: ${ride.requested_tier_name || 'Ride'}`,
+    `Original Fare: $${originalFareAmount.toFixed(2)}`,
+    `Discount: -$${discountAmount.toFixed(2)}`,
     `Fare: $${fareAmount.toFixed(2)}`,
     `Tip: $${tipAmount.toFixed(2)}`,
     `Total: $${totalAmount.toFixed(2)}`,
   ];
   return `${lines.join('\n')}\n`;
+}
+
+function buildRideDiscountPayload(ride) {
+  const originalEstimatedAmount = Number(ride.original_estimated_amount || ride.originalEstimatedAmount || ride.estimated_amount || 0);
+  const discountAmount = Number(ride.discount_amount || ride.discountAmount || 0);
+  const finalEstimatedAmount = Number(ride.final_estimated_amount || ride.finalEstimatedAmount || ride.estimated_amount || 0);
+  const driverReimbursementAmount = Number(ride.driver_reimbursement_amount || ride.driverReimbursementAmount || 0);
+  return {
+    originalEstimatedAmount,
+    discountAmount,
+    finalEstimatedAmount,
+    driverReimbursementAmount,
+    discountCode: ride.discount_code || ride.discountCode || null,
+    discountType: ride.discount_type || ride.discountType || null,
+    discountValue: ride.discount_value === null || ride.discount_value === undefined
+      ? null
+      : Number(ride.discount_value),
+    discountAppliedAt: toIsoOrNull(ride.discount_applied_at || ride.discountAppliedAt),
+    hasDiscountApplied: discountAmount > 0,
+  };
 }
 
 async function getUserProfileImageUrl(userId) {
@@ -304,7 +336,7 @@ async function expireRideRequestIfTimedOut(rideId, passengerUserId = null) {
          (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
          OR (
            status = 'driver_found'
-           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_MINUTES} MINUTE)
+           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
          )
        )`,
     params
@@ -474,11 +506,18 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
          public_id,
          pickup_label,
         pickup_lat,
-        pickup_lng,
+         pickup_lng,
          dropoff_label,
          dropoff_lat,
          dropoff_lng,
          estimated_amount,
+         original_estimated_amount,
+         discount_amount,
+         final_estimated_amount,
+         driver_reimbursement_amount,
+         discount_code,
+         discount_type,
+         discount_value,
          tip_amount,
          requested_tier_name,
          driver_user_id,
@@ -502,6 +541,7 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
 
     return res.json({
       rides: rows.map((row) => ({
+        ...buildRideDiscountPayload(row),
         id: row.id,
         publicId: row.public_id,
         pickupLabel: row.pickup_label,
@@ -514,9 +554,9 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
           latitude: Number(row.dropoff_lat),
           longitude: Number(row.dropoff_lng),
         },
-        estimatedAmount: Number(row.estimated_amount || 0),
+        estimatedAmount: Number(row.final_estimated_amount || row.estimated_amount || 0),
         tipAmount: Number(row.tip_amount || 0),
-        totalAmount: Number(row.estimated_amount || 0) + Number(row.tip_amount || 0),
+        totalAmount: Number(row.final_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0),
         tierName: row.requested_tier_name,
         driverName: row.driver_name || null,
         status: mapPassengerRideStatus(row.status),
@@ -544,6 +584,40 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/rides/passenger/history', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/passenger/validate-discount', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const discountCode = String(req.body?.discountCode || '').trim();
+    const selectedTier = req.body?.selectedTier || {};
+    const originalFareAmount = Number(req.body?.originalFareAmount || 0);
+    if (!discountCode) {
+      return res.status(400).json({ error: 'Discount code is required' });
+    }
+    if (!Number.isFinite(originalFareAmount) || originalFareAmount <= 0) {
+      return res.status(400).json({ error: 'Original fare amount must be greater than zero' });
+    }
+
+    const validatedDiscount = await validateDiscountForRide({
+      passengerUserId: req.userId,
+      discountCode,
+      originalFareAmount,
+      selectedTierKey: selectedTier?.tierKey || null,
+    });
+
+    return res.json({
+      discount: validatedDiscount,
+    });
+  } catch (err) {
+    if (Number(err?.status || 0) >= 400 && Number(err?.status || 0) < 500) {
+      return res.status(err.status).json({ error: err.message || 'Discount code is invalid' });
+    }
+    console.error('POST /api/rides/passenger/validate-discount', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });
@@ -580,6 +654,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       dropoffLabel,
       routePolyline,
       selectedTier,
+      discountCode = '',
     } = req.body || {};
 
     const pickupLat = Number(pickupCoordinate?.latitude);
@@ -628,6 +703,17 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       });
     }
     const authoritativeAmount = calculateTierFare(tier, authoritativeDistanceKm);
+    const validatedDiscount = discountCode
+      ? await validateDiscountForRide({
+          passengerUserId: req.userId,
+          discountCode,
+          originalFareAmount: authoritativeAmount,
+          selectedTierKey: tier.tier_key,
+        })
+      : null;
+    const discountAmount = Number(validatedDiscount?.discountAmount || 0);
+    const finalEstimatedAmount = Number(validatedDiscount?.finalFareAmount || authoritativeAmount);
+    const driverReimbursementAmount = Number(validatedDiscount?.driverReimbursementAmount || 0);
     const passenger = toAppUser(user);
     const passengerFullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
     const passengerName = passengerFullName || 'Passenger';
@@ -657,8 +743,17 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         estimated_distance_km,
         estimated_minutes,
         estimated_amount,
+        original_estimated_amount,
+        discount_amount,
+        final_estimated_amount,
+        driver_reimbursement_amount,
+        discount_code_id,
+        discount_code,
+        discount_type,
+        discount_value,
+        discount_applied_at,
         status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
       [
         publicId,
         req.userId,
@@ -677,11 +772,28 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         authoritativeMinutes,
         authoritativeDistanceKm,
         authoritativeMinutes,
+        finalEstimatedAmount,
         authoritativeAmount,
+        discountAmount,
+        finalEstimatedAmount,
+        driverReimbursementAmount,
+        validatedDiscount?.id || null,
+        validatedDiscount?.code || null,
+        validatedDiscount?.discountType || null,
+        validatedDiscount?.discountValue ?? null,
+        validatedDiscount ? new Date() : null,
       ]
     );
 
     const rideRequestId = result.insertId;
+
+    if (validatedDiscount) {
+      await syncDiscountRedemptionForRide({
+        rideRequestId,
+        discount: validatedDiscount,
+        passengerUserId: req.userId,
+      });
+    }
 
     const nearbyDrivers = await loadEligibleDriversForRide({
       pickupPoint,
@@ -699,6 +811,9 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       dropoffPoint,
       routeDistanceKm: authoritativeDistanceKm,
       routeDurationMinutes: authoritativeMinutes,
+      originalEstimatedAmount: authoritativeAmount,
+      discountAmount,
+      finalEstimatedAmount,
       routeCacheHit: authoritativeRoute?.cacheHit === true,
       nearbyDriverIds: nearbyDrivers.map((driver) => driver.id),
     });
@@ -749,7 +864,17 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         dropoffCoordinate: dropoffPoint,
         estimatedDistanceKm: authoritativeDistanceKm,
         estimatedMinutes: authoritativeMinutes,
-        estimatedAmount: authoritativeAmount,
+        estimatedAmount: finalEstimatedAmount,
+        ...buildRideDiscountPayload({
+          original_estimated_amount: authoritativeAmount,
+          discount_amount: discountAmount,
+          final_estimated_amount: finalEstimatedAmount,
+          driver_reimbursement_amount: driverReimbursementAmount,
+          discount_code: validatedDiscount?.code || null,
+          discount_type: validatedDiscount?.discountType || null,
+          discount_value: validatedDiscount?.discountValue ?? null,
+          discount_applied_at: validatedDiscount ? new Date() : null,
+        }),
         requestedTierKey: tier.tier_key,
         requestedTierName: tier.tier_name,
       },
@@ -772,7 +897,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
                 0,
                 CASE
                   WHEN status = 'driver_found'
-                    THEN ${(DRIVER_FOUND_SELECTION_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
+                    THEN ${DRIVER_FOUND_SELECTION_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
                   ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
                 END
               ) AS remaining_seconds
@@ -861,6 +986,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
 
     return res.json({
       rideRequest: {
+        ...buildRideDiscountPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         status: ride.status,
@@ -874,7 +1000,9 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         },
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
-        estimatedAmount: Number(ride.estimated_amount || 0),
+        estimatedAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
+        tipAmount: Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
@@ -915,7 +1043,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
                 0,
                 CASE
                   WHEN status = 'driver_found'
-                    THEN ${(DRIVER_FOUND_SELECTION_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
+                    THEN ${DRIVER_FOUND_SELECTION_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
                   ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
                 END
               ) AS remaining_seconds
@@ -1026,9 +1154,9 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         },
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
-        estimatedAmount: Number(ride.estimated_amount || 0),
+        estimatedAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
         tipAmount: Number(ride.tip_amount || 0),
-        totalAmount: Number(ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
         requestedAt: toIsoOrNull(ride.requested_at),
@@ -1079,13 +1207,14 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
 
     return res.json({
       ride: {
+        ...buildRideDiscountPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         pickupLabel: ride.pickup_label,
         dropoffLabel: ride.dropoff_label,
-        estimatedAmount: Number(ride.estimated_amount || 0),
+        estimatedAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
         tipAmount: Number(ride.tip_amount || 0),
-        totalAmount: Number(ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
+        totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         tierName: ride.requested_tier_name,
         driverName: ride.driver_name || null,
         driverPhone: ride.driver_phone || null,
@@ -1578,7 +1707,7 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
     const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
     const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
 
-    await query(
+    const updateResult = await query(
       `UPDATE ride_requests
        SET driver_user_id = ?,
            driver_name = ?,
@@ -1599,6 +1728,10 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
       ]
     );
 
+    if (Number(updateResult?.affectedRows || 0) < 1) {
+      return res.status(409).json({ error: 'This ride could not be assigned to the selected driver anymore. Please refresh and choose again.' });
+    }
+
     await query(
       `UPDATE ride_request_driver_responses
        SET status = CASE WHEN driver_user_id = ? THEN 'selected' ELSE status END,
@@ -1615,10 +1748,32 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
       [driverUserId]
     );
 
+    if (Number(ride.discount_code_id || 0) > 0 || Number(ride.discount_amount || 0) > 0) {
+      await syncDiscountRedemptionForRide({
+        rideRequestId,
+        passengerUserId: req.userId,
+        driverUserId,
+        discount: {
+          id: ride.discount_code_id,
+          code: ride.discount_code,
+          discountType: ride.discount_type,
+          discountValue: Number(ride.discount_value || 0),
+          originalFareAmount: Number(ride.original_estimated_amount || ride.estimated_amount || 0),
+          discountAmount: Number(ride.discount_amount || 0),
+          finalFareAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
+          driverReimbursementAmount: Number(ride.driver_reimbursement_amount || 0),
+        },
+      });
+    }
+
     emitRideStatusToPassenger(req.userId, {
       rideRequestId,
       status: 'driver_assigned',
       driverUserId,
+      driverCoordinate: {
+        latitude: Number(driverAvailability.current_lat),
+        longitude: Number(driverAvailability.current_lng),
+      },
     });
     emitRideStatusToDriver(driverUserId, {
       rideRequestId,
@@ -1641,6 +1796,14 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
       });
     });
 
+    const assignedDriver = mapDriverAvailability(
+      {
+        ...driverAvailability,
+        estimated_amount: ride.final_estimated_amount || ride.estimated_amount,
+      },
+      pickupPoint
+    );
+
     return res.json({
       rideRequest: {
         id: rideRequestId,
@@ -1648,6 +1811,7 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
         driverDistanceKm: Number(driverDistanceKm.toFixed(2)),
         driverEtaMinutes,
       },
+      assignedDriver,
     });
   } catch (err) {
     console.error('PATCH /api/rides/passenger/:rideRequestId/select-driver', err);

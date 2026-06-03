@@ -46,6 +46,7 @@ export default function PassengersPage() {
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState('createdAt')
   const [sortOrder, setSortOrder] = useState('desc')
+  const [identityFilter, setIdentityFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
@@ -65,6 +66,7 @@ export default function PassengersPage() {
         },
         params: {
           status: activeTab,
+          identityStatus: identityFilter,
           search: search || undefined,
           sortBy,
           sortOrder,
@@ -86,13 +88,17 @@ export default function PassengersPage() {
   useEffect(() => {
     loadPassengers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeTab, search, sortBy, sortOrder, page, pageSize])
+  }, [token, activeTab, identityFilter, search, sortBy, sortOrder, page, pageSize])
 
   const rows = useMemo(() => passengers, [passengers])
   const activeCount = useMemo(() => rows.filter((passenger) => passenger.status === 'active').length, [rows])
   const flaggedCount = useMemo(() => rows.filter((passenger) => passenger.status === 'flagged').length, [rows])
   const verifiedIdentityCount = useMemo(
     () => rows.filter((passenger) => passenger.passengerIdentity?.status === 'approved').length,
+    [rows],
+  )
+  const pendingIdentityCount = useMemo(
+    () => rows.filter((passenger) => passenger.passengerIdentity?.status === 'pending').length,
     [rows],
   )
 
@@ -121,6 +127,7 @@ export default function PassengersPage() {
         },
         params: {
           status: activeTab,
+          identityStatus: identityFilter,
           search: search || undefined,
         },
         responseType: 'blob',
@@ -149,7 +156,7 @@ export default function PassengersPage() {
             <h1 className="text-xl font-semibold text-slate-900">Passengers</h1>
             <p className="text-xs text-slate-500">Manage passenger accounts, account state, and identity verification.</p>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Loaded</p>
               <p className="mt-1 text-lg font-semibold text-slate-900">{rows.length}</p>
@@ -161,6 +168,10 @@ export default function PassengersPage() {
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Flagged</p>
               <p className="mt-1 text-lg font-semibold text-amber-700">{flaggedCount}</p>
+            </div>
+            <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">ID Pending</p>
+              <p className="mt-1 text-lg font-semibold text-amber-700">{pendingIdentityCount}</p>
             </div>
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">ID OK</p>
@@ -182,7 +193,7 @@ export default function PassengersPage() {
 
       <div className="border border-slate-300 bg-white px-4 py-3">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_116px_88px_110px]">
+          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_140px_116px_88px_110px]">
             <div className="relative">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
@@ -198,6 +209,20 @@ export default function PassengersPage() {
                 className="h-10 w-full border border-slate-300 bg-white pl-9 pr-3 text-xs outline-none focus:border-indigo-500"
               />
             </div>
+            <select
+              value={identityFilter}
+              onChange={(event) => {
+                setIdentityFilter(event.target.value)
+                setPage(1)
+              }}
+              className="h-10 border border-slate-300 bg-white px-2 text-xs"
+            >
+              <option value="all">All identity</option>
+              <option value="pending">Pending review</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="not_submitted">Not submitted</option>
+            </select>
             <select
               value={sortBy}
               onChange={(event) => setSortBy(event.target.value)}
@@ -288,9 +313,16 @@ export default function PassengersPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${identityClass(passenger.passengerIdentity?.status || 'not_submitted')}`}>
-                        {passenger.passengerIdentity?.status || 'not_submitted'}
-                      </span>
+                      <div className="space-y-1">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${identityClass(passenger.passengerIdentity?.status || 'not_submitted')}`}>
+                          {passenger.passengerIdentity?.status || 'not_submitted'}
+                        </span>
+                        {passenger.passengerIdentity?.submittedAt ? (
+                          <p className="text-[11px] text-slate-400">
+                            Submitted {formatJoined(passenger.passengerIdentity.submittedAt)}
+                          </p>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-700">{passenger.totalRides}</td>
                     <td className="px-4 py-3 text-slate-700">${Number(passenger.totalSpend || 0).toFixed(2)}</td>
@@ -302,7 +334,7 @@ export default function PassengersPage() {
                           type="button"
                           onClick={() => navigate(`/dashboard/passengers/${passenger.id}`, { state: { passenger } })}
                           className="text-slate-700 transition hover:text-indigo-600"
-                          title="View"
+                          title={passenger.passengerIdentity?.status === 'pending' ? 'Review verification' : 'View'}
                         >
                           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
                             <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" stroke="currentColor" strokeWidth="1.8" />

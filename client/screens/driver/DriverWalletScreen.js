@@ -199,7 +199,12 @@ const DriverWalletScreen = () => {
                         </Text>
                         {Number(ride.tipAmount || 0) > 0 ? (
                           <Text className="mt-1 text-xs font-semibold text-green-600">
-                            Includes tip {formatCurrency(ride.tipAmount)}
+                            Passenger tip: {formatCurrency(ride.tipAmount)}
+                          </Text>
+                        ) : null}
+                        {Number(ride.discountAmount || 0) > 0 ? (
+                          <Text className="mt-1 text-xs font-semibold text-amber-600">
+                            Passenger promo: -{formatCurrency(ride.discountAmount)} | Admin reimbursement: {formatCurrency(ride.driverReimbursementAmount || ride.discountAmount)}
                           </Text>
                         ) : null}
                       </View>

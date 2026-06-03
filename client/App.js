@@ -34,6 +34,7 @@ import PassengerEmailLoginScreen from './screens/passenger/auth/PassengerEmailLo
 import PassengerPhoneLoginScreen from './screens/passenger/auth/PassengerPhoneLoginScreen';
 import PassengerEnableLocationScreen from './screens/passenger/PassengerEnableLocationScreen';
 import PassengerVerifyPhoneScreen from './screens/passenger/PassengerVerifyPhoneScreen';
+import PassengerIdentityVerificationScreen from './screens/passenger/PassengerIdentityVerificationScreen';
 
 // Screens - Driver
 import DriverWelcomeScreen from './screens/driver/DriverWelcomeScreen';
@@ -925,17 +926,30 @@ function AppStack({ currentRouteName }) {
 
     const passengerPhoneKnown = typeof userProfile?.phoneVerified === 'boolean';
     const passengerPhoneVerified = userProfile?.phoneVerified === true;
+    const passengerIdentity = userProfile?.passengerIdentity || null;
+    const passengerIdentityStatus = String(passengerIdentity?.status || 'not_submitted').trim().toLowerCase();
+    const passengerIdentitySubmitted = !!(
+      passengerIdentity?.selfieUrl &&
+      passengerIdentity?.nationalIdFrontUrl &&
+      passengerIdentity?.nationalIdBackUrl
+    );
+    const passengerIdentityApproved = passengerIdentityStatus === 'approved';
+    const passengerIdentityPending = passengerIdentityStatus === 'pending' && passengerIdentitySubmitted;
+    const passengerIdentityBlocked = passengerIdentityStatus === 'rejected' && passengerIdentity?.canResubmit === false;
     const needPassengerProfile = needsProfileCompletion;
     const needPassengerLocation = passengerLocationGranted !== true;
     // Only force verification when backend explicitly says "false".
     const needPassengerPhoneVerify = passengerPhoneKnown && !passengerPhoneVerified;
+    const needPassengerIdentity = !passengerIdentityApproved && !passengerIdentityPending && !passengerIdentityBlocked;
     const passengerInitialRoute = needPassengerProfile
       ? 'PassengerCompleteProfile'
       : needPassengerLocation
       ? 'PassengerEnableLocation'
       : needPassengerPhoneVerify
         ? 'PassengerVerifyPhone'
-        : 'PassengerTabs';
+        : needPassengerIdentity
+          ? 'PassengerIdentityVerificationOnboarding'
+          : 'PassengerTabs';
 
     return (
       <Stack.Navigator key={passengerInitialRoute} screenOptions={{ headerShown: false }} initialRouteName={passengerInitialRoute}>
@@ -954,7 +968,9 @@ function AppStack({ currentRouteName }) {
                     ? 'PassengerEnableLocation'
                     : needPassengerPhoneVerify
                       ? 'PassengerVerifyPhone'
-                      : 'PassengerTabs'
+                      : needPassengerIdentity
+                        ? 'PassengerIdentityVerificationOnboarding'
+                        : 'PassengerTabs'
                 );
               }}
             />
@@ -967,7 +983,13 @@ function AppStack({ currentRouteName }) {
               onGranted={() => {
                 setPassengerLocationGranted(true);
                 // Move forward immediately instead of waiting for navigator key reset.
-                props.navigation.replace(needPassengerPhoneVerify ? 'PassengerVerifyPhone' : 'PassengerTabs');
+                props.navigation.replace(
+                  needPassengerPhoneVerify
+                    ? 'PassengerVerifyPhone'
+                    : needPassengerIdentity
+                      ? 'PassengerIdentityVerificationOnboarding'
+                      : 'PassengerTabs'
+                );
               }}
             />
           )}
@@ -976,8 +998,24 @@ function AppStack({ currentRouteName }) {
           {(props) => (
             <PassengerVerifyPhoneScreen
               {...props}
+              nextRouteName={needPassengerIdentity ? 'PassengerIdentityVerificationOnboarding' : 'PassengerTabs'}
               onVerified={async () => {
                 await refetchUserProfile();
+              }}
+            />
+          )}
+        </Stack.Screen>
+        <Stack.Screen name="PassengerIdentityVerificationOnboarding">
+          {(props) => (
+            <PassengerIdentityVerificationScreen
+              {...props}
+              route={{
+                ...props.route,
+                params: {
+                  ...(props.route?.params || {}),
+                  required: true,
+                  nextRouteName: 'PassengerTabs',
+                },
               }}
             />
           )}

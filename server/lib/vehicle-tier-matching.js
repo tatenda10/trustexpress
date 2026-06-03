@@ -75,7 +75,7 @@ function computeTierChecks(tier, vehicle = {}) {
   const checks = [];
 
   if (key === 'trust-express') {
-    checks.push(evaluateRule('Model year', year !== null && year >= 2005, '2005 or newer', year ?? 'Not provided'));
+    checks.push(evaluateRule('Model year', year !== null && year >= 2010, '2010 or newer', year ?? 'Not provided'));
     checks.push(evaluateRule('Doors', doorCount !== null && doorCount >= 4, '4 or more doors', doorCount ?? 'Not provided'));
     checks.push(evaluateRule('Passenger seats', seatCount !== null && seatCount >= 4, 'At least 4 passenger seats', seatCount ?? 'Not provided'));
   }

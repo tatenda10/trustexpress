@@ -27,6 +27,10 @@ export function DriverTripReceiptView({
   insets,
   ratingRide,
   fareAmount,
+  passengerFareAmount,
+  discountAmount,
+  driverReimbursementAmount,
+  discountCode,
   tipAmount,
   totalAmount,
   passengerRating,
@@ -60,9 +64,30 @@ export function DriverTripReceiptView({
             <Text className="text-sm text-gray-500">Fare</Text>
             <Text className="text-base font-bold text-gray-900">{formatCurrency(fareAmount)}</Text>
           </View>
+          {Number(discountAmount || 0) > 0 ? (
+            <>
+              <View className="mt-3 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-500">Passenger promo</Text>
+                <Text className="text-base font-bold text-amber-600">-{formatCurrency(discountAmount)}</Text>
+              </View>
+              <View className="mt-3 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-500">Passenger paid</Text>
+                <Text className="text-base font-bold text-gray-900">{formatCurrency(passengerFareAmount)}</Text>
+              </View>
+              <View className="mt-3 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-500">Admin reimbursement</Text>
+                <Text className="text-base font-bold text-indigo-700">{formatCurrency(driverReimbursementAmount)}</Text>
+              </View>
+              {discountCode ? (
+                <Text className="mt-2 text-xs font-semibold text-gray-500">Code applied: {discountCode}</Text>
+              ) : null}
+            </>
+          ) : null}
           <View className="mt-3 flex-row items-center justify-between">
-            <Text className="text-sm text-gray-500">Tip</Text>
-            <Text className="text-base font-bold text-gray-900">{formatCurrency(tipAmount)}</Text>
+            <Text className="text-sm text-gray-500">Passenger tip</Text>
+            <Text className={`text-base font-bold ${Number(tipAmount || 0) > 0 ? 'text-green-600' : 'text-gray-900'}`}>
+              {formatCurrency(tipAmount)}
+            </Text>
           </View>
           <View className="mt-4 border-t border-gray-100 pt-4 flex-row items-center justify-between">
             <Text className="text-base font-bold text-gray-900">Total</Text>
@@ -163,7 +188,6 @@ export function DriverTripMapPanel({
         ref={mapRef}
         style={{ flex: 1 }}
         initialRegion={mapRegion}
-        region={mapRegion}
         onMapReady={onMapReady}
         showsCompass={false}
         toolbarEnabled={false}

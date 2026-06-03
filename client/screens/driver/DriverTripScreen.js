@@ -20,6 +20,7 @@ import {
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
+import { showLocalRideNotification } from '../../notifications';
 import { connectRealtime } from '../../realtime';
 import {
   DriverTripEmptyState,
@@ -298,6 +299,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const lastRouteOriginRef = useRef(null);
   const lastRouteTargetRef = useRef(null);
   const lastRouteFetchedAtRef = useRef(0);
+  const routeCoordinatesRef = useRef([]);
   const locationSubscriptionRef = useRef(null);
   const activeLocationRideIdRef = useRef(null);
   const routeRequestIdRef = useRef(0);
@@ -333,6 +335,10 @@ export default function DriverTripScreen({ navigation, route }) {
   const [passengerRating, setPassengerRating] = useState(0);
   const [passengerReview, setPassengerReview] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
+
+  useEffect(() => {
+    routeCoordinatesRef.current = routeCoordinates;
+  }, [routeCoordinates]);
   const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
 
   const exitPassengerRatingFlow = useCallback(() => {
@@ -684,25 +690,30 @@ export default function DriverTripScreen({ navigation, route }) {
     };
   }, [ride?.id]);
 
-  const pickupCoordinate = normalizeCoordinate(ride?.pickupCoordinate);
-  const dropoffCoordinate = normalizeCoordinate(ride?.dropoffCoordinate);
-  const driverCoordinate = normalizeCoordinate(liveDriverCoordinate)
-    || normalizeCoordinate(ride?.driverCoordinate)
-    || pickupCoordinate
-    || dropoffCoordinate;
-  const targetCoordinate = ride?.stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
-
-  useEffect(() => {
-    console.log(TRIP_DEBUG_PREFIX, 'coordinate snapshot', {
-      rideId: ride?.id || null,
-      stage: ride?.stage || null,
-      pickupCoordinate,
-      dropoffCoordinate,
-      liveDriverCoordinate,
-      resolvedDriverCoordinate: driverCoordinate,
-      targetCoordinate,
-    });
-  }, [driverCoordinate, dropoffCoordinate, liveDriverCoordinate, pickupCoordinate, ride?.id, ride?.stage, targetCoordinate]);
+  const pickupCoordinate = useMemo(
+    () => normalizeCoordinate(ride?.pickupCoordinate),
+    [ride?.pickupCoordinate?.latitude, ride?.pickupCoordinate?.longitude],
+  );
+  const dropoffCoordinate = useMemo(
+    () => normalizeCoordinate(ride?.dropoffCoordinate),
+    [ride?.dropoffCoordinate?.latitude, ride?.dropoffCoordinate?.longitude],
+  );
+  const resolvedLiveDriverCoordinate = useMemo(
+    () => normalizeCoordinate(liveDriverCoordinate),
+    [liveDriverCoordinate?.latitude, liveDriverCoordinate?.longitude],
+  );
+  const resolvedRideDriverCoordinate = useMemo(
+    () => normalizeCoordinate(ride?.driverCoordinate),
+    [ride?.driverCoordinate?.latitude, ride?.driverCoordinate?.longitude],
+  );
+  const driverCoordinate = useMemo(
+    () => resolvedLiveDriverCoordinate || resolvedRideDriverCoordinate || pickupCoordinate || dropoffCoordinate,
+    [resolvedLiveDriverCoordinate, resolvedRideDriverCoordinate, pickupCoordinate, dropoffCoordinate],
+  );
+  const targetCoordinate = useMemo(
+    () => (ride?.stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate),
+    [dropoffCoordinate, pickupCoordinate, ride?.stage],
+  );
 
   useEffect(() => {
     if (!ride || ['completed', 'cancelled', 'expired'].includes(String(ride?.status || '').toLowerCase())) {
@@ -729,7 +740,7 @@ export default function DriverTripScreen({ navigation, route }) {
 
     if (
       !targetChanged &&
-      routeCoordinates.length > 0 &&
+      routeCoordinatesRef.current.length > 0 &&
       movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
       routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
@@ -781,7 +792,7 @@ export default function DriverTripScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [driverCoordinate, ride?.stage, routeCoordinates.length, targetCoordinate]);
+  }, [driverCoordinate, ride?.stage, targetCoordinate]);
 
   useEffect(() => {
     const nextRegion = buildDriverFollowRegion(driverCoordinate, targetCoordinate);
@@ -1038,26 +1049,44 @@ export default function DriverTripScreen({ navigation, route }) {
   };
 
   const handleSendPanicAlert = async () => {
-    try {
-      if (!ride?.id) return;
-      setSubmittingPanicAlert(true);
-      const token = await getTokenRef.current();
-      if (!token) throw new Error('Not signed in');
-      const currentCoordinate = normalizeCoordinate(liveDriverCoordinate)
-        || normalizeCoordinate(ride?.driverCoordinate)
-        || null;
-      await sendRidePanicAlert(token, ride.id, {
-        alertStage: ride?.stage || null,
-        message: 'Driver used the panic button during an active ride.',
-        latitude: currentCoordinate?.latitude,
-        longitude: currentCoordinate?.longitude,
-      });
-      Alert.alert('Alert sent', 'Admin has been notified about this ride.');
-    } catch (error) {
-      Alert.alert('Alert failed', error?.message || 'Could not send the panic alert.');
-    } finally {
-      setSubmittingPanicAlert(false);
-    }
+    Alert.alert(
+      'Are you in danger?',
+      'Tap Yes if you are in danger so admin can start emergency escalation and contact police or other responders.',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (!ride?.id) return;
+              setSubmittingPanicAlert(true);
+              const token = await getTokenRef.current();
+              if (!token) throw new Error('Not signed in');
+              const currentCoordinate = normalizeCoordinate(liveDriverCoordinate)
+                || normalizeCoordinate(ride?.driverCoordinate)
+                || null;
+              await sendRidePanicAlert(token, ride.id, {
+                alertStage: ride?.stage || null,
+                message: 'Driver confirmed they are in danger and requested emergency escalation.',
+                latitude: currentCoordinate?.latitude,
+                longitude: currentCoordinate?.longitude,
+              });
+              await showLocalRideNotification({
+                title: 'Panic alert sent',
+                body: `Ride ${ride.publicId || ride.id} was sent to admin for urgent attention.`,
+                data: { type: 'panic_alert', rideRequestId: ride.id },
+              });
+              Alert.alert('Alert sent', 'Admin has been notified about this ride.');
+            } catch (error) {
+              Alert.alert('Alert failed', error?.message || 'Could not send the panic alert.');
+            } finally {
+              setSubmittingPanicAlert(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleToggleVoiceGuidance = async () => {
@@ -1093,6 +1122,9 @@ export default function DriverTripScreen({ navigation, route }) {
 
   if (showPassengerRating && completedRideId && ratingRide) {
     const fareAmount = Number(ratingRide.estimatedAmount || 0);
+    const passengerFareAmount = Number(ratingRide.finalEstimatedAmount || ratingRide.estimatedAmount || 0);
+    const discountAmount = Number(ratingRide.discountAmount || 0);
+    const driverReimbursementAmount = Number(ratingRide.driverReimbursementAmount || 0);
     const tipAmount = Number(ratingRide.tipAmount || 0);
     const totalAmount = Number(ratingRide.totalAmount || (fareAmount + tipAmount));
     return (
@@ -1100,6 +1132,10 @@ export default function DriverTripScreen({ navigation, route }) {
         insets={insets}
         ratingRide={ratingRide}
         fareAmount={fareAmount}
+        passengerFareAmount={passengerFareAmount}
+        discountAmount={discountAmount}
+        driverReimbursementAmount={driverReimbursementAmount}
+        discountCode={ratingRide.discountCode || null}
         tipAmount={tipAmount}
         totalAmount={totalAmount}
         passengerRating={passengerRating}

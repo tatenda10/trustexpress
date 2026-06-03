@@ -89,7 +89,9 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   const doc = new PDFDocument({ size: [320, 740], margin: 0 });
   doc.pipe(res);
 
-  const fareAmount = Number(ride.estimated_amount || 0);
+  const fareAmount = Number(ride.final_estimated_amount || ride.estimated_amount || 0);
+  const originalFareAmount = Number(ride.original_estimated_amount || fareAmount);
+  const discountAmount = Number(ride.discount_amount || 0);
   const tipAmount = Number(ride.tip_amount || 0);
   const totalAmount = fareAmount + tipAmount;
   const completedAt = ride.completed_at || new Date();
@@ -154,20 +156,30 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   divider(doc, 552);
 
   sectionTitle(doc, 'FARE BREAKDOWN', 570);
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Base fare', 24, 594);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(fareAmount), 230, 594, {
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Original fare', 24, 594);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(originalFareAmount), 230, 594, {
     width: 46,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Tip', 24, 618);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(tipAmount), 230, 618, {
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Discount', 24, 618);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(`-${currency(discountAmount)}`, 230, 618, {
     width: 46,
     align: 'right',
   });
-  divider(doc, 652);
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Fare', 24, 642);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(fareAmount), 230, 642, {
+    width: 46,
+    align: 'right',
+  });
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Tip', 24, 666);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(tipAmount), 230, 666, {
+    width: 46,
+    align: 'right',
+  });
+  divider(doc, 690);
 
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, 678);
-  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, 673, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, 706);
+  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, 701, {
     width: 66,
     align: 'right',
   });
@@ -175,10 +187,10 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   doc.fillColor(MUTED).font('Helvetica').fontSize(6).text(
     options.footerText || 'Thank you for driving with Trust Express!',
     0,
-    706,
+    720,
     { width: 320, align: 'center' },
   );
-  doc.fontSize(5).text('Safe rides. Trusted drivers. Always.', 0, 716, {
+  doc.fontSize(5).text('Safe rides. Trusted drivers. Always.', 0, 730, {
     width: 320,
     align: 'center',
   });
