@@ -15,6 +15,8 @@ const emptyForm = {
   usageLimitTotal: '',
   usageLimitPerPassenger: '',
   allowMultipleUse: true,
+  autoApplyEnabled: false,
+  autoApplyPriority: '0',
   isActive: true,
   startsAt: '',
   expiresAt: '',
@@ -40,6 +42,8 @@ function fromCodeToForm(code) {
     usageLimitTotal: code.usageLimitTotal === null ? '' : String(code.usageLimitTotal),
     usageLimitPerPassenger: code.usageLimitPerPassenger === null ? '' : String(code.usageLimitPerPassenger),
     allowMultipleUse: code.allowMultipleUse !== false,
+    autoApplyEnabled: code.autoApplyEnabled === true,
+    autoApplyPriority: String(code.autoApplyPriority ?? 0),
     isActive: code.isActive !== false,
     startsAt: toDatetimeLocalValue(code.startsAt),
     expiresAt: toDatetimeLocalValue(code.expiresAt),
@@ -63,6 +67,8 @@ function normalizeForm(form) {
     usageLimitTotal: normalizeNullableNumber(form.usageLimitTotal),
     usageLimitPerPassenger: normalizeNullableNumber(form.usageLimitPerPassenger),
     allowMultipleUse: !!form.allowMultipleUse,
+    autoApplyEnabled: !!form.autoApplyEnabled,
+    autoApplyPriority: String(form.autoApplyPriority || '').trim() ? Number(form.autoApplyPriority) : 0,
     isActive: !!form.isActive,
     startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
     expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
@@ -195,6 +201,14 @@ export default function DiscountCodesPage() {
             Allow multiple use
           </label>
           <label className="flex items-center gap-3 pt-6 text-sm text-slate-700">
+            <input type="checkbox" checked={form.autoApplyEnabled} onChange={(event) => handleChange('autoApplyEnabled', event.target.checked)} />
+            Auto apply this code
+          </label>
+          <label className="space-y-1 text-xs text-slate-600">
+            <span className="font-semibold uppercase tracking-wide text-slate-500">Auto apply priority</span>
+            <input type="number" step="1" min="0" value={form.autoApplyPriority} onChange={(event) => handleChange('autoApplyPriority', event.target.value)} className="h-10 w-full border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-indigo-500" />
+          </label>
+          <label className="flex items-center gap-3 pt-6 text-sm text-slate-700">
             <input type="checkbox" checked={form.isActive} onChange={(event) => handleChange('isActive', event.target.checked)} />
             Active
           </label>
@@ -254,6 +268,11 @@ export default function DiscountCodesPage() {
                     <div className="text-slate-500">
                       {code.allowMultipleUse ? 'Reusable' : 'Single-use policy'}
                     </div>
+                    {code.autoApplyEnabled ? (
+                      <div className="text-indigo-600">
+                        Auto apply on | Priority {code.autoApplyPriority}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-3 py-3 text-slate-700">
                     <div>{code.usageCount} redemptions</div>

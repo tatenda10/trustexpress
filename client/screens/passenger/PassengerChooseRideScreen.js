@@ -159,6 +159,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [discountCodeInput, setDiscountCodeInput] = useState('');
   const [appliedDiscount, setAppliedDiscount] = useState(null);
   const [applyingDiscount, setApplyingDiscount] = useState(false);
+  const [autoApplyingDiscount, setAutoApplyingDiscount] = useState(false);
 
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -227,6 +228,43 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     }
     lastDiscountTierKeyRef.current = selectedTierKey;
   }, [selectedTierKey]);
+
+  useEffect(() => {
+    let active = true;
+
+    const maybeApplyAutoDiscount = async () => {
+      if (!selectedTier || !(originalEstimatedAmount > 0)) {
+        if (active) setAppliedDiscount(null);
+        return;
+      }
+
+      if (String(discountCodeInput || '').trim()) {
+        return;
+      }
+
+      try {
+        if (active) setAutoApplyingDiscount(true);
+        const token = await getTokenRef.current();
+        if (!token) throw new Error('Not signed in');
+        const data = await validatePassengerDiscount(token, {
+          autoApply: true,
+          selectedTier,
+          originalFareAmount: originalEstimatedAmount,
+        });
+        if (!active) return;
+        setAppliedDiscount(data?.discount || null);
+      } catch {
+        if (active) setAppliedDiscount(null);
+      } finally {
+        if (active) setAutoApplyingDiscount(false);
+      }
+    };
+
+    maybeApplyAutoDiscount();
+    return () => {
+      active = false;
+    };
+  }, [selectedTier, originalEstimatedAmount, discountCodeInput]);
 
   const originalEstimatedAmount = Number(estimatedAmount || 0);
   const discountAmount = Number(appliedDiscount?.discountAmount || 0);
@@ -417,7 +455,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
               Discount -${discountAmount.toFixed(2)}
             </Text>
             <Text style={styles.discountSummaryTextStrong}>
-              Code {appliedDiscount?.code}
+              {appliedDiscount?.autoApplied ? `Auto promo ${appliedDiscount?.code}` : `Code ${appliedDiscount?.code}`}
             </Text>
           </View>
         ) : null}
@@ -479,6 +517,13 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         {selectedTier && !loadingTiers ? (
           <View style={styles.discountCard}>
             <Text style={styles.discountCardTitle}>Discount code</Text>
+            {autoApplyingDiscount ? (
+              <Text style={styles.discountHintText}>Checking automatic promo...</Text>
+            ) : appliedDiscount?.autoApplied ? (
+              <Text style={styles.discountHintText}>Automatic promo applied. Enter a different code if you want to override it.</Text>
+            ) : (
+              <Text style={styles.discountHintText}>Enter a code manually or use any automatic promo currently active.</Text>
+            )}
             <View style={styles.discountInputRow}>
               <TextInput
                 value={discountCodeInput}
@@ -509,6 +554,12 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
                 <Text style={styles.discountBreakdownLabel}>Discount</Text>
                 <Text style={[styles.discountBreakdownValue, styles.discountBreakdownValueGreen]}>-${discountAmount.toFixed(2)}</Text>
               </View>
+              {appliedDiscount?.code ? (
+                <View style={styles.discountBreakdownRow}>
+                  <Text style={styles.discountBreakdownLabel}>{appliedDiscount.autoApplied ? 'Auto promo' : 'Promo code'}</Text>
+                  <Text style={styles.discountBreakdownValue}>{appliedDiscount.code}</Text>
+                </View>
+              ) : null}
               <View style={styles.discountBreakdownRow}>
                 <Text style={styles.discountBreakdownTotalLabel}>Final total</Text>
                 <Text style={styles.discountBreakdownTotalValue}>${finalEstimatedAmount.toFixed(2)}</Text>
@@ -870,6 +921,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
     marginBottom: 10,
+  },
+  discountHintText: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 10,
+    lineHeight: 18,
   },
   discountInputRow: {
     flexDirection: 'row',

@@ -19,6 +19,8 @@ function mapDiscountCode(row) {
     usageLimitTotal: row.usage_limit_total === null ? null : Number(row.usage_limit_total),
     usageLimitPerPassenger: row.usage_limit_per_passenger === null ? null : Number(row.usage_limit_per_passenger),
     allowMultipleUse: !!row.allow_multiple_use,
+    autoApplyEnabled: !!row.auto_apply_enabled,
+    autoApplyPriority: Number(row.auto_apply_priority || 0),
     isActive: !!row.is_active,
     startsAt: row.starts_at || null,
     expiresAt: row.expires_at || null,
@@ -69,6 +71,8 @@ router.post('/', requireAdminAuth, requirePermission('pricing.manage'), async (r
     const usageLimitTotal = normalizeNullableNumber(req.body?.usageLimitTotal);
     const usageLimitPerPassenger = normalizeNullableNumber(req.body?.usageLimitPerPassenger);
     const allowMultipleUse = req.body?.allowMultipleUse !== false;
+    const autoApplyEnabled = req.body?.autoApplyEnabled === true;
+    const autoApplyPriority = normalizeNullableNumber(req.body?.autoApplyPriority);
     const isActive = req.body?.isActive !== false;
     const startsAt = req.body?.startsAt ? new Date(req.body.startsAt) : null;
     const expiresAt = req.body?.expiresAt ? new Date(req.body.expiresAt) : null;
@@ -91,6 +95,9 @@ router.post('/', requireAdminAuth, requirePermission('pricing.manage'), async (r
     if (Number.isNaN(maxDiscountAmount) || Number.isNaN(minRideAmount) || Number.isNaN(usageLimitTotal) || Number.isNaN(usageLimitPerPassenger)) {
       return res.status(400).json({ error: 'One or more numeric discount fields are invalid' });
     }
+    if (Number.isNaN(autoApplyPriority)) {
+      return res.status(400).json({ error: 'Auto apply priority is invalid' });
+    }
 
     const result = await query(
       `INSERT INTO discount_codes (
@@ -104,11 +111,13 @@ router.post('/', requireAdminAuth, requirePermission('pricing.manage'), async (r
          usage_limit_total,
          usage_limit_per_passenger,
          allow_multiple_use,
+         auto_apply_enabled,
+         auto_apply_priority,
          starts_at,
          expires_at,
          is_active,
          created_by_admin_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         code,
         title,
@@ -120,6 +129,8 @@ router.post('/', requireAdminAuth, requirePermission('pricing.manage'), async (r
         usageLimitTotal === null ? null : Math.max(1, Math.floor(usageLimitTotal)),
         usageLimitPerPassenger === null ? null : Math.max(1, Math.floor(usageLimitPerPassenger)),
         allowMultipleUse ? 1 : 0,
+        autoApplyEnabled ? 1 : 0,
+        autoApplyPriority === null ? 0 : Math.max(0, Math.floor(autoApplyPriority)),
         startsAt && Number.isFinite(startsAt.getTime()) ? startsAt : null,
         expiresAt && Number.isFinite(expiresAt.getTime()) ? expiresAt : null,
         isActive ? 1 : 0,
@@ -184,6 +195,12 @@ router.patch('/:discountCodeId', requireAdminAuth, requirePermission('pricing.ma
       pushUpdate('usage_limit_per_passenger', value === null ? null : Math.max(1, Math.floor(value)));
     }
     if (req.body?.allowMultipleUse !== undefined) pushUpdate('allow_multiple_use', req.body.allowMultipleUse ? 1 : 0);
+    if (req.body?.autoApplyEnabled !== undefined) pushUpdate('auto_apply_enabled', req.body.autoApplyEnabled ? 1 : 0);
+    if (req.body?.autoApplyPriority !== undefined) {
+      const value = normalizeNullableNumber(req.body.autoApplyPriority);
+      if (Number.isNaN(value)) return res.status(400).json({ error: 'Invalid auto apply priority' });
+      pushUpdate('auto_apply_priority', value === null ? 0 : Math.max(0, Math.floor(value)));
+    }
     if (req.body?.isActive !== undefined) pushUpdate('is_active', req.body.isActive ? 1 : 0);
     if (req.body?.startsAt !== undefined) pushUpdate('starts_at', req.body.startsAt ? new Date(req.body.startsAt) : null);
     if (req.body?.expiresAt !== undefined) pushUpdate('expires_at', req.body.expiresAt ? new Date(req.body.expiresAt) : null);

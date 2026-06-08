@@ -7,7 +7,7 @@ import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
-import { syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
+import { findBestAutoDiscountForRide, syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
 import { normalizeRatingTags } from '../lib/ride-rating-tags.js';
 import {
   emitRideRequestRemovedFromDriver,
@@ -614,21 +614,28 @@ router.post('/passenger/validate-discount', requireAuth, async (req, res) => {
     if (!user) return;
 
     const discountCode = String(req.body?.discountCode || '').trim();
+    const autoApply = req.body?.autoApply === true;
     const selectedTier = req.body?.selectedTier || {};
     const originalFareAmount = Number(req.body?.originalFareAmount || 0);
-    if (!discountCode) {
+    if (!discountCode && !autoApply) {
       return res.status(400).json({ error: 'Discount code is required' });
     }
     if (!Number.isFinite(originalFareAmount) || originalFareAmount <= 0) {
       return res.status(400).json({ error: 'Original fare amount must be greater than zero' });
     }
 
-    const validatedDiscount = await validateDiscountForRide({
-      passengerUserId: req.userId,
-      discountCode,
-      originalFareAmount,
-      selectedTierKey: selectedTier?.tierKey || null,
-    });
+    const validatedDiscount = discountCode
+      ? await validateDiscountForRide({
+          passengerUserId: req.userId,
+          discountCode,
+          originalFareAmount,
+          selectedTierKey: selectedTier?.tierKey || null,
+        })
+      : await findBestAutoDiscountForRide({
+          passengerUserId: req.userId,
+          originalFareAmount,
+          selectedTierKey: selectedTier?.tierKey || null,
+        });
 
     return res.json({
       discount: validatedDiscount,
@@ -730,7 +737,11 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
           originalFareAmount: authoritativeAmount,
           selectedTierKey: tier.tier_key,
         })
-      : null;
+      : await findBestAutoDiscountForRide({
+          passengerUserId: req.userId,
+          originalFareAmount: authoritativeAmount,
+          selectedTierKey: tier.tier_key,
+        });
     const discountAmount = Number(validatedDiscount?.discountAmount || 0);
     const finalEstimatedAmount = Number(validatedDiscount?.finalFareAmount || authoritativeAmount);
     const driverReimbursementAmount = Number(validatedDiscount?.driverReimbursementAmount || 0);

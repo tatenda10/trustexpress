@@ -46,17 +46,22 @@ export async function validateDiscountForRide({
   passengerUserId,
   discountCode,
   originalFareAmount,
+  selectedTierKey = null,
+  rowOverride = null,
 }) {
   const normalizedCode = normalizeDiscountCode(discountCode);
-  if (!normalizedCode) return null;
+  if (!normalizedCode && !rowOverride) return null;
 
-  const [row] = await query(
-    `SELECT *
-     FROM discount_codes
-     WHERE code = ?
-     LIMIT 1`,
-    [normalizedCode]
-  );
+  const row = rowOverride || (await (async () => {
+    const [result] = await query(
+      `SELECT *
+       FROM discount_codes
+       WHERE code = ?
+       LIMIT 1`,
+      [normalizedCode]
+    );
+    return result || null;
+  })());
 
   if (!row) {
     const error = new Error('Discount code not found');
@@ -144,9 +149,52 @@ export async function validateDiscountForRide({
     discountAmount,
     finalFareAmount,
     driverReimbursementAmount: discountAmount,
+    autoApplyEnabled: !!row.auto_apply_enabled,
+    autoApplyPriority: Number(row.auto_apply_priority || 0),
+    autoApplied: !!row.auto_apply_enabled && !normalizedCode,
+    selectedTierKey: selectedTierKey || null,
     startsAt: row.starts_at ? new Date(row.starts_at).toISOString() : null,
     expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
   };
+}
+
+export async function findBestAutoDiscountForRide({
+  passengerUserId,
+  originalFareAmount,
+  selectedTierKey = null,
+}) {
+  const rows = await query(
+    `SELECT *
+     FROM discount_codes
+     WHERE is_active = 1
+       AND auto_apply_enabled = 1
+     ORDER BY auto_apply_priority DESC, created_at DESC, id DESC`
+  );
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    try {
+      const discount = await validateDiscountForRide({
+        passengerUserId,
+        discountCode: row.code,
+        originalFareAmount,
+        selectedTierKey,
+        rowOverride: row,
+      });
+      if (discount) {
+        return {
+          ...discount,
+          autoApplied: true,
+        };
+      }
+    } catch (error) {
+      if (Number(error?.status || 0) >= 400 && Number(error?.status || 0) < 500) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return null;
 }
 
 export async function syncDiscountRedemptionForRide({
