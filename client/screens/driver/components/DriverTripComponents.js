@@ -168,6 +168,7 @@ export function DriverTripMapPanel({
   passengerProfileImageUrl,
   passengerName,
   passengerSubtitle,
+  passengerConfirmationText,
   guidanceText,
   showGuidance,
   showMarkArrived,
@@ -322,6 +323,13 @@ export function DriverTripMapPanel({
               <Text className="mt-0.5 text-sm text-gray-500" numberOfLines={1}>{passengerSubtitle}</Text>
             </View>
           </View>
+
+          {passengerConfirmationText ? (
+            <View className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+              <Text className="text-xs font-bold uppercase tracking-widest text-emerald-700">Passenger update</Text>
+              <Text className="mt-1 text-sm font-semibold text-emerald-900">{passengerConfirmationText}</Text>
+            </View>
+          ) : null}
 
           {showGuidance ? (
             <View className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-4">

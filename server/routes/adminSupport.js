@@ -15,6 +15,13 @@ import {
 } from '../lib/support-chat.js';
 import { emitSupportChatMessageToUser } from '../lib/realtime.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
+import {
+  generateSupportAgentReply,
+  getSupportAgentSettings,
+  markSupportAgentTested,
+  updateSupportAgentSettings,
+} from '../lib/support-agent.js';
+import { DEFAULT_SUPPORT_AGENT_SECTIONS } from '../lib/support-agent-training.js';
 
 const router = Router();
 
@@ -50,6 +57,64 @@ async function enrichThread(row) {
     };
   }
 }
+
+router.get('/agent/settings', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
+  try {
+    const settings = await getSupportAgentSettings();
+    return res.json({
+      settings,
+      trainingSections: DEFAULT_SUPPORT_AGENT_SECTIONS.map((section) => ({
+        title: section.title,
+        questions: section.items.map(([question]) => question),
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/admin/support/agent/settings', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/agent/settings', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
+  try {
+    const settings = await updateSupportAgentSettings({
+      enabled: req.body?.enabled,
+      provider: req.body?.provider,
+      model: req.body?.model,
+      systemPrompt: req.body?.systemPrompt,
+      trainingContent: req.body?.trainingContent,
+      adminUserId: req.admin.id,
+    });
+    return res.json({ settings });
+  } catch (err) {
+    console.error('PUT /api/admin/support/agent/settings', err);
+    return res.status(500).json({ error: err?.message || 'Server error' });
+  }
+});
+
+router.post('/agent/test', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
+  try {
+    const message = String(req.body?.message || '').trim();
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const reply = await generateSupportAgentReply({
+      thread: {
+        id: 'test',
+        user_id: 'test-user',
+        user_role: String(req.body?.userRole || 'passenger').trim().toLowerCase() === 'driver' ? 'driver' : 'passenger',
+      },
+      messages: [],
+      testMessage: message,
+    });
+
+    await markSupportAgentTested();
+    return res.json({ reply });
+  } catch (err) {
+    console.error('POST /api/admin/support/agent/test', err);
+    return res.status(500).json({ error: err?.message || 'Server error' });
+  }
+});
 
 router.get('/threads', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
   try {

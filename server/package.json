@@ -21,6 +21,8 @@
     "db:migrate:ride-responses": "node scripts/run-migration.js sql/migrations/010_add_ride_request_driver_responses.sql",
     "db:migrate:ride-ratings": "node scripts/run-migration.js sql/migrations/011_add_passenger_driver_ratings.sql",
     "db:migrate:ride-lost-items": "node scripts/run-migration.js sql/migrations/022_add_ride_lost_items.sql",
+    "db:migrate:ride-case-management": "node scripts/run-migration.js sql/migrations/036_add_ride_case_management_and_rating_tags.sql",
+    "db:migrate:support-agent": "node scripts/run-migration.js sql/migrations/037_add_support_agent_settings.sql",
     "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",
     "db:migrate:agent-profile": "node scripts/run-migration.js sql/migrations/023_add_agent_profile_fields.sql",
     "db:migrate:agent-invites": "node scripts/run-migration.js sql/migrations/024_add_agent_invites_and_driver_referrals.sql",

@@ -8,6 +8,7 @@ import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
+import { normalizeRatingTags } from '../lib/ride-rating-tags.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideChatMessageToUser,
@@ -52,6 +53,21 @@ const DRIVER_ONLINE_STALE_DAYS = 1;
 const LOST_ITEM_MAX_LENGTH = 2000;
 const MAX_RIDE_TIP_AMOUNT = 200;
 const PANIC_ALERT_MESSAGE_MAX_LENGTH = 500;
+
+function parseJsonArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function createCaseReference(prefix, rideRequestId) {
+  return `${prefix}-${String(rideRequestId || '').padStart(6, '0')}-${crypto.randomInt(100, 999)}`;
+}
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
@@ -525,9 +541,11 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
          status,
          passenger_driver_rating,
          passenger_driver_review,
+         passenger_driver_feedback_tags,
          passenger_driver_rated_at,
          driver_passenger_rating,
          driver_passenger_review,
+         driver_passenger_feedback_tags,
          driver_passenger_rated_at,
          requested_at,
         completed_at,
@@ -563,9 +581,11 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         rawStatus: row.status,
         passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
         passengerDriverReview: row.passenger_driver_review || '',
+        passengerDriverFeedbackTags: parseJsonArray(row.passenger_driver_feedback_tags),
         passengerDriverRatedAt: row.passenger_driver_rated_at || null,
         driverPassengerRating: row.driver_passenger_rating === null ? null : Number(row.driver_passenger_rating),
         driverPassengerReview: row.driver_passenger_review || '',
+        driverPassengerFeedbackTags: parseJsonArray(row.driver_passenger_feedback_tags),
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
         canRateDriver: row.status === 'completed' && !!row.driver_user_id && row.passenger_driver_rating === null,
         canTipDriver: row.status === 'completed' && !!row.driver_user_id && Number(row.tip_amount || 0) <= 0,
@@ -1015,6 +1035,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         driverCoordinate,
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
+        passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
         driversViewingCount: 0,
       },
@@ -1169,6 +1190,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         driverCoordinate,
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
+        passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
         driversViewingCount,
       },
@@ -1225,9 +1247,11 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
         cancelledAt: ride.cancelled_at,
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
+        passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
         driverPassengerRating: ride.driver_passenger_rating === null ? null : Number(ride.driver_passenger_rating),
         driverPassengerReview: ride.driver_passenger_review || '',
+        driverPassengerFeedbackTags: parseJsonArray(ride.driver_passenger_feedback_tags),
         driverPassengerRatedAt: ride.driver_passenger_rated_at || null,
         canRateDriver: ride.status === 'completed' && !!ride.driver_user_id && ride.passenger_driver_rating === null,
         canTipDriver: ride.status === 'completed' && !!ride.driver_user_id && Number(ride.tip_amount || 0) <= 0,
@@ -1367,8 +1391,10 @@ router.post('/passenger/:rideRequestId/lost-items', requireAuth, async (req, res
          driver_user_id,
          item_description,
          contact_phone,
+         case_reference,
+         case_priority,
          status
-       ) VALUES (?, ?, ?, ?, ?, ?, 'open')`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       [
         rideRequestId,
         ride.public_id || null,
@@ -1376,6 +1402,8 @@ router.post('/passenger/:rideRequestId/lost-items', requireAuth, async (req, res
         ride.driver_user_id || null,
         itemDescription,
         contactPhone || null,
+        createCaseReference('LI', rideRequestId),
+        'high',
       ]
     );
 
@@ -1386,6 +1414,7 @@ router.post('/passenger/:rideRequestId/lost-items', requireAuth, async (req, res
         status: 'open',
         itemDescription,
         contactPhone: contactPhone || null,
+        followUpStatus: 'pending',
       },
     });
   } catch (err) {
@@ -1446,6 +1475,7 @@ router.post('/:rideRequestId/panic-alert', requireAuth, async (req, res) => {
     const defaultMessage = actorRole === 'driver'
       ? 'Driver requested urgent admin assistance during an active ride.'
       : 'Passenger requested urgent admin assistance during an active ride.';
+    const casePriority = actorRole === 'driver' ? 'critical' : 'high';
 
     const insertResult = await query(
       `INSERT INTO ride_panic_alerts (
@@ -1461,10 +1491,12 @@ router.post('/:rideRequestId/panic-alert', requireAuth, async (req, res) => {
          ride_status,
          alert_stage,
          message,
+         case_reference,
+         case_priority,
          latitude,
          longitude,
          status
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       [
         rideRequestId,
         ride.public_id || null,
@@ -1478,6 +1510,8 @@ router.post('/:rideRequestId/panic-alert', requireAuth, async (req, res) => {
         ride.status,
         alertStage || null,
         message || defaultMessage,
+        createCaseReference('PA', rideRequestId),
+        casePriority,
         latitude,
         longitude,
       ]
@@ -1492,9 +1526,11 @@ router.post('/:rideRequestId/panic-alert', requireAuth, async (req, res) => {
         rideStatus: ride.status,
         alertStage: alertStage || null,
         message: message || defaultMessage,
+        casePriority,
         latitude,
         longitude,
         status: 'open',
+        followUpStatus: 'pending',
       },
     });
   } catch (err) {
@@ -1511,6 +1547,7 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
     const rideRequestId = Number(req.params.rideRequestId);
     const rating = Number(req.body?.rating);
     const review = String(req.body?.review || '').trim();
+    const feedbackTags = normalizeRatingTags(req.body?.feedbackTags);
     if (!Number.isInteger(rideRequestId)) {
       return res.status(400).json({ error: 'Invalid rideRequestId' });
     }
@@ -1536,9 +1573,10 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
       `UPDATE ride_requests
        SET passenger_driver_rating = ?,
            passenger_driver_review = ?,
+           passenger_driver_feedback_tags = ?,
            passenger_driver_rated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND passenger_user_id = ?`,
-      [rating, review || null, rideRequestId, req.userId]
+      [rating, review || null, JSON.stringify(feedbackTags), rideRequestId, req.userId]
     );
 
     try {
@@ -1553,6 +1591,7 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
             type: 'driver_rating',
             rating,
             review,
+            feedbackTags,
             rideRequestId,
           },
         });
@@ -1565,6 +1604,7 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
       rideRequestId,
       rating,
       review,
+      feedbackTags,
       from: 'passenger',
     });
 
@@ -1572,6 +1612,7 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
       ok: true,
       rating,
       review,
+      feedbackTags,
     });
   } catch (err) {
     console.error('POST /api/rides/passenger/:rideRequestId/rate-driver', err);
@@ -2025,6 +2066,24 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
       [rideRequestId, req.userId]
     );
     if (ride?.driver_user_id) {
+      try {
+        const driverUser = await getClerkUserById(ride.driver_user_id);
+        const pushToken = String(driverUser?.privateMetadata?.pushToken || '').trim();
+        if (pushToken) {
+          await sendExpoPushNotifications({
+            to: pushToken,
+            title: 'Passenger is coming',
+            body: 'Your passenger confirmed they are on their way to the pickup point.',
+            data: {
+              type: 'passenger_confirmed',
+              rideRequestId,
+              confirmedAt,
+            },
+          });
+        }
+      } catch (pushError) {
+        console.error('PATCH /api/rides/passenger/:rideRequestId/confirm-pickup push', pushError);
+      }
       emitRideStatusToDriver(ride.driver_user_id, {
         rideRequestId,
         status: 'passenger_confirmed',

@@ -10,6 +10,8 @@ import {
   Image,
   InteractionManager,
   BackHandler,
+  Modal,
+  FlatList,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,6 +22,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { getDriverVehicleOptions, submitVehicle, uploadFile } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
+import { getVehicleModelsForMake, VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
 
 function navigateToDriverAccountTab() {
   if (!navigationRef.isReady()) return;
@@ -53,6 +56,86 @@ function goBackOrDriverTabs(navigation) {
 const MIN_CAR_PHOTOS = 3;
 const MAX_CAR_PHOTOS = 6;
 const UPLOAD_RETRY_COUNT = 2;
+
+function SelectionModal({
+  visible,
+  title,
+  options,
+  selectedValue,
+  searchPlaceholder = 'Search...',
+  onClose,
+  onSelect,
+}) {
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (visible) setSearch('');
+  }, [visible]);
+
+  const filteredOptions = options.filter((option) =>
+    String(option || '').toLowerCase().includes(search.trim().toLowerCase())
+  );
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View className="flex-1 justify-center bg-black/40 px-5">
+        <View className="max-h-[78%] rounded-[24px] bg-white p-5">
+          <View className="flex-row items-center justify-between">
+            <Text className="text-lg font-bold text-gray-900">{title}</Text>
+            <TouchableOpacity onPress={onClose} className="h-10 w-10 items-center justify-center rounded-full bg-gray-100">
+              <Ionicons name="close" size={20} color="#111827" />
+            </TouchableOpacity>
+          </View>
+
+          <TextInput
+            className="mt-4 rounded-xl border border-gray-200 px-4 py-3 text-base"
+            placeholder={searchPlaceholder}
+            value={search}
+            onChangeText={setSearch}
+          />
+
+          <FlatList
+            className="mt-4"
+            data={filteredOptions}
+            keyExtractor={(item) => String(item)}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => {
+              const selected = String(item) === String(selectedValue || '');
+              return (
+                <TouchableOpacity
+                  onPress={() => onSelect(item)}
+                  className={`mb-2 flex-row items-center justify-between rounded-xl border px-4 py-4 ${selected ? 'border-primary bg-blue-50' : 'border-gray-200 bg-white'}`}
+                >
+                  <Text className={`text-base ${selected ? 'font-semibold text-primary' : 'text-gray-800'}`}>{item}</Text>
+                  <Ionicons name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={selected ? '#206EFF' : '#9ca3af'} />
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={<Text className="py-8 text-center text-sm text-gray-500">No matching options.</Text>}
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function SelectField({ label, value, placeholder, onPress, disabled = false }) {
+  return (
+    <>
+      <Text className="text-sm font-medium text-gray-700 mb-2">{label} <Text className="text-red-500">*</Text></Text>
+      <TouchableOpacity
+        onPress={onPress}
+        disabled={disabled}
+        className={`mb-4 flex-row items-center justify-between rounded-xl border p-4 ${disabled ? 'border-gray-100 bg-gray-50' : 'border-gray-200 bg-white'}`}
+      >
+        <Text className={`${value ? 'text-gray-900' : 'text-gray-400'} text-base`}>
+          {value || placeholder}
+        </Text>
+        <Ionicons name="chevron-down" size={20} color={disabled ? '#d1d5db' : '#6b7280'} />
+      </TouchableOpacity>
+    </>
+  );
+}
 
 async function prepareImageForUpload(uri, { maxWidth = 1600, compress = 0.7 } = {}) {
   if (!uri || /^https?:\/\//i.test(uri) || String(uri).startsWith('/uploads/')) return uri;
@@ -149,8 +232,13 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [tiers, setTiers] = useState([]);
   const [tiersLoading, setTiersLoading] = useState(true);
   const [selectedTierKey, setSelectedTierKey] = useState(vehicle?.vehicleTierKey || '');
+  const [showMakeModal, setShowMakeModal] = useState(false);
+  const [showModelModal, setShowModelModal] = useState(false);
+  const [showYearModal, setShowYearModal] = useState(false);
   /** When true, vehicle is pending after a successful submit — show alert before auto-redirect skips this. */
   const pendingSubmitAlertRef = useRef(false);
+  const makeOptions = VEHICLE_MAKE_MODELS.map((item) => item.make);
+  const modelOptions = getVehicleModelsForMake(make);
 
   useFocusEffect(
     useCallback(() => {
@@ -571,18 +659,24 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
         <Text className="text-sm font-medium text-gray-700 mb-2">Number plate <Text className="text-red-500">*</Text></Text>
         <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. ABC 1234" value={numberPlate} onChangeText={setNumberPlate} />
-        <Text className="text-sm font-medium text-gray-700 mb-2">Make <Text className="text-red-500">*</Text></Text>
-        <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Toyota" value={make} onChangeText={setMake} />
-        <Text className="text-sm font-medium text-gray-700 mb-2">Model <Text className="text-red-500">*</Text></Text>
-        <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Corolla" value={model} onChangeText={setModel} />
-        <Text className="text-sm font-medium text-gray-700 mb-2">Year <Text className="text-red-500">*</Text></Text>
-        <TextInput
-          className="border border-gray-200 rounded-xl p-4 text-base mb-4"
-          placeholder="e.g. 2019"
+        <SelectField
+          label="Make"
+          value={make}
+          placeholder="Choose a vehicle make"
+          onPress={() => setShowMakeModal(true)}
+        />
+        <SelectField
+          label="Model"
+          value={model}
+          placeholder={make ? 'Choose a vehicle model' : 'Select make first'}
+          onPress={() => setShowModelModal(true)}
+          disabled={!make}
+        />
+        <SelectField
+          label="Year"
           value={year}
-          onChangeText={(text) => setYear(text.replace(/[^\d]/g, '').slice(0, 4))}
-          keyboardType="number-pad"
-          maxLength={4}
+          placeholder="Choose a year from 2010 onwards"
+          onPress={() => setShowYearModal(true)}
         />
         <Text className="text-sm font-medium text-gray-700 mb-2">Color</Text>
         <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Silver" value={color} onChangeText={setColor} />
@@ -700,6 +794,48 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-white text-lg font-semibold">{isChangingApprovedVehicle ? 'Submit change for review' : 'Submit for review'}</Text>}
         </TouchableOpacity>
       </ScrollView>
+
+      <SelectionModal
+        visible={showMakeModal}
+        title="Select Vehicle Make"
+        options={makeOptions}
+        selectedValue={make}
+        searchPlaceholder="Search vehicle make"
+        onClose={() => setShowMakeModal(false)}
+        onSelect={(value) => {
+          setMake(value);
+          if (!getVehicleModelsForMake(value).includes(model)) {
+            setModel('');
+          }
+          setShowMakeModal(false);
+        }}
+      />
+
+      <SelectionModal
+        visible={showModelModal}
+        title="Select Vehicle Model"
+        options={modelOptions}
+        selectedValue={model}
+        searchPlaceholder="Search vehicle model"
+        onClose={() => setShowModelModal(false)}
+        onSelect={(value) => {
+          setModel(value);
+          setShowModelModal(false);
+        }}
+      />
+
+      <SelectionModal
+        visible={showYearModal}
+        title="Select Vehicle Year"
+        options={VEHICLE_YEAR_OPTIONS}
+        selectedValue={year}
+        searchPlaceholder="Search year"
+        onClose={() => setShowYearModal(false)}
+        onSelect={(value) => {
+          setYear(value);
+          setShowYearModal(false);
+        }}
+      />
     </View>
   );
 };

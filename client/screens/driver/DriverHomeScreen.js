@@ -1554,25 +1554,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       <Text className="text-xs font-semibold uppercase tracking-wide text-[#5a6474]">Fare</Text>
                       <Text className="mt-1 text-3xl font-extrabold text-[#111111]">${Number(req.estimatedAmount || 0).toFixed(2)}</Text>
                       {Number(req.discountAmount || 0) > 0 ? (
-                        <>
-                          <Text className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-[#15803d]">
-                            Passenger promo applied
+                        <View className="mt-2 rounded-full bg-emerald-50 px-3 py-1">
+                          <Text className="text-[11px] font-semibold uppercase tracking-wide text-[#15803d]">
+                            Promo applied
                           </Text>
-                          <Text className="mt-1 text-xs text-[#5a6474]">
-                            Passenger pays ${Number(req.finalEstimatedAmount || 0).toFixed(2)}
-                          </Text>
-                          <Text className="mt-0.5 text-xs text-[#5a6474]">
-                            Discount ${Number(req.discountAmount || 0).toFixed(2)}
-                          </Text>
-                          <Text className="mt-0.5 text-xs text-[#5a6474]">
-                            Admin reimbursement ${Number(req.driverReimbursementAmount || 0).toFixed(2)}
-                          </Text>
-                          {req.discountCode ? (
-                            <Text className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#2f73c9]">
-                              Code {req.discountCode}
-                            </Text>
-                          ) : null}
-                        </>
+                        </View>
                       ) : null}
                     </View>
                   </View>
@@ -1625,15 +1611,34 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
                   {Number(req.discountAmount || 0) > 0 ? (
                     <View className="mt-4 rounded-[18px] border border-[#dbeafe] bg-[#eff6ff] px-4 py-3">
-                      <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
-                        Promo ride accounting
-                      </Text>
-                      <Text className="mt-2 text-sm text-[#1e3a8a]">
-                        Full fare ${Number(req.estimatedAmount || 0).toFixed(2)} | Passenger total ${Number(req.finalEstimatedAmount || 0).toFixed(2)}
-                      </Text>
-                      <Text className="mt-1 text-sm text-[#1e3a8a]">
-                        Discount ${Number(req.discountAmount || 0).toFixed(2)} reimbursed by admin later
-                      </Text>
+                      <View className="flex-row items-center justify-between">
+                        <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                          Promo ride
+                        </Text>
+                        {req.discountCode ? (
+                          <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
+                            {req.discountCode}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View className="mt-2 flex-row items-center justify-between">
+                        <Text className="text-sm text-[#1e3a8a]">Passenger total</Text>
+                        <Text className="text-sm font-semibold text-[#1e3a8a]">
+                          ${Number(req.finalEstimatedAmount || 0).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View className="mt-1 flex-row items-center justify-between">
+                        <Text className="text-sm text-[#1e3a8a]">Discount</Text>
+                        <Text className="text-sm font-semibold text-[#1e3a8a]">
+                          ${Number(req.discountAmount || 0).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View className="mt-1 flex-row items-center justify-between">
+                        <Text className="text-sm text-[#1e3a8a]">Admin reimbursement</Text>
+                        <Text className="text-sm font-semibold text-[#1e3a8a]">
+                          ${Number(req.driverReimbursementAmount || 0).toFixed(2)}
+                        </Text>
+                      </View>
                     </View>
                   ) : null}
 
@@ -1705,25 +1710,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
                         ${Number(activeRequest?.estimatedAmount || 0).toFixed(2)}
                       </Text>
                       {Number(activeRequest?.discountAmount || 0) > 0 ? (
-                        <>
-                          <Text className="mt-2 text-[11px] font-semibold uppercase tracking-[1px] text-[#15803d]">
-                            Passenger promo applied
+                        <View className="mt-2 rounded-full bg-emerald-50 px-3 py-1">
+                          <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#15803d]">
+                            Promo applied
                           </Text>
-                          <Text className="mt-1 text-sm text-[#5a6474]">
-                            Passenger pays ${Number(activeRequest?.finalEstimatedAmount || 0).toFixed(2)}
-                          </Text>
-                          <Text className="mt-0.5 text-sm text-[#5a6474]">
-                            Discount ${Number(activeRequest?.discountAmount || 0).toFixed(2)}
-                          </Text>
-                          <Text className="mt-0.5 text-sm text-[#5a6474]">
-                            Admin reimbursement ${Number(activeRequest?.driverReimbursementAmount || 0).toFixed(2)}
-                          </Text>
-                          {activeRequest?.discountCode ? (
-                            <Text className="mt-0.5 text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
-                              Code {activeRequest.discountCode}
-                            </Text>
-                          ) : null}
-                        </>
+                        </View>
                       ) : null}
                     </View>
                     <View className="items-end">
@@ -1763,6 +1754,39 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       </Text>
                     </View>
                   </View>
+
+                  {Number(activeRequest?.discountAmount || 0) > 0 ? (
+                    <View className="mt-4 rounded-[18px] border border-[#dbeafe] bg-white px-4 py-3">
+                      <View className="flex-row items-center justify-between">
+                        <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                          Promo ride
+                        </Text>
+                        {activeRequest?.discountCode ? (
+                          <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
+                            {activeRequest.discountCode}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View className="mt-2 flex-row items-center justify-between">
+                        <Text className="text-sm text-[#5a6474]">Passenger total</Text>
+                        <Text className="text-sm font-semibold text-[#111111]">
+                          ${Number(activeRequest?.finalEstimatedAmount || 0).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View className="mt-1 flex-row items-center justify-between">
+                        <Text className="text-sm text-[#5a6474]">Discount</Text>
+                        <Text className="text-sm font-semibold text-[#111111]">
+                          ${Number(activeRequest?.discountAmount || 0).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View className="mt-1 flex-row items-center justify-between">
+                        <Text className="text-sm text-[#5a6474]">Admin reimbursement</Text>
+                        <Text className="text-sm font-semibold text-[#111111]">
+                          ${Number(activeRequest?.driverReimbursementAmount || 0).toFixed(2)}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
                 </View>
 
                 <View className="mt-5 rounded-[24px] border border-[#d7dfec] bg-white px-4 py-4">

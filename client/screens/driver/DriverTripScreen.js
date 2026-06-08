@@ -311,6 +311,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const lastSpokenInstructionRef = useRef('');
   const lastSpokenAtRef = useRef(0);
   const lastArrivalAnnouncementStageRef = useRef('');
+  const lastPassengerConfirmedAtRef = useRef('');
   const speechDebounceTimeoutRef = useRef(null);
   const autoArrivalTimerRef = useRef(null);
   const autoArrivalRideIdRef = useRef(null);
@@ -559,6 +560,28 @@ export default function DriverTripScreen({ navigation, route }) {
 
     return undefined;
   }, [ride?.stage, voiceGuidanceEnabled]);
+
+  useEffect(() => {
+    const confirmedAt = String(ride?.passengerConfirmedAt || '').trim();
+    if (!confirmedAt || confirmedAt === lastPassengerConfirmedAtRef.current) return undefined;
+    lastPassengerConfirmedAtRef.current = confirmedAt;
+
+    showLocalRideNotification({
+      title: 'Passenger is coming',
+      body: 'Your passenger confirmed they are on their way to the pickup point.',
+      data: { type: 'passenger_confirmed', rideRequestId: ride?.id || null },
+    }).catch(() => {});
+
+    if (voiceGuidanceEnabled) {
+      Speech.speak('Your passenger confirmed they are coming to the pickup point.', {
+        rate: 0.95,
+        pitch: 1.0,
+        language: 'en',
+      });
+    }
+
+    return undefined;
+  }, [ride?.id, ride?.passengerConfirmedAt, voiceGuidanceEnabled]);
 
   useEffect(() => {
     if (ride?.stage !== 'waiting_for_customer') return undefined;
@@ -1179,6 +1202,9 @@ export default function DriverTripScreen({ navigation, route }) {
   const guidanceText = normalizeInstructionForSpeech(nextInstruction) || (ride.stage === 'on_trip'
     ? `Continue toward ${ride.dropoffLabel || 'the drop-off point'}`
     : `Continue toward ${ride.pickupLabel || 'the pickup point'}`);
+  const passengerConfirmationText = ride.passengerConfirmedAt
+    ? 'Passenger confirmed they are coming to the pickup point.'
+    : '';
 
   const handleOpenExternalNavigation = async () => {
     try {
@@ -1261,6 +1287,7 @@ export default function DriverTripScreen({ navigation, route }) {
       passengerProfileImageUrl={passengerProfileImageUrl}
       passengerName={ride.passengerName}
       passengerSubtitle={ride.passengerPhone || targetLabel}
+      passengerConfirmationText={passengerConfirmationText}
       guidanceText={guidanceText}
       showGuidance={Boolean(ride.stage === 'on_trip' || nextInstruction)}
       showMarkArrived={ride.stage === 'to_pickup'}

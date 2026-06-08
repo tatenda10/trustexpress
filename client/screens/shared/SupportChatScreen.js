@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import * as Notifications from 'expo-notifications';
 import { connectRealtime } from '../../realtime';
 import { getSupportMessages, sendSupportMessage } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -36,6 +37,9 @@ function MessageBubble({ item, isMine }) {
           {item.message}
         </Text>
       </View>
+      {!isMine && item?.isAiReply ? (
+        <Text className="mt-1 text-[11px] font-semibold text-indigo-500">Support assistant</Text>
+      ) : null}
       <Text className="mt-1 text-[11px] text-gray-400">{formatTime(item.createdAt)}</Text>
     </View>
   );
@@ -53,6 +57,7 @@ export default function SupportChatScreen({ navigation, route }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [threadId, setThreadId] = useState(null);
+  const lastIncomingAdminMessageIdRef = useRef(null);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -68,6 +73,32 @@ export default function SupportChatScreen({ navigation, route }) {
       const data = await getSupportMessages(token);
       setThreadId(data?.thread?.id || null);
       const incomingMessages = Array.isArray(data?.messages) ? data.messages : [];
+      const latestAdminMessage = [...incomingMessages]
+        .reverse()
+        .find((item) => item?.senderType === 'admin');
+
+      if (
+        latestAdminMessage?.id &&
+        lastIncomingAdminMessageIdRef.current &&
+        String(latestAdminMessage.id) !== String(lastIncomingAdminMessageIdRef.current)
+      ) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Support replied',
+            body: String(latestAdminMessage.message || 'Support sent a new message.').slice(0, 140),
+            sound: 'default',
+            data: {
+              type: 'support_chat',
+              threadId: data?.thread?.id || threadId || null,
+            },
+          },
+          trigger: null,
+        }).catch(() => {});
+      }
+      if (latestAdminMessage?.id) {
+        lastIncomingAdminMessageIdRef.current = latestAdminMessage.id;
+      }
+
       setMessages((prevMessages) => {
         const isSame =
           prevMessages.length === incomingMessages.length &&
@@ -88,7 +119,7 @@ export default function SupportChatScreen({ navigation, route }) {
       if (showRefreshing) setRefreshing(false);
       if (showLoader) setLoading(false);
     }
-  }, []);
+  }, [threadId]);
 
   useEffect(() => {
     loadMessages({ showLoader: true });
@@ -158,6 +189,12 @@ export default function SupportChatScreen({ navigation, route }) {
         setMessages((prev) => [...prev.filter((item) => String(item.id) !== String(data.messageRecord.id)), data.messageRecord]);
       } else {
         await loadMessages();
+      }
+      if (data?.aiReplyRecord) {
+        setMessages((prev) => [...prev.filter((item) => String(item.id) !== String(data.aiReplyRecord.id)), data.aiReplyRecord]);
+        if (data?.aiReplyRecord?.id) {
+          lastIncomingAdminMessageIdRef.current = data.aiReplyRecord.id;
+        }
       }
       setDraft('');
     } catch (sendError) {

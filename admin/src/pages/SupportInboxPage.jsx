@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
+import { Link } from 'react-router-dom'
 
 function formatTime(value) {
   if (!value) return ''
@@ -49,6 +50,7 @@ export default function SupportInboxPage() {
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
   const [updatingThread, setUpdatingThread] = useState(false)
+  const [agentSettings, setAgentSettings] = useState(null)
   const [error, setError] = useState('')
 
   const loadThreads = async ({ silent = false } = {}) => {
@@ -91,6 +93,15 @@ export default function SupportInboxPage() {
     }
   }
 
+  const loadAgentSettings = async () => {
+    try {
+      const { data } = await axios.get(`${BASE_URL}/api/admin/support/agent/settings`, { headers })
+      setAgentSettings(data?.settings || null)
+    } catch {
+      setAgentSettings(null)
+    }
+  }
+
   const loadMessages = async (threadId, { silent = false } = {}) => {
     if (!threadId) {
       setSelectedThread(null)
@@ -116,6 +127,7 @@ export default function SupportInboxPage() {
 
   useEffect(() => {
     loadThreads()
+    loadAgentSettings()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, statusFilter, messageFilter, appliedSearch, pagination.page, pagination.pageSize])
 
@@ -224,6 +236,24 @@ export default function SupportInboxPage() {
               <p className="mt-1 text-lg font-semibold text-slate-800">{summary.closed}</p>
             </div>
           </div>
+        </div>
+        <div className="mt-3 flex flex-col gap-3 border-t border-slate-200 pt-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <span className={`inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
+              agentSettings?.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+            }`}>
+              Claude auto reply {agentSettings?.enabled ? 'on' : 'off'}
+            </span>
+            <span className="text-xs text-slate-500">
+              {agentSettings?.hasApiKey ? 'API key configured' : 'Claude API key missing'}
+            </span>
+          </div>
+          <Link
+            to="/dashboard/support-agent"
+            className="inline-flex h-10 items-center justify-center border border-slate-300 px-4 text-xs font-semibold uppercase tracking-[0.16em] text-slate-700 hover:bg-slate-50"
+          >
+            Manage support agent
+          </Link>
         </div>
       </div>
 

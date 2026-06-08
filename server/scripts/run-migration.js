@@ -34,7 +34,7 @@ async function run() {
 
   try {
     for (const statement of statements) {
-      await connection.execute(statement)
+      await connection.query(statement)
     }
   } finally {
     await connection.end()

@@ -1398,6 +1398,7 @@ router.get('/history', requireAuth, async (req, res) => {
          driver_eta_minutes,
          passenger_driver_rating,
          passenger_driver_review,
+         passenger_driver_feedback_tags,
          passenger_driver_rated_at,
          status,
          requested_at,
@@ -1438,6 +1439,16 @@ router.get('/history', requireAuth, async (req, res) => {
               ? null
               : (row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating)),
             passengerDriverReview: hideFreshReview ? '' : (row.passenger_driver_review || ''),
+            passengerDriverFeedbackTags: hideFreshReview
+              ? []
+              : (() => {
+                try {
+                  const parsed = JSON.parse(row.passenger_driver_feedback_tags || '[]');
+                  return Array.isArray(parsed) ? parsed : [];
+                } catch {
+                  return [];
+                }
+              })(),
             passengerDriverRatedAt: hideFreshReview ? null : (row.passenger_driver_rated_at || null),
             passengerDriverReviewPending:
               hideFreshReview && (row.passenger_driver_rating !== null || !!String(row.passenger_driver_review || '').trim()),

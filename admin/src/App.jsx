@@ -20,6 +20,7 @@ import ReportsPage from './pages/ReportsPage'
 import VehicleTiersPage from './pages/VehicleTiersPage'
 import AgentRewardsPage from './pages/AgentRewardsPage'
 import SupportInboxPage from './pages/SupportInboxPage'
+import SupportAgentPage from './pages/SupportAgentPage'
 import DiscountCodesPage from './pages/DiscountCodesPage'
 import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursementsPage'
 
@@ -138,6 +139,10 @@ function AppRoutes() {
         <Route
           path="support"
           element={<PermissionRoute permission="support.read"><SupportInboxPage /></PermissionRoute>}
+        />
+        <Route
+          path="support-agent"
+          element={<PermissionRoute permission="support.read"><SupportAgentPage /></PermissionRoute>}
         />
       </Route>
 

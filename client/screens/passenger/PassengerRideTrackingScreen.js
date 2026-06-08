@@ -10,6 +10,7 @@ import * as Location from 'expo-location';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
+import { PASSENGER_DRIVER_RATING_TAGS } from '../../constants/rideRatingTags';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { showLocalRideNotification } from '../../notifications';
@@ -197,6 +198,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [driver, setDriver] = useState(initialDriver || null);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
+  const [ratingTags, setRatingTags] = useState([]);
   const [submittingRating, setSubmittingRating] = useState(false);
   const [submittingTip, setSubmittingTip] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
@@ -265,9 +267,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         setDriver(data?.assignedDriver || initialDriver || null);
         const savedRating = Number(data?.rideRequest?.passengerDriverRating || 0);
         const savedReview = String(data?.rideRequest?.passengerDriverReview || '');
+        const savedRatingTags = Array.isArray(data?.rideRequest?.passengerDriverFeedbackTags)
+          ? data.rideRequest.passengerDriverFeedbackTags
+          : [];
         if (!ratingDraftTouchedRef.current || savedRating > 0) {
           setRating(savedRating);
           setReview(savedReview);
+          setRatingTags(savedRatingTags);
           if (savedRating > 0) {
             ratingDraftTouchedRef.current = false;
           }
@@ -640,6 +646,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
   const handleSkipRating = () => {
     ratingDraftTouchedRef.current = false;
+    setRatingTags([]);
     setShowDriverRatingModal(false);
     exitToPassengerHome();
   };
@@ -669,12 +676,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       setSubmittingRating(true);
       const token = await getToken();
       if (!token || !rideRequestId) throw new Error('Not signed in');
-      await submitPassengerDriverRating(token, rideRequestId, { rating, review });
+      await submitPassengerDriverRating(token, rideRequestId, { rating, review, feedbackTags: ratingTags });
       ratingDraftTouchedRef.current = false;
       setRideStatus((current) => current ? {
         ...current,
         passengerDriverRating: rating,
         passengerDriverReview: review,
+        passengerDriverFeedbackTags: ratingTags,
       } : current);
       if (canPromptForTip) {
         Alert.alert('Rating saved', 'You can add an optional tip now, or tap Finish to close this trip.');
@@ -1335,6 +1343,27 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   textAlignVertical="top"
                   className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
                 />
+                <View className="mt-4 flex-row flex-wrap">
+                  {PASSENGER_DRIVER_RATING_TAGS.map((tag) => {
+                    const selected = ratingTags.includes(tag);
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        onPress={() => {
+                          ratingDraftTouchedRef.current = true;
+                          setRatingTags((current) => (
+                            current.includes(tag)
+                              ? current.filter((item) => item !== tag)
+                              : [...current, tag]
+                          ));
+                        }}
+                        className={`mb-2 mr-2 rounded-full border px-4 py-2 ${selected ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}
+                      >
+                        <Text className={`text-sm font-semibold ${selected ? 'text-blue-700' : 'text-gray-600'}`}>{tag}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </>
             ) : null}
             {(rideStatus?.canTipDriver || tipAmount > 0) ? (

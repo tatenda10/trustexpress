@@ -1,9 +1,31 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole } from '../lib/clerk-user.js';
+import { getClerkClient } from '../lib/clerk-client.js';
 import { query } from '../db/connection.js';
 
 const router = Router();
+
+async function blockDuplicateAccountsForPhone(phoneNumber, role) {
+  const clerkClient = getClerkClient();
+  const result = await clerkClient.users.getUserList({ phoneNumber: [phoneNumber], limit: 50 });
+  const sameRoleUsers = (result.data || []).filter((item) => normalizeRole(item?.publicMetadata?.role) === role);
+  if (sameRoleUsers.length < 2) {
+    return { duplicate: false, affectedUserIds: [] };
+  }
+
+  const affectedUserIds = sameRoleUsers.map((item) => item.id);
+  await Promise.all(affectedUserIds.map((userId) => (
+    mergePrivateMetadata(userId, {
+      ...(role === 'driver' ? { driverStatus: 'blocked' } : { passengerStatus: 'blocked' }),
+      duplicateAccountDetectedAt: new Date().toISOString(),
+      duplicateAccountReason: `Duplicate ${role} accounts detected for verified phone number ${phoneNumber}.`,
+      duplicateAccountMatchedUserIds: affectedUserIds,
+    })
+  )));
+
+  return { duplicate: true, affectedUserIds };
+}
 
 /**
  * Temporary phone verification stub.
@@ -41,7 +63,14 @@ router.post('/confirm', requireAuth, async (req, res) => {
       );
     }
 
-    return res.json({ verified: true, phoneNumber: meta.phoneNumber || phoneNumber });
+    const duplicateResult = await blockDuplicateAccountsForPhone(phoneNumber, role);
+
+    return res.json({
+      verified: true,
+      phoneNumber: meta.phoneNumber || phoneNumber,
+      duplicateBlocked: duplicateResult.duplicate,
+      duplicateAccountUserIds: duplicateResult.affectedUserIds,
+    });
   } catch (err) {
     console.error('POST /api/verify-phone/confirm', err);
     return res.status(500).json({ error: 'Server error' });

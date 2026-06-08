@@ -27,6 +27,9 @@ export function shapeSupportMessage(row) {
     senderType: row.sender_type,
     senderUserId: row.sender_user_id || null,
     adminUserId: row.admin_user_id || null,
+    isAiReply: !!row.is_ai_reply,
+    aiProvider: row.ai_provider || null,
+    aiModel: row.ai_model || null,
     message: row.message || '',
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
@@ -80,7 +83,16 @@ export async function listSupportMessages(threadId) {
   return Array.isArray(rows) ? rows : [];
 }
 
-export async function createSupportMessage({ threadId, senderType, senderUserId = null, adminUserId = null, message }) {
+export async function createSupportMessage({
+  threadId,
+  senderType,
+  senderUserId = null,
+  adminUserId = null,
+  isAiReply = false,
+  aiProvider = null,
+  aiModel = null,
+  message,
+}) {
   const trimmedMessage = String(message || '').trim();
   if (!trimmedMessage) {
     throw new Error('Message is required');
@@ -92,9 +104,12 @@ export async function createSupportMessage({ threadId, senderType, senderUserId 
       sender_type,
       sender_user_id,
       admin_user_id,
+      is_ai_reply,
+      ai_provider,
+      ai_model,
       message
-    ) VALUES (?, ?, ?, ?, ?)`,
-    [threadId, senderType, senderUserId, adminUserId, trimmedMessage]
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [threadId, senderType, senderUserId, adminUserId, isAiReply ? 1 : 0, aiProvider, aiModel, trimmedMessage]
   );
 
   await query(

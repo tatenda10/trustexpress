@@ -484,9 +484,11 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         cancellation_reason,
         passenger_driver_rating,
         passenger_driver_review,
+        passenger_driver_feedback_tags,
         passenger_driver_rated_at,
         driver_passenger_rating,
         driver_passenger_review,
+        driver_passenger_feedback_tags,
         driver_passenger_rated_at
       FROM ride_requests
       WHERE public_id = ? OR id = ?
@@ -498,8 +500,16 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
            id,
            item_description,
            contact_phone,
+           case_reference,
+           case_priority,
            status,
            admin_note,
+           assigned_admin_id,
+           follow_up_status,
+           follow_up_note,
+           follow_up_due_at,
+           last_followed_up_at,
+           resolved_at,
            created_at,
            updated_at
          FROM ride_lost_items
@@ -516,10 +526,18 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
            ride_status,
            alert_stage,
            message,
+           case_reference,
+           case_priority,
            latitude,
            longitude,
            status,
            admin_note,
+           assigned_admin_id,
+           follow_up_status,
+           follow_up_note,
+           follow_up_due_at,
+           last_followed_up_at,
+           resolved_at,
            created_at,
            updated_at
          FROM ride_panic_alerts
@@ -577,17 +595,41 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         cancellationReason: row.cancellation_reason || null,
         passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
         passengerDriverReview: row.passenger_driver_review || '',
+        passengerDriverFeedbackTags: (() => {
+          try {
+            const parsed = JSON.parse(row.passenger_driver_feedback_tags || '[]');
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })(),
         passengerDriverRatedAt: row.passenger_driver_rated_at || null,
         driverPassengerRating: row.driver_passenger_rating === null ? null : Number(row.driver_passenger_rating),
         driverPassengerReview: row.driver_passenger_review || '',
+        driverPassengerFeedbackTags: (() => {
+          try {
+            const parsed = JSON.parse(row.driver_passenger_feedback_tags || '[]');
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })(),
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
       },
       lostItems: (lostItems || []).map((item) => ({
         id: item.id,
         itemDescription: item.item_description,
         contactPhone: item.contact_phone || null,
+        caseReference: item.case_reference || null,
+        casePriority: item.case_priority || 'normal',
         status: item.status,
         adminNote: item.admin_note || null,
+        assignedAdminId: item.assigned_admin_id === null ? null : Number(item.assigned_admin_id),
+        followUpStatus: item.follow_up_status || 'pending',
+        followUpNote: item.follow_up_note || null,
+        followUpDueAt: item.follow_up_due_at || null,
+        lastFollowedUpAt: item.last_followed_up_at || null,
+        resolvedAt: item.resolved_at || null,
         createdAt: item.created_at || null,
         updatedAt: item.updated_at || null,
       })),
@@ -599,16 +641,154 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         rideStatus: alert.ride_status,
         alertStage: alert.alert_stage || null,
         message: alert.message || null,
+        caseReference: alert.case_reference || null,
+        casePriority: alert.case_priority || 'critical',
         latitude: alert.latitude === null ? null : Number(alert.latitude),
         longitude: alert.longitude === null ? null : Number(alert.longitude),
         status: alert.status,
         adminNote: alert.admin_note || null,
+        assignedAdminId: alert.assigned_admin_id === null ? null : Number(alert.assigned_admin_id),
+        followUpStatus: alert.follow_up_status || 'pending',
+        followUpNote: alert.follow_up_note || null,
+        followUpDueAt: alert.follow_up_due_at || null,
+        lastFollowedUpAt: alert.last_followed_up_at || null,
+        resolvedAt: alert.resolved_at || null,
         createdAt: alert.created_at || null,
         updatedAt: alert.updated_at || null,
       })),
     });
   } catch (err) {
     console.error('GET /api/admin/rides/:rideId', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/:rideId/lost-items/:lostItemId', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const rideId = String(req.params.rideId || '').trim();
+    const lostItemId = Number(req.params.lostItemId);
+    if (!rideId || !Number.isFinite(lostItemId) || lostItemId <= 0) {
+      return res.status(400).json({ error: 'Valid ride and lost item ids are required' });
+    }
+
+    const status = String(req.body?.status || '').trim().toLowerCase();
+    const followUpStatus = String(req.body?.followUpStatus || '').trim().toLowerCase();
+    const adminNote = String(req.body?.adminNote || '').trim();
+    const followUpNote = String(req.body?.followUpNote || '').trim();
+    const casePriority = String(req.body?.casePriority || '').trim().toLowerCase();
+    const followUpDueAt = String(req.body?.followUpDueAt || '').trim() || null;
+
+    if (status && !['open', 'contacted', 'returned', 'closed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid lost item status' });
+    }
+    if (followUpStatus && !['pending', 'contacted', 'resolved', 'closed'].includes(followUpStatus)) {
+      return res.status(400).json({ error: 'Invalid follow-up status' });
+    }
+    if (casePriority && !['normal', 'high'].includes(casePriority)) {
+      return res.status(400).json({ error: 'Invalid case priority' });
+    }
+
+    await query(
+      `UPDATE ride_lost_items
+       SET status = COALESCE(NULLIF(?, ''), status),
+           admin_note = ?,
+           case_priority = COALESCE(NULLIF(?, ''), case_priority),
+           assigned_admin_id = ?,
+           follow_up_status = COALESCE(NULLIF(?, ''), follow_up_status),
+           follow_up_note = ?,
+           follow_up_due_at = ?,
+           last_followed_up_at = CURRENT_TIMESTAMP,
+           resolved_at = CASE
+             WHEN COALESCE(NULLIF(?, ''), status) IN ('returned', 'closed') OR COALESCE(NULLIF(?, ''), follow_up_status) IN ('resolved', 'closed')
+               THEN COALESCE(resolved_at, CURRENT_TIMESTAMP)
+             ELSE resolved_at
+           END
+       WHERE id = ?
+         AND (ride_public_id = ? OR ride_request_id = ?)`,
+      [
+        status,
+        adminNote || null,
+        casePriority,
+        req.admin.id,
+        followUpStatus,
+        followUpNote || null,
+        followUpDueAt,
+        status,
+        followUpStatus,
+        lostItemId,
+        rideId,
+        Number(rideId) || -1,
+      ]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/:rideId/lost-items/:lostItemId', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/:rideId/panic-alerts/:alertId', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const rideId = String(req.params.rideId || '').trim();
+    const alertId = Number(req.params.alertId);
+    if (!rideId || !Number.isFinite(alertId) || alertId <= 0) {
+      return res.status(400).json({ error: 'Valid ride and alert ids are required' });
+    }
+
+    const status = String(req.body?.status || '').trim().toLowerCase();
+    const followUpStatus = String(req.body?.followUpStatus || '').trim().toLowerCase();
+    const adminNote = String(req.body?.adminNote || '').trim();
+    const followUpNote = String(req.body?.followUpNote || '').trim();
+    const casePriority = String(req.body?.casePriority || '').trim().toLowerCase();
+    const followUpDueAt = String(req.body?.followUpDueAt || '').trim() || null;
+
+    if (status && !['open', 'reviewed', 'resolved'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid panic alert status' });
+    }
+    if (followUpStatus && !['pending', 'contacted', 'monitoring', 'police_alerted', 'resolved'].includes(followUpStatus)) {
+      return res.status(400).json({ error: 'Invalid follow-up status' });
+    }
+    if (casePriority && !['high', 'critical'].includes(casePriority)) {
+      return res.status(400).json({ error: 'Invalid case priority' });
+    }
+
+    await query(
+      `UPDATE ride_panic_alerts
+       SET status = COALESCE(NULLIF(?, ''), status),
+           admin_note = ?,
+           case_priority = COALESCE(NULLIF(?, ''), case_priority),
+           assigned_admin_id = ?,
+           follow_up_status = COALESCE(NULLIF(?, ''), follow_up_status),
+           follow_up_note = ?,
+           follow_up_due_at = ?,
+           last_followed_up_at = CURRENT_TIMESTAMP,
+           resolved_at = CASE
+             WHEN COALESCE(NULLIF(?, ''), status) = 'resolved' OR COALESCE(NULLIF(?, ''), follow_up_status) = 'resolved'
+               THEN COALESCE(resolved_at, CURRENT_TIMESTAMP)
+             ELSE resolved_at
+           END
+       WHERE id = ?
+         AND (ride_public_id = ? OR ride_request_id = ?)`,
+      [
+        status,
+        adminNote || null,
+        casePriority,
+        req.admin.id,
+        followUpStatus,
+        followUpNote || null,
+        followUpDueAt,
+        status,
+        followUpStatus,
+        alertId,
+        rideId,
+        Number(rideId) || -1,
+      ]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/:rideId/panic-alerts/:alertId', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

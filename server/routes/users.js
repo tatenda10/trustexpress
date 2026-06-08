@@ -5,6 +5,7 @@ import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
 import { attachDriverToAgentInvite, attachPassengerToAgentInvite } from '../lib/agent-invites.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
+import { emitSupportChatMessageToUser } from '../lib/realtime.js';
 import {
   createSupportMessage,
   getOrCreateSupportThreadForUser,
@@ -12,6 +13,8 @@ import {
   shapeSupportMessage,
   shapeSupportThread,
 } from '../lib/support-chat.js';
+import { generateSupportAgentReply, getSupportAgentSettings } from '../lib/support-agent.js';
+import { sendExpoPushNotifications } from '../lib/push.js';
 
 const router = Router();
 
@@ -276,9 +279,53 @@ router.post('/support/messages', requireAuth, async (req, res) => {
       message,
     });
 
+    let aiReplyRecord = null;
+    try {
+      const supportAgentSettings = await getSupportAgentSettings();
+      if (supportAgentSettings.enabled) {
+        const allMessages = await listSupportMessages(thread.id);
+        const aiReply = await generateSupportAgentReply({
+          thread,
+          messages: allMessages,
+          incomingMessage: message,
+        });
+
+        const createdAiReply = await createSupportMessage({
+          threadId: thread.id,
+          senderType: 'admin',
+          isAiReply: true,
+          aiProvider: aiReply.provider,
+          aiModel: aiReply.model,
+          message: aiReply.message,
+        });
+
+        aiReplyRecord = shapeSupportMessage(createdAiReply);
+        emitSupportChatMessageToUser(req.userId, {
+          threadId: thread.id,
+          messageRecord: aiReplyRecord,
+        });
+
+        const pushToken = String(user?.privateMetadata?.pushToken || '').trim();
+        if (pushToken) {
+          await sendExpoPushNotifications({
+            to: pushToken,
+            title: 'Support assistant replied',
+            body: aiReply.message.length > 100 ? `${aiReply.message.slice(0, 97)}...` : aiReply.message,
+            data: {
+              type: 'support_chat',
+              threadId: thread.id,
+            },
+          });
+        }
+      }
+    } catch (agentError) {
+      console.error('Support agent auto-reply failed', agentError);
+    }
+
     return res.status(201).json({
       thread: shapeSupportThread(thread),
       messageRecord: shapeSupportMessage(created),
+      aiReplyRecord,
     });
   } catch (err) {
     console.error('POST /api/users/support/messages', err);

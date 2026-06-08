@@ -25,6 +25,10 @@ function formatRating(value, review) {
   return review ? `${ratingText} - ${review}` : ratingText
 }
 
+function formatTagList(tags) {
+  return Array.isArray(tags) && tags.length ? tags.join(', ') : '-'
+}
+
 function coalesceNumber(...values) {
   for (const value of values) {
     if (value !== null && value !== undefined) {
@@ -86,8 +90,18 @@ export default function RideOperationDetailPage() {
   const [panicAlerts, setPanicAlerts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [savingCaseId, setSavingCaseId] = useState('')
   const fromDriverId = location.state?.fromDriverId || ''
   const fromDriverName = location.state?.fromDriverName || 'driver'
+
+  const refreshRideDetails = async () => {
+    const { data } = await axios.get(`${BASE_URL}/api/admin/rides/${rideId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    setRide(data.ride || null)
+    setLostItems(Array.isArray(data.lostItems) ? data.lostItems : [])
+    setPanicAlerts(Array.isArray(data.panicAlerts) ? data.panicAlerts : [])
+  }
 
   useEffect(() => {
     let active = true
@@ -117,6 +131,42 @@ export default function RideOperationDetailPage() {
       active = false
     }
   }, [rideId, token])
+
+  const updateLostItemCase = async (item, patch) => {
+    if (!token || !item?.id) return
+    setSavingCaseId(`lost-${item.id}`)
+    setError('')
+    try {
+      await axios.patch(
+        `${BASE_URL}/api/admin/rides/${rideId}/lost-items/${item.id}`,
+        patch,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      await refreshRideDetails()
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to update lost item case')
+    } finally {
+      setSavingCaseId('')
+    }
+  }
+
+  const updatePanicCase = async (alert, patch) => {
+    if (!token || !alert?.id) return
+    setSavingCaseId(`panic-${alert.id}`)
+    setError('')
+    try {
+      await axios.patch(
+        `${BASE_URL}/api/admin/rides/${rideId}/panic-alerts/${alert.id}`,
+        patch,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      await refreshRideDetails()
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to update panic case')
+    } finally {
+      setSavingCaseId('')
+    }
+  }
 
   const routePath = useMemo(() => {
     const savedRoute = decodePolyline(ride?.routePolyline)
@@ -239,7 +289,9 @@ export default function RideOperationDetailPage() {
               <DetailField label="Estimated Distance" value={`${Number(ride.estimatedDistanceKm || 0).toFixed(1)} km`} />
               <DetailField label="Estimated Time" value={`${Number(ride.estimatedMinutes || 0)} min`} />
               <DetailField label="Driver Rating" value={formatRating(ride.passengerDriverRating, ride.passengerDriverReview)} />
+              <DetailField label="Driver Rating Tags" value={formatTagList(ride.passengerDriverFeedbackTags)} />
               <DetailField label="Passenger Rating" value={formatRating(ride.driverPassengerRating, ride.driverPassengerReview)} />
+              <DetailField label="Passenger Rating Tags" value={formatTagList(ride.driverPassengerFeedbackTags)} />
               <DetailField label="Requested At" value={formatDateTime(ride.requestedAt)} />
               <DetailField label="Assigned At" value={formatDateTime(ride.assignedAt)} />
               <DetailField label="Arrived At" value={formatDateTime(ride.arrivedAt)} />
@@ -275,6 +327,40 @@ export default function RideOperationDetailPage() {
                       <p className="mt-2 text-xs text-slate-500">
                         Stage: {alert.alertStage || '-'} {alert.latitude !== null && alert.longitude !== null ? `- ${alert.latitude}, ${alert.longitude}` : ''}
                       </p>
+                      <p className="mt-2 text-xs text-slate-500">
+                        Case: {alert.caseReference || '-'} · Priority: {alert.casePriority || '-'} · Follow-up: {alert.followUpStatus || '-'}
+                      </p>
+                      {alert.followUpNote ? <p className="mt-2 text-xs text-slate-600">Follow-up note: {alert.followUpNote}</p> : null}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={savingCaseId === `panic-${alert.id}`}
+                          onClick={() => updatePanicCase(alert, { status: 'reviewed', followUpStatus: 'monitoring' })}
+                          className="rounded-md bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          Mark reviewing
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingCaseId === `panic-${alert.id}`}
+                          onClick={() => updatePanicCase(alert, { followUpStatus: 'police_alerted', casePriority: 'critical' })}
+                          className="rounded-md bg-rose-600 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          Police alerted
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingCaseId === `panic-${alert.id}`}
+                          onClick={() => {
+                            const followUpNote = window.prompt('Add follow-up note', alert.followUpNote || '')
+                            if (followUpNote === null) return
+                            updatePanicCase(alert, { status: 'resolved', followUpStatus: 'resolved', followUpNote })
+                          }}
+                          className="rounded-md bg-emerald-600 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          Resolve case
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -298,6 +384,44 @@ export default function RideOperationDetailPage() {
                       </div>
                       <p className="mt-2 text-sm text-slate-700">{item.itemDescription}</p>
                       <p className="mt-2 text-xs text-slate-500">Contact: {item.contactPhone || '-'}</p>
+                      <p className="mt-2 text-xs text-slate-500">
+                        Case: {item.caseReference || '-'} · Priority: {item.casePriority || '-'} · Follow-up: {item.followUpStatus || '-'}
+                      </p>
+                      {item.followUpNote ? <p className="mt-2 text-xs text-slate-600">Follow-up note: {item.followUpNote}</p> : null}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={savingCaseId === `lost-${item.id}`}
+                          onClick={() => updateLostItemCase(item, { status: 'contacted', followUpStatus: 'contacted' })}
+                          className="rounded-md bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          Mark contacted
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingCaseId === `lost-${item.id}`}
+                          onClick={() => {
+                            const followUpNote = window.prompt('Add follow-up note', item.followUpNote || '')
+                            if (followUpNote === null) return
+                            updateLostItemCase(item, { status: 'returned', followUpStatus: 'resolved', followUpNote, casePriority: 'high' })
+                          }}
+                          className="rounded-md bg-emerald-600 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          Mark returned
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingCaseId === `lost-${item.id}`}
+                          onClick={() => {
+                            const followUpNote = window.prompt('Add admin note', item.followUpNote || item.adminNote || '')
+                            if (followUpNote === null) return
+                            updateLostItemCase(item, { status: 'closed', followUpStatus: 'closed', followUpNote })
+                          }}
+                          className="rounded-md bg-amber-600 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          Close case
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

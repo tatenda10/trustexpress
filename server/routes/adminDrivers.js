@@ -466,6 +466,7 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
            actual_minutes,
            passenger_driver_rating,
            passenger_driver_review,
+           passenger_driver_feedback_tags,
            requested_at,
            assigned_at,
            completed_at,
@@ -552,6 +553,14 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
       actualMinutes: row.actual_minutes === null ? null : Number(row.actual_minutes),
       passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
       passengerDriverReview: row.passenger_driver_review || '',
+      passengerDriverFeedbackTags: (() => {
+        try {
+          const parsed = JSON.parse(row.passenger_driver_feedback_tags || '[]');
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      })(),
       requestedAt: row.requested_at ? new Date(row.requested_at).toISOString() : null,
       assignedAt: row.assigned_at ? new Date(row.assigned_at).toISOString() : null,
       completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
