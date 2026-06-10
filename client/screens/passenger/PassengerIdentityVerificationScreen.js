@@ -98,11 +98,11 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
     };
   }, [isFocused]);
 
-  const status = profile?.status || 'not_submitted';
-  const hasSubmittedDocs = !!(profile?.selfieUrl && profile?.nationalIdFrontUrl && profile?.nationalIdBackUrl);
+  const status = String(profile?.status || 'not_submitted').trim().toLowerCase();
+  const hasSubmittedDocs = !!(profile?.nationalIdFrontUrl && profile?.nationalIdBackUrl);
   const isRejected = status === 'rejected';
   const isBlocked = isRejected && profile?.canResubmit === false;
-  const isApproved = status === 'approved';
+  const isApproved = status === 'approved' || status === 'verified';
   const isPending = status === 'pending' && hasSubmittedDocs;
 
   /** No leaving without submitting while ID is still required (rejected-with-resubmit counts as required). */
@@ -350,6 +350,17 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
           >
             {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Submit for review</Text>}
           </TouchableOpacity>
+
+          {!mustCompleteIdentity ? (
+            <TouchableOpacity
+              onPress={() => navigation.goBack()}
+              disabled={submitting}
+              className="mb-3 h-12 items-center justify-center rounded-[20px] bg-white"
+              style={{ borderWidth: 1, borderColor: '#d1d5db', opacity: submitting ? 0.75 : 1 }}
+            >
+              <Text className="text-base font-semibold text-gray-700">Skip for now</Text>
+            </TouchableOpacity>
+          ) : null}
 
           {isBlocked ? (
             <Text className="text-center text-sm text-red-600">Resubmission is currently blocked. Please contact support.</Text>

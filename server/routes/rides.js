@@ -9,6 +9,7 @@ import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { findBestAutoDiscountForRide, syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
 import { normalizeRatingTags } from '../lib/ride-rating-tags.js';
+import { buildRideStopsPayload, sanitizeIntermediateStops, stringifyIntermediateStops } from '../lib/ride-stops.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideChatMessageToUser,
@@ -255,6 +256,7 @@ function formatRideReceiptText(ride) {
     `Passenger: ${ride.passenger_name || 'Passenger'}`,
     `Driver: ${ride.driver_name || 'N/A'}`,
     `Pickup: ${ride.pickup_label || '-'}`,
+    ...buildRideStopsPayload(ride).intermediateStops.map((stop, index) => `Stop ${index + 1}: ${stop.label}`),
     `Drop-off: ${ride.dropoff_label || '-'}`,
     '',
     `Tier: ${ride.requested_tier_name || 'Ride'}`,
@@ -526,6 +528,8 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
          dropoff_label,
          dropoff_lat,
          dropoff_lng,
+         intermediate_stops_json,
+         current_stop_index,
          estimated_amount,
          original_estimated_amount,
          discount_amount,
@@ -560,6 +564,7 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
     return res.json({
       rides: rows.map((row) => ({
         ...buildRideDiscountPayload(row),
+        ...buildRideStopsPayload(row),
         id: row.id,
         publicId: row.public_id,
         pickupLabel: row.pickup_label,
@@ -677,6 +682,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
     const {
       pickupCoordinate,
       dropoffCoordinate,
+      intermediateStops = [],
       pickupLabel,
       dropoffLabel,
       routePolyline,
@@ -688,6 +694,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
     const pickupLng = Number(pickupCoordinate?.longitude);
     const dropoffLat = Number(dropoffCoordinate?.latitude);
     const dropoffLng = Number(dropoffCoordinate?.longitude);
+    const normalizedIntermediateStops = sanitizeIntermediateStops(intermediateStops);
     const tier = await loadPassengerTier(selectedTier?.tierKey);
 
     if (!pickupLabel || !dropoffLabel || !tier) {
@@ -704,12 +711,18 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         error: 'Trust Express currently supports rides within Bulawayo only. Please choose pickup and drop-off points in Bulawayo.',
       });
     }
+    if (normalizedIntermediateStops.some((stop) => !isCoordinateInBulawayoServiceArea(stop.coordinate))) {
+      return res.status(422).json({
+        error: 'All stops must be inside Bulawayo.',
+      });
+    }
 
     let authoritativeRoute = null;
     try {
       authoritativeRoute = await fetchCachedDirections({
         origin: pickupPoint,
         destination: dropoffPoint,
+        waypoints: normalizedIntermediateStops.map((stop) => stop.coordinate),
         cacheTtlSeconds: 1800,
       });
     } catch (routeError) {
@@ -768,6 +781,8 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         dropoff_label,
         dropoff_lat,
         dropoff_lng,
+        intermediate_stops_json,
+        current_stop_index,
         route_polyline,
         route_distance_km,
         route_duration_minutes,
@@ -784,7 +799,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         discount_value,
         discount_applied_at,
         status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
       [
         publicId,
         req.userId,
@@ -798,6 +813,8 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         String(dropoffLabel).trim(),
         dropoffLat,
         dropoffLng,
+        stringifyIntermediateStops(normalizedIntermediateStops),
+        0,
         String(authoritativeRoute?.polyline || routePolyline || '').trim() || null,
         authoritativeDistanceKm,
         authoritativeMinutes,
@@ -840,6 +857,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       requestedTierName: tier.tier_name,
       pickupPoint,
       dropoffPoint,
+      intermediateStops: normalizedIntermediateStops,
       routeDistanceKm: authoritativeDistanceKm,
       routeDurationMinutes: authoritativeMinutes,
       originalEstimatedAmount: authoritativeAmount,
@@ -893,6 +911,13 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         pickupCoordinate: pickupPoint,
         dropoffLabel: String(dropoffLabel).trim(),
         dropoffCoordinate: dropoffPoint,
+        ...buildRideStopsPayload({
+          intermediate_stops_json: stringifyIntermediateStops(normalizedIntermediateStops),
+          current_stop_index: 0,
+          dropoff_label: String(dropoffLabel).trim(),
+          dropoff_lat: dropoffLat,
+          dropoff_lng: dropoffLng,
+        }),
         estimatedDistanceKm: authoritativeDistanceKm,
         estimatedMinutes: authoritativeMinutes,
         estimatedAmount: finalEstimatedAmount,
@@ -1018,6 +1043,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
     return res.json({
       rideRequest: {
         ...buildRideDiscountPayload(ride),
+        ...buildRideStopsPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         status: ride.status,
@@ -1173,6 +1199,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
 
     return res.json({
       rideRequest: {
+        ...buildRideStopsPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         status: ride.status,
@@ -1241,6 +1268,7 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
     return res.json({
       ride: {
         ...buildRideDiscountPayload(ride),
+        ...buildRideStopsPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         pickupLabel: ride.pickup_label,

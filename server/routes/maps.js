@@ -31,6 +31,7 @@ router.post('/directions', requireAuth, async (req, res) => {
     const {
       origin,
       destination,
+      waypoints,
       includeTraffic = false,
       cachePrecision,
       cacheTtlSeconds,
@@ -39,6 +40,7 @@ router.post('/directions', requireAuth, async (req, res) => {
     const route = await fetchCachedDirections({
       origin,
       destination,
+      waypoints,
       includeTraffic: includeTraffic === true,
       cachePrecision,
       cacheTtlSeconds,

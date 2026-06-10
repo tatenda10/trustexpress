@@ -39,12 +39,13 @@ function coordinateKey(coordinate, precision) {
   return `${coordinate.latitude.toFixed(precision)},${coordinate.longitude.toFixed(precision)}`;
 }
 
-function routeCacheKey({ origin, destination, includeTraffic, cachePrecision }) {
+function routeCacheKey({ origin, destination, waypoints = [], includeTraffic, cachePrecision }) {
   const precision = clampPrecision(cachePrecision);
   return [
     'driving',
     includeTraffic ? 'traffic' : 'standard',
     coordinateKey(origin, precision),
+    ...waypoints.map((waypoint) => coordinateKey(waypoint, precision)),
     coordinateKey(destination, precision),
   ].join('|');
 }
@@ -133,12 +134,16 @@ export function hasOsmDirectionsProvider() {
 export async function fetchCachedOsmDirections({
   origin,
   destination,
+  waypoints = [],
   includeTraffic = false,
   cachePrecision,
   cacheTtlSeconds,
 }) {
   const normalizedOrigin = normalizeCoordinate(origin);
   const normalizedDestination = normalizeCoordinate(destination);
+  const normalizedWaypoints = Array.isArray(waypoints)
+    ? waypoints.map(normalizeCoordinate).filter(Boolean)
+    : [];
 
   if (!normalizedOrigin || !normalizedDestination) {
     const error = new Error('Valid origin and destination coordinates are required');
@@ -150,6 +155,7 @@ export async function fetchCachedOsmDirections({
   const cacheKey = routeCacheKey({
     origin: normalizedOrigin,
     destination: normalizedDestination,
+    waypoints: normalizedWaypoints,
     includeTraffic,
     cachePrecision,
   });
@@ -167,7 +173,11 @@ export async function fetchCachedOsmDirections({
 
   const requestPromise = (async () => {
     const baseUrl = getOsrmBaseUrl();
-    const coordinates = `${normalizedOrigin.longitude},${normalizedOrigin.latitude};${normalizedDestination.longitude},${normalizedDestination.latitude}`;
+    const coordinates = [
+      `${normalizedOrigin.longitude},${normalizedOrigin.latitude}`,
+      ...normalizedWaypoints.map((waypoint) => `${waypoint.longitude},${waypoint.latitude}`),
+      `${normalizedDestination.longitude},${normalizedDestination.latitude}`,
+    ].join(';');
     const params = new URLSearchParams({
       overview: 'full',
       geometries: 'polyline',

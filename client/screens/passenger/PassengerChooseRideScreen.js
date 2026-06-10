@@ -9,7 +9,6 @@ import {
   StyleSheet,
   Animated,
   Platform,
-  TextInput,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -144,6 +143,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const {
     pickupCoordinate,
     dropoffCoordinate,
+    intermediateStops = [],
     pickupLabel,
     dropoffLabel,
     routeCoordinates = [],
@@ -156,9 +156,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [tiers, setTiers] = useState([]);
   const [selectedTierKey, setSelectedTierKey] = useState('');
   const [isSubmittingRide, setIsSubmittingRide] = useState(false);
-  const [discountCodeInput, setDiscountCodeInput] = useState('');
   const [appliedDiscount, setAppliedDiscount] = useState(null);
-  const [applyingDiscount, setApplyingDiscount] = useState(false);
   const [autoApplyingDiscount, setAutoApplyingDiscount] = useState(false);
 
   const slideAnim = useRef(new Animated.Value(40)).current;
@@ -238,10 +236,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         return;
       }
 
-      if (String(discountCodeInput || '').trim()) {
-        return;
-      }
-
       try {
         if (active) setAutoApplyingDiscount(true);
         const token = await getTokenRef.current();
@@ -264,7 +258,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     return () => {
       active = false;
     };
-  }, [selectedTier, originalEstimatedAmount, discountCodeInput]);
+  }, [selectedTier, originalEstimatedAmount]);
 
   const originalEstimatedAmount = Number(estimatedAmount || 0);
   const discountAmount = Number(appliedDiscount?.discountAmount || 0);
@@ -281,6 +275,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       navigation.replace('PassengerNearbyCars', {
         pickupCoordinate: ride.pickupCoordinate,
         dropoffCoordinate: ride.dropoffCoordinate,
+        intermediateStops: ride.intermediateStops || intermediateStops,
         pickupLabel: ride.pickupLabel,
         dropoffLabel: ride.dropoffLabel,
         distanceKm: Number(ride?.estimatedDistanceKm || 0),
@@ -295,6 +290,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     navigation.replace('PassengerRideTracking', {
       pickupCoordinate: ride.pickupCoordinate,
       dropoffCoordinate: ride.dropoffCoordinate,
+      intermediateStops: ride.intermediateStops || intermediateStops,
       pickupLabel: ride.pickupLabel,
       dropoffLabel: ride.dropoffLabel,
       estimatedAmount: Number(ride.estimatedAmount || 0),
@@ -328,6 +324,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       const data = await findNearbyDrivers(token, {
         pickupCoordinate,
         dropoffCoordinate,
+        intermediateStops,
         pickupLabel,
         dropoffLabel,
         routePolyline: encodePolyline(routeCoordinates),
@@ -337,7 +334,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         estimatedMinutes,
         estimatedAmount: finalEstimatedAmount,
         selectedTier,
-        discountCode: appliedDiscount?.code || null,
       });
       const serverRide = data?.rideRequest || null;
       const nextDistanceKm = Number(serverRide?.estimatedDistanceKm || distanceKm || 0);
@@ -349,6 +345,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       navigation.navigate('PassengerNearbyCars', {
         pickupCoordinate,
         dropoffCoordinate,
+        intermediateStops,
         pickupLabel,
         dropoffLabel,
         routeCoordinates,
@@ -374,37 +371,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   };
 
   const isDisabled = loadingTiers || isSubmittingRide || tiers.length === 0;
-
-  const handleApplyDiscount = async () => {
-    if (!selectedTier) {
-      Alert.alert('Choose a ride', 'Select a ride tier before applying a discount code.');
-      return;
-    }
-    const normalizedCode = String(discountCodeInput || '').trim().toUpperCase();
-    if (!normalizedCode) {
-      Alert.alert('Enter a code', 'Type a discount code first.');
-      return;
-    }
-
-    try {
-      setApplyingDiscount(true);
-      const token = await getTokenRef.current();
-      if (!token) throw new Error('Not signed in');
-      const data = await validatePassengerDiscount(token, {
-        discountCode: normalizedCode,
-        selectedTier,
-        originalFareAmount: originalEstimatedAmount,
-      });
-      setAppliedDiscount(data?.discount || null);
-      setDiscountCodeInput(normalizedCode);
-      Alert.alert('Discount applied', `You saved $${Number(data?.discount?.discountAmount || 0).toFixed(2)} on this trip.`);
-    } catch (error) {
-      setAppliedDiscount(null);
-      Alert.alert('Code not applied', error?.message || 'This discount code could not be applied.');
-    } finally {
-      setApplyingDiscount(false);
-    }
-  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -456,6 +422,13 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             </Text>
             <Text style={styles.discountSummaryTextStrong}>
               {appliedDiscount?.autoApplied ? `Auto promo ${appliedDiscount?.code}` : `Code ${appliedDiscount?.code}`}
+            </Text>
+          </View>
+        ) : null}
+        {Array.isArray(intermediateStops) && intermediateStops.length ? (
+          <View style={styles.discountSummaryWrap}>
+            <Text style={styles.discountSummaryTextStrong}>
+              {intermediateStops.length} stop{intermediateStops.length === 1 ? '' : 's'} added
             </Text>
           </View>
         ) : null}
@@ -516,35 +489,14 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
 
         {selectedTier && !loadingTiers ? (
           <View style={styles.discountCard}>
-            <Text style={styles.discountCardTitle}>Discount code</Text>
+            <Text style={styles.discountCardTitle}>Promotions</Text>
             {autoApplyingDiscount ? (
-              <Text style={styles.discountHintText}>Checking automatic promo...</Text>
-            ) : appliedDiscount?.autoApplied ? (
-              <Text style={styles.discountHintText}>Automatic promo applied. Enter a different code if you want to override it.</Text>
+              <Text style={styles.discountHintText}>Checking for active admin promos...</Text>
+            ) : appliedDiscount?.code ? (
+              <Text style={styles.discountHintText}>An admin promo has been applied automatically to this fare.</Text>
             ) : (
-              <Text style={styles.discountHintText}>Enter a code manually or use any automatic promo currently active.</Text>
+              <Text style={styles.discountHintText}>Any active admin promo will be applied automatically. No code entry is needed.</Text>
             )}
-            <View style={styles.discountInputRow}>
-              <TextInput
-                value={discountCodeInput}
-                onChangeText={setDiscountCodeInput}
-                placeholder="Enter promo code"
-                autoCapitalize="characters"
-                autoCorrect={false}
-                style={styles.discountInput}
-              />
-              <TouchableOpacity
-                onPress={handleApplyDiscount}
-                disabled={applyingDiscount}
-                style={[styles.discountApplyBtn, applyingDiscount && styles.discountApplyBtnDisabled]}
-              >
-                {applyingDiscount ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.discountApplyBtnText}>Apply</Text>
-                )}
-              </TouchableOpacity>
-            </View>
             <View style={styles.discountBreakdown}>
               <View style={styles.discountBreakdownRow}>
                 <Text style={styles.discountBreakdownLabel}>Original fare</Text>
@@ -556,7 +508,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
               </View>
               {appliedDiscount?.code ? (
                 <View style={styles.discountBreakdownRow}>
-                  <Text style={styles.discountBreakdownLabel}>{appliedDiscount.autoApplied ? 'Auto promo' : 'Promo code'}</Text>
+                  <Text style={styles.discountBreakdownLabel}>Applied promo</Text>
                   <Text style={styles.discountBreakdownValue}>{appliedDiscount.code}</Text>
                 </View>
               ) : null}

@@ -7,6 +7,7 @@ import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  advanceDriverCurrentRideStop,
   cancelDriverCurrentRide,
   completeDriverCurrentRide,
   getDirectionsRoute,
@@ -721,6 +722,17 @@ export default function DriverTripScreen({ navigation, route }) {
     () => normalizeCoordinate(ride?.dropoffCoordinate),
     [ride?.dropoffCoordinate?.latitude, ride?.dropoffCoordinate?.longitude],
   );
+  const currentTargetCoordinate = useMemo(
+    () => normalizeCoordinate(ride?.currentTargetCoordinate),
+    [ride?.currentTargetCoordinate?.latitude, ride?.currentTargetCoordinate?.longitude],
+  );
+  const intermediateStops = useMemo(
+    () => (Array.isArray(ride?.intermediateStops) ? ride.intermediateStops : []),
+    [ride?.intermediateStops],
+  );
+  const currentStopIndex = Number(ride?.currentStopIndex || 0);
+  const remainingIntermediateStopsCount = Number(ride?.remainingIntermediateStopsCount || 0);
+  const currentIntermediateStop = ride?.currentIntermediateStop || intermediateStops[currentStopIndex] || null;
   const resolvedLiveDriverCoordinate = useMemo(
     () => normalizeCoordinate(liveDriverCoordinate),
     [liveDriverCoordinate?.latitude, liveDriverCoordinate?.longitude],
@@ -734,8 +746,8 @@ export default function DriverTripScreen({ navigation, route }) {
     [resolvedLiveDriverCoordinate, resolvedRideDriverCoordinate, pickupCoordinate, dropoffCoordinate],
   );
   const targetCoordinate = useMemo(
-    () => (ride?.stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate),
-    [dropoffCoordinate, pickupCoordinate, ride?.stage],
+    () => (ride?.stage === 'on_trip' ? currentTargetCoordinate || dropoffCoordinate : pickupCoordinate),
+    [currentTargetCoordinate, dropoffCoordinate, pickupCoordinate, ride?.stage],
   );
 
   useEffect(() => {
@@ -1067,6 +1079,23 @@ export default function DriverTripScreen({ navigation, route }) {
     }
   };
 
+  const handleAdvanceStop = async () => {
+    try {
+      if (!ride?.id) return;
+      setSubmitting(true);
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      await advanceDriverCurrentRideStop(token, ride.id, { suppressAuthErrorHandler: true });
+      setRealtimeSignal((current) => current + 1);
+      const data = await getDriverCurrentRide(token, { suppressAuthErrorHandler: true });
+      setRide(data?.ride || null);
+    } catch (error) {
+      Alert.alert('Advance stop failed', error?.message || 'Could not move to the next stop yet.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSkipPassengerRating = () => {
     exitPassengerRatingFlow();
   };
@@ -1179,8 +1208,12 @@ export default function DriverTripScreen({ navigation, route }) {
   }
 
   const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
-  const destinationForMaps = ride.stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
-  const destinationLabelForMaps = ride.stage === 'on_trip' ? ride.dropoffLabel : ride.pickupLabel;
+  const destinationForMaps = ride.stage === 'on_trip'
+    ? (currentTargetCoordinate || dropoffCoordinate)
+    : pickupCoordinate;
+  const destinationLabelForMaps = ride.stage === 'on_trip'
+    ? (ride.currentTargetLabel || ride.dropoffLabel)
+    : ride.pickupLabel;
   let passengerProfileImageUrl = null;
   try {
     passengerProfileImageUrl = resolveUploadedMediaUrl(ride.passengerProfileImageUrl);
@@ -1192,7 +1225,9 @@ export default function DriverTripScreen({ navigation, route }) {
   }
   const isWaitingAtPickup = ride.stage === 'waiting_for_customer';
   const stageTitle = ride.stage === 'on_trip' ? 'Drive' : isWaitingAtPickup ? 'Pickup wait' : 'To pickup';
-  const targetLabel = ride.stage === 'on_trip' ? ride.dropoffLabel : ride.pickupLabel;
+  const targetLabel = ride.stage === 'on_trip'
+    ? (ride.currentTargetLabel || currentIntermediateStop?.label || ride.dropoffLabel)
+    : ride.pickupLabel;
   const primaryMetric = isWaitingAtPickup ? pickupWaitCountdownText : etaText;
   const secondaryMetric = isWaitingAtPickup
     ? pickupWaitExpired
@@ -1200,11 +1235,17 @@ export default function DriverTripScreen({ navigation, route }) {
       : 'Passenger pickup timer'
     : distanceKmText;
   const guidanceText = normalizeInstructionForSpeech(nextInstruction) || (ride.stage === 'on_trip'
-    ? `Continue toward ${ride.dropoffLabel || 'the drop-off point'}`
+    ? `Continue toward ${ride.currentTargetLabel || currentIntermediateStop?.label || ride.dropoffLabel || 'the next stop'}`
     : `Continue toward ${ride.pickupLabel || 'the pickup point'}`);
   const passengerConfirmationText = ride.passengerConfirmedAt
     ? 'Passenger confirmed they are coming to the pickup point.'
     : '';
+  const stopTimeline = [
+    ride.pickupLabel,
+    ...intermediateStops.map((stop) => stop?.label).filter(Boolean),
+    ride.dropoffLabel,
+  ].filter(Boolean);
+  const stopActionLabel = currentIntermediateStop ? `Reached ${currentIntermediateStop.label}` : 'Reached stop';
 
   const handleOpenExternalNavigation = async () => {
     try {
@@ -1260,6 +1301,8 @@ export default function DriverTripScreen({ navigation, route }) {
       driverCoordinate={driverCoordinate}
       pickupCoordinate={pickupCoordinate}
       dropoffCoordinate={dropoffCoordinate}
+      intermediateStops={intermediateStops}
+      currentStopIndex={currentStopIndex}
       safeRouteCoordinates={safeRouteCoordinates}
       primaryBlue={PRIMARY_BLUE}
       insets={insets}
@@ -1288,16 +1331,21 @@ export default function DriverTripScreen({ navigation, route }) {
       passengerName={ride.passengerName}
       passengerSubtitle={ride.passengerPhone || targetLabel}
       passengerConfirmationText={passengerConfirmationText}
+      stopTimeline={stopTimeline}
+      remainingIntermediateStopsCount={remainingIntermediateStopsCount}
       guidanceText={guidanceText}
       showGuidance={Boolean(ride.stage === 'on_trip' || nextInstruction)}
       showMarkArrived={ride.stage === 'to_pickup'}
       showStartRide={ride.stage === 'waiting_for_customer'}
-      showCompleteRide={ride.stage === 'on_trip'}
+      showAdvanceStop={ride.stage === 'on_trip' && Boolean(currentIntermediateStop)}
+      advanceStopLabel={stopActionLabel}
+      showCompleteRide={ride.stage === 'on_trip' && !currentIntermediateStop}
       showCancelRide={ride.stage === 'waiting_for_customer' || ride.stage === 'on_trip'}
       submitting={submitting}
       cancellingRide={cancellingRide}
       onMarkArrived={handleMarkArrived}
       onStartRide={handleStartRide}
+      onAdvanceStop={handleAdvanceStop}
       onCompleteRide={handleCompleteRide}
       onCancelRide={handleCancelRide}
       submittingPanicAlert={submittingPanicAlert}

@@ -213,6 +213,14 @@ export async function startDriverCurrentRide(token, rideRequestId, options = {})
   }, token);
 }
 
+export async function advanceDriverCurrentRideStop(token, rideRequestId, options = {}) {
+  return apiFetch(`/api/drivers/current-ride/${rideRequestId}/advance-stop`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
+  }, token);
+}
+
 export async function completeDriverCurrentRide(token, rideRequestId, payload = {}, options = {}) {
   return apiFetch(`/api/drivers/current-ride/${rideRequestId}/complete`, {
     method: 'PATCH',

@@ -80,6 +80,14 @@ function decodePolyline(encoded) {
   return coordinates
 }
 
+function buildTripTimeline(ride) {
+  return [
+    ride?.pickupLabel,
+    ...(Array.isArray(ride?.intermediateStops) ? ride.intermediateStops.map((stop) => stop?.label).filter(Boolean) : []),
+    ride?.dropoffLabel,
+  ].filter(Boolean)
+}
+
 export default function RideOperationDetailPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -185,12 +193,42 @@ export default function RideOperationDetailPage() {
     }
     return [
       { lat: Number(ride.pickupLat), lng: Number(ride.pickupLng) },
+      ...(Array.isArray(ride?.intermediateStops)
+        ? ride.intermediateStops
+            .map((stop) => (
+              stop?.coordinate
+                ? {
+                    lat: Number(stop.coordinate.latitude),
+                    lng: Number(stop.coordinate.longitude),
+                  }
+                : null
+            ))
+            .filter(Boolean)
+        : []),
       { lat: Number(ride.dropoffLat), lng: Number(ride.dropoffLng) },
     ]
   }, [ride])
 
+  const tripTimeline = useMemo(() => buildTripTimeline(ride), [ride])
+
   const mapMarkers = useMemo(() => {
     if (routePath.length < 2) return []
+    const stopMarkers = Array.isArray(ride?.intermediateStops)
+      ? ride.intermediateStops
+          .map((stop, index) => (
+            stop?.coordinate
+              ? {
+                  id: `stop-${index}`,
+                  lat: Number(stop.coordinate.latitude),
+                  lng: Number(stop.coordinate.longitude),
+                  color: index < Number(ride?.currentStopIndex || 0) ? '#94a3b8' : '#f97316',
+                  title: `Stop ${index + 1}`,
+                  label: stop.label || `Stop ${index + 1}`,
+                }
+              : null
+          ))
+          .filter(Boolean)
+      : []
     return [
       {
         id: 'pickup',
@@ -201,6 +239,7 @@ export default function RideOperationDetailPage() {
         label: 'Pickup',
         selected: true,
       },
+      ...stopMarkers,
       {
         id: 'dropoff',
         lat: routePath[routePath.length - 1].lat,
@@ -210,7 +249,7 @@ export default function RideOperationDetailPage() {
         label: 'Drop-off',
       },
     ]
-  }, [routePath])
+  }, [ride?.currentStopIndex, ride?.intermediateStops, routePath])
 
   const mapPaths = useMemo(() => (
     routePath.length > 1
@@ -268,9 +307,50 @@ export default function RideOperationDetailPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <DetailField label="Pickup" value={ride.pickupLabel} />
               <DetailField label="Dropoff" value={ride.dropoffLabel} />
+              <DetailField label="Current Target" value={ride.currentTargetLabel || ride.dropoffLabel} />
+              <DetailField label="Current Stop Index" value={String(Number(ride.currentStopIndex || 0))} />
               <DetailField label="Actual Distance" value={`${coalesceNumber(ride.actualDistanceKm, ride.routeDistanceKm, ride.estimatedDistanceKm).toFixed(1)} km`} />
               <DetailField label="Actual Time" value={`${coalesceNumber(ride.actualMinutes, ride.routeDurationMinutes, ride.estimatedMinutes)} min`} />
             </div>
+
+            {tripTimeline.length > 2 ? (
+              <div className="border border-slate-200 bg-slate-50 px-4 py-4">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Stop Timeline</p>
+                <div className="mt-3 space-y-3">
+                  {tripTimeline.map((label, index) => {
+                    const isPickup = index === 0
+                    const isDropoff = index === tripTimeline.length - 1
+                    const stopSequenceIndex = Math.max(0, index - 1)
+                    const isCompletedStop = !isPickup && !isDropoff && stopSequenceIndex < Number(ride.currentStopIndex || 0)
+                    const isCurrentStop = !isPickup && !isDropoff && stopSequenceIndex === Number(ride.currentStopIndex || 0)
+                    return (
+                      <div key={`${label}-${index}`} className="flex items-start gap-3">
+                        <span
+                          className="mt-1 inline-block h-3 w-3 rounded-full"
+                          style={{
+                            backgroundColor: isPickup
+                              ? '#2563eb'
+                              : isDropoff
+                                ? '#111827'
+                                : isCompletedStop
+                                  ? '#94a3b8'
+                                  : isCurrentStop
+                                    ? '#f97316'
+                                    : '#cbd5e1',
+                          }}
+                        />
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex}`}
+                          </p>
+                          <p className="text-sm text-slate-600">{label}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-3">

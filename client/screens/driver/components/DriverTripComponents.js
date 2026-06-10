@@ -57,6 +57,14 @@ export function DriverTripReceiptView({
         <Text className="mt-1 text-xl font-bold text-gray-900">{ratingRide.passengerName || 'Passenger'}</Text>
         <Text className="mt-4 text-sm font-semibold uppercase tracking-wide text-gray-400">Route</Text>
         <Text className="mt-1 text-base font-bold text-gray-900">{ratingRide.pickupLabel || 'Pickup'}</Text>
+        {Array.isArray(ratingRide.intermediateStops) && ratingRide.intermediateStops.length ? (
+          ratingRide.intermediateStops.map((stop, index) => (
+            <React.Fragment key={`receipt-stop-${index}`}>
+              <Text className="mt-1 text-sm text-gray-500">via</Text>
+              <Text className="mt-1 text-base font-bold text-gray-900">{stop?.label || `Stop ${index + 1}`}</Text>
+            </React.Fragment>
+          ))
+        ) : null}
         <Text className="mt-1 text-sm text-gray-500">to</Text>
         <Text className="mt-1 text-base font-bold text-gray-900">{ratingRide.dropoffLabel || 'Drop-off'}</Text>
         <View className="mt-5 rounded-[22px] bg-white px-4 py-4">
@@ -148,6 +156,8 @@ export function DriverTripMapPanel({
   driverCoordinate,
   pickupCoordinate,
   dropoffCoordinate,
+  intermediateStops,
+  currentStopIndex,
   safeRouteCoordinates,
   primaryBlue,
   insets,
@@ -169,16 +179,21 @@ export function DriverTripMapPanel({
   passengerName,
   passengerSubtitle,
   passengerConfirmationText,
+  stopTimeline,
+  remainingIntermediateStopsCount,
   guidanceText,
   showGuidance,
   showMarkArrived,
   showStartRide,
+  showAdvanceStop,
+  advanceStopLabel,
   showCompleteRide,
   showCancelRide,
   submitting,
   cancellingRide,
   onMarkArrived,
   onStartRide,
+  onAdvanceStop,
   onCompleteRide,
   onCancelRide,
   submittingPanicAlert,
@@ -205,6 +220,17 @@ export function DriverTripMapPanel({
         {pickupCoordinate ? (
           <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
         ) : null}
+        {Array.isArray(intermediateStops) ? intermediateStops.map((stop, index) => (
+          stop?.coordinate ? (
+            <Marker
+              key={`driver-stop-${index}`}
+              coordinate={stop.coordinate}
+              title={stop.label || `Stop ${index + 1}`}
+              pinColor={index < Number(currentStopIndex || 0) ? '#94a3b8' : '#f97316'}
+              tracksViewChanges={false}
+            />
+          ) : null
+        )) : null}
         {dropoffCoordinate ? (
           <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
         ) : null}
@@ -347,6 +373,50 @@ export function DriverTripMapPanel({
             </View>
           ) : null}
 
+          {Array.isArray(stopTimeline) && stopTimeline.length > 2 ? (
+            <View className="mt-4 rounded-2xl border border-orange-100 bg-orange-50 px-4 py-4">
+              <Text className="text-xs font-bold uppercase tracking-widest text-orange-600">Trip stops</Text>
+              <Text className="mt-1 text-sm font-semibold text-orange-900">
+                {Number(remainingIntermediateStopsCount || 0) > 0
+                  ? `${remainingIntermediateStopsCount} stop${remainingIntermediateStopsCount === 1 ? '' : 's'} remaining before final destination`
+                  : 'Final destination leg'}
+              </Text>
+              <View className="mt-3">
+                {stopTimeline.map((label, index) => {
+                  const isPickup = index === 0
+                  const isDropoff = index === stopTimeline.length - 1
+                  const stopSequenceIndex = Math.max(0, index - 1)
+                  const isCompletedStop = !isPickup && !isDropoff && stopSequenceIndex < Number(currentStopIndex || 0)
+                  const isCurrentStop = !isPickup && !isDropoff && stopSequenceIndex === Number(currentStopIndex || 0)
+                  return (
+                    <View key={`${label}-${index}`} className="mb-2 flex-row items-start">
+                      <View
+                        className="mr-3 mt-1 h-3 w-3 rounded-full"
+                        style={{
+                          backgroundColor: isPickup
+                            ? '#2563eb'
+                            : isDropoff
+                              ? '#111827'
+                              : isCompletedStop
+                                ? '#94a3b8'
+                                : isCurrentStop
+                                  ? '#f97316'
+                                  : '#cbd5e1',
+                        }}
+                      />
+                      <View className="flex-1">
+                        <Text className="text-sm font-semibold text-gray-900">
+                          {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex}`}
+                        </Text>
+                        <Text className="mt-0.5 text-sm text-gray-600">{label}</Text>
+                      </View>
+                    </View>
+                  )
+                })}
+              </View>
+            </View>
+          ) : null}
+
           {showMarkArrived ? (
             <TouchableOpacity
               onPress={onMarkArrived}
@@ -374,9 +444,20 @@ export function DriverTripMapPanel({
                 className="ml-2 h-14 flex-1 items-center justify-center rounded-[20px]"
                 style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
               >
-                {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Start Ride</Text>}
-              </TouchableOpacity>
-            </View>
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Start Ride</Text>}
+            </TouchableOpacity>
+          </View>
+          ) : null}
+
+          {showAdvanceStop ? (
+            <TouchableOpacity
+              onPress={onAdvanceStop}
+              disabled={submitting}
+              className="mt-4 h-14 items-center justify-center rounded-[20px] bg-orange-500"
+              style={{ opacity: submitting ? 0.7 : 1 }}
+            >
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">{advanceStopLabel || 'Reached stop'}</Text>}
+            </TouchableOpacity>
           ) : null}
 
           {showCompleteRide && showCancelRide && !showStartRide ? (

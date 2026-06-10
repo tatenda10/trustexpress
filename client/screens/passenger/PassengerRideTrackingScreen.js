@@ -118,9 +118,9 @@ function parseTimestampMs(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, stage) {
+function buildTrackingRegion(driverCoordinate, pickupCoordinate, targetCoordinate, stage) {
   const focusCoordinates = stage === 'on_trip'
-    ? [driverCoordinate, dropoffCoordinate]
+    ? [driverCoordinate, targetCoordinate]
     : [driverCoordinate, pickupCoordinate];
   const coordinates = focusCoordinates.filter(Boolean);
   const latitudes = coordinates.map((item) => item.latitude);
@@ -150,12 +150,13 @@ function normalizeVehicleImageUrl(url) {
   }
 }
 
-async function fetchTrackingDirections(token, origin, destination) {
+async function fetchTrackingDirections(token, origin, destination, waypoints = []) {
   if (!token || !origin || !destination) return null;
 
   const data = await getDirectionsRoute(token, {
     origin,
     destination,
+    waypoints,
     cacheTtlSeconds: LIVE_DIRECTIONS_CACHE_TTL_SECONDS,
   });
   const route = data?.route || {};
@@ -187,6 +188,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     dropoffCoordinate: initialDropoffCoordinate,
     pickupLabel: initialPickupLabel,
     dropoffLabel: initialDropoffLabel,
+    intermediateStops: initialIntermediateStops = [],
     estimatedAmount: initialEstimatedAmount,
     selectedTier,
     driver: initialDriver,
@@ -370,7 +372,21 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const shouldPromptForPostTrip = isCompleted && (shouldPromptForRating || canPromptForTip);
   const driverCoordinate = rideStatus?.driverCoordinate || driver?.coordinate || null;
   const hasDriverCoordinate = !!driverCoordinate;
-  const activeTarget = stage === 'on_trip' ? dropoffCoordinate : pickupCoordinate;
+  const intermediateStops = Array.isArray(rideStatus?.intermediateStops)
+    ? rideStatus.intermediateStops
+    : Array.isArray(initialIntermediateStops)
+      ? initialIntermediateStops
+      : [];
+  const currentStopIndex = Number(rideStatus?.currentStopIndex || 0);
+  const remainingIntermediateStopsCount = Number(rideStatus?.remainingIntermediateStopsCount || 0);
+  const currentIntermediateStop = rideStatus?.currentIntermediateStop || intermediateStops[currentStopIndex] || null;
+  const currentTargetLabel = rideStatus?.currentTargetLabel
+    || currentIntermediateStop?.label
+    || dropoffLabel;
+  const currentTargetCoordinate = rideStatus?.currentTargetCoordinate
+    || currentIntermediateStop?.coordinate
+    || dropoffCoordinate;
+  const activeTarget = stage === 'on_trip' ? currentTargetCoordinate : pickupCoordinate;
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
   const tipOptions = [1, 2, 5, 10];
 
@@ -500,7 +516,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     const loadTripRoute = async () => {
       try {
         const token = await getTokenRef.current();
-        const route = await fetchTrackingDirections(token, pickupCoordinate, dropoffCoordinate);
+        const route = await fetchTrackingDirections(
+          token,
+          pickupCoordinate,
+          dropoffCoordinate,
+          intermediateStops.map((stop) => stop.coordinate).filter(Boolean),
+        );
         if (cancelled) return;
         setTripRouteCoordinates(
           Array.isArray(route?.coordinates) && route.coordinates.length > 1
@@ -522,7 +543,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, isCompleted, pickupCoordinate]);
+  }, [dropoffCoordinate, intermediateStops, isCompleted, pickupCoordinate]);
 
   const liveDriverDistanceKm = useMemo(
     () => {
@@ -562,11 +583,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     if (stage === 'on_trip') {
       if (routeCoordinates.length > 1) return routeCoordinates;
       if (tripRouteCoordinates.length > 1) return tripRouteCoordinates;
-      return [pickupCoordinate, dropoffCoordinate].filter(Boolean);
+      return [driverCoordinate, activeTarget].filter(Boolean);
     }
     if (routeCoordinates.length > 1) return routeCoordinates;
     return [driverCoordinate, pickupCoordinate].filter(Boolean);
-  }, [driverCoordinate, dropoffCoordinate, pickupCoordinate, routeCoordinates, stage, tripRouteCoordinates]);
+  }, [activeTarget, driverCoordinate, pickupCoordinate, routeCoordinates, stage, tripRouteCoordinates]);
 
   const pickupWaitRemainingSeconds = useMemo(() => {
     if (stage !== 'waiting_at_pickup') return null;
@@ -578,8 +599,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
   const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
   const trackingRegion = useMemo(
-    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, stage),
-    [driverCoordinate, dropoffCoordinate, pickupCoordinate, stage]
+    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, activeTarget, stage),
+    [activeTarget, driverCoordinate, pickupCoordinate, stage]
+  );
+  const tripTimelineLabels = useMemo(
+    () => [
+      pickupLabel,
+      ...intermediateStops.map((stop) => stop?.label).filter(Boolean),
+      dropoffLabel,
+    ].filter(Boolean),
+    [dropoffLabel, intermediateStops, pickupLabel],
   );
   const currentMapRegionRef = useRef(trackingRegion);
 
@@ -840,6 +869,17 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             </Marker>
           ) : null}
           <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+          {intermediateStops.map((stop, index) => (
+            stop?.coordinate ? (
+              <Marker
+                key={`passenger-stop-${index}`}
+                coordinate={stop.coordinate}
+                title={stop.label || `Stop ${index + 1}`}
+                pinColor={index < currentStopIndex ? '#94a3b8' : '#f97316'}
+                tracksViewChanges={false}
+              />
+            ) : null
+          ))}
           <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
           <Polyline
             coordinates={activeRouteCoordinates}
@@ -909,7 +949,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         ? `Confirmed! ${pickupWaitCountdownText} remaining.`
                         : `${pickupWaitCountdownText} to meet your driver at pickup.`
                     : stage === 'on_trip'
-                      ? (dropoffLabel || 'Heading to your destination')
+                      ? (currentTargetLabel || dropoffLabel || 'Heading to your destination')
                     : hasDriverCoordinate
                       ? `${liveEtaText} away - ${liveDistanceText}`
                       : liveDistanceText}
@@ -1068,7 +1108,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         {stage === 'on_trip' ? (
                           <>
                             <Text className="text-sm font-medium text-gray-500">
-                              {hasRoadDistance ? 'Distance to destination' : 'Estimated distance to destination'}
+                              {currentIntermediateStop
+                                ? (hasRoadDistance ? 'Distance to next stop' : 'Estimated distance to next stop')
+                                : (hasRoadDistance ? 'Distance to destination' : 'Estimated distance to destination')}
                             </Text>
                             <Text className="mt-1 text-3xl font-bold text-gray-900">{liveDistanceText}</Text>
                             <Text className="mt-2 text-sm text-gray-500">
@@ -1099,6 +1141,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     {stage === 'on_trip' ? (
                       <View className="mt-5 border-t border-gray-100 pt-4">
                         <Text className="text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
+                        {intermediateStops.length ? (
+                          <Text className="mt-2 text-sm text-gray-500">
+                            {remainingIntermediateStopsCount > 0
+                              ? `${remainingIntermediateStopsCount} stop${remainingIntermediateStopsCount === 1 ? '' : 's'} left before final drop-off`
+                              : 'Final destination leg'}
+                          </Text>
+                        ) : null}
                         {tipAmount > 0 ? (
                           <Text className="mt-2 text-sm font-medium text-green-600">
                             Includes ${tipAmount.toFixed(2)} tip
@@ -1126,6 +1175,45 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         <Text className="mt-2 text-base font-bold text-gray-900">{pickupLabel}</Text>
                         <Text className="mt-1 text-sm text-gray-500">to</Text>
                         <Text className="mt-1 text-base font-bold text-gray-900">{dropoffLabel}</Text>
+                      </View>
+                    ) : null}
+
+                    {tripTimelineLabels.length > 2 ? (
+                      <View className="mt-5 rounded-[22px] bg-[#f8fafc] p-4">
+                        <Text className="text-sm font-medium text-gray-500">Stops</Text>
+                        <View className="mt-3">
+                          {tripTimelineLabels.map((label, index) => {
+                            const isPickup = index === 0;
+                            const isDropoff = index === tripTimelineLabels.length - 1;
+                            const stopSequenceIndex = Math.max(0, index - 1);
+                            const isCompletedStop = !isPickup && !isDropoff && stopSequenceIndex < currentStopIndex;
+                            const isCurrentStop = stage === 'on_trip' && !isPickup && !isDropoff && stopSequenceIndex === currentStopIndex;
+                            return (
+                              <View key={`${label}-${index}`} className="mb-3 flex-row items-start">
+                                <View
+                                  className="mr-3 mt-1 h-3 w-3 rounded-full"
+                                  style={{
+                                    backgroundColor: isPickup
+                                      ? '#2563eb'
+                                      : isDropoff
+                                        ? '#111827'
+                                        : isCompletedStop
+                                          ? '#94a3b8'
+                                          : isCurrentStop
+                                            ? '#f97316'
+                                            : '#cbd5e1',
+                                  }}
+                                />
+                                <View className="flex-1">
+                                  <Text className="text-sm font-semibold text-gray-900">
+                                    {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex}`}
+                                  </Text>
+                                  <Text className="mt-1 text-sm text-gray-600">{label}</Text>
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
                       </View>
                     ) : null}
                   </View>

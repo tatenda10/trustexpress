@@ -5,6 +5,7 @@ import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql.js';
+import { buildRideStopsPayload } from '../lib/ride-stops.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
 import {
@@ -558,6 +559,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.dropoff_label,
          r.dropoff_lat,
          r.dropoff_lng,
+         r.intermediate_stops_json,
+         r.current_stop_index,
          r.route_distance_km,
          r.route_duration_minutes,
          r.estimated_distance_km,
@@ -626,6 +629,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         dropoff: row.dropoff_label,
         pickupCoordinate,
         dropoffCoordinate,
+        ...buildRideStopsPayload(row),
         tripDistanceKm: Number(row.route_distance_km || row.estimated_distance_km || 0),
         tripDurationMinutes: Number(row.route_duration_minutes || row.estimated_minutes || 0),
         estimatedDistanceKm: Number(row.estimated_distance_km || 0),
@@ -970,6 +974,8 @@ router.get('/current-ride', requireAuth, async (req, res) => {
          dropoff_label,
          dropoff_lat,
          dropoff_lng,
+         intermediate_stops_json,
+         current_stop_index,
          estimated_distance_km,
          estimated_minutes,
          estimated_amount,
@@ -1038,6 +1044,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         discountCode: ride.discount_code || null,
         tipAmount: Number(ride.tip_amount || 0),
         totalAmount: Number(ride.original_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
+        ...buildRideStopsPayload(ride),
         status: ride.status,
         stage: mapTripStage(ride.status),
         driverCoordinate,
@@ -1164,6 +1171,92 @@ router.patch('/current-ride/:rideRequestId/start', requireAuth, async (req, res)
   }
 });
 
+router.patch('/current-ride/:rideRequestId/advance-stop', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT id, passenger_user_id, status, intermediate_stops_json, current_stop_index
+       FROM ride_requests
+       WHERE id = ? AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+    if (ride.status !== 'in_progress') {
+      return res.status(409).json({ error: 'Ride must be in progress to advance a stop' });
+    }
+
+    const stopsPayload = buildRideStopsPayload(ride);
+    if (!stopsPayload.currentIntermediateStop) {
+      return res.status(409).json({ error: 'No remaining intermediate stops to advance' });
+    }
+
+    const nextStopIndex = Math.min(
+      Number(stopsPayload.currentStopIndex || 0) + 1,
+      stopsPayload.intermediateStops.length,
+    );
+
+    await queryWithDeadlockRetry(
+      `UPDATE ride_requests
+       SET current_stop_index = ?
+       WHERE id = ? AND driver_user_id = ?`,
+      [nextStopIndex, rideRequestId, req.userId]
+    );
+
+    const nextStopsPayload = buildRideStopsPayload({
+      ...ride,
+      current_stop_index: nextStopIndex,
+    });
+
+    if (ride.passenger_user_id) {
+      emitRideStatusToPassenger(ride.passenger_user_id, {
+        rideRequestId,
+        status: 'in_progress',
+        driverUserId: req.userId,
+        currentStopIndex: nextStopIndex,
+      });
+      await notifyPassengerRideStatus(ride.passenger_user_id, {
+        title: nextStopsPayload.currentIntermediateStop ? 'Heading to next stop' : 'Final destination ahead',
+        body: nextStopsPayload.currentIntermediateStop
+          ? `Your driver is now heading to ${nextStopsPayload.currentIntermediateStop.label}.`
+          : 'Your driver is now heading to the final destination.',
+        data: {
+          type: 'ride_status',
+          status: 'in_progress',
+          rideRequestId,
+          driverUserId: req.userId,
+          currentStopIndex: nextStopIndex,
+        },
+      });
+    }
+
+    emitRideStatusToDriver(req.userId, {
+      rideRequestId,
+      status: 'in_progress',
+      currentStopIndex: nextStopIndex,
+    });
+
+    return res.json({
+      ok: true,
+      currentStopIndex: nextStopIndex,
+      currentTargetLabel: nextStopsPayload.currentTargetLabel,
+      remainingIntermediateStopsCount: nextStopsPayload.remainingIntermediateStopsCount,
+    });
+  } catch (err) {
+    console.error('PATCH /api/drivers/current-ride/:rideRequestId/advance-stop', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -1172,6 +1265,21 @@ router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, r
     const rideRequestId = Number(req.params.rideRequestId);
     if (!Number.isInteger(rideRequestId)) {
       return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [rideBeforeComplete] = await query(
+      `SELECT id, intermediate_stops_json, current_stop_index
+       FROM ride_requests
+       WHERE id = ? AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!rideBeforeComplete) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+    const stopsBeforeComplete = buildRideStopsPayload(rideBeforeComplete);
+    if (stopsBeforeComplete.currentIntermediateStop) {
+      return res.status(409).json({ error: 'Advance the remaining stop before completing this trip' });
     }
 
     await queryWithDeadlockRetry(

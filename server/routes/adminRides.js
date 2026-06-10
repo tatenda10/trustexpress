@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
+import { buildRideStopsPayload } from '../lib/ride-stops.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
@@ -456,6 +457,8 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         requested_tier_name,
         pickup_label,
         dropoff_label,
+        intermediate_stops_json,
+        current_stop_index,
         pickup_lat,
         pickup_lng,
         dropoff_lat,
@@ -568,6 +571,7 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         tierName: row.requested_tier_name || null,
         pickupLabel: row.pickup_label,
         dropoffLabel: row.dropoff_label,
+        ...buildRideStopsPayload(row),
         pickupLat: row.pickup_lat === null ? null : Number(row.pickup_lat),
         pickupLng: row.pickup_lng === null ? null : Number(row.pickup_lng),
         dropoffLat: row.dropoff_lat === null ? null : Number(row.dropoff_lat),

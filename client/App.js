@@ -929,18 +929,17 @@ function AppStack({ currentRouteName }) {
     const passengerIdentity = userProfile?.passengerIdentity || null;
     const passengerIdentityStatus = String(passengerIdentity?.status || 'not_submitted').trim().toLowerCase();
     const passengerIdentitySubmitted = !!(
-      passengerIdentity?.selfieUrl &&
       passengerIdentity?.nationalIdFrontUrl &&
       passengerIdentity?.nationalIdBackUrl
     );
-    const passengerIdentityApproved = passengerIdentityStatus === 'approved';
+    const passengerIdentityApproved = passengerIdentityStatus === 'approved' || passengerIdentityStatus === 'verified';
     const passengerIdentityPending = passengerIdentityStatus === 'pending' && passengerIdentitySubmitted;
     const passengerIdentityBlocked = passengerIdentityStatus === 'rejected' && passengerIdentity?.canResubmit === false;
     const needPassengerProfile = needsProfileCompletion;
     const needPassengerLocation = passengerLocationGranted !== true;
     // Only force verification when backend explicitly says "false".
     const needPassengerPhoneVerify = passengerPhoneKnown && !passengerPhoneVerified;
-    const needPassengerIdentity = !passengerIdentityApproved && !passengerIdentityPending && !passengerIdentityBlocked;
+    const needPassengerIdentity = false;
     const passengerInitialRoute = needPassengerProfile
       ? 'PassengerCompleteProfile'
       : needPassengerLocation
@@ -968,9 +967,7 @@ function AppStack({ currentRouteName }) {
                     ? 'PassengerEnableLocation'
                     : needPassengerPhoneVerify
                       ? 'PassengerVerifyPhone'
-                      : needPassengerIdentity
-                        ? 'PassengerIdentityVerificationOnboarding'
-                        : 'PassengerTabs'
+                      : 'PassengerTabs'
                 );
               }}
             />
@@ -986,9 +983,7 @@ function AppStack({ currentRouteName }) {
                 props.navigation.replace(
                   needPassengerPhoneVerify
                     ? 'PassengerVerifyPhone'
-                    : needPassengerIdentity
-                      ? 'PassengerIdentityVerificationOnboarding'
-                      : 'PassengerTabs'
+                    : 'PassengerTabs'
                 );
               }}
             />
@@ -998,7 +993,7 @@ function AppStack({ currentRouteName }) {
           {(props) => (
             <PassengerVerifyPhoneScreen
               {...props}
-              nextRouteName={needPassengerIdentity ? 'PassengerIdentityVerificationOnboarding' : 'PassengerTabs'}
+              nextRouteName='PassengerTabs'
               onVerified={async () => {
                 await refetchUserProfile();
               }}

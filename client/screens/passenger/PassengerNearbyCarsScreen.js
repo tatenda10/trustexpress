@@ -208,6 +208,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const {
     pickupCoordinate,
     dropoffCoordinate,
+    intermediateStops = [],
     pickupLabel,
     dropoffLabel,
     routeCoordinates: initialRouteCoordinates = EMPTY_ROUTE_COORDINATES,
@@ -307,6 +308,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     navigatedToTrackingRef.current = true;
     navigation.replace('PassengerRideTracking', {
       pickupCoordinate, dropoffCoordinate, pickupLabel, dropoffLabel,
+      intermediateStops,
       estimatedAmount: Number(rideStatus?.estimatedAmount || estimatedAmount || 0),
       selectedTier: assignedDriver.tier || selectedTier,
       driver: assignedDriver,
@@ -396,6 +398,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       navigation.replace('PassengerRideTracking', {
         pickupCoordinate,
         dropoffCoordinate,
+        intermediateStops,
         pickupLabel,
         dropoffLabel,
         estimatedAmount: Number(rideStatus?.estimatedAmount || estimatedAmount || 0),

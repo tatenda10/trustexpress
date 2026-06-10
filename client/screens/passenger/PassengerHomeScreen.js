@@ -67,6 +67,7 @@ const PLACE_SEARCH_DEBOUNCE_MS = 700;
 const PLACE_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const PLACE_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PLACE_CACHE_ENTRIES = 80;
+const MAX_INTERMEDIATE_STOPS = 2;
 
 function normalizeSearchText(value) {
   return String(value || '')
@@ -76,7 +77,7 @@ function normalizeSearchText(value) {
     .trim();
 }
 
-async function fetchRideRoute(token, origin, destination) {
+async function fetchRideRoute(token, origin, destination, waypoints = []) {
   if (!token || !origin || !destination) {
     return { coordinates: null, distanceKm: null, durationMinutes: null };
   }
@@ -84,6 +85,7 @@ async function fetchRideRoute(token, origin, destination) {
   const data = await getDirectionsRoute(token, {
     origin,
     destination,
+    waypoints,
     cacheTtlSeconds: 1800,
   });
   const route = data?.route || {};
@@ -277,6 +279,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [dropoffCoordinate, setDropoffCoordinate] = useState(null);
   const [pickupLabel, setPickupLabel] = useState('Getting your location...');
   const [dropoffLabel, setDropoffLabel] = useState('Choose destination');
+  const [intermediateStops, setIntermediateStops] = useState([]);
   const [pickupQuery, setPickupQuery] = useState('');
   const [destinationQuery, setDestinationQuery] = useState('');
   const [activeField, setActiveField] = useState('destination');
@@ -289,6 +292,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [routeDistanceKm, setRouteDistanceKm] = useState(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState(null);
+  const [routeReady, setRouteReady] = useState(false);
   const [nearbyDrivers, setNearbyDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
 
@@ -500,6 +504,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       setRouteCoordinates([]);
       setRouteDistanceKm(null);
       setRouteDurationMinutes(null);
+      setRouteReady(false);
       setIsCalculating(false);
       return undefined;
     }
@@ -510,18 +515,25 @@ export default function PassengerHomeScreen({ navigation, route }) {
       try {
         setIsCalculating(true);
         const token = await getTokenRef.current?.();
-        const result = await fetchRideRoute(token, pickupCoordinate, dropoffCoordinate);
+        const result = await fetchRideRoute(
+          token,
+          pickupCoordinate,
+          dropoffCoordinate,
+          intermediateStops.map((stop) => stop.coordinate).filter(Boolean),
+        );
         if (cancelled) return;
 
         const normalizedCoordinates = normalizeRouteCoordinates(result.coordinates);
         setRouteCoordinates(normalizedCoordinates);
         setRouteDistanceKm(result.distanceKm);
         setRouteDurationMinutes(result.durationMinutes);
+        setRouteReady(Boolean(normalizedCoordinates.length > 1 && Number(result.distanceKm || 0) > 0));
       } catch {
         if (cancelled) return;
         setRouteCoordinates([]);
         setRouteDistanceKm(null);
         setRouteDurationMinutes(null);
+        setRouteReady(false);
       } finally {
         if (!cancelled) setIsCalculating(false);
       }
@@ -532,10 +544,18 @@ export default function PassengerHomeScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, pickupCoordinate]);
+  }, [dropoffCoordinate, intermediateStops, pickupCoordinate]);
 
   useEffect(() => {
-    const query = (activeField === 'pickup' ? pickupQuery : destinationQuery).trim();
+    const stopMatch = /^stop-(\d+)$/.exec(String(activeField || ''));
+    const stopIndex = stopMatch ? Number(stopMatch[1]) : -1;
+    const query = (
+      activeField === 'pickup'
+        ? pickupQuery
+        : activeField === 'destination'
+          ? destinationQuery
+          : String(intermediateStops[stopIndex]?.label || '')
+    ).trim();
     if (!showRouteModal || query.length < PLACE_SEARCH_MIN_CHARS) {
       setSuggestions([]);
       setIsSearchingSuggestions(false);
@@ -587,7 +607,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     return () => {
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     };
-  }, [activeField, currentLocationCoordinate, destinationQuery, pickupCoordinate, pickupQuery, showRouteModal]);
+  }, [activeField, currentLocationCoordinate, destinationQuery, intermediateStops, pickupCoordinate, pickupQuery, showRouteModal]);
 
   const distanceKm = useMemo(
     () => (routeDistanceKm != null && routeDistanceKm > 0 ? routeDistanceKm : 0),
@@ -629,6 +649,36 @@ export default function PassengerHomeScreen({ navigation, route }) {
     if (closeModal) setShowRouteModal(false);
   };
 
+  const applyIntermediateStop = async (index, coordinate, label, closeModal = false) => {
+    if (!isCoordinateInBulawayoServiceArea(coordinate)) {
+      Alert.alert('Outside Bulawayo', 'Trust Express currently supports stop points within Bulawayo only.');
+      return;
+    }
+    setIntermediateStops((current) => {
+      const nextStops = [...current];
+      nextStops[index] = {
+        label,
+        coordinate,
+      };
+      return nextStops.filter(Boolean).slice(0, MAX_INTERMEDIATE_STOPS);
+    });
+    const nextRegion = buildRouteRegion(pickupCoordinate, dropoffCoordinate || coordinate);
+    setMapRegion(nextRegion);
+    mapRef.current?.animateToRegion(nextRegion, 500);
+    if (closeModal) setShowRouteModal(false);
+  };
+
+  const addIntermediateStopSlot = () => {
+    setIntermediateStops((current) => {
+      if (current.length >= MAX_INTERMEDIATE_STOPS) return current;
+      return [...current, { label: '', coordinate: null }];
+    });
+  };
+
+  const removeIntermediateStop = (index) => {
+    setIntermediateStops((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+
   const handleMapPress = async (event) => {
     if (!showRouteModal) return;
     const coordinate = event.nativeEvent.coordinate;
@@ -636,11 +686,18 @@ export default function PassengerHomeScreen({ navigation, route }) {
       Alert.alert('Outside Bulawayo', 'Please choose a location inside Bulawayo.');
       return;
     }
-    const label = await getReadableLocationLabel(activeField === 'pickup' ? 'Pickup' : 'Drop-off', coordinate);
+    const isPickupField = activeField === 'pickup';
+    const isDestinationField = activeField === 'destination';
+    const stopMatch = /^stop-(\d+)$/.exec(String(activeField || ''));
+    const stopIndex = stopMatch ? Number(stopMatch[1]) : -1;
+    const stopLabelPrefix = stopIndex >= 0 ? `Stop ${stopIndex + 1}` : 'Drop-off';
+    const label = await getReadableLocationLabel(isPickupField ? 'Pickup' : (isDestinationField ? 'Drop-off' : stopLabelPrefix), coordinate);
 
-    if (activeField === 'pickup') {
+    if (isPickupField) {
       await applyPickup(coordinate, label);
       setPickupQuery(label.replace('Pickup: ', ''));
+    } else if (stopIndex >= 0) {
+      await applyIntermediateStop(stopIndex, coordinate, label, true);
     } else {
       await applyDestination(coordinate, label, true);
       setDestinationQuery(label.replace('Drop-off: ', ''));
@@ -703,9 +760,14 @@ export default function PassengerHomeScreen({ navigation, route }) {
       return;
     }
 
+    const stopMatch = /^stop-(\d+)$/.exec(String(activeField || ''));
+    const stopIndex = stopMatch ? Number(stopMatch[1]) : -1;
+
     if (activeField === 'pickup') {
       await applyPickup(resolvedSuggestion.coordinate, `Pickup: ${resolvedSuggestion.title}`);
       setPickupQuery(resolvedSuggestion.title);
+    } else if (stopIndex >= 0) {
+      await applyIntermediateStop(stopIndex, resolvedSuggestion.coordinate, `Stop ${stopIndex + 1}: ${resolvedSuggestion.title}`, true);
     } else {
       await applyDestination(resolvedSuggestion.coordinate, `Drop-off: ${resolvedSuggestion.title}`, true);
       setDestinationQuery(resolvedSuggestion.title);
@@ -723,6 +785,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const clearDestination = () => {
     setDropoffCoordinate(null);
     setDropoffLabel('Choose destination');
+    setIntermediateStops([]);
     setDestinationQuery('');
     setRouteCoordinates([]);
     setRouteDistanceKm(null);
@@ -741,7 +804,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       Alert.alert('Outside Bulawayo', 'Trust Express currently supports rides within Bulawayo only.');
       return;
     }
-    if (!(routeDistanceKm > 0)) {
+    if (!routeReady || !(routeDistanceKm > 0)) {
       Alert.alert('Calculating road distance', 'Please wait for the road distance to finish calculating, then choose your ride.');
       return;
     }
@@ -753,6 +816,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     navigation.navigate('PassengerChooseRide', {
       pickupCoordinate,
       dropoffCoordinate,
+      intermediateStops: intermediateStops.filter((stop) => stop?.coordinate && stop?.label),
       pickupLabel,
       dropoffLabel,
       routeCoordinates,
@@ -805,6 +869,16 @@ export default function PassengerHomeScreen({ navigation, route }) {
           {pickupCoordinate && !areCoordinatesClose(pickupCoordinate, currentLocationCoordinate) ? (
             <Marker coordinate={pickupCoordinate} title="Pickup" pinColor={PRIMARY_BLUE} />
           ) : null}
+          {intermediateStops.map((stop, index) => (
+            stop?.coordinate ? (
+              <Marker
+                key={`stop-${index}`}
+                coordinate={stop.coordinate}
+                title={stop.label || `Stop ${index + 1}`}
+                pinColor="#f59e0b"
+              />
+            ) : null
+          ))}
           {dropoffCoordinate ? <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" /> : null}
           {pickupCoordinate && dropoffCoordinate ? (
             routeCoordinates.length > 1 ? (
@@ -838,6 +912,11 @@ export default function PassengerHomeScreen({ navigation, route }) {
                 <View className="flex-1">
                   <Text className="text-lg font-bold text-gray-900">{pickupLabel.replace('Pickup: ', '')}</Text>
                   <Text className="mt-1 text-base text-gray-700">{dropoffLabel.replace('Drop-off: ', '')}</Text>
+                  {intermediateStops.length ? (
+                    <Text className="mt-1 text-sm text-amber-700">
+                      {intermediateStops.filter((stop) => stop?.label).length} stop{intermediateStops.filter((stop) => stop?.label).length === 1 ? '' : 's'} added
+                    </Text>
+                  ) : null}
                   <Text className="mt-1 text-sm text-gray-500">{estimatedMinutes} min</Text>
                 </View>
                 <TouchableOpacity
@@ -898,11 +977,11 @@ export default function PassengerHomeScreen({ navigation, route }) {
               </View>
               <TouchableOpacity
                 onPress={openChooseRideScreen}
-                disabled={loadingLocation || isCalculating}
+                disabled={loadingLocation || isCalculating || !routeReady}
                 className="mt-4 h-16 items-center justify-center rounded-[22px]"
-                style={{ backgroundColor: loadingLocation || isCalculating ? '#93c5fd' : PRIMARY_BLUE }}
+                style={{ backgroundColor: loadingLocation || isCalculating || !routeReady ? '#93c5fd' : PRIMARY_BLUE }}
               >
-                {isCalculating ? (
+                {isCalculating || !routeReady ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <Text className="text-lg font-bold text-white">Choose ride</Text>
@@ -1162,7 +1241,16 @@ export default function PassengerHomeScreen({ navigation, route }) {
                       <TouchableOpacity
                         onPress={() => {
                           if (activeField === 'pickup') setPickupQuery('');
-                          else setDestinationQuery('');
+                          else if (activeField === 'destination') setDestinationQuery('');
+                          else {
+                            const stopMatch = /^stop-(\d+)$/.exec(String(activeField || ''));
+                            const stopIndex = stopMatch ? Number(stopMatch[1]) : -1;
+                            if (stopIndex >= 0) {
+                              setIntermediateStops((current) => current.map((item, itemIndex) => (
+                                itemIndex === stopIndex ? { ...item, label: '', coordinate: null } : item
+                              )));
+                            }
+                          }
                           setSuggestions([]);
                         }}
                       >
@@ -1171,6 +1259,51 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     ) : null}
                   </View>
                 </View>
+
+                {intermediateStops.map((stop, index) => (
+                  <View
+                    key={`stop-field-${index}`}
+                    className="mt-3 rounded-[22px] bg-white px-4 py-3"
+                    style={{ borderWidth: 1, borderColor: '#fde68a' }}
+                  >
+                    <View className="flex-row items-center">
+                      <Ionicons name="flag-outline" size={22} color="#d97706" />
+                      <View className="ml-4 flex-1">
+                        <Text className="text-sm text-gray-500">Stop {index + 1}</Text>
+                        <TextInput
+                          className="mt-1 text-xl text-gray-900"
+                          placeholder={`Search stop ${index + 1}`}
+                          value={String(stop?.label || '').replace(/^Stop \d+:\s*/i, '')}
+                          onFocus={() => setActiveField(`stop-${index}`)}
+                          onChangeText={(value) => {
+                            setIntermediateStops((current) => current.map((item, itemIndex) => (
+                              itemIndex === index ? { ...item, label: value } : item
+                            )));
+                          }}
+                          returnKeyType="search"
+                        />
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => removeIntermediateStop(index)}
+                        className="ml-3 h-10 w-10 items-center justify-center rounded-full bg-[#fff7ed]"
+                      >
+                        <Ionicons name="close-circle" size={24} color="#c2410c" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+
+                {intermediateStops.length < MAX_INTERMEDIATE_STOPS ? (
+                  <TouchableOpacity
+                    onPress={addIntermediateStopSlot}
+                    className="mt-3 flex-row items-center justify-center rounded-[18px] border border-dashed border-[#cbd5e1] bg-white px-4 py-3"
+                  >
+                    <Ionicons name="add-circle-outline" size={18} color={PRIMARY_BLUE} />
+                    <Text className="ml-2 text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
+                      Add stop
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
 
                 <KeyboardAwareScrollView
                   bottomOffset={24}
@@ -1204,7 +1337,13 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     <View className="rounded-[22px] bg-white px-4 py-5">
                       <ActivityIndicator size="small" color={PRIMARY_BLUE} />
                     </View>
-                  ) : !suggestions.length && (activeField === 'pickup' ? pickupQuery : destinationQuery).trim().length >= PLACE_SEARCH_MIN_CHARS ? (
+                  ) : !suggestions.length && (
+                    activeField === 'pickup'
+                      ? pickupQuery
+                      : activeField === 'destination'
+                        ? destinationQuery
+                        : String(intermediateStops[Number((/^stop-(\d+)$/.exec(String(activeField || '')) || [])[1] || -1)]?.label || '')
+                  ).trim().length >= PLACE_SEARCH_MIN_CHARS ? (
                     <View className="rounded-[22px] bg-white px-4 py-5">
                       <Text className="text-base font-semibold text-gray-900">No Bulawayo places found</Text>
                       <Text className="mt-2 text-sm text-gray-500">
@@ -1220,9 +1359,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
                       >
                         <View className="flex-row items-start">
                           <Ionicons
-                            name={activeField === 'pickup' ? 'ellipse-outline' : 'location-outline'}
+                            name={activeField === 'pickup' ? 'ellipse-outline' : activeField === 'destination' ? 'location-outline' : 'flag-outline'}
                             size={24}
-                            color={activeField === 'pickup' ? '#16a34a' : '#6b7280'}
+                            color={activeField === 'pickup' ? '#16a34a' : activeField === 'destination' ? '#6b7280' : '#d97706'}
                           />
                           <View className="ml-3 flex-1 pr-3">
                             <Text className="text-lg font-bold text-gray-900">{suggestion.title}</Text>

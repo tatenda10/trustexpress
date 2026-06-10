@@ -149,11 +149,10 @@ const PassengerAccountScreen = ({ navigation }) => {
   const passengerIdentity = profile?.passengerIdentity || null;
   const identityStatus = passengerIdentity?.status || 'not_submitted';
   const identityDocsSubmitted = !!(
-    passengerIdentity?.selfieUrl &&
     passengerIdentity?.nationalIdFrontUrl &&
     passengerIdentity?.nationalIdBackUrl
   );
-  const identityApproved = identityStatus === 'approved';
+  const identityApproved = identityStatus === 'approved' || identityStatus === 'verified';
   const identityPending = identityStatus === 'pending' && identityDocsSubmitted;
   const identityRejected = identityStatus === 'rejected';
   /** Full ID pack submitted and awaiting admin — same pattern as driver documentation row. */
