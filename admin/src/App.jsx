@@ -7,6 +7,7 @@ import DriverVerificationPage from './pages/DriverVerificationPage'
 import DriverVerificationDetailPage from './pages/DriverVerificationDetailPage'
 import RideOperationsPage from './pages/RideOperationsPage'
 import RideOperationDetailPage from './pages/RideOperationDetailPage'
+import PanicAlertsPage from './pages/PanicAlertsPage'
 import LiveMapPage from './pages/LiveMapRealtimePage'
 import DriversPage from './pages/DriversPage'
 import DriverDetailsPage from './pages/DriverDetailsPage'
@@ -83,6 +84,10 @@ function AppRoutes() {
         <Route
           path="ride-operations/:rideId"
           element={<PermissionRoute permission="ride_ops.read"><RideOperationDetailPage /></PermissionRoute>}
+        />
+        <Route
+          path="panic-alerts"
+          element={<PermissionRoute permission="ride_ops.read"><PanicAlertsPage /></PermissionRoute>}
         />
         <Route
           path="live-map"

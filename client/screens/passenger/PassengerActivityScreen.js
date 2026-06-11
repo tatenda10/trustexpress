@@ -209,7 +209,7 @@ const PassengerActivityScreen = ({ navigation }) => {
             <>
               {rides.map((ride) => {
                 const statusStyle = getStatusColors(ride.status);
-                const { discountAmount, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
+                const { fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
                 return (
                   <TouchableOpacity
                     key={ride.id}
@@ -239,11 +239,6 @@ const PassengerActivityScreen = ({ navigation }) => {
                       </View>
                     </View>
 
-                    {discountAmount > 0 ? (
-                      <Text className="mt-2 text-sm font-medium text-emerald-600">
-                        Discount{ride.discountCode ? ` ${ride.discountCode}` : ''}: -{formatCurrency(discountAmount)}
-                      </Text>
-                    ) : null}
                     {tipAmount > 0 ? (
                       <Text className="mt-1 text-sm text-gray-500">
                         Tip: {formatCurrency(tipAmount)} | Total: {formatCurrency(totalAmount)}

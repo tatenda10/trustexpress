@@ -421,8 +421,18 @@ async function createPendingDriverOffers(rideRequestId, drivers) {
   );
 }
 
-async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, rideRequestId, publicId, tierName }) {
+function buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops = [] }) {
+  const stopCount = Array.isArray(intermediateStops) ? intermediateStops.length : 0;
+  if (stopCount > 0) {
+    return `${pickupLabel} via ${stopCount} stop${stopCount === 1 ? '' : 's'} to ${dropoffLabel}`;
+  }
+  return `${pickupLabel} to ${dropoffLabel}`;
+}
+
+async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, intermediateStops = [], rideRequestId, publicId, tierName }) {
   if (!Array.isArray(drivers) || !drivers.length) return;
+  const stopCount = Array.isArray(intermediateStops) ? intermediateStops.length : 0;
+  const notificationBody = buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops });
 
   const destinations = (
     await Promise.all(
@@ -456,7 +466,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
       expoTokens.map((token) => ({
         to: token,
         title: 'New ride request',
-        body: `${pickupLabel} to ${dropoffLabel}`,
+        body: notificationBody,
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -475,7 +485,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
       fcmTokens.map((token) => ({
         to: token,
         title: 'New ride request',
-        body: `${pickupLabel} to ${dropoffLabel}`,
+        body: notificationBody,
         android: {
           channelId: 'ride-requests',
           notification: {
@@ -490,6 +500,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           passengerName: String(passengerName || ''),
           pickupLabel: String(pickupLabel || ''),
           dropoffLabel: String(dropoffLabel || ''),
+          intermediateStopCount: String(stopCount || 0),
           tierName: String(tierName || ''),
         },
       }))
@@ -873,6 +884,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       passengerName,
       pickupLabel: String(pickupLabel).trim(),
       dropoffLabel: String(dropoffLabel).trim(),
+      intermediateStops: normalizedIntermediateStops,
       rideRequestId,
       publicId,
       tierName: tier.tier_name,

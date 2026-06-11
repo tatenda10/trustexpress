@@ -86,6 +86,62 @@ function formatCountdown(totalSeconds) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function buildRequestStopTimeline(request) {
+  return [
+    request?.pickup,
+    ...(Array.isArray(request?.intermediateStops)
+      ? request.intermediateStops.map((stop) => stop?.label).filter(Boolean)
+      : []),
+    request?.dropoff,
+  ].filter(Boolean);
+}
+
+function getRequestNotificationBody(request) {
+  const stopCount = Array.isArray(request?.intermediateStops) ? request.intermediateStops.length : 0;
+  const pickup = String(request?.pickupLabel || request?.pickup || 'Pickup').trim();
+  const dropoff = String(request?.dropoffLabel || request?.dropoff || 'Drop-off').trim();
+  if (stopCount > 0) {
+    return `${pickup} via ${stopCount} stop${stopCount === 1 ? '' : 's'} to ${dropoff}`;
+  }
+  return `${pickup} to ${dropoff}`;
+}
+
+function RequestStopsPreview({ request }) {
+  const stopTimeline = buildRequestStopTimeline(request);
+  const stopCount = Array.isArray(request?.intermediateStops) ? request.intermediateStops.length : 0;
+
+  if (stopTimeline.length <= 2 || stopCount <= 0) return null;
+
+  return (
+    <View className="mt-4 rounded-[18px] border border-orange-100 bg-orange-50 px-4 py-3">
+      <Text className="text-[11px] font-bold uppercase tracking-[1px] text-orange-700">
+        This is a multi-stop trip
+      </Text>
+      <Text className="mt-1 text-sm font-medium text-orange-900">
+        {stopCount} stop{stopCount === 1 ? '' : 's'} before the final destination
+      </Text>
+      <View className="mt-3">
+        {stopTimeline.map((label, index) => {
+          const isPickup = index === 0;
+          const isDropoff = index === stopTimeline.length - 1;
+          const dotColor = isPickup ? '#2563eb' : isDropoff ? '#111827' : '#f97316';
+          return (
+            <View key={`${label}-${index}`} className="mb-2 flex-row items-start">
+              <View className="mr-3 mt-1 h-3 w-3 rounded-full" style={{ backgroundColor: dotColor }} />
+              <View className="flex-1">
+                <Text className="text-sm font-semibold text-gray-900">
+                  {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${index}`}
+                </Text>
+                <Text className="mt-0.5 text-sm text-gray-600">{label}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 /** Open Location Code style names Android often returns from reverse geocode (e.g. 428R+4V9). */
 function looksLikePlusCode(value) {
   const text = String(value || '').trim().replace(/\s+/g, '');
@@ -596,7 +652,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
             await showLocalRideNotification({
               title: 'New ride request',
               body: newestRequest
-                ? `${newestRequest.pickupLabel || 'Pickup'} to ${newestRequest.dropoffLabel || 'Dropoff'}`
+                ? getRequestNotificationBody(newestRequest)
                 : 'A new ride request is waiting for you.',
               data: {
                 type: 'driver_new_ride_request',
@@ -1338,6 +1394,19 @@ const DriverHomeScreen = ({ navigation, route }) => {
           {activeRequest ? (
             <>
               <Marker coordinate={activeRequest.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+              {Array.isArray(activeRequest.intermediateStops)
+                ? activeRequest.intermediateStops.map((stop, index) => (
+                    stop?.coordinate ? (
+                      <Marker
+                        key={`incoming-stop-${activeRequest.id}-${index}`}
+                        coordinate={stop.coordinate}
+                        title={stop.label || `Stop ${index + 1}`}
+                        pinColor="#f97316"
+                        tracksViewChanges={false}
+                      />
+                    ) : null
+                  ))
+                : null}
               <Marker coordinate={activeRequest.dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
               {routeCoordinates.length > 1 ? (
                 <>
@@ -1579,6 +1648,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                   </View>
 
+                  <RequestStopsPreview request={req} />
+
                   <View className="mt-4 flex-row items-center gap-6">
                     <View className="flex-row items-center">
                       <Ionicons name="navigate" size={15} color="#2f73c9" />
@@ -1795,6 +1866,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   <Text className="mt-4 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
                   <Text className="mt-1 text-base font-semibold text-[#111111]">{activeRequest?.dropoff}</Text>
                 </View>
+
+                <RequestStopsPreview request={activeRequest} />
 
                 <TouchableOpacity
                   onPress={() => handleAcceptRequest(activeRequest)}

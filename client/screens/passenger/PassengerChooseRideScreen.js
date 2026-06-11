@@ -52,7 +52,37 @@ function encodePolyline(coordinates) {
     .join('');
 }
 
-function TierCard({ tier, selected, onPress, distanceKm }) {
+function getTierAmount(tier, distanceKm) {
+  return Math.ceil(
+    Math.max(
+      Number(tier?.baseFare || 0) + Number(distanceKm || 0) * Number(tier?.pricePerKm || 0),
+      Number(tier?.minimumFare || 0),
+    ),
+  );
+}
+
+function getDiscountedAmount(amount, discount) {
+  const fare = Number(amount || 0);
+  if (!(fare > 0) || !discount?.discountType || !(Number(discount?.discountValue || 0) > 0)) {
+    return fare;
+  }
+
+  let reduction = 0;
+  if (String(discount.discountType) === 'percent') {
+    reduction = (fare * Number(discount.discountValue || 0)) / 100;
+  } else {
+    reduction = Number(discount.discountValue || 0);
+  }
+
+  if (Number(discount.maxDiscountAmount || 0) > 0) {
+    reduction = Math.min(reduction, Number(discount.maxDiscountAmount || 0));
+  }
+
+  reduction = Math.min(reduction, fare);
+  return Number((fare - reduction).toFixed(2));
+}
+
+function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -73,12 +103,8 @@ function TierCard({ tier, selected, onPress, distanceKm }) {
     }).start();
   };
 
-  const tierAmount = Math.ceil(
-    Math.max(
-      Number(tier.baseFare || 0) + distanceKm * Number(tier.pricePerKm || 0),
-      Number(tier.minimumFare || 0),
-    ),
-  );
+  const tierAmount = getTierAmount(tier, distanceKm);
+  const visibleTierAmount = getDiscountedAmount(tierAmount, appliedDiscount);
 
   const iconName = getTierIconName(tier);
 
@@ -116,7 +142,7 @@ function TierCard({ tier, selected, onPress, distanceKm }) {
 
           {/* Price */}
           <View style={styles.tierPriceWrap}>
-            <Text style={styles.tierPrice}>${tierAmount.toFixed(2)}</Text>
+            <Text style={styles.tierPrice}>${visibleTierAmount.toFixed(2)}</Text>
             {tier.surgeMultiplier && Number(tier.surgeMultiplier) > 1 && (
               <View style={styles.surgeBadge}>
                 <Text style={styles.surgeText}>{tier.surgeMultiplier}×</Text>
@@ -157,7 +183,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [selectedTierKey, setSelectedTierKey] = useState('');
   const [isSubmittingRide, setIsSubmittingRide] = useState(false);
   const [appliedDiscount, setAppliedDiscount] = useState(null);
-  const [autoApplyingDiscount, setAutoApplyingDiscount] = useState(false);
 
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -211,13 +236,10 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     [selectedTierKey, tiers],
   );
 
-  const estimatedAmount = useMemo(() => {
-    if (!selectedTier || !distanceKm) return 0;
-    const baseFare = Number(selectedTier.baseFare || 0);
-    const perKm = Number(selectedTier.pricePerKm || 0);
-    const minimumFare = Number(selectedTier.minimumFare || 0);
-    return Math.ceil(Math.max(baseFare + distanceKm * perKm, minimumFare));
-  }, [distanceKm, selectedTier]);
+  const estimatedAmount = useMemo(
+    () => getTierAmount(selectedTier, distanceKm),
+    [distanceKm, selectedTier],
+  );
 
   useEffect(() => {
     if (!selectedTierKey) return;
@@ -237,7 +259,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       }
 
       try {
-        if (active) setAutoApplyingDiscount(true);
         const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await validatePassengerDiscount(token, {
@@ -249,8 +270,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         setAppliedDiscount(data?.discount || null);
       } catch {
         if (active) setAppliedDiscount(null);
-      } finally {
-        if (active) setAutoApplyingDiscount(false);
       }
     };
 
@@ -261,7 +280,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   }, [selectedTier, originalEstimatedAmount]);
 
   const originalEstimatedAmount = Number(estimatedAmount || 0);
-  const discountAmount = Number(appliedDiscount?.discountAmount || 0);
   const finalEstimatedAmount = Number(appliedDiscount?.finalFareAmount || estimatedAmount || 0);
 
   const navigateToActiveRide = (data) => {
@@ -412,19 +430,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
           <View style={styles.routeMetaDot} />
           <Text style={styles.routeMetaPrice}>${finalEstimatedAmount.toFixed(2)}</Text>
         </View>
-        {discountAmount > 0 ? (
-          <View style={styles.discountSummaryWrap}>
-            <Text style={styles.discountSummaryText}>
-              Original ${originalEstimatedAmount.toFixed(2)}
-            </Text>
-            <Text style={styles.discountSummaryText}>
-              Discount -${discountAmount.toFixed(2)}
-            </Text>
-            <Text style={styles.discountSummaryTextStrong}>
-              {appliedDiscount?.autoApplied ? `Auto promo ${appliedDiscount?.code}` : `Code ${appliedDiscount?.code}`}
-            </Text>
-          </View>
-        ) : null}
         {Array.isArray(intermediateStops) && intermediateStops.length ? (
           <View style={styles.discountSummaryWrap}>
             <Text style={styles.discountSummaryTextStrong}>
@@ -466,6 +471,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
                 selected={selectedTierKey === tier.tierKey}
                 onPress={() => setSelectedTierKey(tier.tierKey)}
                 distanceKm={distanceKm}
+                appliedDiscount={appliedDiscount}
               />
             ))}
           </Animated.ScrollView>
@@ -486,39 +492,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             <Text style={styles.infoPillText}>Price locked in • No surge pricing</Text>
           </View>
         )}
-
-        {selectedTier && !loadingTiers ? (
-          <View style={styles.discountCard}>
-            <Text style={styles.discountCardTitle}>Promotions</Text>
-            {autoApplyingDiscount ? (
-              <Text style={styles.discountHintText}>Checking for active admin promos...</Text>
-            ) : appliedDiscount?.code ? (
-              <Text style={styles.discountHintText}>An admin promo has been applied automatically to this fare.</Text>
-            ) : (
-              <Text style={styles.discountHintText}>Any active admin promo will be applied automatically. No code entry is needed.</Text>
-            )}
-            <View style={styles.discountBreakdown}>
-              <View style={styles.discountBreakdownRow}>
-                <Text style={styles.discountBreakdownLabel}>Original fare</Text>
-                <Text style={styles.discountBreakdownValue}>${originalEstimatedAmount.toFixed(2)}</Text>
-              </View>
-              <View style={styles.discountBreakdownRow}>
-                <Text style={styles.discountBreakdownLabel}>Discount</Text>
-                <Text style={[styles.discountBreakdownValue, styles.discountBreakdownValueGreen]}>-${discountAmount.toFixed(2)}</Text>
-              </View>
-              {appliedDiscount?.code ? (
-                <View style={styles.discountBreakdownRow}>
-                  <Text style={styles.discountBreakdownLabel}>Applied promo</Text>
-                  <Text style={styles.discountBreakdownValue}>{appliedDiscount.code}</Text>
-                </View>
-              ) : null}
-              <View style={styles.discountBreakdownRow}>
-                <Text style={styles.discountBreakdownTotalLabel}>Final total</Text>
-                <Text style={styles.discountBreakdownTotalValue}>${finalEstimatedAmount.toFixed(2)}</Text>
-              </View>
-            </View>
-          </View>
-        ) : null}
 
         <TouchableOpacity
           onPress={handleFindRide}

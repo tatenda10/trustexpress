@@ -341,7 +341,7 @@ export default function RideOperationDetailPage() {
                         />
                         <div>
                           <p className="text-sm font-semibold text-slate-900">
-                            {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex}`}
+                            {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex + 1}`}
                           </p>
                           <p className="text-sm text-slate-600">{label}</p>
                         </div>

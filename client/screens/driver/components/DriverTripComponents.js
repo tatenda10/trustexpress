@@ -12,6 +12,10 @@ export function DriverTripLoadingState({ color }) {
   );
 }
 
+function getStopDisplayNumber(index) {
+  return Number(index) + 1;
+}
+
 export function DriverTripEmptyState({ onBack }) {
   return (
     <View className="flex-1 items-center justify-center bg-white px-5">
@@ -406,7 +410,7 @@ export function DriverTripMapPanel({
                       />
                       <View className="flex-1">
                         <Text className="text-sm font-semibold text-gray-900">
-                          {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex}`}
+                          {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${getStopDisplayNumber(stopSequenceIndex)}`}
                         </Text>
                         <Text className="mt-0.5 text-sm text-gray-600">{label}</Text>
                       </View>

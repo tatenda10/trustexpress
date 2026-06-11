@@ -1206,7 +1206,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                                 />
                                 <View className="flex-1">
                                   <Text className="text-sm font-semibold text-gray-900">
-                                    {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex}`}
+                                    {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${stopSequenceIndex + 1}`}
                                   </Text>
                                   <Text className="mt-1 text-sm text-gray-600">{label}</Text>
                                 </View>

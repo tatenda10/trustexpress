@@ -323,17 +323,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     0,
     Number(rideStatus?.driversViewingCount ?? rideRequest?.driversViewingCount ?? 0)
   );
-  const originalEstimatedAmount = Number(
-    rideStatus?.originalEstimatedAmount ??
-    rideRequest?.originalEstimatedAmount ??
-    estimatedAmount ??
-    0
-  );
-  const discountAmount = Number(
-    rideStatus?.discountAmount ??
-    rideRequest?.discountAmount ??
-    0
-  );
   const finalEstimatedAmount = Number(
     rideStatus?.finalEstimatedAmount ??
     rideStatus?.estimatedAmount ??
@@ -342,12 +331,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     estimatedAmount ??
     0
   );
-  const appliedDiscountCode = String(
-    rideStatus?.discountCode ??
-    rideRequest?.discountCode ??
-    ''
-  ).trim();
-
   const remainingSeconds = useMemo(
     () => getEffectiveRemainingSeconds(
       rideExpiresAt,
@@ -524,11 +507,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
               <Text className="text-[11px] text-gray-400">
                 {distanceKm?.toFixed(1)} km · {estimatedMinutes} min
               </Text>
-              {discountAmount > 0 ? (
-                <Text className="text-[11px] font-semibold text-emerald-600">
-                  Saved {formatCurrency(discountAmount)}
-                </Text>
-              ) : null}
             </View>
 
             {/* Countdown badge */}
@@ -562,25 +540,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                   <Text className="text-base font-extrabold text-blue-700">{driversViewingCount}</Text>
                 </View>
               </View>
-              {discountAmount > 0 ? (
-                <View className="mt-3 rounded-2xl border border-emerald-100 bg-white/95 px-4 py-3">
-                  <Text className="text-[11px] font-bold uppercase tracking-[1.2px] text-emerald-700">
-                    Discount applied{appliedDiscountCode ? ` - ${appliedDiscountCode}` : ''}
-                  </Text>
-                  <View className="mt-2 flex-row items-center justify-between">
-                    <Text className="text-sm text-gray-600">Original fare</Text>
-                    <Text className="text-sm font-semibold text-gray-900">{formatCurrency(originalEstimatedAmount)}</Text>
-                  </View>
-                  <View className="mt-1 flex-row items-center justify-between">
-                    <Text className="text-sm text-gray-600">Discount</Text>
-                    <Text className="text-sm font-semibold text-emerald-700">-{formatCurrency(discountAmount)}</Text>
-                  </View>
-                  <View className="mt-1 flex-row items-center justify-between">
-                    <Text className="text-sm font-semibold text-gray-900">Passenger total</Text>
-                    <Text className="text-sm font-bold text-gray-900">{formatCurrency(finalEstimatedAmount)}</Text>
-                  </View>
-                </View>
-              ) : null}
             </>
           ) : null}
         </View>

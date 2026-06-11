@@ -196,7 +196,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     );
   }
 
-  const { originalFare, discountAmount, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
+  const { originalFare, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
 
   return (
     <View className="flex-1 bg-white">
@@ -228,20 +228,8 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
 
           <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
             <View className="flex-row items-center justify-between">
-              <Text className="text-sm text-gray-500">Original fare</Text>
-              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(originalFare)}</Text>
-            </View>
-            {discountAmount > 0 ? (
-              <View className="mt-2 flex-row items-center justify-between">
-                <Text className="text-sm text-gray-500">
-                  Discount{ride.discountCode ? ` (${ride.discountCode})` : ''}
-                </Text>
-                <Text className="text-sm font-semibold text-green-600">-{formatCurrency(discountAmount)}</Text>
-              </View>
-            ) : null}
-            <View className="mt-2 flex-row items-center justify-between">
-              <Text className="text-sm text-gray-500">Fare after discount</Text>
-              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(fareAfterDiscount)}</Text>
+              <Text className="text-sm text-gray-500">Ride fare</Text>
+              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(fareAfterDiscount || originalFare)}</Text>
             </View>
             <View className="mt-2 flex-row items-center justify-between">
               <Text className="text-sm text-gray-500">Tip</Text>

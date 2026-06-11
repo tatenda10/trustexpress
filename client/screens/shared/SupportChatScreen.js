@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import * as Notifications from 'expo-notifications';
 import { connectRealtime } from '../../realtime';
@@ -27,18 +27,20 @@ function formatTime(value) {
 }
 
 function MessageBubble({ item, isMine }) {
+  const bubbleBackgroundColor = isMine ? PRIMARY_BLUE : '#eff6ff';
+  const textColor = isMine ? '#fff' : '#1e3a8a';
   return (
     <View className={`mb-3 ${isMine ? 'items-end' : 'items-start'}`}>
       <View
         className={`max-w-[82%] rounded-2xl px-4 py-3 ${isMine ? 'rounded-br-md' : 'rounded-bl-md'}`}
-        style={{ backgroundColor: isMine ? PRIMARY_BLUE : '#f3f4f6' }}
+        style={{ backgroundColor: bubbleBackgroundColor }}
       >
-        <Text style={{ color: isMine ? '#fff' : '#111827', fontSize: 15, lineHeight: 21 }}>
+        <Text style={{ color: textColor, fontSize: 15, lineHeight: 21 }}>
           {item.message}
         </Text>
       </View>
       {!isMine && item?.isAiReply ? (
-        <Text className="mt-1 text-[11px] font-semibold text-indigo-500">Support assistant</Text>
+        <Text className="mt-1 text-[11px] font-semibold" style={{ color: PRIMARY_BLUE }}>Support assistant</Text>
       ) : null}
       <Text className="mt-1 text-[11px] text-gray-400">{formatTime(item.createdAt)}</Text>
     </View>
@@ -46,6 +48,7 @@ function MessageBubble({ item, isMine }) {
 }
 
 export default function SupportChatScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const { user } = useUser();
   const getTokenRef = useRef(getToken);
@@ -205,7 +208,7 @@ export default function SupportChatScreen({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-white">
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} className="flex-1 bg-white">
       <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
         <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
           <Ionicons name="arrow-back" size={20} color="#111827" />
@@ -243,7 +246,7 @@ export default function SupportChatScreen({ navigation, route }) {
             contentContainerStyle={{
               paddingHorizontal: 20,
               paddingTop: 20,
-              paddingBottom: 12,
+              paddingBottom: 20,
               flexGrow: sortedMessages.length ? 0 : 1,
             }}
             onRefresh={() => loadMessages({ showRefreshing: true })}
@@ -260,8 +263,11 @@ export default function SupportChatScreen({ navigation, route }) {
           />
 
           <KeyboardStickyView>
-            <View className="border-t border-gray-100 bg-white px-4 pt-3 pb-2">
-              <View className="flex-row items-end rounded-[26px] border border-gray-200 bg-[#f8fafc] px-3 py-2">
+            <View
+              className="border-t border-gray-100 bg-white px-4 pt-3"
+              style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+            >
+              <View className="flex-row items-end rounded-[26px] border border-blue-100 bg-[#eff6ff] px-3 py-2">
                 <TextInput
                   className="flex-1 px-2 py-3 text-[15px] text-gray-900"
                   placeholder="Type your message"

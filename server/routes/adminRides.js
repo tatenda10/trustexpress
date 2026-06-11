@@ -79,6 +79,18 @@ function buildRideFilters(req) {
   };
 }
 
+function normalizePanicAlertStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizePanicFollowUpStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizePanicCasePriority(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
   try {
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -432,6 +444,182 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
     });
   } catch (err) {
     console.error('GET /api/admin/rides/live-map', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/panic-alerts', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const status = normalizePanicAlertStatus(req.query.status || 'open');
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const clauses = [];
+    const params = [];
+
+    if (status && status !== 'all') {
+      clauses.push('pa.status = ?');
+      params.push(status);
+    }
+
+    if (search) {
+      const searchParam = `%${search}%`;
+      clauses.push(`(
+        LOWER(COALESCE(pa.actor_name, '')) LIKE ?
+        OR LOWER(COALESCE(pa.message, '')) LIKE ?
+        OR LOWER(COALESCE(pa.case_reference, '')) LIKE ?
+        OR LOWER(COALESCE(rr.public_id, '')) LIKE ?
+        OR LOWER(COALESCE(rr.passenger_name, '')) LIKE ?
+        OR LOWER(COALESCE(rr.driver_name, '')) LIKE ?
+        OR LOWER(COALESCE(rr.pickup_label, '')) LIKE ?
+        OR LOWER(COALESCE(rr.dropoff_label, '')) LIKE ?
+      )`);
+      params.push(searchParam, searchParam, searchParam, searchParam, searchParam, searchParam, searchParam, searchParam);
+    }
+
+    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+    const rows = await query(
+      `SELECT
+         pa.id,
+         pa.ride_request_id,
+         pa.ride_public_id,
+         pa.actor_role,
+         pa.actor_user_id,
+         pa.actor_name,
+         pa.ride_status,
+         pa.alert_stage,
+         pa.message,
+         pa.case_reference,
+         pa.case_priority,
+         pa.latitude,
+         pa.longitude,
+         pa.status,
+         pa.admin_note,
+         pa.assigned_admin_id,
+         pa.follow_up_status,
+         pa.follow_up_note,
+         pa.follow_up_due_at,
+         pa.last_followed_up_at,
+         pa.resolved_at,
+         pa.created_at,
+         pa.updated_at,
+         rr.public_id AS trip_public_id,
+         rr.passenger_name,
+         rr.driver_name,
+         rr.pickup_label,
+         rr.dropoff_label
+       FROM ride_panic_alerts pa
+       LEFT JOIN ride_requests rr
+         ON rr.id = pa.ride_request_id
+       ${whereSql}
+       ORDER BY
+         CASE pa.status
+           WHEN 'open' THEN 0
+           WHEN 'reviewed' THEN 1
+           ELSE 2
+         END,
+         CASE pa.case_priority
+           WHEN 'critical' THEN 0
+           WHEN 'high' THEN 1
+           ELSE 2
+         END,
+         pa.created_at DESC,
+         pa.id DESC`,
+      params,
+    );
+
+    return res.json({
+      panicAlerts: (rows || []).map((row) => ({
+        id: row.id,
+        rideRequestId: row.ride_request_id,
+        ridePublicId: row.ride_public_id || row.trip_public_id || null,
+        actorRole: row.actor_role,
+        actorUserId: row.actor_user_id,
+        actorName: row.actor_name || null,
+        rideStatus: row.ride_status,
+        alertStage: row.alert_stage || null,
+        message: row.message || null,
+        caseReference: row.case_reference || null,
+        casePriority: row.case_priority || 'critical',
+        latitude: row.latitude === null ? null : Number(row.latitude),
+        longitude: row.longitude === null ? null : Number(row.longitude),
+        status: row.status,
+        adminNote: row.admin_note || null,
+        assignedAdminId: row.assigned_admin_id === null ? null : Number(row.assigned_admin_id),
+        followUpStatus: row.follow_up_status || 'pending',
+        followUpNote: row.follow_up_note || null,
+        followUpDueAt: row.follow_up_due_at || null,
+        lastFollowedUpAt: row.last_followed_up_at || null,
+        resolvedAt: row.resolved_at || null,
+        createdAt: row.created_at || null,
+        updatedAt: row.updated_at || null,
+        rider: row.passenger_name || 'Passenger',
+        driver: row.driver_name || 'No driver assigned',
+        route: `${row.pickup_label || '-'} -> ${row.dropoff_label || '-'}`,
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/admin/rides/panic-alerts', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/panic-alerts/:alertId', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const alertId = Number(req.params.alertId);
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      return res.status(400).json({ error: 'Valid panic alert id is required' });
+    }
+
+    const status = normalizePanicAlertStatus(req.body?.status);
+    const followUpStatus = normalizePanicFollowUpStatus(req.body?.followUpStatus);
+    const adminNote = String(req.body?.adminNote || '').trim();
+    const followUpNote = String(req.body?.followUpNote || '').trim();
+    const casePriority = normalizePanicCasePriority(req.body?.casePriority);
+    const followUpDueAt = String(req.body?.followUpDueAt || '').trim() || null;
+
+    if (status && !['open', 'reviewed', 'resolved'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid panic alert status' });
+    }
+    if (followUpStatus && !['pending', 'contacted', 'monitoring', 'police_alerted', 'resolved'].includes(followUpStatus)) {
+      return res.status(400).json({ error: 'Invalid follow-up status' });
+    }
+    if (casePriority && !['high', 'critical'].includes(casePriority)) {
+      return res.status(400).json({ error: 'Invalid case priority' });
+    }
+
+    await query(
+      `UPDATE ride_panic_alerts
+       SET status = COALESCE(NULLIF(?, ''), status),
+           admin_note = ?,
+           case_priority = COALESCE(NULLIF(?, ''), case_priority),
+           assigned_admin_id = ?,
+           follow_up_status = COALESCE(NULLIF(?, ''), follow_up_status),
+           follow_up_note = ?,
+           follow_up_due_at = ?,
+           last_followed_up_at = CURRENT_TIMESTAMP,
+           resolved_at = CASE
+             WHEN COALESCE(NULLIF(?, ''), status) = 'resolved' OR COALESCE(NULLIF(?, ''), follow_up_status) = 'resolved'
+               THEN COALESCE(resolved_at, CURRENT_TIMESTAMP)
+             ELSE resolved_at
+           END
+       WHERE id = ?`,
+      [
+        status,
+        adminNote || null,
+        casePriority,
+        req.admin.id,
+        followUpStatus,
+        followUpNote || null,
+        followUpDueAt,
+        status,
+        followUpStatus,
+        alertId,
+      ]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/panic-alerts/:alertId', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });
