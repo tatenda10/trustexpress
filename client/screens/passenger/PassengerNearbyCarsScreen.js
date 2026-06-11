@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -59,6 +59,48 @@ function normalizeVehicleImageUrl(url) {
   }
 }
 
+function normalizeDriverProfileImageUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('/')) return getApiUrl(raw);
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return raw;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function DriverFacePreview({ driver, size = 34 }) {
+  const imageUri = normalizeDriverProfileImageUrl(driver?.profileImageUrl);
+  const initials = String(driver?.driverName || 'D')
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'D';
+
+  if (imageUri) {
+    return (
+      <Image
+        source={{ uri: imageUri }}
+        style={{ width: size, height: size, borderRadius: size / 2, marginRight: 8, borderWidth: 2, borderColor: '#fff' }}
+      />
+    );
+  }
+
+  return (
+    <View
+      className="items-center justify-center rounded-full bg-blue-100"
+      style={{ width: size, height: size, marginRight: 8, borderWidth: 2, borderColor: '#fff' }}
+    >
+      <Text className="text-[11px] font-bold text-blue-700">{initials}</Text>
+    </View>
+  );
+}
+
 async function fetchRouteCoordinates(token, origin, destination) {
   if (!token || !origin || !destination) return null;
   const data = await getDirectionsRoute(token, { origin, destination, cacheTtlSeconds: 1800 });
@@ -94,7 +136,8 @@ function formatCurrency(value) {
 
 // ── Driver card ──────────────────────────────────────────────────────────────
 function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDecline, isSubmitting }) {
-  const imgUri =
+  const faceUri = normalizeDriverProfileImageUrl(driver.profileImageUrl);
+  const carUri =
     normalizeVehicleImageUrl(driver.carImage) ||
     'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80';
 
@@ -118,11 +161,19 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
       <View className="px-4 py-3">
         <View className="flex-row items-center">
           {/* Car image */}
-          <Image
-            source={{ uri: imgUri }}
-            resizeMode="cover"
-            className="h-16 w-16 rounded-xl bg-gray-100"
-          />
+          {faceUri ? (
+            <Image
+              source={{ uri: faceUri }}
+              resizeMode="cover"
+              className="h-16 w-16 rounded-xl bg-gray-100"
+            />
+          ) : (
+            <Image
+              source={{ uri: carUri }}
+              resizeMode="cover"
+              className="h-16 w-16 rounded-xl bg-gray-100"
+            />
+          )}
 
           {/* Driver info */}
           <View className="ml-3 flex-1">
@@ -192,6 +243,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const getTokenRef = useRef(getToken);
   const navigatedToTrackingRef = useRef(false);
   const expiryNavigationHandledRef = useRef(false);
+  const lastStatusRefreshAtRef = useRef(0);
 
   const [isSubmittingDriverId, setIsSubmittingDriverId] = useState('');
   const [isCancellingRequest, setIsCancellingRequest] = useState(false);
@@ -222,6 +274,27 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  const refreshRideStatus = useCallback(async ({ silent = false } = {}) => {
+    if (!rideRequest?.id) return null;
+    const now = Date.now();
+    if (silent && now - lastStatusRefreshAtRef.current < 900) return null;
+    lastStatusRefreshAtRef.current = now;
+    try {
+      if (!silent) setLoadingStatus(true);
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      const data = await getPassengerRideRequestStatus(token, rideRequest.id);
+      setRideStatus(data?.rideRequest ? { ...data.rideRequest, remainingSecondsCapturedAt: Date.now() } : null);
+      setAcceptedDrivers(Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : []);
+      setAssignedDriver(data?.assignedDriver || null);
+      return data || null;
+    } catch {
+      return null;
+    } finally {
+      setLoadingStatus(false);
+    }
+  }, [rideRequest?.id]);
 
   // ── Tick every second ──
   useEffect(() => {
@@ -254,22 +327,13 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     if (!rideRequest?.id) return;
     let active = true;
     const loadStatus = async () => {
-      try {
-        const token = await getTokenRef.current();
-        if (!token) throw new Error('Not signed in');
-        const data = await getPassengerRideRequestStatus(token, rideRequest.id);
-        if (!active) return;
-        setRideStatus(data?.rideRequest ? { ...data.rideRequest, remainingSecondsCapturedAt: Date.now() } : null);
-        setAcceptedDrivers(Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : []);
-        setAssignedDriver(data?.assignedDriver || null);
-      } catch { /* ignore */ } finally {
-        if (active) setLoadingStatus(false);
-      }
+      if (!active) return;
+      await refreshRideStatus({ silent: true });
     };
-    loadStatus();
+    refreshRideStatus();
     const interval = setInterval(loadStatus, REQUEST_EXPIRY_POLL_MS);
     return () => { active = false; clearInterval(interval); };
-  }, [rideRequest?.id, realtimeSignal]);
+  }, [refreshRideStatus, realtimeSignal, rideRequest?.id]);
 
   // ── Realtime socket ──
   useEffect(() => {
@@ -293,14 +357,14 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             });
             setRideStatus((cur) => ({ ...(cur || {}), status: 'driver_found' }));
           }
-          setRealtimeSignal((c) => c + 1);
+          refreshRideStatus({ silent: true });
         };
         localSocket.on('ride_status:updated', handleRideUpdate);
         localSocket.__cleanup = () => localSocket.off('ride_status:updated', handleRideUpdate);
       } catch { /* polling fallback */ }
     })();
     return () => { active = false; localSocket?.__cleanup?.(); };
-  }, [rideRequest?.id]);
+  }, [refreshRideStatus, rideRequest?.id]);
 
   // ── Navigate to tracking when driver assigned ──
   useEffect(() => {
@@ -309,12 +373,19 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     navigation.replace('PassengerRideTracking', {
       pickupCoordinate, dropoffCoordinate, pickupLabel, dropoffLabel,
       intermediateStops,
-      estimatedAmount: Number(rideStatus?.estimatedAmount || estimatedAmount || 0),
+      estimatedAmount: Number(
+        rideStatus?.finalEstimatedAmount ??
+        rideStatus?.estimatedAmount ??
+        rideRequest?.finalEstimatedAmount ??
+        rideRequest?.estimatedAmount ??
+        estimatedAmount ??
+        0
+      ),
       selectedTier: assignedDriver.tier || selectedTier,
       driver: assignedDriver,
       rideRequestId: rideRequest.id,
     });
-  }, [assignedDriver, dropoffCoordinate, dropoffLabel, estimatedAmount, navigation, pickupCoordinate, pickupLabel, rideRequest?.id, rideStatus?.estimatedAmount, selectedTier]);
+  }, [assignedDriver, dropoffCoordinate, dropoffLabel, estimatedAmount, navigation, pickupCoordinate, pickupLabel, rideRequest?.finalEstimatedAmount, rideRequest?.estimatedAmount, rideRequest?.id, rideStatus?.finalEstimatedAmount, rideStatus?.estimatedAmount, selectedTier]);
 
   // ── Handle expiry / cancellation ──
   const rideExpiresAt = rideStatus?.expiresAt || rideRequest?.expiresAt || null;
@@ -323,6 +394,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     0,
     Number(rideStatus?.driversViewingCount ?? rideRequest?.driversViewingCount ?? 0)
   );
+  const visibleDriversPreview = Array.isArray(rideStatus?.visibleDriversPreview)
+    ? rideStatus.visibleDriversPreview
+    : Array.isArray(rideRequest?.visibleDriversPreview)
+      ? rideRequest.visibleDriversPreview
+      : [];
   const finalEstimatedAmount = Number(
     rideStatus?.finalEstimatedAmount ??
     rideStatus?.estimatedAmount ??
@@ -345,9 +421,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
   useEffect(() => {
     if (!shouldForceAcceptedRefresh) return;
-    const interval = setInterval(() => setRealtimeSignal((c) => c + 1), 600);
+    const interval = setInterval(() => {
+      refreshRideStatus({ silent: true });
+    }, 750);
     return () => clearInterval(interval);
-  }, [shouldForceAcceptedRefresh]);
+  }, [refreshRideStatus, shouldForceAcceptedRefresh]);
 
   useEffect(() => {
     if (assignedDriver || expiryNavigationHandledRef.current) return;
@@ -384,7 +462,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
         intermediateStops,
         pickupLabel,
         dropoffLabel,
-        estimatedAmount: Number(rideStatus?.estimatedAmount || estimatedAmount || 0),
+        estimatedAmount: finalEstimatedAmount,
         selectedTier: assigned?.tier || selectedTier,
         driver: assigned,
         rideRequestId: rideRequest.id,
@@ -521,11 +599,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           {isWaitingForDrivers ? (
             <>
               <View className="mt-3 flex-row items-center justify-between rounded-2xl border border-blue-100 bg-white/95 px-4 py-3">
-                <View className="flex-row items-center">
+                <View className="flex-1 flex-row items-center">
                   <View className="h-9 w-9 items-center justify-center rounded-full bg-blue-50">
                     <Ionicons name="people-outline" size={18} color={PRIMARY_BLUE} />
                   </View>
-                  <View className="ml-3">
+                  <View className="ml-3 flex-1">
                     <Text className="text-[11px] font-bold uppercase tracking-[1.2px] text-blue-600">
                       Request visibility
                     </Text>
@@ -534,6 +612,13 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                         ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} can currently see your request`
                         : 'Waiting for nearby drivers to see your request'}
                     </Text>
+                    {visibleDriversPreview.length ? (
+                      <View className="mt-2 flex-row items-center">
+                        {visibleDriversPreview.slice(0, 4).map((driver) => (
+                          <DriverFacePreview key={driver.id} driver={driver} />
+                        ))}
+                      </View>
+                    ) : null}
                   </View>
                 </View>
                 <View className="rounded-full bg-blue-50 px-3 py-2">
@@ -568,7 +653,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                   <DriverCard
                     key={driver.id}
                     driver={driver}
-                    estimatedAmount={estimatedAmount}
+                    estimatedAmount={finalEstimatedAmount}
                     remainingSeconds={remainingSeconds}
                     onAccept={handleAccept}
                     onDecline={() => handleDeclineDriver(driver)}

@@ -7,11 +7,11 @@ import {
   FlatList,
   TextInput,
   Platform,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import * as Notifications from 'expo-notifications';
 import { connectRealtime } from '../../realtime';
 import { getSupportMessages, sendSupportMessage } from '../../api';
@@ -219,12 +219,17 @@ export default function SupportChatScreen({ navigation, route }) {
         </View>
       </View>
 
-      {loading ? (
-        <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color={PRIMARY_BLUE} />
-        </View>
-      ) : (
-        <View className="flex-1">
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+      >
+        {loading ? (
+          <View className="flex-1 items-center justify-center">
+            <ActivityIndicator size="large" color={PRIMARY_BLUE} />
+          </View>
+        ) : (
+          <View className="flex-1">
           {!!error && (
             <View className="mx-5 mt-4 rounded-xl bg-red-50 px-4 py-3">
               <Text className="text-sm text-red-700">{error}</Text>
@@ -246,7 +251,7 @@ export default function SupportChatScreen({ navigation, route }) {
             contentContainerStyle={{
               paddingHorizontal: 20,
               paddingTop: 20,
-              paddingBottom: 20,
+              paddingBottom: Math.max(insets.bottom + 104, 132),
               flexGrow: sortedMessages.length ? 0 : 1,
             }}
             onRefresh={() => loadMessages({ showRefreshing: true })}
@@ -262,39 +267,39 @@ export default function SupportChatScreen({ navigation, route }) {
             }
           />
 
-          <KeyboardStickyView>
-            <View
-              className="border-t border-gray-100 bg-white px-4 pt-3"
-              style={{ paddingBottom: Math.max(insets.bottom, 10) }}
-            >
-              <View className="flex-row items-end rounded-[26px] border border-blue-100 bg-[#eff6ff] px-3 py-2">
-                <TextInput
-                  className="flex-1 px-2 py-3 text-[15px] text-gray-900"
-                  placeholder="Type your message"
-                  placeholderTextColor="#9ca3af"
-                  multiline
-                  value={draft}
-                  onChangeText={setDraft}
-                  maxLength={1000}
-                  textAlignVertical="top"
-                />
-                <TouchableOpacity
-                  onPress={handleSend}
-                  disabled={sending || !String(draft || '').trim()}
-                  className="mb-1 ml-2 h-11 w-11 items-center justify-center rounded-full"
-                  style={{ backgroundColor: sending || !String(draft || '').trim() ? '#93c5fd' : PRIMARY_BLUE }}
-                >
-                  {sending ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Ionicons name="send" size={18} color="#fff" />
-                  )}
-                </TouchableOpacity>
-              </View>
+          <View
+            className="border-t border-gray-100 bg-white px-4 pt-3"
+            style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+          >
+            <View className="flex-row items-end rounded-[26px] border border-blue-100 bg-[#eff6ff] px-3 py-2">
+              <TextInput
+                className="flex-1 px-2 py-3 text-[15px] text-gray-900"
+                placeholder="Type your message"
+                placeholderTextColor="#9ca3af"
+                multiline
+                value={draft}
+                onChangeText={setDraft}
+                maxLength={1000}
+                textAlignVertical="top"
+                style={{ minHeight: 48, maxHeight: 120 }}
+              />
+              <TouchableOpacity
+                onPress={handleSend}
+                disabled={sending || !String(draft || '').trim()}
+                className="mb-1 ml-2 h-11 w-11 items-center justify-center rounded-full"
+                style={{ backgroundColor: sending || !String(draft || '').trim() ? '#93c5fd' : PRIMARY_BLUE }}
+              >
+                {sending ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="send" size={18} color="#fff" />
+                )}
+              </TouchableOpacity>
             </View>
-          </KeyboardStickyView>
+          </View>
         </View>
       )}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

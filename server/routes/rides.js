@@ -180,6 +180,7 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
       tierName: row.vehicle_tier_name || 'Ride',
     },
     carImage: row.car_photo_url || null,
+    profileImageUrl: row.profile_image_url || null,
   };
 }
 
@@ -854,11 +855,18 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       });
     }
 
-    const nearbyDrivers = await loadEligibleDriversForRide({
+    const nearbyDriversBase = await loadEligibleDriversForRide({
       pickupPoint,
       estimatedAmount: authoritativeAmount,
       tierKey: tier.tier_key,
     });
+    const nearbyDrivers = await Promise.all(
+      nearbyDriversBase.map(async (driver) => ({
+        ...driver,
+        amount: finalEstimatedAmount,
+        profileImageUrl: await getUserProfileImageUrl(driver.id),
+      }))
+    );
 
     console.log('[rides.findDriver] request created', {
       rideRequestId,
@@ -945,6 +953,12 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         }),
         requestedTierKey: tier.tier_key,
         requestedTierName: tier.tier_name,
+        visibleDriversPreview: nearbyDrivers.slice(0, 4).map((driver) => ({
+          id: driver.id,
+          driverName: driver.driverName,
+          profileImageUrl: driver.profileImageUrl || null,
+          carImage: driver.carImage || null,
+        })),
       },
       nearbyDrivers,
     });
@@ -1004,7 +1018,8 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
          da.car_photo_url,
          da.current_lat,
          da.current_lng,
-         da.is_online
+         da.is_online,
+         rr.driver_user_id AS profile_image_user_id
        FROM ride_request_driver_responses rr
        LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
        WHERE rr.ride_request_id = ?
@@ -1013,8 +1028,11 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
       [ride.id]
     );
 
-    const acceptedDrivers = respondingDrivers.map((row) =>
-      mapAcceptedDriverOffer(row, pickupCoordinate, ride.estimated_amount)
+    const acceptedDrivers = await Promise.all(
+      respondingDrivers.map(async (row) => ({
+        ...mapAcceptedDriverOffer(row, pickupCoordinate, ride.final_estimated_amount || ride.estimated_amount),
+        profileImageUrl: await getUserProfileImageUrl(row.profile_image_user_id || row.driver_user_id),
+      }))
     );
 
     const [driverAvailability] = await query(
@@ -1087,6 +1105,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
         driversViewingCount: 0,
+        visibleDriversPreview: [],
       },
       acceptedDrivers,
       assignedDriver,
@@ -1159,7 +1178,8 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
          da.car_photo_url,
          da.current_lat,
          da.current_lng,
-         da.is_online
+         da.is_online,
+         rr.driver_user_id AS profile_image_user_id
        FROM ride_request_driver_responses rr
        LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
        WHERE rr.ride_request_id = ?
@@ -1167,8 +1187,11 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
        ORDER BY rr.responded_at ASC`,
       [rideRequestId]
     );
-    const acceptedDrivers = respondingDrivers.map((row) =>
-      mapAcceptedDriverOffer(row, pickupCoordinate, ride.estimated_amount)
+    const acceptedDrivers = await Promise.all(
+      respondingDrivers.map(async (row) => ({
+        ...mapAcceptedDriverOffer(row, pickupCoordinate, ride.final_estimated_amount || ride.estimated_amount),
+        profileImageUrl: await getUserProfileImageUrl(row.profile_image_user_id || row.driver_user_id),
+      }))
     );
 
     const assignedDriver = ride.driver_user_id
@@ -1188,6 +1211,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
     let driversViewingCount = 0;
+    let visibleDriversPreview = [];
     if (ride.status === 'requested' || ride.status === 'driver_found') {
       const [countRow] = await query(
         `SELECT COUNT(*) AS total
@@ -1207,6 +1231,38 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         [rideRequestId]
       );
       driversViewingCount = Number(countRow?.total || 0);
+
+      const visibleDriverRows = await query(
+        `SELECT
+           rr.driver_user_id,
+           da.driver_name,
+           da.car_photo_url
+         FROM ride_request_driver_responses rr
+         INNER JOIN driver_availability da
+           ON da.driver_user_id = rr.driver_user_id
+          AND da.is_online = 1
+          AND da.current_lat IS NOT NULL
+          AND da.current_lng IS NOT NULL
+          AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+         LEFT JOIN ride_requests active_ride
+           ON active_ride.driver_user_id = rr.driver_user_id
+          AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+         WHERE rr.ride_request_id = ?
+           AND rr.status IN ('pending', 'accepted', 'selected')
+           AND active_ride.id IS NULL
+         ORDER BY rr.responded_at ASC, rr.id ASC
+         LIMIT 4`,
+        [rideRequestId]
+      );
+
+      visibleDriversPreview = await Promise.all(
+        (visibleDriverRows || []).map(async (row) => ({
+          id: row.driver_user_id,
+          driverName: row.driver_name || 'Driver',
+          profileImageUrl: await getUserProfileImageUrl(row.driver_user_id),
+          carImage: row.car_photo_url || null,
+        }))
+      );
     }
 
     return res.json({
@@ -1243,6 +1299,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
         driversViewingCount,
+        visibleDriversPreview,
       },
       acceptedDrivers,
       assignedDriver: assignedDriver ? {
@@ -1333,7 +1390,11 @@ router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) =>
          requested_tier_name,
          pickup_label,
          dropoff_label,
+         intermediate_stops_json,
          estimated_amount,
+         original_estimated_amount,
+         discount_amount,
+         final_estimated_amount,
          tip_amount,
          status,
          requested_at,
@@ -1376,7 +1437,11 @@ router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res
          requested_tier_name,
          pickup_label,
          dropoff_label,
+         intermediate_stops_json,
          estimated_amount,
+         original_estimated_amount,
+         discount_amount,
+         final_estimated_amount,
          tip_amount,
          status,
          requested_at,

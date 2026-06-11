@@ -17,6 +17,7 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions, validatePassengerDiscount } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
+import { connectRealtime } from '../../realtime';
 
 function getTierIconName(tier) {
   const tierName = String(tier?.tierName || '').toLowerCase();
@@ -187,6 +188,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const lastDiscountTierKeyRef = useRef('');
+  const realtimeResumeInFlightRef = useRef(false);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -318,6 +320,56 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     });
     return true;
   };
+
+  useEffect(() => {
+    let active = true;
+    let localSocket = null;
+
+    const refreshCurrentRideFromRealtime = async () => {
+      if (realtimeResumeInFlightRef.current) return;
+      realtimeResumeInFlightRef.current = true;
+      try {
+        const token = await getTokenRef.current?.();
+        if (!token || !active) return;
+        const currentRideData = await getPassengerCurrentRide(token);
+        if (navigateToActiveRide(currentRideData)) return;
+      } catch {
+        // Ignore and leave normal screen state in place.
+      } finally {
+        realtimeResumeInFlightRef.current = false;
+      }
+    };
+
+    const initRealtime = async () => {
+      try {
+        const token = await getTokenRef.current?.();
+        if (!token || !active) return;
+        localSocket = connectRealtime(token);
+        if (!localSocket) return;
+
+        const handleRideUpdate = (payload = {}) => {
+          const rideStatus = String(payload?.status || '').toLowerCase();
+          if (!['driver_found', 'driver_assigned', 'driver_arrived', 'in_progress'].includes(rideStatus)) return;
+          refreshCurrentRideFromRealtime();
+        };
+
+        localSocket.on('ride_status:updated', handleRideUpdate);
+        localSocket.__passengerChooseCleanup = () => {
+          localSocket?.off('ride_status:updated', handleRideUpdate);
+        };
+      } catch {
+        // Manual and polling flows remain as fallback.
+      }
+    };
+
+    initRealtime();
+
+    return () => {
+      active = false;
+      realtimeResumeInFlightRef.current = false;
+      localSocket?.__passengerChooseCleanup?.();
+    };
+  }, []);
 
   const handleFindRide = async () => {
     if (!pickupCoordinate || !dropoffCoordinate || !selectedTier) {

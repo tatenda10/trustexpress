@@ -36,6 +36,7 @@ import {
   getPlaceAutocomplete,
   getPlaceDetails,
 } from '../../api';
+import { connectRealtime } from '../../realtime';
 
 const HARARE_FALLBACK = BULAWAYO_DEFAULT_REGION;
 
@@ -272,6 +273,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const getTokenRef = useRef(getToken);
   const placeSearchCacheRef = useRef(new Map());
   const placeDetailsCacheRef = useRef(new Map());
+  const realtimeResumeInFlightRef = useRef(false);
 
   const [mapRegion, setMapRegion] = useState(HARARE_FALLBACK);
   const [currentLocationCoordinate, setCurrentLocationCoordinate] = useState(null);
@@ -368,6 +370,101 @@ export default function PassengerHomeScreen({ navigation, route }) {
       active = false;
       clearInterval(interval);
       resumeCheckInFlightRef.current = false;
+    };
+  }, [isFocused, navigation]);
+
+  useEffect(() => {
+    if (!isFocused) return undefined;
+    let active = true;
+    let localSocket = null;
+
+    const refreshCurrentRideFromRealtime = async () => {
+      if (realtimeResumeInFlightRef.current) return;
+      realtimeResumeInFlightRef.current = true;
+      try {
+        const token = await getTokenRef.current?.();
+        if (!token || !active) return;
+        const data = await getPassengerCurrentRide(token);
+        const ride = data?.rideRequest;
+        if (!active || !ride?.id) return;
+
+        const rideStatus = String(ride?.status || '').toLowerCase();
+        if (rideStatus === 'requested' || rideStatus === 'driver_found') {
+          navigation.replace('PassengerNearbyCars', {
+            pickupCoordinate: ride.pickupCoordinate,
+            dropoffCoordinate: ride.dropoffCoordinate,
+            intermediateStops: ride.intermediateStops || [],
+            pickupLabel: ride.pickupLabel,
+            dropoffLabel: ride.dropoffLabel,
+            distanceKm: Number(ride?.estimatedDistanceKm || 0),
+            estimatedMinutes: Number(ride?.estimatedMinutes || 0),
+            estimatedAmount: Number(ride?.estimatedAmount || 0),
+            selectedTier: ride.requestedTierKey || ride.requestedTierName
+              ? {
+                  tierKey: ride.requestedTierKey || '',
+                  tierName: ride.requestedTierName || 'Ride',
+                }
+              : null,
+            rideRequest: {
+              ...ride,
+              remainingSecondsCapturedAt: Date.now(),
+            },
+            nearbyDrivers: Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : [],
+          });
+          return;
+        }
+
+        navigation.replace('PassengerRideTracking', {
+          pickupCoordinate: ride.pickupCoordinate,
+          dropoffCoordinate: ride.dropoffCoordinate,
+          intermediateStops: ride.intermediateStops || [],
+          pickupLabel: ride.pickupLabel,
+          dropoffLabel: ride.dropoffLabel,
+          estimatedAmount: Number(ride.estimatedAmount || 0),
+          selectedTier: ride.requestedTierKey || ride.requestedTierName
+            ? {
+                tierKey: ride.requestedTierKey || '',
+                tierName: ride.requestedTierName || 'Ride',
+              }
+            : null,
+          driver: data?.assignedDriver || null,
+          rideRequestId: ride.id,
+        });
+      } catch {
+        // Polling remains as fallback.
+      } finally {
+        realtimeResumeInFlightRef.current = false;
+      }
+    };
+
+    const initRealtime = async () => {
+      try {
+        const token = await getTokenRef.current?.();
+        if (!token || !active) return;
+        localSocket = connectRealtime(token);
+        if (!localSocket) return;
+
+        const handleRideUpdate = (payload = {}) => {
+          const rideStatus = String(payload?.status || '').toLowerCase();
+          if (!['driver_found', 'driver_assigned', 'driver_arrived', 'in_progress'].includes(rideStatus)) return;
+          refreshCurrentRideFromRealtime();
+        };
+
+        localSocket.on('ride_status:updated', handleRideUpdate);
+        localSocket.__passengerHomeCleanup = () => {
+          localSocket?.off('ride_status:updated', handleRideUpdate);
+        };
+      } catch {
+        // Polling remains as fallback.
+      }
+    };
+
+    initRealtime();
+
+    return () => {
+      active = false;
+      realtimeResumeInFlightRef.current = false;
+      localSocket?.__passengerHomeCleanup?.();
     };
   }, [isFocused, navigation]);
 

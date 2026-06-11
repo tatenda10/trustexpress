@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { buildRideStopsPayload } from './ride-stops.js';
 
 const BLUE = '#114D7E';
 const LIGHT_GREEN = '#E8F3D7';
@@ -100,6 +101,16 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   const driverName = shortName(ride.driver_name, 'Driver');
   const passengerInitials = passengerName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'P';
   const driverInitials = driverName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'D';
+  const intermediateStops = buildRideStopsPayload(ride).intermediateStops;
+  const routeRows = [
+    { label: 'PICKUP', value: ride.pickup_label, color: BLUE },
+    ...intermediateStops.map((stop, index) => ({
+      label: `STOP ${index + 1}`,
+      value: stop?.label || `Stop ${index + 1}`,
+      color: '#F97316',
+    })),
+    { label: 'DROP-OFF', value: ride.dropoff_label, color: BLUE },
+  ];
 
   doc.rect(0, 0, 320, 740).fill('#FFFFFF');
   doc.roundedRect(8, 8, 304, 724, 3).strokeColor('#CFCFCF').lineWidth(0.7).stroke();
@@ -122,64 +133,70 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   });
 
   sectionTitle(doc, 'ROUTE', 154);
-  drawRoutePoint(doc, 168, 'PICKUP', ride.pickup_label, false);
-  drawRoutePoint(doc, 212, 'DROP-OFF', ride.dropoff_label, true);
-  divider(doc, 264);
+  let routeY = 168;
+  routeRows.forEach((row, index) => {
+    drawRoutePoint(doc, routeY, row.label, row.value, index === routeRows.length - 1);
+    routeY += 44;
+  });
+  divider(doc, routeY + 8);
 
-  sectionTitle(doc, 'PEOPLE', 282);
-  drawPersonCard(doc, 24, 300, 'PASSENGER', passengerInitials, passengerName);
-  drawPersonCard(doc, 164, 300, 'DRIVER', driverInitials, driverName);
-  divider(doc, 382);
+  const peopleSectionY = routeY + 26;
+  sectionTitle(doc, 'PEOPLE', peopleSectionY);
+  drawPersonCard(doc, 24, peopleSectionY + 18, 'PASSENGER', passengerInitials, passengerName);
+  drawPersonCard(doc, 164, peopleSectionY + 18, 'DRIVER', driverInitials, driverName);
+  divider(doc, peopleSectionY + 100);
 
-  sectionTitle(doc, 'TRIP DETAILS', 400);
-  labelValue(doc, 'Trip ID', ride.public_id || ride.id, 24, 416, { width: 106 });
-  labelValue(doc, 'Requested', shortDateTime(ride.requested_at), 24, 446, { width: 106 });
-  labelValue(doc, 'Completed', shortDateTime(ride.completed_at), 24, 476, { width: 106 });
-  labelValue(doc, 'Service tier', ride.requested_tier_name || 'Trust Express', 24, 506, { width: 106 });
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text(`TR-${String(ride.id).padStart(5, '0')}`, 190, 426, {
+  const tripDetailsY = peopleSectionY + 118;
+  sectionTitle(doc, 'TRIP DETAILS', tripDetailsY);
+  labelValue(doc, 'Trip ID', ride.public_id || ride.id, 24, tripDetailsY + 16, { width: 106 });
+  labelValue(doc, 'Requested', shortDateTime(ride.requested_at), 24, tripDetailsY + 46, { width: 106 });
+  labelValue(doc, 'Completed', shortDateTime(ride.completed_at), 24, tripDetailsY + 76, { width: 106 });
+  labelValue(doc, 'Service tier', ride.requested_tier_name || 'Trust Express', 24, tripDetailsY + 106, { width: 106 });
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text(`TR-${String(ride.id).padStart(5, '0')}`, 190, tripDetailsY + 26, {
     width: 86,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.requested_at), 170, 456, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.requested_at), 170, tripDetailsY + 56, {
     width: 106,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.completed_at), 170, 486, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.completed_at), 170, tripDetailsY + 86, {
     width: 106,
     align: 'right',
   });
-  doc.roundedRect(178, 515, 98, 18, 9).fill('#EAF2FF');
-  doc.circle(190, 524, 4).fill('#5A9CF2');
-  doc.fillColor(BLUE).font('Helvetica-Bold').fontSize(7).text(ride.requested_tier_name || 'Trust Express', 198, 520, {
+  doc.roundedRect(178, tripDetailsY + 115, 98, 18, 9).fill('#EAF2FF');
+  doc.circle(190, tripDetailsY + 124, 4).fill('#5A9CF2');
+  doc.fillColor(BLUE).font('Helvetica-Bold').fontSize(7).text(ride.requested_tier_name || 'Trust Express', 198, tripDetailsY + 120, {
     width: 70,
   });
-  divider(doc, 552);
+  divider(doc, tripDetailsY + 152);
 
-  sectionTitle(doc, 'FARE BREAKDOWN', 570);
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Original fare', 24, 594);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(originalFareAmount), 230, 594, {
+  const fareY = tripDetailsY + 170;
+  sectionTitle(doc, 'FARE BREAKDOWN', fareY);
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Original fare', 24, fareY + 24);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(originalFareAmount), 230, fareY + 24, {
     width: 46,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Discount', 24, 618);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(`-${currency(discountAmount)}`, 230, 618, {
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Discount', 24, fareY + 48);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(`-${currency(discountAmount)}`, 230, fareY + 48, {
     width: 46,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Fare', 24, 642);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(fareAmount), 230, 642, {
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Fare', 24, fareY + 72);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(fareAmount), 230, fareY + 72, {
     width: 46,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Tip', 24, 666);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(tipAmount), 230, 666, {
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Tip', 24, fareY + 96);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(tipAmount), 230, fareY + 96, {
     width: 46,
     align: 'right',
   });
-  divider(doc, 690);
+  divider(doc, fareY + 120);
 
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, 706);
-  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, 701, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, fareY + 136);
+  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, fareY + 131, {
     width: 66,
     align: 'right',
   });
