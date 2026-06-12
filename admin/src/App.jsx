@@ -8,6 +8,7 @@ import DriverVerificationDetailPage from './pages/DriverVerificationDetailPage'
 import RideOperationsPage from './pages/RideOperationsPage'
 import RideOperationDetailPage from './pages/RideOperationDetailPage'
 import PanicAlertsPage from './pages/PanicAlertsPage'
+import LostItemsPage from './pages/LostItemsPage'
 import LiveMapPage from './pages/LiveMapRealtimePage'
 import DriversPage from './pages/DriversPage'
 import DriverDetailsPage from './pages/DriverDetailsPage'
@@ -88,6 +89,10 @@ function AppRoutes() {
         <Route
           path="panic-alerts"
           element={<PermissionRoute permission="ride_ops.read"><PanicAlertsPage /></PermissionRoute>}
+        />
+        <Route
+          path="lost-items"
+          element={<PermissionRoute permission="ride_ops.read"><LostItemsPage /></PermissionRoute>}
         />
         <Route
           path="live-map"

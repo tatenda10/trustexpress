@@ -39,6 +39,7 @@ const navSections = [
     label: 'Safety & System',
     items: [
       { id: 'panic-alerts', label: 'Panic Alerts', icon: LockIcon, to: '/dashboard/panic-alerts', permission: 'ride_ops.read' },
+      { id: 'lost-items', label: 'Lost Items', icon: LockIcon, to: '/dashboard/lost-items', permission: 'ride_ops.read' },
       { id: 'admin-users', label: 'Admin Users', icon: UsersIcon, to: '/dashboard/admin-users', permission: 'admin.users.read' },
     ],
   },

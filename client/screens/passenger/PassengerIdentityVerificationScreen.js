@@ -277,95 +277,107 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
           <ActivityIndicator size="large" color={PRIMARY_BLUE} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
-          <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
-            <Text className="text-[22px] font-bold text-gray-950">Verify your identity</Text>
-            <Text className="mt-2 text-sm leading-6 text-gray-500">
-              Take a live passenger selfie and upload the front and back of your national ID so support can review and confirm your passenger identity.
-            </Text>
-
-            <View className="mt-4 self-start rounded-full px-4 py-2" style={{ backgroundColor: statusTone.bg }}>
-              <Text className="text-xs font-semibold uppercase tracking-[1.2px]" style={{ color: statusTone.text }}>
-                {statusTone.label}
+        <View className="flex-1">
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 176, flexGrow: 1 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
+              <Text className="text-[22px] font-bold text-gray-950">Verify your identity</Text>
+              <Text className="mt-2 text-sm leading-6 text-gray-500">
+                Take a live passenger selfie and upload the front and back of your national ID so support can review and confirm your passenger identity.
               </Text>
+
+              <View className="mt-4 self-start rounded-full px-4 py-2" style={{ backgroundColor: statusTone.bg }}>
+                <Text className="text-xs font-semibold uppercase tracking-[1.2px]" style={{ color: statusTone.text }}>
+                  {statusTone.label}
+                </Text>
+              </View>
+
+              {profile?.rejectionReason ? (
+                <View className="mt-4 rounded-[20px] bg-red-50 px-4 py-4">
+                  <Text className="text-sm font-semibold text-red-700">Why it was rejected</Text>
+                  <Text className="mt-1 text-sm leading-5 text-red-600">{profile.rejectionReason}</Text>
+                </View>
+              ) : null}
             </View>
 
-            {profile?.rejectionReason ? (
-              <View className="mt-4 rounded-[20px] bg-red-50 px-4 py-4">
-                <Text className="text-sm font-semibold text-red-700">Why it was rejected</Text>
-                <Text className="mt-1 text-sm leading-5 text-red-600">{profile.rejectionReason}</Text>
+            <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
+              <Text className="mb-3 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Documents</Text>
+
+              {[SELFIE_DOC, ...DOCS].map((doc) => {
+                const localUri = uris[doc.key];
+                const existingUrl =
+                  doc.key === 'selfie'
+                    ? profile?.selfieUrl
+                    : doc.key === 'nationalIdFront'
+                      ? profile?.nationalIdFrontUrl
+                      : profile?.nationalIdBackUrl;
+                return (
+                  <View key={doc.key} className="mb-4 flex-row items-center rounded-[24px] border border-gray-200 bg-white px-4 py-4">
+                    {localUri ? (
+                      <Image source={{ uri: localUri }} className="mr-4 h-14 w-14 rounded-[16px]" />
+                    ) : (
+                      <View className="mr-4 h-14 w-14 items-center justify-center rounded-[16px] bg-[#f3f4f6]">
+                        <Ionicons name={doc.icon} size={24} color="#374151" />
+                      </View>
+                    )}
+                    <View className="flex-1">
+                      <Text className="text-[15px] font-medium text-gray-900">{doc.label}</Text>
+                      <Text className="mt-1 text-sm text-gray-500">
+                        {localUri ? 'Image selected' : existingUrl ? 'Already uploaded' : doc.subtitle}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => pickImage(doc.key)}
+                      disabled={isBlocked || submitting}
+                      className="h-10 w-10 items-center justify-center rounded-full"
+                      style={{ backgroundColor: isBlocked ? '#d1d5db' : PRIMARY_BLUE }}
+                    >
+                      <Ionicons name={existingUrl || localUri ? 'refresh' : 'add'} size={20} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+
+              <View className="rounded-[20px] bg-[#f8fafc] px-4 py-4">
+                <Text className="text-sm font-medium text-gray-900">Photo tips</Text>
+                <Text className="mt-1 text-sm text-gray-500">Take the selfie live from the camera, keep your full face visible, and make sure your national ID text is readable with no glare.</Text>
               </View>
+            </View>
+
+            {isBlocked ? (
+              <Text className="text-center text-sm text-red-600">Resubmission is currently blocked. Please contact support.</Text>
+            ) : null}
+          </ScrollView>
+
+          <View
+            className="border-t border-gray-200 bg-[#f6f7f3] px-5 pt-4"
+            style={{ paddingBottom: Math.max(insets.bottom, 16) }}
+          >
+            <TouchableOpacity
+              onPress={handleSubmit}
+              disabled={submitting || isBlocked}
+              className="mb-3 h-12 items-center justify-center rounded-[20px]"
+              style={{ backgroundColor: isBlocked ? '#d1d5db' : PRIMARY_BLUE, opacity: submitting ? 0.75 : 1 }}
+            >
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Submit for review</Text>}
+            </TouchableOpacity>
+
+            {!mustCompleteIdentity ? (
+              <TouchableOpacity
+                onPress={() => navigation.goBack()}
+                disabled={submitting}
+                className="h-12 items-center justify-center rounded-[20px] bg-white"
+                style={{ borderWidth: 1, borderColor: '#d1d5db', opacity: submitting ? 0.75 : 1 }}
+              >
+                <Text className="text-base font-semibold text-gray-700">Skip for now</Text>
+              </TouchableOpacity>
             ) : null}
           </View>
-
-          <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
-            <Text className="mb-3 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Documents</Text>
-
-            {[SELFIE_DOC, ...DOCS].map((doc) => {
-              const localUri = uris[doc.key];
-              const existingUrl =
-                doc.key === 'selfie'
-                  ? profile?.selfieUrl
-                  : doc.key === 'nationalIdFront'
-                    ? profile?.nationalIdFrontUrl
-                    : profile?.nationalIdBackUrl;
-              return (
-                <View key={doc.key} className="mb-4 flex-row items-center rounded-[24px] border border-gray-200 bg-white px-4 py-4">
-                  {localUri ? (
-                    <Image source={{ uri: localUri }} className="mr-4 h-14 w-14 rounded-[16px]" />
-                  ) : (
-                    <View className="mr-4 h-14 w-14 items-center justify-center rounded-[16px] bg-[#f3f4f6]">
-                      <Ionicons name={doc.icon} size={24} color="#374151" />
-                    </View>
-                  )}
-                  <View className="flex-1">
-                    <Text className="text-[15px] font-medium text-gray-900">{doc.label}</Text>
-                    <Text className="mt-1 text-sm text-gray-500">
-                      {localUri ? 'Image selected' : existingUrl ? 'Already uploaded' : doc.subtitle}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => pickImage(doc.key)}
-                    disabled={isBlocked || submitting}
-                    className="h-10 w-10 items-center justify-center rounded-full"
-                    style={{ backgroundColor: isBlocked ? '#d1d5db' : PRIMARY_BLUE }}
-                  >
-                    <Ionicons name={existingUrl || localUri ? 'refresh' : 'add'} size={20} color="#fff" />
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-
-          <View className="rounded-[20px] bg-[#f8fafc] px-4 py-4">
-            <Text className="text-sm font-medium text-gray-900">Photo tips</Text>
-            <Text className="mt-1 text-sm text-gray-500">Take the selfie live from the camera, keep your full face visible, and make sure your national ID text is readable with no glare.</Text>
-          </View>
-          </View>
-
-          <TouchableOpacity
-            onPress={handleSubmit}
-            disabled={submitting || isBlocked}
-            className="mb-3 h-12 items-center justify-center rounded-[20px]"
-            style={{ backgroundColor: isBlocked ? '#d1d5db' : PRIMARY_BLUE, opacity: submitting ? 0.75 : 1 }}
-          >
-            {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Submit for review</Text>}
-          </TouchableOpacity>
-
-          {!mustCompleteIdentity ? (
-            <TouchableOpacity
-              onPress={() => navigation.goBack()}
-              disabled={submitting}
-              className="mb-3 h-12 items-center justify-center rounded-[20px] bg-white"
-              style={{ borderWidth: 1, borderColor: '#d1d5db', opacity: submitting ? 0.75 : 1 }}
-            >
-              <Text className="text-base font-semibold text-gray-700">Skip for now</Text>
-            </TouchableOpacity>
-          ) : null}
-
-          {isBlocked ? (
-            <Text className="text-center text-sm text-red-600">Resubmission is currently blocked. Please contact support.</Text>
-          ) : null}
-        </ScrollView>
+        </View>
       )}
     </View>
   );

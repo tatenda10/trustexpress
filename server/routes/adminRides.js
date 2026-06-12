@@ -563,6 +563,175 @@ router.get('/panic-alerts', requireAdminAuth, requirePermission('ride_ops.read')
   }
 });
 
+router.get('/lost-items', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const status = String(req.query?.status || 'open').trim().toLowerCase();
+    const search = String(req.query?.search || '').trim();
+
+    const where = [];
+    const params = [];
+
+    if (status && status !== 'all') {
+      where.push('li.status = ?');
+      params.push(status);
+    }
+
+    if (search) {
+      where.push(`(
+        li.case_reference LIKE ?
+        OR li.item_description LIKE ?
+        OR li.contact_phone LIKE ?
+        OR rr.public_id LIKE ?
+        OR rr.passenger_name LIKE ?
+        OR rr.driver_name LIKE ?
+        OR rr.pickup_label LIKE ?
+        OR rr.dropoff_label LIKE ?
+      )`);
+      const likeValue = `%${search}%`;
+      params.push(likeValue, likeValue, likeValue, likeValue, likeValue, likeValue, likeValue, likeValue);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const rows = await query(
+      `SELECT
+         li.id,
+         li.ride_request_id,
+         li.ride_public_id,
+         li.passenger_user_id,
+         li.driver_user_id,
+         li.item_description,
+         li.contact_phone,
+         li.case_reference,
+         li.case_priority,
+         li.status,
+         li.admin_note,
+         li.assigned_admin_id,
+         li.follow_up_status,
+         li.follow_up_note,
+         li.follow_up_due_at,
+         li.last_followed_up_at,
+         li.resolved_at,
+         li.created_at,
+         li.updated_at,
+         rr.public_id AS trip_public_id,
+         rr.passenger_name,
+         rr.driver_name,
+         rr.pickup_label,
+         rr.dropoff_label
+       FROM ride_lost_items li
+       LEFT JOIN ride_requests rr
+         ON rr.id = li.ride_request_id
+       ${whereSql}
+       ORDER BY
+         CASE li.status
+           WHEN 'open' THEN 0
+           WHEN 'contacted' THEN 1
+           WHEN 'returned' THEN 2
+           ELSE 3
+         END,
+         CASE li.case_priority
+           WHEN 'high' THEN 0
+           ELSE 1
+         END,
+         li.created_at DESC,
+         li.id DESC`,
+      params,
+    );
+
+    return res.json({
+      lostItems: (rows || []).map((row) => ({
+        id: row.id,
+        rideRequestId: row.ride_request_id,
+        ridePublicId: row.ride_public_id || row.trip_public_id || null,
+        passengerUserId: row.passenger_user_id || null,
+        driverUserId: row.driver_user_id || null,
+        itemDescription: row.item_description,
+        contactPhone: row.contact_phone || null,
+        caseReference: row.case_reference || null,
+        casePriority: row.case_priority || 'normal',
+        status: row.status,
+        adminNote: row.admin_note || null,
+        assignedAdminId: row.assigned_admin_id === null ? null : Number(row.assigned_admin_id),
+        followUpStatus: row.follow_up_status || 'pending',
+        followUpNote: row.follow_up_note || null,
+        followUpDueAt: row.follow_up_due_at || null,
+        lastFollowedUpAt: row.last_followed_up_at || null,
+        resolvedAt: row.resolved_at || null,
+        createdAt: row.created_at || null,
+        updatedAt: row.updated_at || null,
+        rider: row.passenger_name || 'Passenger',
+        driver: row.driver_name || 'No driver assigned',
+        route: `${row.pickup_label || '-'} -> ${row.dropoff_label || '-'}`,
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/admin/rides/lost-items', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/lost-items/:lostItemId', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const lostItemId = Number(req.params.lostItemId);
+    if (!Number.isFinite(lostItemId) || lostItemId <= 0) {
+      return res.status(400).json({ error: 'Valid lost item id is required' });
+    }
+
+    const status = String(req.body?.status || '').trim().toLowerCase();
+    const followUpStatus = String(req.body?.followUpStatus || '').trim().toLowerCase();
+    const adminNote = String(req.body?.adminNote || '').trim();
+    const followUpNote = String(req.body?.followUpNote || '').trim();
+    const casePriority = String(req.body?.casePriority || '').trim().toLowerCase();
+    const followUpDueAt = String(req.body?.followUpDueAt || '').trim() || null;
+
+    if (status && !['open', 'contacted', 'returned', 'closed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid lost item status' });
+    }
+    if (followUpStatus && !['pending', 'contacted', 'resolved', 'closed'].includes(followUpStatus)) {
+      return res.status(400).json({ error: 'Invalid follow-up status' });
+    }
+    if (casePriority && !['normal', 'high'].includes(casePriority)) {
+      return res.status(400).json({ error: 'Invalid case priority' });
+    }
+
+    await query(
+      `UPDATE ride_lost_items
+       SET status = COALESCE(NULLIF(?, ''), status),
+           admin_note = ?,
+           case_priority = COALESCE(NULLIF(?, ''), case_priority),
+           assigned_admin_id = ?,
+           follow_up_status = COALESCE(NULLIF(?, ''), follow_up_status),
+           follow_up_note = ?,
+           follow_up_due_at = ?,
+           last_followed_up_at = CURRENT_TIMESTAMP,
+           resolved_at = CASE
+             WHEN COALESCE(NULLIF(?, ''), status) IN ('returned', 'closed') OR COALESCE(NULLIF(?, ''), follow_up_status) IN ('resolved', 'closed')
+               THEN COALESCE(resolved_at, CURRENT_TIMESTAMP)
+             ELSE resolved_at
+           END
+       WHERE id = ?`,
+      [
+        status,
+        adminNote || null,
+        casePriority,
+        req.admin.id,
+        followUpStatus,
+        followUpNote || null,
+        followUpDueAt,
+        status,
+        followUpStatus,
+        lostItemId,
+      ]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/lost-items/:lostItemId', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.patch('/panic-alerts/:alertId', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
   try {
     const alertId = Number(req.params.alertId);

@@ -111,10 +111,14 @@ export default function RideOperationsPage() {
           <p className="text-[11px] uppercase tracking-wide text-rose-500">Open Panic Alerts</p>
           <p className="mt-1 text-xl font-semibold text-rose-700">{summary.panicAlerts}</p>
         </button>
-        <article className="border border-amber-200 bg-white p-3">
+        <button
+          type="button"
+          onClick={() => navigate('/dashboard/lost-items')}
+          className="border border-amber-200 bg-white p-3 text-left transition hover:bg-amber-50"
+        >
           <p className="text-[11px] uppercase tracking-wide text-amber-600">Open Lost Items</p>
           <p className="mt-1 text-xl font-semibold text-amber-700">{summary.lostItems}</p>
-        </article>
+        </button>
       </div>
 
       {error ? <div className="border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">{error}</div> : null}
