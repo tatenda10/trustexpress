@@ -14,6 +14,7 @@ import {
   emitRideStatusToPassenger,
   emitTripRatingToPassenger,
 } from '../lib/realtime.js';
+import { markRideRequestsViewedByDriver } from '../lib/ride-driver-responses.js';
 
 const router = Router();
 const OPEN_REQUEST_TTL_MINUTES = 3;
@@ -682,6 +683,11 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       }
     }));
 
+    await markRideRequestsViewedByDriver(
+      rows.map((row) => row.id),
+      req.userId
+    );
+
     return res.json({ requests });
   } catch (err) {
     console.error('GET /api/drivers/ride-requests', err);
@@ -817,11 +823,13 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
          ride_request_id,
          driver_user_id,
          status,
-         responded_at
-       ) VALUES (?, ?, 'accepted', CURRENT_TIMESTAMP)
+         responded_at,
+         viewed_at
+       ) VALUES (?, ?, 'accepted', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON DUPLICATE KEY UPDATE
          status = 'accepted',
-         responded_at = CURRENT_TIMESTAMP`,
+         responded_at = CURRENT_TIMESTAMP,
+         viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP)`,
       [rideRequestId, req.userId]
     );
     const [acceptedSnapshot] = await query(

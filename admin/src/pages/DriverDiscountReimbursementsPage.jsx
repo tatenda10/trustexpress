@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import axios from 'axios'
 import { toast } from 'react-toastify'
 import { useAuth } from '../authcontext/AuthContext'
@@ -147,7 +148,25 @@ export default function DriverDiscountReimbursementsPage() {
                 </tr>
               ) : reimbursements.map((batch) => (
                 <tr key={batch.id} className="border-b border-slate-200">
-                  <td className="px-3 py-3 font-medium text-slate-800">{batch.driverUserId}</td>
+                  <td className="px-3 py-3">
+                    <div className="font-medium text-slate-800">
+                      {batch.driverName || 'Unknown driver'}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {batch.driverVehicleLabel || 'Vehicle not set'}
+                      {batch.driverNumberPlate ? ` • ${batch.driverNumberPlate}` : ''}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {batch.driverPhoneNumber || 'No phone on file'}
+                    </div>
+                    <Link
+                      to={`/dashboard/drivers/${batch.driverUserId}`}
+                      className="mt-1 inline-block text-[11px] font-semibold text-indigo-600 hover:text-indigo-500"
+                    >
+                      View driver profile
+                    </Link>
+                    <div className="mt-1 font-mono text-[10px] text-slate-400">{batch.driverUserId}</div>
+                  </td>
                   <td className="px-3 py-3 text-slate-700">
                     {formatDate(batch.periodStart)} - {formatDate(batch.periodEnd)}
                   </td>

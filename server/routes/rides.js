@@ -18,6 +18,7 @@ import {
   emitRideStatusToPassenger,
   emitTripRatingToDriver,
 } from '../lib/realtime.js';
+import { loadDriversViewingSnapshot } from '../lib/ride-driver-responses.js';
 
 const router = Router();
 
@@ -959,6 +960,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
           profileImageUrl: driver.profileImageUrl || null,
           carImage: driver.carImage || null,
         })),
+        driversViewingCount: 0,
       },
       nearbyDrivers,
     });
@@ -1070,6 +1072,10 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
+    const viewingSnapshot = (ride.status === 'requested' || ride.status === 'driver_found')
+      ? await loadDriversViewingSnapshot(ride.id)
+      : { driversViewingCount: 0, visibleDriversPreview: [] };
+
     return res.json({
       rideRequest: {
         ...buildRideDiscountPayload(ride),
@@ -1104,8 +1110,8 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         passengerDriverReview: ride.passenger_driver_review || '',
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
-        driversViewingCount: 0,
-        visibleDriversPreview: [],
+        driversViewingCount: viewingSnapshot.driversViewingCount,
+        visibleDriversPreview: viewingSnapshot.visibleDriversPreview,
       },
       acceptedDrivers,
       assignedDriver,
@@ -1210,60 +1216,9 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
-    let driversViewingCount = 0;
-    let visibleDriversPreview = [];
-    if (ride.status === 'requested' || ride.status === 'driver_found') {
-      const [countRow] = await query(
-        `SELECT COUNT(*) AS total
-         FROM ride_request_driver_responses rr
-         INNER JOIN driver_availability da
-           ON da.driver_user_id = rr.driver_user_id
-          AND da.is_online = 1
-          AND da.current_lat IS NOT NULL
-          AND da.current_lng IS NOT NULL
-          AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
-         LEFT JOIN ride_requests active_ride
-           ON active_ride.driver_user_id = rr.driver_user_id
-          AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-         WHERE rr.ride_request_id = ?
-           AND rr.status IN ('pending', 'accepted', 'selected')
-           AND active_ride.id IS NULL`,
-        [rideRequestId]
-      );
-      driversViewingCount = Number(countRow?.total || 0);
-
-      const visibleDriverRows = await query(
-        `SELECT
-           rr.driver_user_id,
-           da.driver_name,
-           da.car_photo_url
-         FROM ride_request_driver_responses rr
-         INNER JOIN driver_availability da
-           ON da.driver_user_id = rr.driver_user_id
-          AND da.is_online = 1
-          AND da.current_lat IS NOT NULL
-          AND da.current_lng IS NOT NULL
-          AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
-         LEFT JOIN ride_requests active_ride
-           ON active_ride.driver_user_id = rr.driver_user_id
-          AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-         WHERE rr.ride_request_id = ?
-           AND rr.status IN ('pending', 'accepted', 'selected')
-           AND active_ride.id IS NULL
-         ORDER BY rr.responded_at ASC, rr.id ASC
-         LIMIT 4`,
-        [rideRequestId]
-      );
-
-      visibleDriversPreview = await Promise.all(
-        (visibleDriverRows || []).map(async (row) => ({
-          id: row.driver_user_id,
-          driverName: row.driver_name || 'Driver',
-          profileImageUrl: await getUserProfileImageUrl(row.driver_user_id),
-          carImage: row.car_photo_url || null,
-        }))
-      );
-    }
+    const viewingSnapshot = (ride.status === 'requested' || ride.status === 'driver_found')
+      ? await loadDriversViewingSnapshot(rideRequestId)
+      : { driversViewingCount: 0, visibleDriversPreview: [] };
 
     return res.json({
       rideRequest: {
@@ -1298,8 +1253,8 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         passengerDriverReview: ride.passenger_driver_review || '',
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
         passengerDriverRatedAt: ride.passenger_driver_rated_at || null,
-        driversViewingCount,
-        visibleDriversPreview,
+        driversViewingCount: viewingSnapshot.driversViewingCount,
+        visibleDriversPreview: viewingSnapshot.visibleDriversPreview,
       },
       acceptedDrivers,
       assignedDriver: assignedDriver ? {

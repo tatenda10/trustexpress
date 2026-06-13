@@ -15,7 +15,7 @@ export default function SupportAgentPage() {
   const [settings, setSettings] = useState({
     enabled: false,
     provider: 'claude',
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     systemPrompt: '',
     trainingContent: '',
     hasApiKey: false,

@@ -609,8 +609,8 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                     </Text>
                     <Text className="mt-0.5 text-sm font-semibold text-gray-900">
                       {driversViewingCount > 0
-                        ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} can currently see your request`
-                        : 'Waiting for nearby drivers to see your request'}
+                        ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} viewed your request`
+                        : 'Waiting for nearby drivers to view your request'}
                     </Text>
                     {visibleDriversPreview.length ? (
                       <View className="mt-2 flex-row items-center">

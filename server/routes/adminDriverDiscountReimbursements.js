@@ -24,8 +24,17 @@ router.get('/', requireAdminAuth, requirePermission('payouts.read'), async (req,
          dr.paid_at,
          dr.created_at,
          dr.updated_at,
+         MAX(da.driver_name) AS driver_name,
+         MAX(da.phone_number) AS driver_phone_number,
+         MAX(da.number_plate) AS driver_number_plate,
+         MAX(dv.make) AS driver_vehicle_make,
+         MAX(dv.model) AS driver_vehicle_model,
          COALESCE(SUM(red.discount_amount), 0) AS linked_discount_amount
        FROM driver_discount_reimbursements dr
+       LEFT JOIN driver_availability da
+         ON da.driver_user_id = dr.driver_user_id
+       LEFT JOIN driver_vehicle dv
+         ON dv.driver_user_id = dr.driver_user_id
        LEFT JOIN driver_discount_reimbursement_items dri
          ON dri.reimbursement_id = dr.id
        LEFT JOIN discount_code_redemptions red
@@ -51,6 +60,10 @@ router.get('/', requireAdminAuth, requirePermission('payouts.read'), async (req,
       reimbursements: rows.map((row) => ({
         id: row.id,
         driverUserId: row.driver_user_id,
+        driverName: row.driver_name || null,
+        driverPhoneNumber: row.driver_phone_number || null,
+        driverNumberPlate: row.driver_number_plate || null,
+        driverVehicleLabel: [row.driver_vehicle_make, row.driver_vehicle_model].filter(Boolean).join(' ').trim() || null,
         periodStart: row.period_start,
         periodEnd: row.period_end,
         totalDiscountReimbursement: Number(row.total_discount_reimbursement || 0),

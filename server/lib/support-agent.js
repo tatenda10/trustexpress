@@ -5,7 +5,18 @@ import {
 } from './support-agent-training.js';
 
 const DEFAULT_PROVIDER = 'claude';
-const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
+const LEGACY_SUPPORT_AGENT_MODELS = new Set([
+  'claude-sonnet-4-20250514',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-5-sonnet-latest',
+]);
+
+function resolveActiveModel(storedModel) {
+  const stored = normalizeText(storedModel, '');
+  const upgradedStored = LEGACY_SUPPORT_AGENT_MODELS.has(stored) ? DEFAULT_MODEL : stored;
+  return normalizeText(process.env.ANTHROPIC_MODEL, normalizeText(upgradedStored, DEFAULT_MODEL));
+}
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
 function coerceBoolean(value) {
@@ -32,7 +43,7 @@ export function shapeSupportAgentSettings(row) {
   return {
     enabled: coerceBoolean(row?.enabled),
     provider: normalizeText(row?.provider, DEFAULT_PROVIDER),
-    model: normalizeText(row?.model, DEFAULT_MODEL),
+    model: resolveActiveModel(row?.model),
     systemPrompt: normalizeText(row?.system_prompt, DEFAULT_SUPPORT_AGENT_SYSTEM_PROMPT),
     trainingContent,
     updatedByAdminId: row?.updated_by_admin_id || null,
@@ -203,15 +214,17 @@ export async function generateSupportAgentReply({
     'Write the best support reply. Use the knowledge base only. If the answer needs a human follow-up, say so clearly and ask for the trip details needed.',
   ].join('\n');
 
+  const model = resolveActiveModel(settings.model);
+
   const text = await callClaude({
     systemPrompt: settings.systemPrompt,
-    model: settings.model,
+    model,
     userPrompt,
   });
 
   return {
     provider: settings.provider,
-    model: settings.model,
+    model,
     message: text,
   };
 }
