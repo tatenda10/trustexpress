@@ -8,12 +8,16 @@ import {
   Alert,
   Image,
   BackHandler,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { getMe, submitPassengerIdentity, uploadFile } from '../../api';
+import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 const SELFIE_DOC = {
@@ -45,6 +49,7 @@ function chooseImageSource({ title = 'Upload document', message = 'Use your came
 
 export default function PassengerIdentityVerificationScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const isFocused = useIsFocused();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -68,6 +73,11 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  const handleGoBack = () => {
+    if (requiredInOnboarding) return;
+    navigateToPassengerAccountMain(navigation);
+  };
+
   useEffect(() => {
     if (!isFocused) return undefined;
     let active = true;
@@ -85,7 +95,7 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
         if (!active) return;
         setIdentityLoadFailed(true);
         Alert.alert('Verification unavailable', error?.message || 'Could not load your ID verification details.', [
-          { text: 'OK', onPress: () => navigation.goBack() },
+          { text: 'OK', onPress: handleGoBack },
         ]);
       } finally {
         if (active) setLoading(false);
@@ -122,14 +132,23 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
   }, [identityLoadFailed, isApproved, isPending, loading, navigation, nextRouteName, requiredInOnboarding]);
 
   useEffect(() => {
-    if (!mustCompleteIdentity) return undefined;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
-    return () => sub.remove();
-  }, [mustCompleteIdentity]);
+    if (requiredInOnboarding && mustCompleteIdentity) {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+      return () => sub.remove();
+    }
+    if (!requiredInOnboarding) {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        handleGoBack();
+        return true;
+      });
+      return () => sub.remove();
+    }
+    return undefined;
+  }, [mustCompleteIdentity, requiredInOnboarding, navigation]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ gestureEnabled: !mustCompleteIdentity });
-  }, [navigation, mustCompleteIdentity]);
+    navigation.setOptions({ gestureEnabled: requiredInOnboarding ? !mustCompleteIdentity : true });
+  }, [navigation, mustCompleteIdentity, requiredInOnboarding]);
 
   // Status lives under Account → Identity documents; no blocking "under review" screen here.
   useLayoutEffect(() => {
@@ -142,7 +161,7 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
       }
       return;
     }
-    navigation.goBack();
+    navigateToPassengerAccountMain(navigation);
   }, [isPending, isBlocked, navigation, nextRouteName, requiredInOnboarding]);
 
   const pickImage = async (key) => {
@@ -227,7 +246,7 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
         if (requiredInOnboarding) {
           navigation.replace(nextRouteName);
         } else {
-          navigation.goBack();
+          navigateToPassengerAccountMain(navigation);
         }
       };
       Alert.alert(
@@ -255,21 +274,49 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
         ? { bg: '#fee2e2', text: '#991b1b', label: 'Needs resubmission' }
         : { bg: '#e5e7eb', text: '#374151', label: 'Not submitted' };
 
+  const canSkip = !mustCompleteIdentity;
+  const scrollBottomPadding = requiredInOnboarding
+    ? Math.max(insets.bottom + 32, 32)
+    : Math.max(tabBarHeight + insets.bottom + 24, insets.bottom + 32);
+
   return (
     <View className="flex-1 bg-[#f6f7f3]">
       <View
         className="flex-row items-center justify-between bg-[#f6f7f3]"
-        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
+        style={{
+          paddingTop: insets.top + 6,
+          paddingHorizontal: 20,
+          paddingBottom: 14,
+          zIndex: 20,
+          elevation: 20,
+        }}
       >
-        {mustCompleteIdentity ? (
-          <View className="h-10 w-10" />
-        ) : (
-          <TouchableOpacity onPress={() => navigation.goBack()} className="h-10 w-10 items-center justify-center rounded-full bg-white">
-            <Ionicons name="chevron-back" size={22} color="#111827" />
+        {!requiredInOnboarding ? (
+          <TouchableOpacity
+            onPress={handleGoBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            className="h-10 min-w-[40px] flex-row items-center justify-center rounded-full border border-gray-200 bg-white px-2"
+            accessibilityRole="button"
+            accessibilityLabel="Back to account"
+          >
+            <Ionicons name="arrow-back" size={22} color="#111827" />
           </TouchableOpacity>
+        ) : (
+          <View className="h-10 w-10" />
         )}
-        <Text className="text-[18px] font-bold text-gray-900">ID verification</Text>
-        <View className="h-10 w-10" />
+        <Text className="flex-1 text-center text-[18px] font-bold text-gray-900">ID verification</Text>
+        {canSkip ? (
+          <TouchableOpacity
+            onPress={handleGoBack}
+            disabled={submitting}
+            className="h-10 items-center justify-center rounded-full border border-gray-200 bg-white px-3"
+            style={{ opacity: submitting ? 0.75 : 1 }}
+          >
+            <Text className="text-sm font-semibold text-gray-700">Skip</Text>
+          </TouchableOpacity>
+        ) : (
+          <View className="h-10 w-10" />
+        )}
       </View>
 
       {loading ? (
@@ -277,12 +324,17 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
           <ActivityIndicator size="large" color={PRIMARY_BLUE} />
         </View>
       ) : (
-        <View className="flex-1">
+        <KeyboardAvoidingView
+          className="flex-1"
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 12 : 0}
+        >
           <ScrollView
             style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 176, flexGrow: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: scrollBottomPadding }}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
           >
             <View className="mb-5 rounded-[28px] bg-white px-5 py-5">
               <Text className="text-[22px] font-bold text-gray-950">Verify your identity</Text>
@@ -341,43 +393,22 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
                   </View>
                 );
               })}
-
-              <View className="rounded-[20px] bg-[#f8fafc] px-4 py-4">
-                <Text className="text-sm font-medium text-gray-900">Photo tips</Text>
-                <Text className="mt-1 text-sm text-gray-500">Take the selfie live from the camera, keep your full face visible, and make sure your national ID text is readable with no glare.</Text>
-              </View>
             </View>
 
             {isBlocked ? (
               <Text className="text-center text-sm text-red-600">Resubmission is currently blocked. Please contact support.</Text>
             ) : null}
-          </ScrollView>
 
-          <View
-            className="border-t border-gray-200 bg-[#f6f7f3] px-5 pt-4"
-            style={{ paddingBottom: Math.max(insets.bottom, 16) }}
-          >
             <TouchableOpacity
               onPress={handleSubmit}
               disabled={submitting || isBlocked}
-              className="mb-3 h-12 items-center justify-center rounded-[20px]"
+              className="mt-2 h-12 items-center justify-center rounded-[20px]"
               style={{ backgroundColor: isBlocked ? '#d1d5db' : PRIMARY_BLUE, opacity: submitting ? 0.75 : 1 }}
             >
               {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Submit for review</Text>}
             </TouchableOpacity>
-
-            {!mustCompleteIdentity ? (
-              <TouchableOpacity
-                onPress={() => navigation.goBack()}
-                disabled={submitting}
-                className="h-12 items-center justify-center rounded-[20px] bg-white"
-                style={{ borderWidth: 1, borderColor: '#d1d5db', opacity: submitting ? 0.75 : 1 }}
-              >
-                <Text className="text-base font-semibold text-gray-700">Skip for now</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </View>
   );

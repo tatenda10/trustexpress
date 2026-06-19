@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getPassengerRideDetails, reportLostItem, submitPassengerDriverRating, tipDriver } from '../../api';
 import { downloadReceiptPdf, printReceiptPdf } from '../../services/receiptPrint';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { PASSENGER_DRIVER_RATING_TAGS } from '../../constants/rideRatingTags';
+import { PASSENGER_DRIVER_RATING_TAGS, isPassengerDriverReviewTagSelected, togglePassengerDriverReviewTag } from '../../constants/rideRatingTags';
 
 function formatCurrency(value) {
   return `$${Number(value || 0).toFixed(2)}`;
@@ -46,7 +46,6 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const [submittingTip, setSubmittingTip] = useState(false);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
-  const [ratingTags, setRatingTags] = useState([]);
   const [lostItemDescription, setLostItemDescription] = useState('');
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
   const tipOptions = [1, 2, 5, 10];
@@ -63,7 +62,6 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         setRide(data?.ride || null);
         setRating(Number(data?.ride?.passengerDriverRating || 0));
         setReview(String(data?.ride?.passengerDriverReview || ''));
-        setRatingTags(Array.isArray(data?.ride?.passengerDriverFeedbackTags) ? data.ride.passengerDriverFeedbackTags : []);
       } catch (error) {
         if (!active) return;
         Alert.alert('Ride details unavailable', error?.message || 'Could not load this ride.');
@@ -87,12 +85,15 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
       setSubmitting(true);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await submitPassengerDriverRating(token, rideRequestId, { rating, review, feedbackTags: ratingTags });
+      const reviewText = String(review || '').trim();
+      await submitPassengerDriverRating(token, rideRequestId, {
+        rating,
+        review: reviewText,
+      });
       setRide((current) => current ? {
         ...current,
         passengerDriverRating: rating,
-        passengerDriverReview: review,
-        passengerDriverFeedbackTags: ratingTags,
+        passengerDriverReview: reviewText,
         canRateDriver: false,
       } : current);
       Alert.alert('Thanks', 'Your rating was saved.');
@@ -292,25 +293,15 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
               ))}
             </View>
 
-            <TextInput
-              value={review}
-              onChangeText={setReview}
-              placeholder="Write optional feedback"
-              multiline
-              textAlignVertical="top"
-              className="mt-5 min-h-[120px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
-            />
-            <View className="mt-4 flex-row flex-wrap">
+            <View className="mt-5 flex-row flex-wrap">
               {PASSENGER_DRIVER_RATING_TAGS.map((tag) => {
-                const selected = ratingTags.includes(tag);
+                const selected = isPassengerDriverReviewTagSelected(review, tag);
                 return (
                   <TouchableOpacity
                     key={tag}
-                    onPress={() => setRatingTags((current) => (
-                      current.includes(tag)
-                        ? current.filter((item) => item !== tag)
-                        : [...current, tag]
-                    ))}
+                    onPress={() => {
+                      setReview((current) => togglePassengerDriverReviewTag(current, tag));
+                    }}
                     className={`mb-2 mr-2 rounded-full border px-4 py-2 ${selected ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}
                   >
                     <Text className={`text-sm font-semibold ${selected ? 'text-blue-700' : 'text-gray-600'}`}>{tag}</Text>
@@ -318,6 +309,15 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
                 );
               })}
             </View>
+
+            <TextInput
+              value={review}
+              onChangeText={setReview}
+              placeholder="Write optional feedback"
+              multiline
+              textAlignVertical="top"
+              className="mt-4 min-h-[120px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
+            />
 
             <TouchableOpacity
               onPress={handleSubmitRating}
@@ -338,15 +338,6 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
             </View>
             {ride.passengerDriverReview ? (
               <Text className="mt-4 text-base text-gray-700">{ride.passengerDriverReview}</Text>
-            ) : null}
-            {Array.isArray(ride.passengerDriverFeedbackTags) && ride.passengerDriverFeedbackTags.length ? (
-              <View className="mt-4 flex-row flex-wrap">
-                {ride.passengerDriverFeedbackTags.map((tag) => (
-                  <View key={tag} className="mb-2 mr-2 rounded-full bg-blue-50 px-4 py-2">
-                    <Text className="text-sm font-semibold text-blue-700">{tag}</Text>
-                  </View>
-                ))}
-              </View>
             ) : null}
           </View>
         ) : null}

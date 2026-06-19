@@ -10,7 +10,7 @@ import * as Location from 'expo-location';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
-import { PASSENGER_DRIVER_RATING_TAGS } from '../../constants/rideRatingTags';
+import { PASSENGER_DRIVER_RATING_TAGS, isPassengerDriverReviewTagSelected, togglePassengerDriverReviewTag } from '../../constants/rideRatingTags';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { showLocalRideNotification } from '../../notifications';
@@ -200,7 +200,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [driver, setDriver] = useState(initialDriver || null);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
-  const [ratingTags, setRatingTags] = useState([]);
   const [submittingRating, setSubmittingRating] = useState(false);
   const [submittingTip, setSubmittingTip] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
@@ -269,13 +268,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         setDriver(data?.assignedDriver || initialDriver || null);
         const savedRating = Number(data?.rideRequest?.passengerDriverRating || 0);
         const savedReview = String(data?.rideRequest?.passengerDriverReview || '');
-        const savedRatingTags = Array.isArray(data?.rideRequest?.passengerDriverFeedbackTags)
-          ? data.rideRequest.passengerDriverFeedbackTags
-          : [];
         if (!ratingDraftTouchedRef.current || savedRating > 0) {
           setRating(savedRating);
           setReview(savedReview);
-          setRatingTags(savedRatingTags);
           if (savedRating > 0) {
             ratingDraftTouchedRef.current = false;
           }
@@ -675,7 +670,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
   const handleSkipRating = () => {
     ratingDraftTouchedRef.current = false;
-    setRatingTags([]);
     setShowDriverRatingModal(false);
     exitToPassengerHome();
   };
@@ -705,13 +699,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       setSubmittingRating(true);
       const token = await getToken();
       if (!token || !rideRequestId) throw new Error('Not signed in');
-      await submitPassengerDriverRating(token, rideRequestId, { rating, review, feedbackTags: ratingTags });
+      const reviewText = String(review || '').trim();
+      await submitPassengerDriverRating(token, rideRequestId, {
+        rating,
+        review: reviewText,
+      });
       ratingDraftTouchedRef.current = false;
       setRideStatus((current) => current ? {
         ...current,
         passengerDriverRating: rating,
-        passengerDriverReview: review,
-        passengerDriverFeedbackTags: ratingTags,
+        passengerDriverReview: reviewText,
       } : current);
       if (canPromptForTip) {
         Alert.alert('Rating saved', 'You can add an optional tip now, or tap Finish to close this trip.');
@@ -1392,124 +1389,128 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       </Modal>
 
       <Modal visible={showDriverRatingModal} transparent animationType="fade" onRequestClose={handleSkipRating}>
-        <View className="flex-1 items-center justify-center bg-black/20 px-5">
-          <View className="w-full max-w-[380px] rounded-[28px] bg-white px-5 pt-5 pb-5">
-            <Text className="text-2xl font-bold text-gray-900">
-              {shouldPromptForRating ? 'Rate & Tip Driver' : 'Trip Complete'}
-            </Text>
-            <Text className="mt-2 text-sm text-gray-500">
-              {shouldPromptForRating
-                ? 'Tell us how this trip went and add an optional tip before you finish.'
-                : 'Add an optional thank-you tip for your driver, or finish your trip now.'}
-            </Text>
-            {shouldPromptForRating ? (
-              <>
-                <View className="mt-5 flex-row items-center justify-between">
-                  {[1, 2, 3, 4, 5].map((value) => (
-                    <Pressable
-                      key={value}
-                      onPress={() => {
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1">
+          <View className="flex-1 items-center justify-center bg-black/20 px-5">
+            <View className="w-full max-w-[380px] max-h-[88%] rounded-[28px] bg-white px-5 pt-5 pb-5">
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 8 }}
+              >
+                <Text className="text-2xl font-bold text-gray-900">
+                  {shouldPromptForRating ? 'Rate & Tip Driver' : 'Trip Complete'}
+                </Text>
+                <Text className="mt-2 text-sm text-gray-500">
+                  {shouldPromptForRating
+                    ? 'Tell us how this trip went and add an optional tip before you finish.'
+                    : 'Add an optional thank-you tip for your driver, or finish your trip now.'}
+                </Text>
+                {shouldPromptForRating ? (
+                  <>
+                    <View className="mt-5 flex-row items-center justify-between">
+                      {[1, 2, 3, 4, 5].map((value) => (
+                        <Pressable
+                          key={value}
+                          onPress={() => {
+                            ratingDraftTouchedRef.current = true;
+                            setRating(value);
+                          }}
+                          hitSlop={8}
+                          className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
+                          style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
+                        >
+                          <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color={value <= rating ? '#f59e0b' : '#9ca3af'} />
+                        </Pressable>
+                      ))}
+                    </View>
+                    <View className="mt-4 flex-row flex-wrap">
+                      {PASSENGER_DRIVER_RATING_TAGS.map((tag) => {
+                        const selected = isPassengerDriverReviewTagSelected(review, tag);
+                        return (
+                          <TouchableOpacity
+                            key={tag}
+                            onPress={() => {
+                              ratingDraftTouchedRef.current = true;
+                              setReview((current) => togglePassengerDriverReviewTag(current, tag));
+                            }}
+                            className={`mb-2 mr-2 rounded-full border px-4 py-2 ${selected ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}
+                          >
+                            <Text className={`text-sm font-semibold ${selected ? 'text-blue-700' : 'text-gray-600'}`}>{tag}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    <TextInput
+                      value={review}
+                      onChangeText={(value) => {
                         ratingDraftTouchedRef.current = true;
-                        setRating(value);
+                        setReview(value);
                       }}
-                      hitSlop={8}
-                      className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
-                      style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
-                    >
-                      <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color={value <= rating ? '#f59e0b' : '#9ca3af'} />
-                    </Pressable>
-                  ))}
-                </View>
-                <TextInput
-                  value={review}
-                  onChangeText={(value) => {
-                    ratingDraftTouchedRef.current = true;
-                    setReview(value);
-                  }}
-                  placeholder="Write optional feedback"
-                  multiline
-                  textAlignVertical="top"
-                  className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
-                />
-                <View className="mt-4 flex-row flex-wrap">
-                  {PASSENGER_DRIVER_RATING_TAGS.map((tag) => {
-                    const selected = ratingTags.includes(tag);
-                    return (
-                      <TouchableOpacity
-                        key={tag}
-                        onPress={() => {
-                          ratingDraftTouchedRef.current = true;
-                          setRatingTags((current) => (
-                            current.includes(tag)
-                              ? current.filter((item) => item !== tag)
-                              : [...current, tag]
-                          ));
-                        }}
-                        className={`mb-2 mr-2 rounded-full border px-4 py-2 ${selected ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}
-                      >
-                        <Text className={`text-sm font-semibold ${selected ? 'text-blue-700' : 'text-gray-600'}`}>{tag}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </>
-            ) : null}
-            {(rideStatus?.canTipDriver || tipAmount > 0) ? (
-              <View className={`${shouldPromptForRating ? 'mt-4' : 'mt-5'} rounded-[22px] bg-[#f8fafc] px-4 py-4`}>
-                <Text className="text-sm font-semibold uppercase tracking-[1px] text-gray-500">Optional tip</Text>
-                {tipAmount > 0 ? (
-                  <Text className="mt-2 text-base font-bold text-green-600">
-                    Tip added: ${tipAmount.toFixed(2)}
-                  </Text>
-                ) : (
-                  <View className="mt-3 flex-row flex-wrap">
-                    {tipOptions.map((amount) => (
-                      <TouchableOpacity
-                        key={amount}
-                        onPress={() => handleSendTip(amount)}
-                        disabled={submittingTip}
-                        className="mb-2 mr-2 rounded-full border border-blue-200 bg-white px-4 py-2"
-                      >
-                        <Text className="text-sm font-bold" style={{ color: PRIMARY_BLUE }}>
-                          ${amount.toFixed(2)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-                {submittingTip ? (
-                  <View className="mt-2 flex-row items-center">
-                    <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-                    <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
+                      placeholder="Write optional feedback"
+                      multiline
+                      textAlignVertical="top"
+                      className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
+                    />
+                  </>
+                ) : null}
+                {(rideStatus?.canTipDriver || tipAmount > 0) ? (
+                  <View className={`${shouldPromptForRating ? 'mt-4' : 'mt-5'} rounded-[22px] bg-[#f8fafc] px-4 py-4`}>
+                    <Text className="text-sm font-semibold uppercase tracking-[1px] text-gray-500">Optional tip</Text>
+                    {tipAmount > 0 ? (
+                      <Text className="mt-2 text-base font-bold text-green-600">
+                        Tip added: ${tipAmount.toFixed(2)}
+                      </Text>
+                    ) : (
+                      <View className="mt-3 flex-row flex-wrap">
+                        {tipOptions.map((amount) => (
+                          <TouchableOpacity
+                            key={amount}
+                            onPress={() => handleSendTip(amount)}
+                            disabled={submittingTip}
+                            className="mb-2 mr-2 rounded-full border border-blue-200 bg-white px-4 py-2"
+                          >
+                            <Text className="text-sm font-bold" style={{ color: PRIMARY_BLUE }}>
+                              ${amount.toFixed(2)}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                    {submittingTip ? (
+                      <View className="mt-2 flex-row items-center">
+                        <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+                        <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
+                      </View>
+                    ) : null}
                   </View>
                 ) : null}
-              </View>
-            ) : null}
-            <TouchableOpacity
-              onPress={shouldPromptForRating ? handleSubmitRating : handleSkipRating}
-              disabled={submittingRating}
-              className="mt-4 h-14 rounded-[22px] items-center justify-center"
-              style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingRating ? 0.7 : 1 }}
-            >
-              {submittingRating ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text className="text-lg font-bold text-white">
-                  {shouldPromptForRating ? 'Save rating' : 'Finish'}
-                </Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleSkipRating}
-              disabled={submittingRating}
-              className="mt-3 h-12 items-center justify-center"
-            >
-              <Text className="text-base font-semibold text-gray-500">
-                {shouldPromptForRating ? 'Skip for now' : 'Close'}
-              </Text>
-            </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={shouldPromptForRating ? handleSubmitRating : handleSkipRating}
+                  disabled={submittingRating}
+                  className="mt-4 h-14 rounded-[22px] items-center justify-center"
+                  style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingRating ? 0.7 : 1 }}
+                >
+                  {submittingRating ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-lg font-bold text-white">
+                      {shouldPromptForRating ? 'Save rating' : 'Finish'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleSkipRating}
+                  disabled={submittingRating}
+                  className="mt-3 h-12 items-center justify-center"
+                >
+                  <Text className="text-base font-semibold text-gray-500">
+                    {shouldPromptForRating ? 'Skip for now' : 'Close'}
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

@@ -1,11 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  TextInput,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import auth from '@react-native-firebase/auth';
 import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification, getMe } from '../../api';
+import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function normalizePhone(phone) {
@@ -19,6 +30,7 @@ function normalizePhone(phone) {
 
 export default function PassengerPhoneVerificationScreen({ navigation }) {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const isFocused = useIsFocused();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -27,16 +39,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
   const [phoneVerified, setPhoneVerified] = useState(false);
   const [currentPhone, setCurrentPhone] = useState('');
   const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
-  const [confirmation, setConfirmation] = useState(null);
-  const [verificationStep, setVerificationStep] = useState('phone');
-  const [verifyingPhone, setVerifyingPhone] = useState(false);
-
-  const clearVerificationFlow = () => {
-    setVerificationStep('phone');
-    setConfirmation(null);
-    setCode('');
-  };
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -69,7 +72,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
     };
   }, [isFocused]);
 
-  const handleSendCode = async () => {
+  const handleVerifyPhone = async () => {
     const normalizedPhone = normalizePhone(phone);
     if (!normalizedPhone) {
       Alert.alert('Invalid number', 'Enter a valid phone number like 077 123 4567.');
@@ -77,168 +80,125 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
     }
 
     try {
-      setVerifyingPhone(true);
-      const nextConfirmation = await auth().signInWithPhoneNumber(normalizedPhone);
-      setConfirmation(nextConfirmation);
-      setVerificationStep('code');
-      setCode('');
-    } catch (error) {
-      Alert.alert('Error', error?.message || 'Failed to send verification code.');
-    } finally {
-      setVerifyingPhone(false);
-    }
-  };
-
-  const handleVerifyPhone = async () => {
-    if (!confirmation || code.trim().length < 4) {
-      Alert.alert('Enter code', 'Enter the SMS code we sent to your phone.');
-      return;
-    }
-
-    try {
-      setVerifyingPhone(true);
-      await confirmation.confirm(code.trim());
-      const firebaseUser = auth().currentUser;
-      if (!firebaseUser) throw new Error('Verification failed');
-      const firebaseIdToken = await firebaseUser.getIdToken();
-      await auth().signOut();
-
+      setSubmitting(true);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, firebaseIdToken);
+      await confirmPhoneVerification(token, normalizedPhone);
       const data = await getMe(token);
       setPhoneVerified(data?.phoneVerified === true);
-      setCurrentPhone(data?.phone_number || '');
-      setVerificationStep('phone');
-      setConfirmation(null);
+      setCurrentPhone(data?.phone_number || normalizedPhone);
       setPhone('');
-      setCode('');
-      Alert.alert('Phone verified', 'Your phone number is now verified.');
-      navigation.goBack();
+      Alert.alert('Phone saved', 'Your phone number has been saved on your account.');
+      navigateToPassengerAccountMain(navigation);
     } catch (error) {
-      Alert.alert('Verification failed', error?.message || 'Invalid or expired code.');
+      Alert.alert('Verification failed', error?.message || 'Could not save your phone number right now.');
     } finally {
-      setVerifyingPhone(false);
+      setSubmitting(false);
     }
   };
 
+  const handleGoBack = () => {
+    navigateToPassengerAccountMain(navigation);
+  };
+
+  const headline = phoneVerified ? 'Your phone is verified' : 'Confirm your information';
+  const subtitle = phoneVerified
+    ? 'Your number is already saved on your account for ride updates and security.'
+    : 'Add your Zimbabwe mobile number so we can save it on your account for ride updates.';
+
+  const scrollBottomPadding = Math.max(tabBarHeight + insets.bottom + 24, insets.bottom + 32);
+
   return (
-    <View className="flex-1 bg-white">
+    <View className="flex-1 bg-[#f6f7f3]">
+      <View
+        className="flex-row items-center justify-between bg-[#f6f7f3]"
+        style={{
+          paddingTop: insets.top + 6,
+          paddingHorizontal: 20,
+          paddingBottom: 14,
+          zIndex: 20,
+          elevation: 20,
+        }}
+      >
+        <TouchableOpacity
+          onPress={handleGoBack}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          className="h-10 min-w-[40px] flex-row items-center justify-center rounded-full border border-gray-200 bg-white px-2"
+          accessibilityRole="button"
+          accessibilityLabel="Back to account"
+        >
+          <Ionicons name="arrow-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text className="flex-1 text-center text-[18px] font-bold text-gray-900">Phone verification</Text>
+        <View className="h-10 w-10" />
+      </View>
+
       {loading ? (
         <View className="flex-1 items-center justify-center px-5">
           <ActivityIndicator size="large" color={PRIMARY_BLUE} />
         </View>
       ) : (
-        <View className="flex-1" style={{ paddingTop: insets.top + 12 }}>
+        <KeyboardAvoidingView
+          className="flex-1"
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 12 : 0}
+        >
           <ScrollView
-            contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingBottom: insets.bottom + 140 }}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: scrollBottomPadding }}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            <Text className="mt-6 text-[28px] font-bold leading-[34px] text-gray-950">
-              {phoneVerified ? 'Your phone is verified' : verificationStep === 'code' ? 'Confirm your code' : 'Confirm your information'}
-            </Text>
+            <View className="rounded-[28px] bg-white px-5 py-5">
+              <Text className="text-[22px] font-bold text-gray-950">{headline}</Text>
+              <Text className="mt-2 text-sm leading-6 text-gray-500">{subtitle}</Text>
 
-            {phoneVerified ? (
-              <View className="mt-10 rounded-[24px] bg-[#f5f5f3] px-5 py-5">
-                <Text className="text-sm font-medium text-gray-400">Verified phone</Text>
-                <Text className="mt-2 text-[18px] font-semibold text-gray-950">
-                  {currentPhone || 'Phone number verified'}
-                </Text>
-              </View>
-            ) : verificationStep === 'phone' ? (
-              <View className="mt-10">
-                {currentPhone ? (
-                  <View className="mb-6 rounded-[20px] bg-[#f5f5f3] px-4 py-4">
-                    <Text className="text-sm font-medium text-gray-400">Current phone</Text>
-                    <Text className="mt-1 text-[16px] font-medium text-gray-950">{currentPhone}</Text>
-                  </View>
-                ) : null}
+              {currentPhone ? (
+                <View className="mt-5 rounded-[20px] bg-[#f8fafc] px-4 py-4">
+                  <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">
+                    {phoneVerified ? 'Saved phone' : 'Current phone'}
+                  </Text>
+                  <Text className="mt-2 text-[18px] font-semibold text-gray-950">{currentPhone}</Text>
+                </View>
+              ) : null}
 
-                <View className="flex-row items-stretch">
-                  <View className="mr-4 w-[98px] rounded-[18px] bg-[#f5f5f3] px-4 py-4">
-                    <Text className="text-[28px]">🇿🇼</Text>
-                    <Text className="mt-2 text-sm font-medium text-gray-700">+263</Text>
-                  </View>
-
-                  <View className="flex-1 rounded-[18px] border-[2px] border-black px-5 py-4">
-                    <Text className="text-sm font-medium text-gray-400">Phone number</Text>
+              {!phoneVerified ? (
+                <View className="mt-5">
+                  <Text className="mb-2 text-sm font-medium text-gray-700">Phone number</Text>
+                  <View className="flex-row items-stretch">
+                    <View className="mr-3 w-[92px] items-center justify-center rounded-[18px] border border-gray-200 bg-[#f8fafc] px-3 py-3">
+                      <Text className="text-lg">ZW</Text>
+                      <Text className="mt-1 text-sm font-semibold text-gray-700">+263</Text>
+                    </View>
                     <TextInput
                       value={phone}
                       onChangeText={setPhone}
                       placeholder="77 123 4567"
                       placeholderTextColor="#9ca3af"
                       keyboardType="phone-pad"
-                      className="mt-2 text-[22px] font-medium text-gray-950"
+                      editable={!submitting}
+                      className="flex-1 rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-lg font-medium text-gray-900"
                     />
                   </View>
                 </View>
-              </View>
-            ) : (
-              <View className="mt-10">
-                <View className="rounded-[20px] bg-[#f5f5f3] px-4 py-4">
-                  <Text className="text-sm font-medium text-gray-400">Sent to</Text>
-                  <Text className="mt-1 text-[16px] font-medium text-gray-950">+263 {phone.trim()}</Text>
-                </View>
-
-                <View className="mt-5 rounded-[18px] border-[2px] border-black px-5 py-4">
-                  <Text className="text-sm font-medium text-gray-400">Verification code</Text>
-                  <TextInput
-                    value={code}
-                    onChangeText={setCode}
-                    placeholder="Enter code"
-                    placeholderTextColor="#9ca3af"
-                    keyboardType="number-pad"
-                    maxLength={6}
-                    className="mt-2 text-[22px] font-medium tracking-[4px] text-gray-950"
-                  />
-                </View>
-
-                <TouchableOpacity onPress={clearVerificationFlow} className="mt-4 self-start">
-                  <Text className="text-sm font-medium" style={{ color: PRIMARY_BLUE }}>Use a different number</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </ScrollView>
-
-          <View
-            className="absolute bottom-0 left-0 right-0 bg-white px-5 pt-4"
-            style={{ paddingBottom: Math.max(insets.bottom + 12, 24) }}
-          >
-            <View className="flex-row items-center justify-between">
-              <TouchableOpacity
-                onPress={() => {
-                  if (phoneVerified || verificationStep === 'phone') navigation.goBack();
-                  else clearVerificationFlow();
-                }}
-                className="h-18 w-18 items-center justify-center rounded-full bg-[#f5f5f3]"
-                style={{ width: 72, height: 72 }}
-              >
-                <Ionicons name="arrow-back" size={28} color="#111827" />
-              </TouchableOpacity>
-
-              {!phoneVerified ? (
-                <TouchableOpacity
-                  onPress={verificationStep === 'phone' ? handleSendCode : handleVerifyPhone}
-                  disabled={verifyingPhone}
-                  className="h-18 flex-row items-center justify-center rounded-full bg-black px-8"
-                  style={{ height: 72, opacity: verifyingPhone ? 0.7 : 1 }}
-                >
-                  {verifyingPhone ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <>
-                      <Text className="text-[18px] font-semibold text-white">
-                        {verificationStep === 'phone' ? 'Next' : 'Verify'}
-                      </Text>
-                      <Ionicons name="arrow-forward" size={24} color="#fff" style={{ marginLeft: 8 }} />
-                    </>
-                  )}
-                </TouchableOpacity>
               ) : null}
             </View>
-          </View>
-        </View>
+
+            {!phoneVerified ? (
+              <TouchableOpacity
+                onPress={handleVerifyPhone}
+                disabled={submitting}
+                className="mt-5 h-12 items-center justify-center rounded-[20px]"
+                style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.75 : 1 }}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text className="text-base font-bold text-white">Save phone number</Text>
+                )}
+              </TouchableOpacity>
+            ) : null}
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </View>
   );

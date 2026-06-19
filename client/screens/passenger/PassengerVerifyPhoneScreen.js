@@ -44,7 +44,7 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = nu
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
       await confirmPhoneVerification(token, normalizedPhone);
-      Alert.alert('Phone verified', 'Your phone number is now verified.', [
+      Alert.alert('Phone saved', 'Your phone number has been saved on your account.', [
         {
           text: 'Continue',
           onPress: () => {
@@ -86,9 +86,9 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = nu
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text className="mt-8 text-3xl font-bold text-gray-900">Verify your phone number</Text>
+        <Text className="mt-8 text-3xl font-bold text-gray-900">Add your phone number</Text>
         <Text className="mt-3 text-base leading-7 text-gray-500">
-          Add a verified number for ride updates and account security. Verification is required before you can use the app.
+          Add your Zimbabwe mobile number for ride updates and account security.
         </Text>
 
         <Text className="mb-2 mt-8 text-sm font-medium text-gray-700">Phone number</Text>
@@ -127,7 +127,7 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = nu
           {loading ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text className="text-lg font-bold text-white">Verify phone</Text>
+            <Text className="text-lg font-bold text-white">Save phone number</Text>
           )}
         </TouchableOpacity>
       </View>

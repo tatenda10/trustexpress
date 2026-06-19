@@ -33,8 +33,8 @@ import PassengerPhoneSignUpScreen from './screens/passenger/auth/PassengerPhoneS
 import PassengerEmailLoginScreen from './screens/passenger/auth/PassengerEmailLoginScreen';
 import PassengerPhoneLoginScreen from './screens/passenger/auth/PassengerPhoneLoginScreen';
 import PassengerEnableLocationScreen from './screens/passenger/PassengerEnableLocationScreen';
-import PassengerVerifyPhoneScreen from './screens/passenger/PassengerVerifyPhoneScreen';
 import PassengerIdentityVerificationScreen from './screens/passenger/PassengerIdentityVerificationScreen';
+import { passengerPhoneVerificationTabsParams, replaceWithPassengerPhoneVerification, replaceWithPassengerTabs } from './navigation/passengerNavigation';
 
 // Screens - Driver
 import DriverWelcomeScreen from './screens/driver/DriverWelcomeScreen';
@@ -940,19 +940,23 @@ function AppStack({ currentRouteName }) {
     // Only force verification when backend explicitly says "false".
     const needPassengerPhoneVerify = passengerPhoneKnown && !passengerPhoneVerified;
     const needPassengerIdentity = false;
+    const openPhoneVerificationOnLaunch = needPassengerPhoneVerify && !needPassengerProfile && !needPassengerLocation;
     const passengerInitialRoute = needPassengerProfile
       ? 'PassengerCompleteProfile'
       : needPassengerLocation
       ? 'PassengerEnableLocation'
-      : needPassengerPhoneVerify
-        ? 'PassengerVerifyPhone'
-        : needPassengerIdentity
-          ? 'PassengerIdentityVerificationOnboarding'
-          : 'PassengerTabs';
+      : 'PassengerTabs';
+    const passengerTabsInitialParams = openPhoneVerificationOnLaunch
+      ? passengerPhoneVerificationTabsParams
+      : undefined;
 
     return (
       <Stack.Navigator key={passengerInitialRoute} screenOptions={{ headerShown: false }} initialRouteName={passengerInitialRoute}>
-        <Stack.Screen name="PassengerTabs" component={PassengerTabNavigator} />
+        <Stack.Screen
+          name="PassengerTabs"
+          component={PassengerTabNavigator}
+          initialParams={passengerTabsInitialParams}
+        />
         <Stack.Screen name="PassengerCompleteProfile">
           {(props) => (
             <CompleteProfileScreen
@@ -962,13 +966,13 @@ function AppStack({ currentRouteName }) {
                 const profileData = await refetchUserProfile();
                 const profileStillMissing = !String(profileData?.first_name || '').trim() || !String(profileData?.last_name || '').trim();
                 if (profileStillMissing) return;
-                props.navigation.replace(
-                  needPassengerLocation
-                    ? 'PassengerEnableLocation'
-                    : needPassengerPhoneVerify
-                      ? 'PassengerVerifyPhone'
-                      : 'PassengerTabs'
-                );
+                if (needPassengerLocation) {
+                  props.navigation.replace('PassengerEnableLocation');
+                } else if (needPassengerPhoneVerify) {
+                  replaceWithPassengerPhoneVerification(props.navigation);
+                } else {
+                  replaceWithPassengerTabs(props.navigation);
+                }
               }}
             />
           )}
@@ -980,22 +984,11 @@ function AppStack({ currentRouteName }) {
               onGranted={() => {
                 setPassengerLocationGranted(true);
                 // Move forward immediately instead of waiting for navigator key reset.
-                props.navigation.replace(
-                  needPassengerPhoneVerify
-                    ? 'PassengerVerifyPhone'
-                    : 'PassengerTabs'
-                );
-              }}
-            />
-          )}
-        </Stack.Screen>
-        <Stack.Screen name="PassengerVerifyPhone">
-          {(props) => (
-            <PassengerVerifyPhoneScreen
-              {...props}
-              nextRouteName='PassengerTabs'
-              onVerified={async () => {
-                await refetchUserProfile();
+                if (needPassengerPhoneVerify) {
+                  replaceWithPassengerPhoneVerification(props.navigation);
+                } else {
+                  replaceWithPassengerTabs(props.navigation);
+                }
               }}
             />
           )}
