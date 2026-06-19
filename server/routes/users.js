@@ -5,6 +5,7 @@ import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
 import { attachDriverToAgentInvite, attachPassengerToAgentInvite } from '../lib/agent-invites.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
+import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { emitSupportChatMessageToUser } from '../lib/realtime.js';
 import {
   createSupportMessage,
@@ -67,6 +68,7 @@ router.get('/me', requireAuth, async (req, res) => {
   try {
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
+    await upsertClerkUserToMysql(user);
 
     if (appUser.role !== 'passenger') {
       return res.json(appUser);
@@ -109,6 +111,7 @@ router.post('/register', requireAuth, async (req, res) => {
     }
 
     const user = await getClerkUserById(req.userId);
+    await upsertClerkUserToMysql(user);
     return res.status(201).json(toAppUser(user));
   } catch (err) {
     if (err.status === 400) {
@@ -128,6 +131,7 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
 
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
+    await upsertClerkUserToMysql(user);
     let referral = null;
     if (appUser.role === 'driver') {
       referral = await attachDriverToAgentInvite({
@@ -203,6 +207,7 @@ router.patch('/me', requireAuth, async (req, res) => {
     }
 
     const nextUser = await getClerkUserById(req.userId);
+    await upsertClerkUserToMysql(nextUser);
     return res.json(toAppUser(nextUser));
   } catch (err) {
     console.error('PATCH /api/users/me', err);
@@ -238,6 +243,7 @@ router.get('/support/thread', requireAuth, async (req, res) => {
   try {
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
+    await upsertClerkUserToMysql(user);
     const thread = await getOrCreateSupportThreadForUser(req.userId, appUser.role);
     return res.json({ thread: shapeSupportThread(thread) });
   } catch (err) {
@@ -250,6 +256,7 @@ router.get('/support/messages', requireAuth, async (req, res) => {
   try {
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
+    await upsertClerkUserToMysql(user);
     const thread = await getOrCreateSupportThreadForUser(req.userId, appUser.role);
     const messages = await listSupportMessages(thread.id);
     return res.json({
@@ -271,6 +278,7 @@ router.post('/support/messages', requireAuth, async (req, res) => {
 
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
+    await upsertClerkUserToMysql(user);
     const thread = await getOrCreateSupportThreadForUser(req.userId, appUser.role);
     const created = await createSupportMessage({
       threadId: thread.id,
@@ -337,6 +345,7 @@ router.delete('/me', requireAuth, async (req, res) => {
   try {
     const user = await getClerkUserById(req.userId, { skipCache: true });
     const appUser = toAppUser(user);
+    await upsertClerkUserToMysql(user);
     await deleteEndUserAccount(req.userId, appUser.role);
     return res.json({ ok: true, role: appUser.role });
   } catch (err) {

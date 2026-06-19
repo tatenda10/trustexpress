@@ -3,12 +3,14 @@ import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
+import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 
 const router = Router();
 const DRIVER_ONLINE_STALE_DAYS = 1;
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
+  await upsertClerkUserToMysql(user);
   const appUser = toAppUser(user);
   const role = normalizeRole(appUser.role);
   // Allow both dedicated passengers and drivers to request ride tiers,

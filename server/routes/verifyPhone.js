@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole } from '../lib/clerk-user.js';
 import { getClerkClient } from '../lib/clerk-client.js';
 import { query } from '../db/connection.js';
+import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 
 const router = Router();
 
@@ -64,6 +65,8 @@ router.post('/confirm', requireAuth, async (req, res) => {
     }
 
     const duplicateResult = await blockDuplicateAccountsForPhone(phoneNumber, role);
+    const refreshedUser = await getClerkUserById(req.userId, { skipCache: true });
+    await upsertClerkUserToMysql(refreshedUser);
 
     return res.json({
       verified: true,

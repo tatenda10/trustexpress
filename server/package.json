@@ -42,7 +42,8 @@
     "recovery:mark-drivers-verified": "node scripts/mark-all-drivers-verified.js",
     "drivers:docs:list": "node scripts/list-driver-document-submissions.js",
     "contacts:export": "node scripts/export-user-contacts-to-excel.js",
-    "drivers:find-by-email": "node scripts/find-driver-by-email.js"
+    "drivers:find-by-email": "node scripts/find-driver-by-email.js",
+    "drivers:audit-unsynced": "node scripts/find-unsynced-clerk-drivers.js"
   },
   "author": "",
   "license": "ISC",

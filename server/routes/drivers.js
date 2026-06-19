@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql.js';
@@ -164,6 +165,7 @@ async function cleanupStaleActiveRides(driverUserId = null) {
 
 async function requireDriver(req, res) {
   const user = await getClerkUserById(req.userId);
+  await upsertClerkUserToMysql(user);
   const appUser = toAppUser(user);
   if (normalizeRole(appUser.role) !== 'driver') {
     res.status(403).json({ error: 'Not a driver' });
