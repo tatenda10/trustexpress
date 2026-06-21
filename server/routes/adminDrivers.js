@@ -10,6 +10,28 @@ import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib
 
 const router = Router();
 
+async function loadAllClerkUsers(orderBy = '-created_at') {
+  const clerkClient = getClerkClient();
+  const limit = 100;
+  let offset = 0;
+  const users = [];
+
+  while (true) {
+    const page = await clerkClient.users.getUserList({
+      limit,
+      offset,
+      orderBy,
+    });
+    const pageUsers = page.data || [];
+    if (!pageUsers.length) break;
+    users.push(...pageUsers);
+    offset += pageUsers.length;
+    if (pageUsers.length < limit) break;
+  }
+
+  return users;
+}
+
 /** Build admin driver row from Clerk user + MySQL identity/vehicle (source of truth for verification). */
 function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
   const publicMeta = user.publicMetadata || {};
@@ -269,13 +291,8 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
     const sortBy = String(req.query.sortBy || 'createdAt');
     const sortOrder = String(req.query.sortOrder || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-    const clerkClient = getClerkClient();
-    const clerkPage = await clerkClient.users.getUserList({
-      limit: 500,
-      orderBy: '-created_at',
-    });
-
-    const users = (clerkPage.data || []).filter((u) => normalizeRole(u.publicMetadata?.role) === 'driver');
+    const clerkUsers = await loadAllClerkUsers('-created_at');
+    const users = clerkUsers.filter((u) => normalizeRole(u.publicMetadata?.role) === 'driver');
     const driverIds = users.map((u) => u.id);
     const identityByUser = new Map();
     const vehicleByUser = new Map();
@@ -377,13 +394,8 @@ router.get('/export.csv', requireAdminAuth, requirePermission('drivers.read'), a
     const search = String(req.query.search || '').trim().toLowerCase();
     const verificationStatus = String(req.query.verificationStatus || 'all').toLowerCase();
 
-    const clerkClient = getClerkClient();
-    const clerkPage = await clerkClient.users.getUserList({
-      limit: 500,
-      orderBy: '-created_at',
-    });
-
-    const users = (clerkPage.data || []).filter((u) => normalizeRole(u.publicMetadata?.role) === 'driver');
+    const clerkUsers = await loadAllClerkUsers('-created_at');
+    const users = clerkUsers.filter((u) => normalizeRole(u.publicMetadata?.role) === 'driver');
     const driverIds = users.map((u) => u.id);
     const identityByUser = new Map();
     const vehicleByUser = new Map();

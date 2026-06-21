@@ -9,6 +9,28 @@ import { query } from '../db/connection.js';
 
 const router = Router();
 
+async function loadAllClerkUsers(orderBy = '-created_at') {
+  const clerkClient = getClerkClient();
+  const limit = 100;
+  let offset = 0;
+  const users = [];
+
+  while (true) {
+    const page = await clerkClient.users.getUserList({
+      limit,
+      offset,
+      orderBy,
+    });
+    const pageUsers = page.data || [];
+    if (!pageUsers.length) break;
+    users.push(...pageUsers);
+    offset += pageUsers.length;
+    if (pageUsers.length < limit) break;
+  }
+
+  return users;
+}
+
 function mapPassenger(user, passengerIdentity = null) {
   const publicMeta = user.publicMetadata || {};
   const privateMeta = user.privateMetadata || {};
@@ -98,13 +120,8 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
     const sortBy = String(req.query.sortBy || 'createdAt');
     const sortOrder = String(req.query.sortOrder || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-    const clerkClient = getClerkClient();
-    const clerkPage = await clerkClient.users.getUserList({
-      limit: 500,
-      orderBy: '-created_at',
-    });
-
-    const passengerUsers = (clerkPage.data || []).filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
+    const clerkUsers = await loadAllClerkUsers('-created_at');
+    const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
     const identities = await listPassengerIdentities(passengerUsers.map((item) => item.id));
     const identityByUserId = new Map(
       identities.map((row) => [row.passenger_user_id, shapePassengerIdentityFromRow(row)])
@@ -188,13 +205,8 @@ router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read')
     const status = String(req.query.status || 'all').toLowerCase();
     const identityStatus = String(req.query.identityStatus || 'all').toLowerCase();
 
-    const clerkClient = getClerkClient();
-    const clerkPage = await clerkClient.users.getUserList({
-      limit: 500,
-      orderBy: '-created_at',
-    });
-
-    const passengerUsers = (clerkPage.data || []).filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
+    const clerkUsers = await loadAllClerkUsers('-created_at');
+    const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
     const identities = await listPassengerIdentities(passengerUsers.map((item) => item.id));
     const identityByUserId = new Map(
       identities.map((row) => [row.passenger_user_id, shapePassengerIdentityFromRow(row)])
