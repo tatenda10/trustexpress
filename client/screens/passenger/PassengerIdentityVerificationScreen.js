@@ -19,6 +19,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { getMe, submitPassengerIdentity, uploadFile } from '../../api';
 import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { persistLocalImageUri } from '../../services/localImageUpload';
 
 const SELFIE_DOC = {
   key: 'selfie',
@@ -187,6 +188,7 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
         result = await imagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing: true,
+          cameraType: isSelfie ? imagePicker.CameraType.front : imagePicker.CameraType.back,
           quality: 0.8,
         });
       } else {
@@ -202,8 +204,9 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
         });
       }
 
-      if (!result.canceled && result.assets?.[0]) {
-        setUris((prev) => ({ ...prev, [key]: result.assets[0].uri }));
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        const stableUri = await persistLocalImageUri(result.assets[0].uri);
+        setUris((prev) => ({ ...prev, [key]: stableUri }));
       }
     } catch {
       Alert.alert('Error', 'Could not open the document picker');

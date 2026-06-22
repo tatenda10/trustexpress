@@ -4,6 +4,7 @@ import { useAgentAuth } from './auth/AgentAuthContext.jsx'
 import BASE_URL from './context/Api'
 
 const ANDROID_PLAY_STORE_FALLBACK_URL = 'https://play.google.com/store/search?q=trust%20express%20app&c=apps'
+const IOS_APP_STORE_FALLBACK_URL = 'https://apps.apple.com/us/search?term=trust%20express'
 
 const agentSections = [
   {
@@ -645,11 +646,10 @@ function RegisterDriverSection({
   vehicleEligibilityError,
 }) {
   const apiBase = String(BASE_URL || '').replace(/\/$/, '')
-  /** HTTPS page on API host: opens app first, Play Store only if app did not open (see server GET /invite/driver). */
+  /** HTTPS page on API host: opens app first, then falls back to the correct store for the phone if needed. */
   const driverSmartInviteUrl =
-    invite?.token && apiBase
-      ? `${apiBase}/invite/driver?invite=${encodeURIComponent(invite.token)}`
-      : ''
+    invite?.driverSmartInviteUrl ||
+    (invite?.token && apiBase ? `${apiBase}/invite/driver?invite=${encodeURIComponent(invite.token)}` : '')
   const qrCodeUrl = driverSmartInviteUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(driverSmartInviteUrl)}`
     : ''
@@ -760,7 +760,7 @@ function RegisterDriverSection({
                 />
               </div>
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                Scan opens a secure link: Trust Express app if installed, otherwise Google Play after a short moment.
+                Scan opens a secure link: Trust Express app if installed, otherwise the correct app store for that phone after a short moment.
               </p>
             </div>
 
@@ -777,6 +777,10 @@ function RegisterDriverSection({
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Play Store Link (Android fallback)</p>
                 <p className="mt-2 break-all text-sm font-medium text-slate-900">{ANDROID_PLAY_STORE_FALLBACK_URL}</p>
               </div>
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">App Store Link (iPhone fallback)</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{IOS_APP_STORE_FALLBACK_URL}</p>
+              </div>
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
@@ -792,6 +796,13 @@ function RegisterDriverSection({
                 >
                   Copy Play Store Link
                 </button>
+                <button
+                  type="button"
+                  onClick={() => onCopyInvite(IOS_APP_STORE_FALLBACK_URL)}
+                  className="h-10 rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  Copy App Store Link
+                </button>
                 <a
                   href={invite.appUrl}
                   className="inline-flex h-10 items-center rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
@@ -804,6 +815,12 @@ function RegisterDriverSection({
                 >
                   Open Play Store
                 </a>
+                <a
+                  href={IOS_APP_STORE_FALLBACK_URL}
+                  className="inline-flex h-10 items-center rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  Open App Store
+                </a>
               </div>
             </div>
           </div>
@@ -814,8 +831,9 @@ function RegisterDriverSection({
 }
 
 function RegisterPassengerSection({ invite, inviteLoading, inviteError, onCopyInvite }) {
-  const qrCodeUrl = invite?.passengerAppUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(invite.passengerAppUrl)}`
+  const passengerSmartInviteUrl = invite?.passengerSmartInviteUrl || invite?.passengerUniversalUrl || ''
+  const qrCodeUrl = passengerSmartInviteUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(passengerSmartInviteUrl)}`
     : ''
 
   return (
@@ -853,22 +871,35 @@ function RegisterPassengerSection({ invite, inviteLoading, inviteError, onCopyIn
               </div>
               <p className="mt-3 text-xs leading-5 text-slate-500">
                 The passenger scans this code and is taken into the Trust Express passenger signup flow with your referral already attached.
+                iPhone users fall back to the App Store, while Android users fall back to Google Play if the app is not installed.
               </p>
             </div>
 
             <div className="grid gap-3">
               <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Invite link (QR &amp; WhatsApp)</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{passengerSmartInviteUrl || '—'}</p>
+              </div>
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">App Deep Link</p>
                 <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.passengerAppUrl}</p>
               </div>
               <div className="border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Fallback Link</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Web fallback link</p>
                 <p className="mt-2 break-all text-sm font-medium text-slate-900">{invite.passengerUniversalUrl}</p>
+              </div>
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Play Store Link (Android fallback)</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{ANDROID_PLAY_STORE_FALLBACK_URL}</p>
+              </div>
+              <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">App Store Link (iPhone fallback)</p>
+                <p className="mt-2 break-all text-sm font-medium text-slate-900">{IOS_APP_STORE_FALLBACK_URL}</p>
               </div>
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={() => onCopyInvite(invite.passengerUniversalUrl)}
+                  onClick={() => onCopyInvite(passengerSmartInviteUrl || invite.passengerUniversalUrl)}
                   className="h-10 rounded-sm bg-[#16213a] px-4 text-sm font-semibold text-white transition hover:bg-slate-900"
                 >
                   Copy Passenger Link
@@ -879,6 +910,13 @@ function RegisterPassengerSection({ invite, inviteLoading, inviteError, onCopyIn
                   className="h-10 rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
                 >
                   Copy App Link
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCopyInvite(IOS_APP_STORE_FALLBACK_URL)}
+                  className="h-10 rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  Copy App Store Link
                 </button>
               </div>
             </div>

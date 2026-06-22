@@ -29,24 +29,17 @@ app.use('/uploads', (req, res) => {
 const ANDROID_PLAY_STORE_SEARCH_URL =
   process.env.ANDROID_PLAY_STORE_SEARCH_URL ||
   'https://play.google.com/store/search?q=trust%20express%20app&c=apps';
+const IOS_APP_STORE_SEARCH_URL =
+  process.env.IOS_APP_STORE_SEARCH_URL ||
+  'https://apps.apple.com/us/search?term=trust%20express';
 
-/**
- * Agent QR / shared link: HTTPS so phone cameras treat it as a normal link.
- * Tries app deep link first; only redirects to Play Store if the page stays in the foreground (app did not open).
- */
-app.get('/invite/driver', (req, res) => {
-  const invite = String(req.query.invite || '').trim();
-  if (!invite || invite.length > 200 || !/^[a-zA-Z0-9_-]+$/.test(invite)) {
-    return res.status(400).send('Invalid invite token');
-  }
-  const appDeepLink = `trustexpress://driver-signup?invite=${encodeURIComponent(invite)}`;
-  const playUrl = ANDROID_PLAY_STORE_SEARCH_URL;
-  const html = `<!DOCTYPE html>
+function buildInviteLandingHtml({ title, appDeepLink, openLabel }) {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Trust Express — Driver invite</title>
+  <title>${title}</title>
   <style>
     body { font-family: system-ui, sans-serif; padding: 24px; max-width: 420px; margin: 0 auto; }
     p { color: #444; line-height: 1.5; }
@@ -54,13 +47,22 @@ app.get('/invite/driver', (req, res) => {
   </style>
 </head>
 <body>
-  <p>Opening Trust Express…</p>
-  <p>If nothing happens, <a href="${playUrl.replace(/"/g, '&quot;')}">get the app from Google Play</a>.</p>
-  <p><a href="${appDeepLink.replace(/"/g, '&quot;')}">Open in app</a></p>
+  <p>Opening Trust Express...</p>
+  <p>If nothing happens, <a id="store-link" href="${ANDROID_PLAY_STORE_SEARCH_URL.replace(/"/g, '&quot;')}">get the app</a>.</p>
+  <p><a href="${appDeepLink.replace(/"/g, '&quot;')}">${openLabel}</a></p>
   <script>
 (function () {
   var appUrl = ${JSON.stringify(appDeepLink)};
-  var storeUrl = ${JSON.stringify(playUrl)};
+  var androidStoreUrl = ${JSON.stringify(ANDROID_PLAY_STORE_SEARCH_URL)};
+  var iosStoreUrl = ${JSON.stringify(IOS_APP_STORE_SEARCH_URL)};
+  var ua = window.navigator.userAgent || '';
+  var isApple = /iPhone|iPad|iPod/i.test(ua);
+  var storeUrl = isApple ? iosStoreUrl : androidStoreUrl;
+  var storeLink = document.getElementById('store-link');
+  if (storeLink) {
+    storeLink.href = storeUrl;
+    storeLink.textContent = isApple ? 'get the app from the App Store' : 'get the app from Google Play';
+  }
   var left = false;
   function markLeft() { left = true; }
   window.addEventListener('pagehide', markLeft);
@@ -78,8 +80,40 @@ app.get('/invite/driver', (req, res) => {
   </script>
 </body>
 </html>`;
+}
+
+function handleInviteLanding(req, res, type) {
+  const invite = String(req.query.invite || '').trim();
+  if (!invite || invite.length > 200 || !/^[a-zA-Z0-9_-]+$/.test(invite)) {
+    res.status(400).send('Invalid invite token');
+    return;
+  }
+
+  const path = type === 'passenger' ? 'passenger-signup' : 'driver-signup';
+  const title = type === 'passenger' ? 'Trust Express - Passenger invite' : 'Trust Express - Driver invite';
+  const openLabel = type === 'passenger' ? 'Open passenger signup in app' : 'Open driver signup in app';
+  const appDeepLink = `trustexpress://${path}?invite=${encodeURIComponent(invite)}`;
+
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
+  res.send(buildInviteLandingHtml({ title, appDeepLink, openLabel }));
+}
+
+// HTTPS landing pages for QR scans and shared links. These try the app first,
+// then send the user to the right store for their device if the app did not open.
+app.get('/invite/driver', (req, res) => {
+  handleInviteLanding(req, res, 'driver');
+});
+
+app.get('/invite/passenger', (req, res) => {
+  handleInviteLanding(req, res, 'passenger');
+});
+
+app.get('/driver-signup', (req, res) => {
+  handleInviteLanding(req, res, 'driver');
+});
+
+app.get('/passenger-signup', (req, res) => {
+  handleInviteLanding(req, res, 'passenger');
 });
 
 app.use('/api', routes);

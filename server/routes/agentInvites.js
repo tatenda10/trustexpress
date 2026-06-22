@@ -10,8 +10,10 @@ function shapeInvitePayload(invite) {
 
   const driverAppUrl = `trustexpress://driver-signup?invite=${encodeURIComponent(invite.token)}`;
   const driverUniversalUrl = `https://trustexpress.co.zw/driver-signup?invite=${encodeURIComponent(invite.token)}`;
+  const driverSmartInviteUrl = `https://trustexpress.co.zw/invite/driver?invite=${encodeURIComponent(invite.token)}`;
   const passengerAppUrl = `trustexpress://passenger-signup?invite=${encodeURIComponent(invite.token)}`;
   const passengerUniversalUrl = `https://trustexpress.co.zw/passenger-signup?invite=${encodeURIComponent(invite.token)}`;
+  const passengerSmartInviteUrl = `https://trustexpress.co.zw/invite/passenger?invite=${encodeURIComponent(invite.token)}`;
 
   return {
     id: invite.id,
@@ -23,8 +25,10 @@ function shapeInvitePayload(invite) {
     universalUrl: driverUniversalUrl,
     driverAppUrl,
     driverUniversalUrl,
+    driverSmartInviteUrl,
     passengerAppUrl,
     passengerUniversalUrl,
+    passengerSmartInviteUrl,
   };
 }
 

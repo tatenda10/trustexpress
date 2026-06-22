@@ -18,11 +18,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { getDriverVehicleOptions, submitVehicle, uploadFile } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
 import { getVehicleModelsForMake, VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
+import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 
 function navigateToDriverAccountTab() {
   if (!navigationRef.isReady()) return;
@@ -63,6 +63,8 @@ function SelectionModal({
   options,
   selectedValue,
   searchPlaceholder = 'Search...',
+  customCreateLabel = null,
+  onCustomCreate = null,
   onClose,
   onSelect,
 }) {
@@ -113,6 +115,20 @@ function SelectionModal({
             }}
             ListEmptyComponent={<Text className="py-8 text-center text-sm text-gray-500">No matching options.</Text>}
           />
+
+          {typeof onCustomCreate === 'function' && search.trim() ? (
+            <TouchableOpacity
+              onPress={() => onCustomCreate(search.trim())}
+              className="mt-3 rounded-xl border border-dashed border-blue-300 bg-blue-50 px-4 py-4"
+            >
+              <Text className="text-sm font-semibold text-primary">
+                {customCreateLabel || `Use "${search.trim()}"`}
+              </Text>
+              <Text className="mt-1 text-xs leading-5 text-slate-500">
+                If the model is not listed yet, save the typed value and continue.
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -135,21 +151,6 @@ function SelectField({ label, value, placeholder, onPress, disabled = false }) {
       </TouchableOpacity>
     </>
   );
-}
-
-async function prepareImageForUpload(uri, { maxWidth = 1600, compress = 0.7 } = {}) {
-  if (!uri || /^https?:\/\//i.test(uri) || String(uri).startsWith('/uploads/')) return uri;
-
-  const manipulated = await ImageManipulator.manipulateAsync(
-    uri,
-    [{ resize: { width: maxWidth } }],
-    {
-      compress,
-      format: ImageManipulator.SaveFormat.JPEG,
-    }
-  );
-
-  return manipulated?.uri || uri;
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -315,6 +316,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         result = await ImagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing: false,
+          cameraType: ImagePicker.CameraType.back,
           quality: 0.8,
         });
       } else {
@@ -333,8 +335,11 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       }
 
       if (result.canceled || !result.assets?.length) return;
+      const stableUris = (
+        await Promise.all(result.assets.map((asset) => persistLocalImageUri(asset?.uri)))
+      ).filter(Boolean);
       setCarPhotoUris((current) => {
-        const merged = [...current, ...result.assets.map((asset) => asset.uri).filter(Boolean)];
+        const merged = [...current, ...stableUris];
         return Array.from(new Set(merged)).slice(0, MAX_CAR_PHOTOS);
       });
     } catch {
@@ -362,6 +367,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         result = await ImagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing,
+          cameraType: ImagePicker.CameraType.back,
           quality: 0.8,
         });
       } else {
@@ -377,7 +383,10 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         });
       }
 
-      if (!result.canceled && result.assets?.[0]?.uri) setter(result.assets[0].uri);
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        const stableUri = await persistLocalImageUri(result.assets[0].uri);
+        setter(stableUri);
+      }
     } catch {
       Alert.alert('Error', 'Could not open the document picker');
     }
@@ -817,7 +826,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         options={modelOptions}
         selectedValue={model}
         searchPlaceholder="Search vehicle model"
+        customCreateLabel={make ? `Use typed ${make} model` : 'Use typed vehicle model'}
         onClose={() => setShowModelModal(false)}
+        onCustomCreate={(value) => {
+          setModel(value);
+          setShowModelModal(false);
+        }}
         onSelect={(value) => {
           setModel(value);
           setShowModelModal(false);

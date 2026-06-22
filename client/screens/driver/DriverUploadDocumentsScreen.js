@@ -12,10 +12,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { submitDriverDocuments, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
+import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 
 export const DRIVER_SKIP_ONBOARDING_KEY = 'trust_express_driver_skip_onboarding';
 export const DRIVER_SKIP_ENHANCED_SELFIE_KEY = 'trust_express_driver_skip_enhanced_selfie';
@@ -45,7 +45,7 @@ function askCropPreference() {
   });
 }
 
-function chooseImageSource({ title, message, allowCamera = true }) {
+function chooseImageSource({ title, message, allowCamera = true, allowGallery = true }) {
   return new Promise((resolve) => {
     const buttons = [];
 
@@ -53,7 +53,9 @@ function chooseImageSource({ title, message, allowCamera = true }) {
       buttons.push({ text: 'Take photo', onPress: () => resolve('camera') });
     }
 
-    buttons.push({ text: 'Choose from gallery', onPress: () => resolve('gallery') });
+    if (allowGallery) {
+      buttons.push({ text: 'Choose from gallery', onPress: () => resolve('gallery') });
+    }
     buttons.push({ text: 'Cancel', style: 'cancel', onPress: () => resolve(null) });
 
     Alert.alert(title, message, buttons, { cancelable: true, onDismiss: () => resolve(null) });
@@ -80,16 +82,6 @@ function formatUploadErrorMessage(error, fallback) {
 
   if (!apiMessage) return fallback;
   return apiMessage;
-}
-
-async function prepareImageForUpload(uri, { maxWidth = 1280, compress = 0.7 } = {}) {
-  if (!uri || /^https?:\/\//i.test(uri) || String(uri).startsWith('/uploads/')) return uri;
-  const result = await ImageManipulator.manipulateAsync(
-    uri,
-    [{ resize: { width: maxWidth } }],
-    { compress, format: ImageManipulator.SaveFormat.JPEG }
-  );
-  return result?.uri || uri;
 }
 
 export default function DriverUploadDocumentsScreen({ navigation, route }) {
@@ -163,14 +155,17 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const pickImage = async (key) => {
     try {
       const imagePicker = await import('expo-image-picker');
+      const isLiveSelfie = key === 'selfie' || key === 'selfieWithIdCard';
       const source = await chooseImageSource({
-        title: 'Upload document',
+        title: isLiveSelfie ? 'Take live selfie' : 'Upload document',
         message:
           key === 'selfieWithIdCard'
-            ? 'Use your camera or choose an existing photo while holding your national ID.'
+            ? 'For safety and identity review, this photo must be taken live with the camera while holding your national ID.'
             : key === 'selfie'
-              ? 'Use your camera or choose an existing selfie from your gallery.'
+              ? 'For safety and identity review, this selfie must be taken live with the camera.'
               : 'Use your camera or choose an existing document photo from your gallery.',
+        allowCamera: true,
+        allowGallery: !isLiveSelfie,
       });
       if (!source) return;
 
@@ -191,7 +186,10 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         result = await imagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing,
-          cameraType: imagePicker.CameraType.front,
+          cameraType:
+            key === 'selfie' || key === 'selfieWithIdCard'
+              ? imagePicker.CameraType.front
+              : imagePicker.CameraType.back,
           quality: 0.8,
         });
       } else {
@@ -207,8 +205,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         });
       }
 
-      if (!result.canceled && result.assets?.[0]) {
-        setUris((prev) => ({ ...prev, [key]: result.assets[0].uri }));
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        const stableUri = await persistLocalImageUri(result.assets[0].uri);
+        setUris((prev) => ({ ...prev, [key]: stableUri }));
       }
     } catch {
       Alert.alert('Error', 'Could not open the document picker.');
