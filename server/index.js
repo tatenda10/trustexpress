@@ -10,7 +10,7 @@ import routes from './routes/index.js';
 import { getRealtimeUserRoom, setRealtimeServer } from './lib/realtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 3001;
+const PORT = Number(process.env.PORT);
 
 const app = express();
 app.use(cors());
