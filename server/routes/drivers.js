@@ -800,6 +800,14 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
     };
     const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
     const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
+    const [driverStatsRow] = await query(
+      `SELECT
+         COUNT(*) AS total_rides,
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides
+       FROM ride_requests
+       WHERE driver_user_id = ?`,
+      [req.userId]
+    );
     const acceptedDriverPayload = {
       id: req.userId,
       tierName: availability.vehicle_tier_name || 'Ride',
@@ -810,7 +818,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       driverDistanceKm,
       amount: Number(ride.estimated_amount || 0),
       rating: 4.9,
-      trips: 0,
+      trips: Number(driverStatsRow?.completed_rides || driverStatsRow?.total_rides || 0),
       phoneNumber: availability.phone_number || null,
       coordinate: {
         latitude: Number.isFinite(Number(availability.current_lat)) ? Number(availability.current_lat) : pickupPoint.latitude,
