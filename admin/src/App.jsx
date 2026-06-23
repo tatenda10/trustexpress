@@ -20,6 +20,7 @@ import Can from './components/Can'
 import PricingZonesPage from './pages/PricingZonesPage'
 import ReportsPage from './pages/ReportsPage'
 import VehicleTiersPage from './pages/VehicleTiersPage'
+import VehicleCatalogPage from './pages/VehicleCatalogPage'
 import AgentRewardsPage from './pages/AgentRewardsPage'
 import SupportInboxPage from './pages/SupportInboxPage'
 import SupportAgentPage from './pages/SupportAgentPage'
@@ -125,6 +126,10 @@ function AppRoutes() {
         <Route
           path="pricing-zones"
           element={<PermissionRoute permission="pricing.read"><PricingZonesPage /></PermissionRoute>}
+        />
+        <Route
+          path="vehicle-catalog"
+          element={<PermissionRoute permission="pricing.read"><VehicleCatalogPage /></PermissionRoute>}
         />
         <Route
           path="vehicle-tiers"

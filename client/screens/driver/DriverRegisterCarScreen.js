@@ -21,7 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { getDriverVehicleOptions, submitVehicle, uploadFile } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
-import { getVehicleModelsForMake, VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
+import { VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 
 function navigateToDriverAccountTab() {
@@ -56,6 +56,31 @@ function goBackOrDriverTabs(navigation) {
 const MIN_CAR_PHOTOS = 3;
 const MAX_CAR_PHOTOS = 6;
 const UPLOAD_RETRY_COUNT = 2;
+const VEHICLE_COLOR_OPTIONS = [
+  'White',
+  'Black',
+  'Silver',
+  'Grey',
+  'Blue',
+  'Red',
+  'Green',
+  'Yellow',
+  'Brown',
+  'Beige',
+  'Gold',
+  'Orange',
+  'Purple',
+  'Maroon',
+  'Pink',
+  'Cream',
+  'Champagne',
+  'Other',
+];
+
+function getVehicleModelsFromCatalog(catalog = [], make) {
+  const match = catalog.find((item) => String(item?.make || '').trim().toLowerCase() === String(make || '').trim().toLowerCase());
+  return Array.isArray(match?.models) ? match.models : [];
+}
 
 function SelectionModal({
   visible,
@@ -232,14 +257,16 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [loading, setLoading] = useState(false);
   const [tiers, setTiers] = useState([]);
   const [tiersLoading, setTiersLoading] = useState(true);
+  const [vehicleCatalog, setVehicleCatalog] = useState(VEHICLE_MAKE_MODELS);
   const [selectedTierKey, setSelectedTierKey] = useState(vehicle?.vehicleTierKey || '');
   const [showMakeModal, setShowMakeModal] = useState(false);
   const [showModelModal, setShowModelModal] = useState(false);
   const [showYearModal, setShowYearModal] = useState(false);
+  const [showColorModal, setShowColorModal] = useState(false);
   /** When true, vehicle is pending after a successful submit — show alert before auto-redirect skips this. */
   const pendingSubmitAlertRef = useRef(false);
-  const makeOptions = VEHICLE_MAKE_MODELS.map((item) => item.make);
-  const modelOptions = getVehicleModelsForMake(make);
+  const makeOptions = vehicleCatalog.map((item) => item.make);
+  const modelOptions = getVehicleModelsFromCatalog(vehicleCatalog, make);
 
   useFocusEffect(
     useCallback(() => {
@@ -273,7 +300,19 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         const data = await getDriverVehicleOptions(token);
         if (!active) return;
         const nextTiers = Array.isArray(data?.tiers) ? data.tiers.slice(0, 3) : [];
+        const nextCatalog = Array.isArray(data?.catalog) && data.catalog.length > 0
+          ? data.catalog
+              .map((item, index) => ({
+                make: String(item?.make || '').trim(),
+                models: Array.isArray(item?.models)
+                  ? item.models.map((value) => String(value || '').trim()).filter(Boolean)
+                  : [],
+                sortOrder: Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : index,
+              }))
+              .filter((item) => item.make && item.models.length > 0)
+          : VEHICLE_MAKE_MODELS;
         setTiers(nextTiers);
+        setVehicleCatalog(nextCatalog.length > 0 ? nextCatalog : VEHICLE_MAKE_MODELS);
         if (!selectedTierKey && nextTiers[0]?.tierKey) {
           setSelectedTierKey(nextTiers[0].tierKey);
         }
@@ -687,8 +726,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           placeholder="Choose a year from 2010 onwards"
           onPress={() => setShowYearModal(true)}
         />
-        <Text className="text-sm font-medium text-gray-700 mb-2">Color</Text>
-        <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. Silver" value={color} onChangeText={setColor} />
+        <SelectField
+          label="Color"
+          value={color}
+          placeholder="Choose a color or type your own"
+          onPress={() => setShowColorModal(true)}
+        />
         <Text className="text-sm font-medium text-gray-700 mb-2">Passenger seats <Text className="text-red-500">*</Text></Text>
         <TextInput
           className="border border-gray-200 rounded-xl p-4 text-base mb-4"
@@ -813,7 +856,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         onClose={() => setShowMakeModal(false)}
         onSelect={(value) => {
           setMake(value);
-          if (!getVehicleModelsForMake(value).includes(model)) {
+          if (!getVehicleModelsFromCatalog(vehicleCatalog, value).includes(model)) {
             setModel('');
           }
           setShowMakeModal(false);
@@ -848,6 +891,24 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         onSelect={(value) => {
           setYear(value);
           setShowYearModal(false);
+        }}
+      />
+
+      <SelectionModal
+        visible={showColorModal}
+        title="Select Vehicle Color"
+        options={VEHICLE_COLOR_OPTIONS}
+        selectedValue={color}
+        searchPlaceholder="Search vehicle color"
+        customCreateLabel="Use typed color"
+        onClose={() => setShowColorModal(false)}
+        onCustomCreate={(value) => {
+          setColor(value);
+          setShowColorModal(false);
+        }}
+        onSelect={(value) => {
+          setColor(value);
+          setShowColorModal(false);
         }}
       />
     </View>

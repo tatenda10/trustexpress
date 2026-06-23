@@ -1,0 +1,18 @@
+export const DEFAULT_VEHICLE_CATALOG = [
+  { make: 'Toyota', models: ['Corolla', 'Auris', 'Yaris', 'Vitz', 'Passo', 'Belta', 'Wish', 'Premio', 'Allion', 'Axio', 'Fielder', 'Mark X', 'Hilux', 'Fortuner', 'RAV4', 'Harrier', 'Prado', 'Land Cruiser', 'Sienta', 'Noah', 'Voxy', 'Alphard', 'Hiace', 'Probox', 'Rumion', 'Ist', 'Raum'] },
+  { make: 'Daihatsu', models: ['Mira', 'Move', 'Tanto', 'Boon', 'Sirion', 'Terios', 'Rocky', 'Thor', 'Cast', 'Copen', 'Hijet'] },
+  { make: 'Honda', models: ['Fit', 'Jazz', 'Civic', 'Accord', 'CR-V', 'HR-V', 'Vezel', 'Insight', 'Freed', 'Stepwgn', 'Airwave', 'Stream'] },
+  { make: 'Nissan', models: ['March', 'Note', 'Tiida', 'Sunny', 'Bluebird', 'Sylphy', 'Wingroad', 'X-Trail', 'Dualis', 'Qashqai', 'Navara', 'Serena', 'NV200'] },
+  { make: 'Mazda', models: ['Demio', 'Mazda2', 'Mazda3', 'Axela', 'Atenza', 'Verisa', 'CX-3', 'CX-5', 'CX-7', 'BT-50', 'Bongo'] },
+  { make: 'Mercedes-Benz', models: ['A-Class', 'B-Class', 'C-Class', 'E-Class', 'S-Class', 'GLA', 'GLC', 'GLE', 'V-Class', 'Sprinter'] },
+  { make: 'BMW', models: ['1 Series', '3 Series', '5 Series', '7 Series', 'X1', 'X3', 'X5'] },
+  { make: 'Volkswagen', models: ['Polo', 'Golf', 'Jetta', 'Passat', 'Tiguan', 'Touareg', 'Caddy', 'Kombi', 'Amarok'] },
+  { make: 'Subaru', models: ['Impreza', 'Legacy', 'Forester', 'Outback', 'XV', 'Levorg'] },
+  { make: 'Suzuki', models: ['Swift', 'Alto', 'Wagon R', 'Baleno', 'Vitara', 'Ertiga', 'Every'] },
+  { make: 'Ford', models: ['Fiesta', 'Focus', 'Mondeo', 'EcoSport', 'Escape', 'Ranger', 'Everest', 'Tourneo'] },
+  { make: 'Hyundai', models: ['i10', 'i20', 'i30', 'Accent', 'Elantra', 'Tucson', 'Santa Fe', 'H-1', 'Getz'] },
+  { make: 'Kia', models: ['Picanto', 'Rio', 'Cerato', 'Sportage', 'Sorento', 'Carens', 'Morning'] },
+  { make: 'Lexus', models: ['CT', 'IS', 'ES', 'GS', 'RX', 'NX', 'LX'] },
+  { make: 'Mitsubishi', models: ['Mirage', 'Lancer', 'ASX', 'Outlander', 'Pajero', 'Triton', 'Colt'] },
+  { make: 'Isuzu', models: ['D-Max', 'MU-X', 'KB', 'N-Series'] },
+];

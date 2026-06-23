@@ -5,6 +5,7 @@ import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
+import { loadVehicleCatalog } from '../lib/vehicle-catalog.js';
 import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql.js';
 import { buildRideStopsPayload } from '../lib/ride-stops.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
@@ -269,9 +270,11 @@ router.get('/vehicle-options', requireAuth, async (req, res) => {
     const user = await requireDriver(req, res);
     if (!user) return;
 
+    const catalog = await loadVehicleCatalog();
     const rules = await loadVehicleTierRules();
     if (rules.length > 0) {
       return res.json({
+        catalog,
         tiers: rules.map((rule) => ({
           id: rule.id,
           tierKey: rule.tierKey,
@@ -319,7 +322,7 @@ router.get('/vehicle-options', requireAuth, async (req, res) => {
       });
     }
 
-    return res.json({ tiers: deduped });
+    return res.json({ catalog, tiers: deduped });
   } catch (err) {
     console.error('GET /api/drivers/vehicle-options', err);
     return res.status(500).json({ error: 'Server error' });

@@ -671,8 +671,9 @@ function RegisterDriverSection({
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {[
             'Open this page and show the QR code to the driver.',
-            'Driver scans it and the Trust Express mobile app opens.',
-            'Driver creates their own account inside the real app.',
+            'Driver scans it and opens the Trust Express app or the correct app store for their phone.',
+            'If the app had to be installed first, the driver must reopen the same QR code or invite link after install.',
+            'Driver creates a new driver account inside that same invite flow.',
             'The signup is automatically credited to your agent profile.',
           ].map((item, index) => (
             <div key={item} className="border border-slate-200 bg-slate-50 px-4 py-4">
@@ -738,7 +739,13 @@ function RegisterDriverSection({
         <h3 className="mt-2 text-2xl font-semibold text-slate-950">Share this with the driver</h3>
         <p className="mt-3 text-sm leading-6 text-slate-500">
           Use the QR code for in-person recruitment, or copy the invite link if you want to send it by WhatsApp or SMS.
+          Do not tell the driver to search for the app manually on Google first, because that can break agent attribution.
         </p>
+
+        <div className="mt-4 border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Important: if the driver had to install the app first, they must come back and open this same QR code or invite link again
+          before creating their driver account. Installing the app alone is not enough to credit the signup to your portal.
+        </div>
 
         {!vehicleEligibility?.available ? (
           <div className="mt-4 border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -761,6 +768,7 @@ function RegisterDriverSection({
               </div>
               <p className="mt-3 text-xs leading-5 text-slate-500">
                 Scan opens a secure link: Trust Express app if installed, otherwise the correct app store for that phone after a short moment.
+                After install, open this same QR again to keep the driver linked to your portal.
               </p>
             </div>
 
