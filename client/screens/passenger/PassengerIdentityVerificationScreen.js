@@ -10,12 +10,14 @@ import {
   BackHandler,
   KeyboardAvoidingView,
   Platform,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { getMe, submitPassengerIdentity, uploadFile } from '../../api';
 import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -53,6 +55,8 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
   const tabBarHeight = useBottomTabBarHeight();
   const isFocused = useIsFocused();
   const { getToken } = useAuth();
+  const cameraRef = useRef(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const getTokenRef = useRef(getToken);
   const requiredInOnboarding = route?.params?.required === true;
   const nextRouteName = String(route?.params?.nextRouteName || 'PassengerTabs');
@@ -61,6 +65,8 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
   const [loading, setLoading] = useState(true);
   const [identityLoadFailed, setIdentityLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [capturingSelfie, setCapturingSelfie] = useState(false);
+  const [showLockedSelfieCamera, setShowLockedSelfieCamera] = useState(false);
   const [profile, setProfile] = useState(null);
   const [uris, setUris] = useState({
     selfie: null,
@@ -77,6 +83,48 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
   const handleGoBack = () => {
     if (requiredInOnboarding) return;
     navigateToPassengerAccountMain(navigation);
+  };
+
+  const closeLockedSelfieCamera = () => {
+    if (capturingSelfie) return;
+    setShowLockedSelfieCamera(false);
+  };
+
+  const openLockedSelfieCamera = async () => {
+    if (cameraPermission?.granted !== true) {
+      const permission = await requestCameraPermission();
+      if (!permission?.granted) {
+        Alert.alert('Front camera permission needed', 'Allow camera access so you can take a live passenger selfie.');
+        return false;
+      }
+    }
+
+    setShowLockedSelfieCamera(true);
+    return true;
+  };
+
+  const captureLockedSelfie = async () => {
+    if (capturingSelfie) return;
+
+    try {
+      setCapturingSelfie(true);
+      const photo = await cameraRef.current?.takePictureAsync({
+        quality: 0.8,
+        skipProcessing: false,
+      });
+
+      if (!photo?.uri) {
+        throw new Error('No image was captured');
+      }
+
+      const stableUri = await persistLocalImageUri(photo.uri);
+      setUris((prev) => ({ ...prev, selfie: stableUri }));
+      setShowLockedSelfieCamera(false);
+    } catch (error) {
+      Alert.alert('Capture failed', error?.message || 'Could not capture the selfie. Please try again.');
+    } finally {
+      setCapturingSelfie(false);
+    }
   };
 
   useEffect(() => {
@@ -169,13 +217,12 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
     try {
       const imagePicker = await import('expo-image-picker');
       const isSelfie = key === 'selfie';
-      const source = isSelfie
-        ? await chooseImageSource({
-            title: 'Take passenger selfie',
-            message: 'For safety and identity review, your selfie must be taken live with the camera.',
-            allowGallery: false,
-          })
-        : await chooseImageSource();
+      if (isSelfie) {
+        await openLockedSelfieCamera();
+        return;
+      }
+
+      const source = await chooseImageSource();
       if (!source) return;
 
       let result;
@@ -188,7 +235,7 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
         result = await imagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing: true,
-          cameraType: isSelfie ? imagePicker.CameraType.front : imagePicker.CameraType.back,
+          cameraType: imagePicker.CameraType.back,
           quality: 0.8,
         });
       } else {
@@ -284,6 +331,72 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
 
   return (
     <View className="flex-1 bg-[#f6f7f3]">
+      <Modal
+        visible={showLockedSelfieCamera}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={closeLockedSelfieCamera}
+      >
+        <View className="flex-1 bg-black">
+          <View
+            className="absolute left-0 right-0 top-0 z-20 flex-row items-center justify-between px-5"
+            style={{ paddingTop: insets.top + 10, paddingBottom: 14 }}
+          >
+            <TouchableOpacity
+              onPress={closeLockedSelfieCamera}
+              disabled={capturingSelfie}
+              className="h-10 w-10 items-center justify-center rounded-full bg-black/45"
+            >
+              <Ionicons name="close" size={22} color="#fff" />
+            </TouchableOpacity>
+            <Text className="mx-4 flex-1 text-center text-base font-semibold text-white">
+              Front camera only: take your live passenger selfie
+            </Text>
+            <View className="h-10 w-10" />
+          </View>
+
+          {cameraPermission?.granted === true ? (
+            <CameraView
+              ref={cameraRef}
+              style={{ flex: 1 }}
+              facing="front"
+              mute={true}
+              responsiveOrientationWhenOrientationLocked
+            />
+          ) : (
+            <View className="flex-1 items-center justify-center px-8">
+              <Ionicons name="camera-outline" size={46} color="#fff" />
+              <Text className="mt-4 text-center text-base text-white">
+                Camera permission is required for live selfie capture.
+              </Text>
+            </View>
+          )}
+
+          <View
+            className="absolute bottom-0 left-0 right-0 px-6"
+            style={{ paddingBottom: Math.max(insets.bottom + 22, 30), paddingTop: 18 }}
+          >
+            <View className="mb-4 rounded-2xl bg-black/45 px-4 py-3">
+              <Text className="text-center text-sm text-white">
+                Gallery is disabled here. Use the front camera and make sure your full face is clearly visible.
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={captureLockedSelfie}
+              disabled={capturingSelfie || cameraPermission?.granted !== true}
+              className="self-center h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-white/20"
+              style={{ opacity: capturingSelfie || cameraPermission?.granted !== true ? 0.65 : 1 }}
+            >
+              {capturingSelfie ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <View className="h-14 w-14 rounded-full bg-white" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <View
         className="flex-row items-center justify-between bg-[#f6f7f3]"
         style={{

@@ -148,13 +148,22 @@ function mapSearchResult(item, index, query, originCoordinate) {
     latitude: Number(item?.lat),
     longitude: Number(item?.lon),
   };
+  const providerPlaceId = toPlaceId(item);
   return {
-    id: toPlaceId(item) || `${buildTitle(item, query)}-${index}`,
-    placeId: toPlaceId(item),
+    id: providerPlaceId || `${buildTitle(item, query)}-${index}`,
+    placeId: providerPlaceId,
+    providerPlaceId,
     title: buildTitle(item, query),
     subtitle: buildSubtitle(item),
     coordinate,
     distanceKm: originCoordinate ? calculateDistanceKm(originCoordinate, coordinate) : 0,
+    context: {
+      district: item?.address?.suburb || item?.address?.county || null,
+      city: item?.address?.city || item?.address?.town || item?.address?.village || null,
+      region: item?.address?.state || null,
+      country: item?.address?.country || 'Zimbabwe',
+    },
+    rawPayload: item,
   };
 }
 
@@ -164,6 +173,7 @@ function mapLookupResult(item) {
     longitude: Number(item?.lon),
   };
   return {
+    providerPlaceId: toPlaceId(item),
     coordinate,
     title: buildTitle(item, 'Selected place'),
     subtitle: item?.display_name || buildSubtitle(item),
@@ -173,6 +183,7 @@ function mapLookupResult(item) {
       region: item?.address?.state || null,
       country: item?.address?.country || 'Zimbabwe',
     },
+    rawPayload: item,
   };
 }
 

@@ -7,11 +7,13 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { submitDriverDocuments, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
@@ -88,6 +90,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const { driverStatus: contextDriverStatus, refetchDriverStatus } = useDriverStatus();
+  const cameraRef = useRef(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const driverStatus = contextDriverStatus ?? route.params?.driverStatus ?? null;
   const profile = driverStatus?.driverProfile;
   const vehicle = driverStatus?.vehicle;
@@ -106,6 +110,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     selfieWithIdCard: null,
   });
   const [loading, setLoading] = useState(false);
+  const [lockedSelfieDocKey, setLockedSelfieDocKey] = useState(null);
+  const [capturingLockedSelfie, setCapturingLockedSelfie] = useState(false);
   /** True while showing post-submit alert so useLayoutEffect does not replace before the user taps Continue. */
   const pendingSubmitAlertRef = useRef(false);
 
@@ -152,20 +158,67 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     } catch {}
   };
 
+  const closeLockedSelfieCamera = () => {
+    if (capturingLockedSelfie) return;
+    setLockedSelfieDocKey(null);
+  };
+
+  const openLockedSelfieCamera = async (key) => {
+    if (cameraPermission?.granted !== true) {
+      const permission = await requestCameraPermission();
+      if (!permission?.granted) {
+        Alert.alert(
+          'Front camera permission needed',
+          key === 'selfieWithIdCard'
+            ? 'Allow camera access so you can take a live selfie while holding your national ID.'
+            : 'Allow camera access so you can take your live identity selfie.',
+        );
+        return;
+      }
+    }
+
+    setLockedSelfieDocKey(key);
+  };
+
+  const captureLockedSelfie = async () => {
+    if (!lockedSelfieDocKey || capturingLockedSelfie) return;
+
+    try {
+      setCapturingLockedSelfie(true);
+      const photo = await cameraRef.current?.takePictureAsync({
+        quality: 0.8,
+        skipProcessing: false,
+      });
+
+      if (!photo?.uri) {
+        throw new Error('No image was captured');
+      }
+
+      const stableUri = await persistLocalImageUri(photo.uri);
+      setUris((prev) => ({ ...prev, [lockedSelfieDocKey]: stableUri }));
+      setLockedSelfieDocKey(null);
+    } catch (error) {
+      Alert.alert('Capture failed', error?.message || 'Could not capture the selfie. Please try again.');
+    } finally {
+      setCapturingLockedSelfie(false);
+    }
+  };
+
   const pickImage = async (key) => {
     try {
       const imagePicker = await import('expo-image-picker');
       const isLiveSelfie = key === 'selfie' || key === 'selfieWithIdCard';
+      if (isLiveSelfie) {
+        await openLockedSelfieCamera(key);
+        return;
+      }
+
       const source = await chooseImageSource({
-        title: isLiveSelfie ? 'Take live selfie' : 'Upload document',
+        title: 'Upload document',
         message:
-          key === 'selfieWithIdCard'
-            ? 'For safety and identity review, this photo must be taken live with the camera while holding your national ID.'
-            : key === 'selfie'
-              ? 'For safety and identity review, this selfie must be taken live with the camera.'
-              : 'Use your camera or choose an existing document photo from your gallery.',
+          'Use your camera or choose an existing document photo from your gallery.',
         allowCamera: true,
-        allowGallery: !isLiveSelfie,
+        allowGallery: true,
       });
       if (!source) return;
 
@@ -177,19 +230,14 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         if (!permission.granted) {
           Alert.alert(
             'Camera permission needed',
-            key === 'selfieWithIdCard'
-              ? 'Allow camera access to take a selfie while holding your national ID.'
-              : 'Allow camera access to take your identity selfie.',
+            'Allow camera access to capture the document.',
           );
           return;
         }
         result = await imagePicker.launchCameraAsync({
           mediaTypes: ['images'],
           allowsEditing,
-          cameraType:
-            key === 'selfie' || key === 'selfieWithIdCard'
-              ? imagePicker.CameraType.front
-              : imagePicker.CameraType.back,
+          cameraType: imagePicker.CameraType.back,
           quality: 0.8,
         });
       } else {
@@ -377,6 +425,74 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
 
   return (
     <View className="flex-1 bg-white">
+      <Modal
+        visible={!!lockedSelfieDocKey}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={closeLockedSelfieCamera}
+      >
+        <View className="flex-1 bg-black">
+          <View
+            className="absolute left-0 right-0 top-0 z-20 flex-row items-center justify-between px-5"
+            style={{ paddingTop: insets.top + 10, paddingBottom: 14 }}
+          >
+            <TouchableOpacity
+              onPress={closeLockedSelfieCamera}
+              disabled={capturingLockedSelfie}
+              className="h-10 w-10 items-center justify-center rounded-full bg-black/45"
+            >
+              <Ionicons name="close" size={22} color="#fff" />
+            </TouchableOpacity>
+            <Text className="mx-4 flex-1 text-center text-base font-semibold text-white">
+              {lockedSelfieDocKey === 'selfieWithIdCard' ? 'Front camera only: hold your ID next to your face' : 'Front camera only: take your live selfie'}
+            </Text>
+            <View className="h-10 w-10" />
+          </View>
+
+          {cameraPermission?.granted === true ? (
+            <CameraView
+              ref={cameraRef}
+              style={{ flex: 1 }}
+              facing="front"
+              mute={true}
+              responsiveOrientationWhenOrientationLocked
+            />
+          ) : (
+            <View className="flex-1 items-center justify-center px-8">
+              <Ionicons name="camera-outline" size={46} color="#fff" />
+              <Text className="mt-4 text-center text-base text-white">
+                Camera permission is required for live selfie capture.
+              </Text>
+            </View>
+          )}
+
+          <View
+            className="absolute bottom-0 left-0 right-0 px-6"
+            style={{ paddingBottom: Math.max(insets.bottom + 22, 30), paddingTop: 18 }}
+          >
+            <View className="mb-4 rounded-2xl bg-black/45 px-4 py-3">
+              <Text className="text-center text-sm text-white">
+                {lockedSelfieDocKey === 'selfieWithIdCard'
+                  ? 'Gallery is disabled here. Use the front camera and make sure both your face and national ID are clearly visible.'
+                  : 'Gallery is disabled here. Use the front camera and make sure your full face is clearly visible.'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={captureLockedSelfie}
+              disabled={capturingLockedSelfie || cameraPermission?.granted !== true}
+              className="self-center h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-white/20"
+              style={{ opacity: capturingLockedSelfie || cameraPermission?.granted !== true ? 0.65 : 1 }}
+            >
+              {capturingLockedSelfie ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <View className="h-14 w-14 rounded-full bg-white" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <View
         className="flex-row items-center justify-between border-b border-gray-100 bg-white"
         style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}

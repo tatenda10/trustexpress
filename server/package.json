@@ -27,6 +27,7 @@
     "db:migrate:ride-multi-stops": "node scripts/run-migration.js sql/migrations/039_add_ride_intermediate_stops.sql",
     "db:migrate:driver-response-viewed": "node scripts/run-migration.js sql/migrations/040_add_driver_response_viewed_at.sql",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
+    "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",
     "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",
     "db:migrate:agent-profile": "node scripts/run-migration.js sql/migrations/023_add_agent_profile_fields.sql",
     "db:migrate:agent-invites": "node scripts/run-migration.js sql/migrations/024_add_agent_invites_and_driver_referrals.sql",
@@ -45,7 +46,8 @@
     "contacts:export": "node scripts/export-user-contacts-to-excel.js",
     "drivers:find-by-email": "node scripts/find-driver-by-email.js",
     "drivers:audit-unsynced": "node scripts/find-unsynced-clerk-drivers.js",
-    "agent:repair-driver-referrals": "node scripts/attach-agent-drivers.js"
+    "agent:repair-driver-referrals": "node scripts/attach-agent-drivers.js",
+    "maps:test-place-fallback": "node scripts/test-place-search-fallback.js"
   },
   "author": "",
   "license": "ISC",
