@@ -139,4 +139,34 @@ router.patch('/:agentId/status', requireAdminAuth, requirePermission('agents.man
   }
 });
 
+router.patch('/:agentId/password', requireAdminAuth, requirePermission('agents.manage'), async (req, res) => {
+  try {
+    const agentId = Number(req.params.agentId);
+    const password = String(req.body?.password || '');
+
+    if (!agentId) {
+      return res.status(400).json({ error: 'Invalid agent id' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'password must be at least 8 characters' });
+    }
+
+    const passwordHash = hashPassword(password);
+    const result = await query(
+      'UPDATE agent_users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [passwordHash, agentId]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /api/admin/agents/:agentId/password', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 export default router;

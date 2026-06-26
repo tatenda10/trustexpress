@@ -193,6 +193,96 @@ function AgentModal({
   )
 }
 
+function ResetPasswordModal({
+  open,
+  saving,
+  agent,
+  form,
+  setForm,
+  onClose,
+  onSubmit,
+}) {
+  if (!open || !agent) return null
+
+  const passwordMismatch =
+    form.confirmPassword.length > 0 && form.password !== form.confirmPassword
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-8">
+      <div className="w-full max-w-xl border border-slate-300 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Recruitment / Agents</p>
+            <h2 className="mt-1 text-lg font-semibold text-slate-900">Reset Agent Password</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Set a new password for {agent.fullName}. This only updates the agent portal password.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 w-9 rounded-sm border border-slate-300 text-slate-500 transition hover:border-slate-400 hover:text-slate-800"
+          >
+            ×
+          </button>
+        </div>
+
+        <form onSubmit={onSubmit} className="space-y-4 px-5 py-5">
+          <div className="rounded-sm border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-sm font-medium text-slate-900">{agent.fullName}</p>
+            <p className="mt-1 text-xs text-slate-500">{agent.email}</p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">New Password</label>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                className="mt-1 h-10 w-full border border-slate-300 px-3 text-sm outline-none focus:border-indigo-500"
+                placeholder="Minimum 8 characters"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Confirm Password</label>
+              <input
+                type="password"
+                value={form.confirmPassword}
+                onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+                className="mt-1 h-10 w-full border border-slate-300 px-3 text-sm outline-none focus:border-indigo-500"
+                placeholder="Re-enter password"
+              />
+              {passwordMismatch ? (
+                <p className="mt-1 text-[11px] font-medium text-rose-600">Passwords do not match yet.</p>
+              ) : form.password && form.confirmPassword ? (
+                <p className="mt-1 text-[11px] font-medium text-emerald-600">Passwords match.</p>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-10 rounded-sm border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || passwordMismatch}
+              className={`h-10 rounded-sm px-4 text-sm font-semibold text-white ${saving || passwordMismatch ? 'cursor-not-allowed bg-slate-300' : 'bg-[#16213a]'}`}
+            >
+              {saving ? 'Saving...' : 'Reset Password'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function AgentsPage() {
   const { token, can, admin } = useAuth()
   const isSuperAdmin = admin?.role === 'super_admin'
@@ -201,7 +291,10 @@ export default function AgentsPage() {
 
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [resetSaving, setResetSaving] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [selectedAgent, setSelectedAgent] = useState(null)
   const [agents, setAgents] = useState([])
   const [searchInput, setSearchInput] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
@@ -216,12 +309,16 @@ export default function AgentsPage() {
     password: '',
     confirmPassword: '',
   })
+  const [resetPasswordForm, setResetPasswordForm] = useState({
+    password: '',
+    confirmPassword: '',
+  })
 
   const headers = useMemo(() => ({
     Authorization: `Bearer ${token}`,
   }), [token])
 
-  const resetForm = () => {
+  const resetCreateForm = () => {
     setForm({
       fullName: '',
       email: '',
@@ -229,6 +326,13 @@ export default function AgentsPage() {
       employeeCode: '',
       idNumber: '',
       address: '',
+      password: '',
+      confirmPassword: '',
+    })
+  }
+
+  const clearResetPasswordForm = () => {
+    setResetPasswordForm({
       password: '',
       confirmPassword: '',
     })
@@ -279,7 +383,7 @@ export default function AgentsPage() {
       }, { headers })
 
       toast.success('Agent account created successfully.')
-      resetForm()
+      resetCreateForm()
       setCreateOpen(false)
       await loadAgents()
     } catch (err) {
@@ -299,6 +403,44 @@ export default function AgentsPage() {
       await loadAgents()
     } catch (err) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to update agent status')
+    }
+  }
+
+  const openResetPassword = (agent) => {
+    setSelectedAgent(agent)
+    clearResetPasswordForm()
+    setResetOpen(true)
+  }
+
+  const closeResetPassword = () => {
+    if (resetSaving) return
+    setResetOpen(false)
+    setSelectedAgent(null)
+    clearResetPasswordForm()
+  }
+
+  const submitResetPassword = async (event) => {
+    event.preventDefault()
+    if (!canManageAgents || !selectedAgent) return
+    if (resetPasswordForm.password !== resetPasswordForm.confirmPassword) {
+      toast.error('Password and confirm password do not match.')
+      return
+    }
+
+    setResetSaving(true)
+    try {
+      await axios.patch(`${BASE_URL}/api/admin/agents/${selectedAgent.id}/password`, {
+        password: resetPasswordForm.password,
+      }, { headers })
+
+      toast.success('Agent password reset successfully.')
+      setResetOpen(false)
+      setSelectedAgent(null)
+      clearResetPasswordForm()
+    } catch (err) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to reset agent password')
+    } finally {
+      setResetSaving(false)
     }
   }
 
@@ -426,14 +568,24 @@ export default function AgentsPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-700">{formatDateTime(agent.lastLoginAt)}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => toggleAgentStatus(agent.id, agent.isActive)}
-                        disabled={!canManageAgents}
-                        className={`rounded-sm px-3 py-1.5 text-[11px] font-semibold ${!canManageAgents ? 'cursor-not-allowed bg-slate-100 text-slate-400' : agent.isActive ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200' : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'}`}
-                      >
-                        {agent.isActive ? 'Deactivate' : 'Activate'}
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openResetPassword(agent)}
+                          disabled={!canManageAgents}
+                          className={`rounded-sm px-3 py-1.5 text-[11px] font-semibold ${!canManageAgents ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'}`}
+                        >
+                          Reset Password
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleAgentStatus(agent.id, agent.isActive)}
+                          disabled={!canManageAgents}
+                          className={`rounded-sm px-3 py-1.5 text-[11px] font-semibold ${!canManageAgents ? 'cursor-not-allowed bg-slate-100 text-slate-400' : agent.isActive ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200' : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'}`}
+                        >
+                          {agent.isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -452,9 +604,19 @@ export default function AgentsPage() {
         onClose={() => {
           if (saving) return
           setCreateOpen(false)
-          resetForm()
+          resetCreateForm()
         }}
         onSubmit={createAgent}
+      />
+
+      <ResetPasswordModal
+        open={resetOpen}
+        saving={resetSaving}
+        agent={selectedAgent}
+        form={resetPasswordForm}
+        setForm={setResetPasswordForm}
+        onClose={closeResetPassword}
+        onSubmit={submitResetPassword}
       />
     </section>
   )
