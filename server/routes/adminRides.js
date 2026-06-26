@@ -297,29 +297,29 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
 
     const tripRows = await query(
       `SELECT
-         id,
-         public_id,
-         passenger_user_id,
-         passenger_name,
-         driver_user_id,
-         driver_name,
-         requested_tier_name,
-         pickup_label,
-         dropoff_label,
-         intermediate_stops_json,
-         current_stop_index,
-         pickup_lat,
-         pickup_lng,
-         dropoff_lat,
-         dropoff_lng,
-         route_polyline,
+         ride_requests.id,
+         ride_requests.public_id,
+         ride_requests.passenger_user_id,
+         ride_requests.passenger_name,
+         ride_requests.driver_user_id,
+         ride_requests.driver_name,
+         ride_requests.requested_tier_name,
+         ride_requests.pickup_label,
+         ride_requests.dropoff_label,
+         ride_requests.intermediate_stops_json,
+         ride_requests.current_stop_index,
+         ride_requests.pickup_lat,
+         ride_requests.pickup_lng,
+         ride_requests.dropoff_lat,
+         ride_requests.dropoff_lng,
+         ride_requests.route_polyline,
          da.current_lat AS driver_current_lat,
          da.current_lng AS driver_current_lng,
-         status
+         ride_requests.status
        FROM ride_requests
        LEFT JOIN driver_availability da ON da.driver_user_id = ride_requests.driver_user_id
-       WHERE status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-       ORDER BY COALESCE(arrived_at, assigned_at, requested_at) DESC`
+       WHERE ride_requests.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+       ORDER BY COALESCE(ride_requests.arrived_at, ride_requests.assigned_at, ride_requests.requested_at) DESC`
     );
 
     let searchContext = null;
