@@ -8,6 +8,7 @@ import { getPassengerVerificationFromMysql } from '../lib/passenger-verification
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { emitSupportChatMessageToUser } from '../lib/realtime.js';
 import {
+  autoCloseInactiveSupportThreads,
   createSupportMessage,
   getOrCreateSupportThreadForUser,
   listSupportMessages,
@@ -241,6 +242,7 @@ router.post('/push-token', requireAuth, async (req, res) => {
 
 router.get('/support/thread', requireAuth, async (req, res) => {
   try {
+    await autoCloseInactiveSupportThreads();
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
@@ -254,6 +256,7 @@ router.get('/support/thread', requireAuth, async (req, res) => {
 
 router.get('/support/messages', requireAuth, async (req, res) => {
   try {
+    await autoCloseInactiveSupportThreads();
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);

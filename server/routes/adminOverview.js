@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
+import { autoCloseInactiveSupportThreads } from '../lib/support-chat.js';
 
 const router = Router();
 const DRIVER_ONLINE_STALE_DAYS = 1;
@@ -32,6 +33,7 @@ function describeChange(value) {
 
 router.get('/', requireAdminAuth, requirePermission('overview.read'), async (_req, res) => {
   try {
+    await autoCloseInactiveSupportThreads();
     const [
       ridesTodayRows,
       ridesYesterdayRows,

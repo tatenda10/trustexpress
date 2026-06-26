@@ -7,6 +7,49 @@ import { buildRideStopsPayload } from '../lib/ride-stops.js';
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
 
+function decodePolyline(encoded, precision = 5) {
+  if (!encoded) return [];
+  let index = 0;
+  let latitude = 0;
+  let longitude = 0;
+  const coordinates = [];
+  const factor = Math.pow(10, precision);
+
+  while (index < encoded.length) {
+    let shift = 0;
+    let result = 0;
+    let byte = null;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
+    latitude += deltaLat;
+
+    shift = 0;
+    result = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
+    longitude += deltaLng;
+
+    coordinates.push({
+      lat: latitude / factor,
+      lng: longitude / factor,
+    });
+  }
+
+  return coordinates;
+}
+
 function mapRideStatus(status) {
   if (status === 'driver_assigned' || status === 'driver_arrived' || status === 'in_progress') return 'In Progress';
   if (status === 'completed') return 'Completed';
@@ -263,12 +306,18 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
          requested_tier_name,
          pickup_label,
          dropoff_label,
+         intermediate_stops_json,
+         current_stop_index,
          pickup_lat,
          pickup_lng,
          dropoff_lat,
          dropoff_lng,
+         route_polyline,
+         da.current_lat AS driver_current_lat,
+         da.current_lng AS driver_current_lng,
          status
        FROM ride_requests
+       LEFT JOIN driver_availability da ON da.driver_user_id = ride_requests.driver_user_id
        WHERE status IN ('driver_assigned', 'driver_arrived', 'in_progress')
        ORDER BY COALESCE(arrived_at, assigned_at, requested_at) DESC`
     );
@@ -384,7 +433,7 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
     const summary = {
       totalDrivers: driverRows.length,
       availableDrivers: driverRows.filter((row) => row.is_online && !row.ride_status).length,
-      pickupDrivers: driverRows.filter((row) => row.ride_status === 'driver_arrived').length,
+      pickupDrivers: driverRows.filter((row) => ['driver_assigned', 'driver_arrived'].includes(String(row.ride_status || ''))).length,
       onTripDrivers: driverRows.filter((row) => row.ride_status === 'in_progress').length,
       activeTrips: tripRows.length,
     };
@@ -399,7 +448,7 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
         name: row.driver_name || 'Driver',
         status: row.ride_status === 'in_progress'
           ? 'On Trip'
-          : row.ride_status === 'driver_arrived'
+          : ['driver_assigned', 'driver_arrived'].includes(String(row.ride_status || ''))
             ? 'Pickup'
             : row.is_online
               ? 'Available'
@@ -419,6 +468,7 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
           : { lat: Number(row.dropoff_lat), lng: Number(row.dropoff_lng) },
       })),
       trips: tripRows.map((row) => ({
+        ...buildRideStopsPayload(row),
         rowId: row.id,
         id: row.public_id,
         rider: row.passenger_name || 'Passenger',
@@ -432,6 +482,12 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
             ? 'Waiting for Customer'
             : 'Driver Arriving',
         route: `${row.pickup_label} -> ${row.dropoff_label}`,
+        driverCoordinate: row.driver_current_lat === null || row.driver_current_lng === null
+          ? null
+          : {
+              lat: Number(row.driver_current_lat),
+              lng: Number(row.driver_current_lng),
+            },
         pickupCoordinate: {
           lat: Number(row.pickup_lat),
           lng: Number(row.pickup_lng),
@@ -440,6 +496,16 @@ router.get('/live-map', requireAdminAuth, requirePermission('live_map.read'), as
           lat: Number(row.dropoff_lat),
           lng: Number(row.dropoff_lng),
         },
+        currentTargetCoordinate: (() => {
+          const stopsPayload = buildRideStopsPayload(row);
+          const target = stopsPayload.currentTargetCoordinate;
+          if (!target) return null;
+          return {
+            lat: Number(target.latitude),
+            lng: Number(target.longitude),
+          };
+        })(),
+        routeCoordinates: decodePolyline(String(row.route_polyline || '').trim()),
       })),
     });
   } catch (err) {

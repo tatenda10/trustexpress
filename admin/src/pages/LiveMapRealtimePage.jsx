@@ -35,10 +35,22 @@ function formatRefreshTime(value) {
 }
 
 function tripPath(trip) {
-  if (!trip?.pickupCoordinate || !trip?.dropoffCoordinate) return null
+  if (Array.isArray(trip?.routeCoordinates) && trip.routeCoordinates.length > 1) {
+    return trip.routeCoordinates
+      .map((point) => ({
+        lat: Number(point?.lat),
+        lng: Number(point?.lng),
+      }))
+      .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+  }
+
+  const origin = trip?.driverCoordinate || trip?.pickupCoordinate || null
+  const target = trip?.currentTargetCoordinate || trip?.dropoffCoordinate || null
+  if (!origin || !target) return null
+
   return [
-    { lat: Number(trip.pickupCoordinate.lat), lng: Number(trip.pickupCoordinate.lng) },
-    { lat: Number(trip.dropoffCoordinate.lat), lng: Number(trip.dropoffCoordinate.lng) },
+    { lat: Number(origin.lat), lng: Number(origin.lng) },
+    { lat: Number(target.lat), lng: Number(target.lng) },
   ]
 }
 
@@ -179,6 +191,19 @@ export default function LiveMapRealtimePage() {
           lng: Number(trip.dropoffCoordinate.lng),
           color: '#059669',
           title: `Drop-off for ${trip.id}`,
+          onClick: () => {
+            setSelectedTripId(trip.id)
+            navigate(`/dashboard/ride-operations/${trip.id}`)
+          },
+        })
+      }
+      if (trip.currentTargetCoordinate) {
+        markers.push({
+          id: `target-${trip.id}`,
+          lat: Number(trip.currentTargetCoordinate.lat),
+          lng: Number(trip.currentTargetCoordinate.lng),
+          color: '#f59e0b',
+          title: `Current target for ${trip.id}`,
           onClick: () => {
             setSelectedTripId(trip.id)
             navigate(`/dashboard/ride-operations/${trip.id}`)

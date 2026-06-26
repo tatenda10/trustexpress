@@ -4,6 +4,7 @@ import { requirePermission } from '../middleware/requirePermission.js';
 import { getClerkClient } from '../lib/clerk-client.js';
 import { normalizeRole } from '../lib/clerk-user.js';
 import { query } from '../db/connection.js';
+import { autoCloseInactiveSupportThreads } from '../lib/support-chat.js';
 
 const router = Router();
 
@@ -64,6 +65,7 @@ function normalizeDateInput(value, endOfDay = false) {
 
 router.get('/summary', requireAdminAuth, requirePermission('reports.read'), async (req, res) => {
   try {
+    await autoCloseInactiveSupportThreads();
     const dateFrom = normalizeDateInput(req.query.dateFrom, false);
     const dateTo = normalizeDateInput(req.query.dateTo, true);
     const rideWhere = [];

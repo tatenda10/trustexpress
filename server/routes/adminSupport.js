@@ -3,6 +3,7 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { getClerkUserById, toAppUser } from '../lib/clerk-user.js';
 import {
+  autoCloseInactiveSupportThreads,
   createSupportMessage,
   deleteSupportThread,
   getSupportThreadById,
@@ -118,6 +119,7 @@ router.post('/agent/test', requireAdminAuth, requirePermission('support.read'), 
 
 router.get('/threads', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
   try {
+    await autoCloseInactiveSupportThreads();
     const status = String(req.query.status || 'all').toLowerCase();
     const filter = String(req.query.filter || 'all').toLowerCase();
     const search = String(req.query.q || '').trim().toLowerCase();
@@ -186,6 +188,7 @@ router.get('/threads', requireAdminAuth, requirePermission('support.read'), asyn
 
 router.get('/threads/:threadId/messages', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
   try {
+    await autoCloseInactiveSupportThreads();
     const threadId = Number(req.params.threadId);
     if (!Number.isFinite(threadId) || threadId <= 0) {
       return res.status(400).json({ error: 'Valid threadId required' });

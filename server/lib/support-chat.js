@@ -1,5 +1,7 @@
 import { query } from '../db/connection.js';
 
+const SUPPORT_AUTO_CLOSE_HOURS = 24;
+
 export function normalizeSupportRole(role) {
   return role === 'driver' ? 'driver' : 'passenger';
 }
@@ -45,6 +47,23 @@ export async function getSupportThreadById(threadId) {
     [threadId]
   );
   return row || null;
+}
+
+export async function autoCloseInactiveSupportThreads(hours = SUPPORT_AUTO_CLOSE_HOURS) {
+  const safeHours = Math.max(1, Number(hours) || SUPPORT_AUTO_CLOSE_HOURS);
+  const result = await query(
+    `UPDATE support_threads
+     SET status = 'closed',
+         updated_at = CURRENT_TIMESTAMP
+     WHERE status = 'open'
+       AND COALESCE(last_message_at, updated_at, created_at) < (CURRENT_TIMESTAMP - INTERVAL ? HOUR)`,
+    [safeHours]
+  );
+
+  return {
+    affectedRows: Number(result?.affectedRows || 0),
+    hours: safeHours,
+  };
 }
 
 export async function getSupportThreadForUser(userId, role) {

@@ -57,6 +57,51 @@ function mapPassenger(user, passengerIdentity = null) {
   };
 }
 
+async function loadPassengerRideStats(passengerUserIds = []) {
+  const normalizedIds = Array.from(
+    new Set(passengerUserIds.map((value) => String(value || '').trim()).filter(Boolean))
+  );
+  if (normalizedIds.length === 0) return new Map();
+
+  const placeholders = normalizedIds.map(() => '?').join(', ');
+  const rows = await query(
+    `SELECT
+       passenger_user_id,
+       COUNT(*) AS total_rides,
+       COALESCE(SUM(CASE
+         WHEN status = 'completed' THEN COALESCE(final_estimated_amount, estimated_amount, 0) + COALESCE(tip_amount, 0)
+         ELSE 0
+       END), 0) AS total_spend,
+       MAX(COALESCE(completed_at, cancelled_at, started_at, arrived_at, assigned_at, requested_at)) AS last_ride_at
+     FROM ride_requests
+     WHERE passenger_user_id IN (${placeholders})
+     GROUP BY passenger_user_id`,
+    normalizedIds
+  );
+
+  return new Map(
+    rows.map((row) => [
+      row.passenger_user_id,
+      {
+        totalRides: Number(row.total_rides || 0),
+        totalSpend: Number(row.total_spend || 0),
+        lastRideAt: row.last_ride_at || null,
+      },
+    ])
+  );
+}
+
+function applyPassengerRideStats(passenger, statsMap) {
+  const stats = statsMap.get(passenger.id) || null;
+  if (!stats) return passenger;
+  return {
+    ...passenger,
+    totalRides: Number(stats.totalRides || 0),
+    totalSpend: Number(stats.totalSpend || 0),
+    lastRideAt: stats.lastRideAt || null,
+  };
+}
+
 function toDateValue(value) {
   if (!value) return 0;
   const numeric = Number(value);
@@ -123,12 +168,16 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
     const clerkUsers = await loadAllClerkUsers('-created_at');
     const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
     const identities = await listPassengerIdentities(passengerUsers.map((item) => item.id));
+    const passengerRideStats = await loadPassengerRideStats(passengerUsers.map((item) => item.id));
     const identityByUserId = new Map(
       identities.map((row) => [row.passenger_user_id, shapePassengerIdentityFromRow(row)])
     );
 
     let passengers = passengerUsers
-      .map((item) => mapPassenger(item, identityByUserId.get(item.id) || null))
+      .map((item) => applyPassengerRideStats(
+        mapPassenger(item, identityByUserId.get(item.id) || null),
+        passengerRideStats
+      ))
       .filter((item) => item._role === 'passenger');
 
     if (search) {
@@ -208,12 +257,16 @@ router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read')
     const clerkUsers = await loadAllClerkUsers('-created_at');
     const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
     const identities = await listPassengerIdentities(passengerUsers.map((item) => item.id));
+    const passengerRideStats = await loadPassengerRideStats(passengerUsers.map((item) => item.id));
     const identityByUserId = new Map(
       identities.map((row) => [row.passenger_user_id, shapePassengerIdentityFromRow(row)])
     );
 
     let passengers = passengerUsers
-      .map((item) => mapPassenger(item, identityByUserId.get(item.id) || null))
+      .map((item) => applyPassengerRideStats(
+        mapPassenger(item, identityByUserId.get(item.id) || null),
+        passengerRideStats
+      ))
       .filter((item) => item._role === 'passenger');
 
     if (search) {
@@ -254,7 +307,11 @@ router.get('/:passengerId', requireAdminAuth, requirePermission('passengers.read
     const clerkClient = getClerkClient();
     const user = await clerkClient.users.getUser(req.params.passengerId);
     const identities = await listPassengerIdentities([req.params.passengerId]);
-    const mapped = mapPassenger(user, shapePassengerIdentityFromRow(identities[0] || null));
+    const passengerRideStats = await loadPassengerRideStats([req.params.passengerId]);
+    const mapped = applyPassengerRideStats(
+      mapPassenger(user, shapePassengerIdentityFromRow(identities[0] || null)),
+      passengerRideStats
+    );
 
     if (mapped._role !== 'passenger') {
       return res.status(404).json({ error: 'Passenger not found' });
