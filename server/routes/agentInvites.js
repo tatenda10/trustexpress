@@ -5,15 +5,35 @@ import { requireAgentAuth } from '../middleware/agentAuth.js';
 
 const router = Router();
 
-function shapeInvitePayload(invite) {
+function getPublicBaseUrl(req) {
+  const envBaseUrl = String(
+    process.env.PUBLIC_WEB_BASE_URL ||
+      process.env.PUBLIC_BASE_URL ||
+      process.env.API_PUBLIC_BASE_URL ||
+      'https://ridehailcarsserver.online'
+  ).trim();
+
+  if (envBaseUrl) {
+    return envBaseUrl.replace(/\/$/, '');
+  }
+
+  const forwardedProto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = forwardedProto || req?.protocol || 'https';
+  const host = String(req?.get?.('host') || '').trim();
+  if (!host) return 'https://ridehailcarsserver.online';
+  return `${proto}://${host}`.replace(/\/$/, '');
+}
+
+function shapeInvitePayload(invite, req) {
   if (!invite) return null;
 
+  const publicBaseUrl = getPublicBaseUrl(req);
   const driverAppUrl = `trustexpress://driver-signup?invite=${encodeURIComponent(invite.token)}`;
-  const driverUniversalUrl = `https://trustexpress.co.zw/driver-signup?invite=${encodeURIComponent(invite.token)}`;
-  const driverSmartInviteUrl = `https://trustexpress.co.zw/invite/driver?invite=${encodeURIComponent(invite.token)}`;
+  const driverUniversalUrl = `${publicBaseUrl}/driver-signup?invite=${encodeURIComponent(invite.token)}`;
+  const driverSmartInviteUrl = `${publicBaseUrl}/invite/driver?invite=${encodeURIComponent(invite.token)}`;
   const passengerAppUrl = `trustexpress://passenger-signup?invite=${encodeURIComponent(invite.token)}`;
-  const passengerUniversalUrl = `https://trustexpress.co.zw/passenger-signup?invite=${encodeURIComponent(invite.token)}`;
-  const passengerSmartInviteUrl = `https://trustexpress.co.zw/invite/passenger?invite=${encodeURIComponent(invite.token)}`;
+  const passengerUniversalUrl = `${publicBaseUrl}/passenger-signup?invite=${encodeURIComponent(invite.token)}`;
+  const passengerSmartInviteUrl = `${publicBaseUrl}/invite/passenger?invite=${encodeURIComponent(invite.token)}`;
 
   return {
     id: invite.id,
@@ -35,7 +55,7 @@ function shapeInvitePayload(invite) {
 router.get('/invites/me', requireAgentAuth, async (req, res) => {
   try {
     const invite = await getOrCreateInviteForAgent(req.agent.id);
-    return res.json({ invite: shapeInvitePayload(invite) });
+    return res.json({ invite: shapeInvitePayload(invite, req) });
   } catch (err) {
     console.error('GET /api/agent/invites/me', err);
     return res.status(500).json({ error: 'Server error' });
@@ -62,7 +82,7 @@ router.get('/invite/:token', async (req, res) => {
 
     return res.json({
       valid: true,
-      invite: shapeInvitePayload(invite),
+      invite: shapeInvitePayload(invite, req),
     });
   } catch (err) {
     console.error('GET /api/agent/invite/:token', err);

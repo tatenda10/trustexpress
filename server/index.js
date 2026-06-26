@@ -26,12 +26,8 @@ app.use('/uploads', (req, res) => {
   });
 });
 
-const ANDROID_PLAY_STORE_SEARCH_URL =
-  process.env.ANDROID_PLAY_STORE_SEARCH_URL ||
-  'https://play.google.com/store/search?q=trust%20express%20app&c=apps';
-const IOS_APP_STORE_SEARCH_URL =
-  process.env.IOS_APP_STORE_SEARCH_URL ||
-  'https://apps.apple.com/us/search?term=trust%20express';
+const ANDROID_PLAY_STORE_SEARCH_URL = 'https://play.google.com/store/apps/details?id=com.tatenda10.trustexpress';
+const IOS_APP_STORE_SEARCH_URL = 'https://apps.apple.com/gr/app/trust-express-app/id6760766112';
 
 function buildInviteLandingHtml({ title, appDeepLink, openLabel }) {
   return `<!DOCTYPE html>
