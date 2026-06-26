@@ -49,6 +49,7 @@ import DriverEmailLoginScreen from './screens/driver/auth/DriverEmailLoginScreen
 import DriverPhoneLoginScreen from './screens/driver/auth/DriverPhoneLoginScreen';
 import { DriverStatusProvider } from './context/DriverStatusContext';
 import { AgentInviteProvider, useAgentInvite } from './context/AgentInviteContext';
+import { restoreAgentInviteFromAndroidInstallReferrer } from './services/agentInstallReferrer';
 import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
 import {
@@ -1223,7 +1224,15 @@ function AppContent() {
     // Complete OAuth session when app opens from redirect (Clerk Google/Apple sign-in)
     WebBrowser.maybeCompleteAuthSession();
 
+    let cancelled = false;
     hydrateStoredInvite().catch(() => {});
+
+    const queueInviteNavigation = (target) => {
+      if (cancelled || isSignedIn) return;
+      if (!navigateToOnboardingIfAvailable(target)) {
+        pendingInviteNavigationRef.current = target;
+      }
+    };
 
     // When app is opened via deep link (e.g. trustexpress://oauth-callback?...) complete the auth session
     const sub = Linking.addEventListener('url', ({ url }) => {
@@ -1236,11 +1245,22 @@ function AppContent() {
       if (url) {
         WebBrowser.maybeCompleteAuthSession();
         handleInviteUrl(url).catch(() => {});
+        return;
       }
+
+      restoreAgentInviteFromAndroidInstallReferrer({ setInviteFromToken })
+        .then((restored) => {
+          if (!restored?.inviteToken) return;
+          queueInviteNavigation(restored.target === 'passenger' ? 'passenger' : 'driver');
+        })
+        .catch(() => {});
     });
 
-    return () => sub?.remove();
-  }, [handleInviteUrl, hydrateStoredInvite]);
+    return () => {
+      cancelled = true;
+      sub?.remove();
+    };
+  }, [handleInviteUrl, hydrateStoredInvite, isSignedIn, navigateToOnboardingIfAvailable, setInviteFromToken]);
 
   return (
     <NavigationContainer

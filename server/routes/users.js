@@ -105,6 +105,14 @@ router.post('/register', requireAuth, async (req, res) => {
     }
 
     if (referral) {
+      console.log('[users.register] agent referral attached', {
+        userId: req.userId,
+        role,
+        inviteToken,
+        agentUserId: referral.agentUserId,
+        inviteId: referral.inviteId,
+        source: referral.source,
+      });
       await mergePrivateMetadata(req.userId, {
         referredByAgentId: referral.agentUserId,
         recruitmentSource: referral.source,
@@ -149,6 +157,14 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
     }
 
     if (referral) {
+      console.log('[users.agent-referral.attach] agent referral attached', {
+        userId: req.userId,
+        role: appUser.role,
+        inviteToken,
+        agentUserId: referral.agentUserId,
+        inviteId: referral.inviteId,
+        source: referral.source,
+      });
       await mergePrivateMetadata(req.userId, {
         referredByAgentId: referral.agentUserId,
         recruitmentSource: referral.source,

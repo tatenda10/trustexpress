@@ -29,7 +29,23 @@ app.use('/uploads', (req, res) => {
 const ANDROID_PLAY_STORE_SEARCH_URL = 'https://play.google.com/store/apps/details?id=com.tatenda10.trustexpress';
 const IOS_APP_STORE_SEARCH_URL = 'https://apps.apple.com/gr/app/trust-express-app/id6760766112';
 
-function buildInviteLandingHtml({ title, appDeepLink, openLabel }) {
+function buildPlayStoreInviteUrl({ invite, type }) {
+  try {
+    const url = new URL(ANDROID_PLAY_STORE_SEARCH_URL);
+    const referrerParams = new URLSearchParams({
+      invite,
+      target: type,
+    });
+    url.searchParams.set('referrer', referrerParams.toString());
+    return url.toString();
+  } catch {
+    const encodedReferrer = encodeURIComponent(`invite=${invite}&target=${type}`);
+    const separator = ANDROID_PLAY_STORE_SEARCH_URL.includes('?') ? '&' : '?';
+    return `${ANDROID_PLAY_STORE_SEARCH_URL}${separator}referrer=${encodedReferrer}`;
+  }
+}
+
+function buildInviteLandingHtml({ title, appDeepLink, openLabel, androidStoreUrl, iosStoreUrl }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -44,13 +60,13 @@ function buildInviteLandingHtml({ title, appDeepLink, openLabel }) {
 </head>
 <body>
   <p>Opening Trust Express...</p>
-  <p>If nothing happens, <a id="store-link" href="${ANDROID_PLAY_STORE_SEARCH_URL.replace(/"/g, '&quot;')}">get the app</a>.</p>
+  <p>If nothing happens, <a id="store-link" href="${androidStoreUrl.replace(/"/g, '&quot;')}">get the app</a>.</p>
   <p><a href="${appDeepLink.replace(/"/g, '&quot;')}">${openLabel}</a></p>
   <script>
 (function () {
   var appUrl = ${JSON.stringify(appDeepLink)};
-  var androidStoreUrl = ${JSON.stringify(ANDROID_PLAY_STORE_SEARCH_URL)};
-  var iosStoreUrl = ${JSON.stringify(IOS_APP_STORE_SEARCH_URL)};
+  var androidStoreUrl = ${JSON.stringify(androidStoreUrl)};
+  var iosStoreUrl = ${JSON.stringify(iosStoreUrl)};
   var ua = window.navigator.userAgent || '';
   var isApple = /iPhone|iPad|iPod/i.test(ua);
   var storeUrl = isApple ? iosStoreUrl : androidStoreUrl;
@@ -89,9 +105,16 @@ function handleInviteLanding(req, res, type) {
   const title = type === 'passenger' ? 'Trust Express - Passenger invite' : 'Trust Express - Driver invite';
   const openLabel = type === 'passenger' ? 'Open passenger signup in app' : 'Open driver signup in app';
   const appDeepLink = `trustexpress://${path}?invite=${encodeURIComponent(invite)}`;
+  const androidStoreUrl = buildPlayStoreInviteUrl({ invite, type });
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(buildInviteLandingHtml({ title, appDeepLink, openLabel }));
+  res.send(buildInviteLandingHtml({
+    title,
+    appDeepLink,
+    openLabel,
+    androidStoreUrl,
+    iosStoreUrl: IOS_APP_STORE_SEARCH_URL,
+  }));
 }
 
 // HTTPS landing pages for QR scans and shared links. These try the app first,
