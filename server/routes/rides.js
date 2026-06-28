@@ -2037,17 +2037,30 @@ router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req
       [rideRequestId]
     );
     const acceptedCount = Number(acceptedCountRow?.total || 0);
+    const [pendingCountRow] = await query(
+      `SELECT COUNT(*) AS total
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?
+         AND status = 'pending'`,
+      [rideRequestId]
+    );
+    const pendingCount = Number(pendingCountRow?.total || 0);
+    const nextRideStatus = acceptedCount > 0
+      ? 'driver_found'
+      : pendingCount > 0
+        ? 'requested'
+        : 'expired';
 
     if (acceptedCount === 0) {
       await query(
         `UPDATE ride_requests
-         SET status = 'requested',
-             driver_found_at = NULL
+         SET status = ?,
+             driver_found_at = CASE WHEN ? = 'requested' THEN NULL ELSE driver_found_at END
          WHERE id = ?
            AND passenger_user_id = ?
            AND status = 'driver_found'
            AND driver_user_id IS NULL`,
-        [rideRequestId, req.userId]
+        [nextRideStatus, nextRideStatus, rideRequestId, req.userId]
       );
     }
 
@@ -2057,7 +2070,7 @@ router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req
     });
     emitRideStatusToDriver(driverUserId, {
       rideRequestId,
-      status: 'requested',
+      status: nextRideStatus,
       passengerUserId: req.userId,
       reason: 'declined_by_passenger',
     });
@@ -2066,7 +2079,7 @@ router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req
       ok: true,
       rideRequest: {
         id: rideRequestId,
-        status: acceptedCount > 0 ? 'driver_found' : 'requested',
+        status: nextRideStatus,
       },
     });
   } catch (err) {

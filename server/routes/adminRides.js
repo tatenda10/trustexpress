@@ -83,6 +83,7 @@ function buildRideFilters(req) {
   const dateTo = String(req.query.dateTo || '').trim();
   const clauses = [];
   const params = [];
+  const activityTimestampSql = `COALESCE(completed_at, cancelled_at, started_at, arrived_at, assigned_at, driver_found_at, requested_at)`;
 
   if (search) {
     clauses.push(`(
@@ -107,12 +108,12 @@ function buildRideFilters(req) {
   }
 
   if (dateFrom) {
-    clauses.push(`DATE(requested_at) >= ?`);
+    clauses.push(`DATE(${activityTimestampSql}) >= ?`);
     params.push(dateFrom);
   }
 
   if (dateTo) {
-    clauses.push(`DATE(requested_at) <= ?`);
+    clauses.push(`DATE(${activityTimestampSql}) <= ?`);
     params.push(dateTo);
   }
 
@@ -178,7 +179,7 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
           GROUP BY ride_request_id
         ) pa ON pa.ride_request_id = rr.id
         ${whereSql}
-        ORDER BY rr.requested_at DESC, rr.id DESC
+        ORDER BY COALESCE(rr.completed_at, rr.cancelled_at, rr.started_at, rr.arrived_at, rr.assigned_at, rr.driver_found_at, rr.requested_at) DESC, rr.id DESC
         LIMIT ${pageSize} OFFSET ${offset}`,
         params
       ),
