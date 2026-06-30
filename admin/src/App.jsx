@@ -16,6 +16,7 @@ import PassengersPage from './pages/PassengersPage'
 import PassengerDetailsPage from './pages/PassengerDetailsPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AgentsPage from './pages/AgentsPage'
+import AgentDetailPage from './pages/AgentDetailPage'
 import Can from './components/Can'
 import PricingZonesPage from './pages/PricingZonesPage'
 import ReportsPage from './pages/ReportsPage'
@@ -114,6 +115,10 @@ function AppRoutes() {
         <Route
           path="agents"
           element={<PermissionRoute permission="agents.read"><AgentsPage /></PermissionRoute>}
+        />
+        <Route
+          path="agents/:agentId"
+          element={<PermissionRoute permission="agents.read"><AgentDetailPage /></PermissionRoute>}
         />
         <Route
           path="passengers/:passengerId"

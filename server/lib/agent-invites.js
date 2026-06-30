@@ -64,6 +64,58 @@ export async function findInviteByToken(token) {
   return mapInviteRow(rows[0]);
 }
 
+export async function attachDriverToAgentManual({ driverUserId, agentUserId, source = 'admin_manual' }) {
+  if (!driverUserId || !agentUserId) return null;
+
+  const invite = await getOrCreateInviteForAgent(agentUserId);
+  if (!invite) {
+    const error = new Error('Agent invite could not be created');
+    error.status = 400;
+    throw error;
+  }
+
+  return withTransaction(async (connection) => {
+    const [existingRows] = await connection.execute(
+      `SELECT id, driver_user_id, agent_user_id, invite_id, source
+       FROM agent_driver_referrals
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [driverUserId]
+    );
+
+    if (existingRows[0]) {
+      if (Number(existingRows[0].agent_user_id) !== Number(agentUserId)) {
+        const error = new Error('Driver is already assigned to another agent');
+        error.status = 409;
+        error.existingAgentUserId = existingRows[0].agent_user_id;
+        throw error;
+      }
+      return {
+        driverUserId: existingRows[0].driver_user_id,
+        agentUserId: existingRows[0].agent_user_id,
+        inviteId: existingRows[0].invite_id,
+        source: existingRows[0].source,
+        alreadyExists: true,
+      };
+    }
+
+    const referralSource = String(source || 'admin_manual').trim() || 'admin_manual';
+    await connection.execute(
+      `INSERT INTO agent_driver_referrals (driver_user_id, agent_user_id, invite_id, source)
+       VALUES (?, ?, ?, ?)`,
+      [driverUserId, invite.agentUserId, invite.id, referralSource]
+    );
+
+    return {
+      driverUserId,
+      agentUserId: invite.agentUserId,
+      inviteId: invite.id,
+      source: referralSource,
+      alreadyExists: false,
+    };
+  });
+}
+
 export async function attachDriverToAgentInvite({ driverUserId, inviteToken }) {
   const token = String(inviteToken || '').trim();
   if (!driverUserId || !token) return null;

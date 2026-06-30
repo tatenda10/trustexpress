@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -529,6 +530,8 @@ export default function AgentsPage() {
                 <th className="px-4 py-2 font-semibold">Agent Details</th>
                 <th className="px-4 py-2 font-semibold">Address</th>
                 <th className="px-4 py-2 font-semibold">Status</th>
+                <th className="px-4 py-2 font-semibold">Drivers</th>
+                <th className="px-4 py-2 font-semibold">Rides</th>
                 <th className="px-4 py-2 font-semibold">Last Login</th>
                 <th className="px-4 py-2 font-semibold text-right">Actions</th>
               </tr>
@@ -536,11 +539,11 @@ export default function AgentsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">Loading agents...</td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-xs text-slate-500">Loading agents...</td>
                 </tr>
               ) : agents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">No agents found.</td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-xs text-slate-500">No agents found.</td>
                 </tr>
               ) : (
                 agents.map((agent) => (
@@ -566,9 +569,20 @@ export default function AgentsPage() {
                         {agent.isActive ? 'Active' : 'Inactive'}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div className="font-medium text-slate-800">{agent.driverReferralCount || 0}</div>
+                      <div className="mt-1 text-[11px] text-slate-500">{agent.passengerReferralCount || 0} passengers</div>
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">{agent.totalCompletedRides || 0}</td>
                     <td className="px-4 py-3 text-slate-700">{formatDateTime(agent.lastLoginAt)}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <Link
+                          to={`/dashboard/agents/${agent.id}`}
+                          className="rounded-sm bg-indigo-50 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100"
+                        >
+                          View
+                        </Link>
                         <button
                           type="button"
                           onClick={() => openResetPassword(agent)}
