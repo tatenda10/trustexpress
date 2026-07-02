@@ -136,18 +136,104 @@ export async function mergePrivateMetadata(userId, patch) {
   return nextPrivate;
 }
 
+function isClerkUserNotFoundError(error) {
+  if (!error) return false;
+  if (Number(error.status) === 404) return true;
+  const errors = Array.isArray(error.errors) ? error.errors : [];
+  return errors.some((item) => item?.code === 'resource_not_found');
+}
+
+export async function resolveClerkUserIdForMetadataSync({ clerkUserId, email, role = 'driver' }) {
+  const mysqlClerkUserId = String(clerkUserId || '').trim();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+
+  if (mysqlClerkUserId) {
+    try {
+      await getClerkUserById(mysqlClerkUserId, { skipCache: true });
+      return { clerkUserId: mysqlClerkUserId, repaired: false };
+    } catch (error) {
+      if (!isClerkUserNotFoundError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  if (!normalizedEmail) {
+    return {
+      clerkUserId: mysqlClerkUserId || null,
+      repaired: false,
+      notFoundInClerk: true,
+    };
+  }
+
+  const clerkClient = getClerkClient();
+  const list = await clerkClient.users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
+  const users = Array.isArray(list?.data) ? list.data : [];
+  const expectedRole = normalizeRole(role);
+  const match = users.find((user) => normalizeRole(user.publicMetadata?.role) === expectedRole) || users[0] || null;
+
+  if (!match?.id) {
+    return {
+      clerkUserId: mysqlClerkUserId || null,
+      repaired: false,
+      notFoundInClerk: true,
+    };
+  }
+
+  return {
+    clerkUserId: match.id,
+    repaired: Boolean(mysqlClerkUserId && mysqlClerkUserId !== match.id),
+    staleMysqlClerkUserId: mysqlClerkUserId && mysqlClerkUserId !== match.id ? mysqlClerkUserId : null,
+  };
+}
+
+export async function syncRecruitmentPrivateMetadata(userId, { referredByAgentId, recruitmentSource }) {
+  try {
+    await mergePrivateMetadata(userId, {
+      referredByAgentId,
+      recruitmentSource,
+    });
+    return { synced: true };
+  } catch (error) {
+    if (isClerkUserNotFoundError(error)) {
+      return {
+        synced: false,
+        reason: 'clerk_user_not_found',
+        message: 'Referral saved, but this Clerk user no longer exists — metadata was not synced.',
+      };
+    }
+    console.error('syncRecruitmentPrivateMetadata failed', { userId, error });
+    return {
+      synced: false,
+      reason: 'clerk_sync_failed',
+      message: 'Referral saved, but Clerk metadata could not be updated.',
+    };
+  }
+}
+
 export async function clearRecruitmentPrivateMetadata(userId) {
   const clerkClient = getClerkClient();
-  const user = await clerkClient.users.getUser(userId);
-  const nextPrivate = { ...(user.privateMetadata || {}) };
-  delete nextPrivate.referredByAgentId;
-  delete nextPrivate.recruitmentSource;
+  try {
+    const user = await clerkClient.users.getUser(userId);
+    const nextPrivate = { ...(user.privateMetadata || {}) };
+    delete nextPrivate.referredByAgentId;
+    delete nextPrivate.recruitmentSource;
 
-  await clerkClient.users.updateUserMetadata(userId, {
-    privateMetadata: nextPrivate,
-  });
+    await clerkClient.users.updateUserMetadata(userId, {
+      privateMetadata: nextPrivate,
+    });
 
-  clerkUserCache.delete(userId);
+    clerkUserCache.delete(userId);
 
-  return nextPrivate;
+    return { cleared: true, privateMetadata: nextPrivate };
+  } catch (error) {
+    if (isClerkUserNotFoundError(error)) {
+      return {
+        cleared: false,
+        reason: 'clerk_user_not_found',
+        message: 'Referral removed from database. Clerk user was not found, so metadata was not cleared.',
+      };
+    }
+    throw error;
+  }
 }

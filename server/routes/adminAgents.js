@@ -6,7 +6,7 @@ import { hashPassword } from '../lib/admin-password.js';
 import { attachDriverToAgentManual } from '../lib/agent-invites.js';
 import { detachDriverFromAgent, detachPassengerFromAgent, getExistingDriverReferral, resolveDriverByIdentifier } from '../lib/agent-driver-referrals.js';
 import { getAgentRecruitmentDashboard } from '../lib/agent-recruitment.js';
-import { clearRecruitmentPrivateMetadata, mergePrivateMetadata } from '../lib/clerk-user.js';
+import { clearRecruitmentPrivateMetadata, resolveClerkUserIdForMetadataSync, syncRecruitmentPrivateMetadata } from '../lib/clerk-user.js';
 
 const router = Router();
 
@@ -250,18 +250,48 @@ router.post('/:agentId/referrals/drivers', requireAdminAuth, requirePermission('
       agentUserId: agentId,
     });
 
-    if (referral && !referral.alreadyExists) {
-      await mergePrivateMetadata(driver.clerk_user_id, {
-        referredByAgentId: referral.agentUserId,
-        recruitmentSource: referral.source,
-      });
+    const clerkIdentity = await resolveClerkUserIdForMetadataSync({
+      clerkUserId: driver.clerk_user_id,
+      email: driver.email,
+      role: driver.role,
+    });
+
+    const clerkSync = referral && clerkIdentity.clerkUserId
+      ? await syncRecruitmentPrivateMetadata(clerkIdentity.clerkUserId, {
+          referredByAgentId: referral.agentUserId,
+          recruitmentSource: referral.source,
+        })
+      : {
+          synced: false,
+          reason: clerkIdentity.notFoundInClerk ? 'clerk_user_not_found' : 'referral_missing',
+          message: clerkIdentity.notFoundInClerk
+            ? 'Referral saved in database, but no matching Clerk user was found for metadata sync.'
+            : undefined,
+        };
+
+    const warnings = [];
+    if (referral?.alreadyExists) {
+      warnings.push('Driver was already linked to this agent. Clerk metadata was re-synced.');
+    }
+    if (clerkIdentity.repaired) {
+      warnings.push(
+        `MySQL had a stale Clerk user ID (${clerkIdentity.staleMysqlClerkUserId}); metadata synced using the live Clerk account (${clerkIdentity.clerkUserId}).`
+      );
+    }
+    if (!clerkSync.synced && clerkSync.message) {
+      warnings.push(clerkSync.message);
     }
 
     return res.status(referral?.alreadyExists ? 200 : 201).json({
       ok: true,
       alreadyExists: !!referral?.alreadyExists,
+      clerkSync,
+      clerkIdentity,
+      warnings,
+      warning: warnings[0],
       driver: {
         userId: driver.clerk_user_id,
+        clerkUserIdForSync: clerkIdentity.clerkUserId || null,
         email: driver.email || null,
         phoneNumber: driver.phone_number || null,
       },

@@ -105,10 +105,19 @@ export default function AgentDetailPage() {
         { headers }
       )
       if (response?.alreadyExists) {
-        toast.info('Driver was already assigned to this agent.')
+        toast.info('Driver was already linked to this agent. Clerk metadata was re-synced.')
       } else {
         toast.success('Driver assigned to agent successfully.')
       }
+      const warningMessages = Array.isArray(response?.warnings)
+        ? response.warnings.filter(Boolean)
+        : response?.warning
+          ? [response.warning]
+          : []
+      warningMessages.forEach((message) => {
+        if (response?.alreadyExists && message.includes('already linked')) return
+        toast.warn(message)
+      })
       setDriverIdentifier('')
       await loadReferrals()
     } catch (err) {
