@@ -1,4 +1,5 @@
-import { query } from '../db/connection.js';
+import { query, withTransaction } from '../db/connection.js';
+import { resolveClerkUserIdForMetadataSync } from './clerk-user.js';
 
 export function normalizeVehicleNumber(value) {
   return String(value || '')
@@ -6,6 +7,87 @@ export function normalizeVehicleNumber(value) {
     .toUpperCase()
     .replace(/\s+/g, '')
     .replace(/-/g, '');
+}
+
+export async function repairStaleDriverClerkUserId({ staleClerkUserId, liveClerkUserId }) {
+  const staleId = String(staleClerkUserId || '').trim();
+  const liveId = String(liveClerkUserId || '').trim();
+  if (!staleId || !liveId || staleId === liveId) {
+    return { repaired: false };
+  }
+
+  return withTransaction(async (connection) => {
+    const exec = (sql, params) => connection.execute(sql, params);
+
+    const [liveReferralRows] = await exec(
+      'SELECT id FROM agent_driver_referrals WHERE driver_user_id = ? LIMIT 1',
+      [liveId]
+    );
+    const [staleReferralRows] = await exec(
+      'SELECT id FROM agent_driver_referrals WHERE driver_user_id = ? LIMIT 1',
+      [staleId]
+    );
+    if (liveReferralRows[0] && staleReferralRows[0]) {
+      await exec('DELETE FROM agent_driver_referrals WHERE driver_user_id = ?', [staleId]);
+    } else if (staleReferralRows[0]) {
+      await exec(
+        'UPDATE agent_driver_referrals SET driver_user_id = ? WHERE driver_user_id = ?',
+        [liveId, staleId]
+      );
+    }
+
+    for (const table of ['driver_identity', 'driver_vehicle', 'driver_availability']) {
+      const [liveRows] = await exec(
+        `SELECT driver_user_id FROM ${table} WHERE driver_user_id = ? LIMIT 1`,
+        [liveId]
+      );
+      const [staleRows] = await exec(
+        `SELECT driver_user_id FROM ${table} WHERE driver_user_id = ? LIMIT 1`,
+        [staleId]
+      );
+      if (liveRows[0] && staleRows[0]) {
+        await exec(`DELETE FROM ${table} WHERE driver_user_id = ?`, [staleId]);
+      } else if (staleRows[0]) {
+        await exec(
+          `UPDATE ${table} SET driver_user_id = ? WHERE driver_user_id = ?`,
+          [liveId, staleId]
+        );
+      }
+    }
+
+    for (const table of [
+      'ride_requests',
+      'ride_request_driver_responses',
+      'ride_lost_items',
+      'ride_panic_alerts',
+      'discount_code_redemptions',
+      'driver_discount_reimbursements',
+    ]) {
+      await exec(
+        `UPDATE ${table} SET driver_user_id = ? WHERE driver_user_id = ?`,
+        [liveId, staleId]
+      );
+    }
+
+    const [liveUserRows] = await exec(
+      'SELECT id FROM users WHERE clerk_user_id = ? LIMIT 1',
+      [liveId]
+    );
+    const [staleUserRows] = await exec(
+      'SELECT id FROM users WHERE clerk_user_id = ? LIMIT 1',
+      [staleId]
+    );
+    if (liveUserRows[0] && staleUserRows[0]) {
+      await exec('DELETE FROM users WHERE clerk_user_id = ?', [staleId]);
+    } else if (staleUserRows[0]) {
+      await exec(
+        'UPDATE users SET clerk_user_id = ? WHERE clerk_user_id = ?',
+        [liveId, staleId]
+      );
+    }
+
+    return { repaired: true, staleClerkUserId: staleId, liveClerkUserId: liveId };
+  });
 }
 
 export async function resolveDriverByIdentifier(identifier) {
@@ -20,7 +102,9 @@ export async function resolveDriverByIdentifier(identifier) {
        LIMIT 1`,
       [raw]
     );
-    return rows[0] || null;
+    const driver = rows[0] || null;
+    if (!driver) return null;
+    return refreshDriverClerkUserId(driver);
   }
 
   if (raw.includes('@')) {
@@ -31,7 +115,9 @@ export async function resolveDriverByIdentifier(identifier) {
        LIMIT 1`,
       [raw.toLowerCase()]
     );
-    return rows[0] || null;
+    const driver = rows[0] || null;
+    if (!driver) return null;
+    return refreshDriverClerkUserId(driver);
   }
 
   const vehicleNumber = normalizeVehicleNumber(raw);
@@ -43,7 +129,32 @@ export async function resolveDriverByIdentifier(identifier) {
      LIMIT 1`,
     [vehicleNumber]
   );
-  return rows[0] || null;
+  const driver = rows[0] || null;
+  if (!driver) return null;
+
+  return refreshDriverClerkUserId(driver);
+}
+
+async function refreshDriverClerkUserId(driver) {
+  const identity = await resolveClerkUserIdForMetadataSync({
+    clerkUserId: driver.clerk_user_id,
+    email: driver.email,
+    role: driver.role,
+  });
+
+  if (!identity.repaired || !identity.clerkUserId) {
+    return driver;
+  }
+
+  await repairStaleDriverClerkUserId({
+    staleClerkUserId: identity.staleMysqlClerkUserId || driver.clerk_user_id,
+    liveClerkUserId: identity.clerkUserId,
+  });
+
+  return {
+    ...driver,
+    clerk_user_id: identity.clerkUserId,
+  };
 }
 
 export async function getExistingDriverReferral(driverUserId) {

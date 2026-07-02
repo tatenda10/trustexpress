@@ -1,6 +1,7 @@
 import { query } from '../db/connection.js';
-import { getClerkUserById, getPrimaryEmail, getPrimaryPhone } from './clerk-user.js';
+import { getClerkUserById, getPrimaryEmail, getPrimaryPhone, resolveClerkUserIdForMetadataSync } from './clerk-user.js';
 import { getAgentRewardProgress } from './agent-rewards.js';
+import { repairStaleDriverClerkUserId } from './agent-driver-referrals.js';
 
 function hasValue(value) {
   return value !== null && value !== undefined && String(value).trim() !== '';
@@ -184,9 +185,12 @@ async function listAgentDriverRecruitmentApplications(agentUserId) {
       dv.zinara_url,
       dv.make,
       dv.model,
-      dv.number_plate
+      dv.number_plate,
+      u.email AS user_email,
+      u.phone_number AS user_phone_number
     FROM agent_driver_referrals r
     INNER JOIN agent_invites i ON i.id = r.invite_id
+    LEFT JOIN users u ON u.clerk_user_id = r.driver_user_id
     LEFT JOIN driver_identity di ON di.driver_user_id = r.driver_user_id
     LEFT JOIN driver_vehicle dv ON dv.driver_user_id = r.driver_user_id
     WHERE r.agent_user_id = ?
@@ -196,23 +200,86 @@ async function listAgentDriverRecruitmentApplications(agentUserId) {
 
   const applications = await Promise.all(
     rows.map(async (row) => {
+      let driverUserId = row.driver_user_id;
+      let identityRow = row;
       let clerkUser = null;
+
       try {
-        clerkUser = await getClerkUserById(row.driver_user_id, { skipCache: true });
+        clerkUser = await getClerkUserById(driverUserId, { skipCache: true });
       } catch {
         clerkUser = null;
       }
 
+      if (!clerkUser && row.user_email) {
+        const identity = await resolveClerkUserIdForMetadataSync({
+          clerkUserId: driverUserId,
+          email: row.user_email,
+          role: 'driver',
+        });
+        if (identity.repaired && identity.clerkUserId) {
+          await repairStaleDriverClerkUserId({
+            staleClerkUserId: driverUserId,
+            liveClerkUserId: identity.clerkUserId,
+          });
+          driverUserId = identity.clerkUserId;
+          const refreshedRows = await query(
+            `SELECT
+              di.profile_status,
+              di.profile_submitted_at,
+              di.profile_reviewed_at,
+              di.profile_rejection_reason,
+              di.national_id_front_url,
+              di.national_id_back_url,
+              di.driver_licence_url,
+              di.selfie_url,
+              di.selfie_with_id_card_url,
+              dv.vehicle_status,
+              dv.vehicle_submitted_at,
+              dv.vehicle_reviewed_at,
+              dv.vehicle_rejection_reason,
+              dv.car_photo_front_url,
+              dv.car_photo_rear_url,
+              dv.vehicle_registration_book_url,
+              dv.insurance_url,
+              dv.zinara_url,
+              dv.make,
+              dv.model,
+              dv.number_plate,
+              u.email AS user_email,
+              u.phone_number AS user_phone_number
+             FROM agent_driver_referrals r
+             LEFT JOIN users u ON u.clerk_user_id = r.driver_user_id
+             LEFT JOIN driver_identity di ON di.driver_user_id = r.driver_user_id
+             LEFT JOIN driver_vehicle dv ON dv.driver_user_id = r.driver_user_id
+             WHERE r.id = ?
+             LIMIT 1`,
+            [row.id]
+          );
+          identityRow = { ...row, ...(refreshedRows[0] || {}), driver_user_id: driverUserId };
+          try {
+            clerkUser = await getClerkUserById(driverUserId, { skipCache: true });
+          } catch {
+            clerkUser = null;
+          }
+        } else if (identity.clerkUserId) {
+          try {
+            clerkUser = await getClerkUserById(identity.clerkUserId, { skipCache: true });
+          } catch {
+            clerkUser = null;
+          }
+        }
+      }
+
       const fullName = [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(' ').trim();
       const applicationStatus = buildApplicationStatus({
-        identity: row,
-        vehicle: row,
+        identity: identityRow,
+        vehicle: identityRow,
       });
 
       return {
         id: row.id,
         type: 'driver',
-        driverUserId: row.driver_user_id,
+        driverUserId,
         agentUserId: row.agent_user_id,
         inviteId: row.invite_id,
         source: row.source,
@@ -220,19 +287,22 @@ async function listAgentDriverRecruitmentApplications(agentUserId) {
         inviteCreatedAt: row.invite_created_at,
         driver: {
           fullName: fullName || null,
-          email: clerkUser ? getPrimaryEmail(clerkUser) : null,
-          phoneNumber: clerkUser?.privateMetadata?.phoneNumber || (clerkUser ? getPrimaryPhone(clerkUser) : null),
+          email: clerkUser ? getPrimaryEmail(clerkUser) : identityRow.user_email || null,
+          phoneNumber: clerkUser?.privateMetadata?.phoneNumber
+            || (clerkUser ? getPrimaryPhone(clerkUser) : null)
+            || identityRow.user_phone_number
+            || null,
         },
         vehicle: {
-          make: row.make || null,
-          model: row.model || null,
-          numberPlate: row.number_plate || null,
+          make: identityRow.make || null,
+          model: identityRow.model || null,
+          numberPlate: identityRow.number_plate || null,
         },
-        identityStatus: row.profile_status || null,
-        vehicleStatus: row.vehicle_status || null,
-        submittedAt: row.profile_submitted_at || row.vehicle_submitted_at || null,
-        reviewedAt: row.profile_reviewed_at || row.vehicle_reviewed_at || null,
-        rejectionReason: row.profile_rejection_reason || row.vehicle_rejection_reason || null,
+        identityStatus: identityRow.profile_status || null,
+        vehicleStatus: identityRow.vehicle_status || null,
+        submittedAt: identityRow.profile_submitted_at || identityRow.vehicle_submitted_at || null,
+        reviewedAt: identityRow.profile_reviewed_at || identityRow.vehicle_reviewed_at || null,
+        rejectionReason: identityRow.profile_rejection_reason || identityRow.vehicle_rejection_reason || null,
         status: applicationStatus,
       };
     })

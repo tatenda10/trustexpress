@@ -305,8 +305,15 @@ export default function AgentDetailPage() {
                     <tr key={`${item.type}-${item.id}`} className="border-b border-slate-200 align-top hover:bg-slate-50">
                       <td className="px-4 py-3 capitalize text-slate-700">{item.type}</td>
                       <td className="px-4 py-3 text-slate-700">
-                        <div className="font-medium text-slate-800">{item.driver?.fullName || userId}</div>
-                        <div className="mt-1 text-[11px] text-slate-500">{item.driver?.email || '-'}</div>
+                        <div className="font-medium text-slate-800">
+                          {item.driver?.fullName || item.driver?.email || userId}
+                        </div>
+                        {item.driver?.fullName && item.driver?.email ? (
+                          <div className="mt-1 text-[11px] text-slate-500">{item.driver.email}</div>
+                        ) : null}
+                        {!item.driver?.fullName && !item.driver?.email ? (
+                          <div className="mt-1 text-[11px] text-slate-500">{userId}</div>
+                        ) : null}
                         <div className="text-[11px] text-slate-500">{item.driver?.phoneNumber || '-'}</div>
                       </td>
                       <td className="px-4 py-3 text-slate-700">

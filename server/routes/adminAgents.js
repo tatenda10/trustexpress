@@ -274,9 +274,7 @@ router.post('/:agentId/referrals/drivers', requireAdminAuth, requirePermission('
       warnings.push('Driver was already linked to this agent. Clerk metadata was re-synced.');
     }
     if (clerkIdentity.repaired) {
-      warnings.push(
-        `MySQL had a stale Clerk user ID (${clerkIdentity.staleMysqlClerkUserId}); metadata synced using the live Clerk account (${clerkIdentity.clerkUserId}).`
-      );
+      warnings.push('Corrected a stale Clerk user ID in the database and synced the live account.');
     }
     if (!clerkSync.synced && clerkSync.message) {
       warnings.push(clerkSync.message);
