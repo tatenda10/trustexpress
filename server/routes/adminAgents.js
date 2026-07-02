@@ -4,9 +4,9 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { hashPassword } from '../lib/admin-password.js';
 import { attachDriverToAgentManual } from '../lib/agent-invites.js';
-import { getExistingDriverReferral, resolveDriverByIdentifier } from '../lib/agent-driver-referrals.js';
+import { detachDriverFromAgent, detachPassengerFromAgent, getExistingDriverReferral, resolveDriverByIdentifier } from '../lib/agent-driver-referrals.js';
 import { getAgentRecruitmentDashboard } from '../lib/agent-recruitment.js';
-import { mergePrivateMetadata } from '../lib/clerk-user.js';
+import { clearRecruitmentPrivateMetadata, mergePrivateMetadata } from '../lib/clerk-user.js';
 
 const router = Router();
 
@@ -272,6 +272,68 @@ router.post('/:agentId/referrals/drivers', requireAdminAuth, requirePermission('
       return res.status(409).json({ error: err.message || 'Driver is already assigned to another agent' });
     }
     console.error('POST /api/admin/agents/:agentId/referrals/drivers', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/:agentId/referrals/drivers/:driverUserId', requireAdminAuth, requirePermission('agents.manage'), async (req, res) => {
+  try {
+    const agentId = Number(req.params.agentId);
+    const driverUserId = String(req.params.driverUserId || '').trim();
+
+    if (!agentId || !driverUserId) {
+      return res.status(400).json({ error: 'Invalid agent or driver id' });
+    }
+
+    const detached = await detachDriverFromAgent({
+      driverUserId,
+      agentUserId: agentId,
+    });
+
+    if (!detached) {
+      return res.status(404).json({ error: 'Driver referral not found for this agent' });
+    }
+
+    try {
+      await clearRecruitmentPrivateMetadata(driverUserId);
+    } catch (metadataErr) {
+      console.error('DELETE driver referral: Clerk metadata clear failed', metadataErr);
+    }
+
+    return res.json({ ok: true, driverUserId });
+  } catch (err) {
+    console.error('DELETE /api/admin/agents/:agentId/referrals/drivers/:driverUserId', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/:agentId/referrals/passengers/:passengerUserId', requireAdminAuth, requirePermission('agents.manage'), async (req, res) => {
+  try {
+    const agentId = Number(req.params.agentId);
+    const passengerUserId = String(req.params.passengerUserId || '').trim();
+
+    if (!agentId || !passengerUserId) {
+      return res.status(400).json({ error: 'Invalid agent or passenger id' });
+    }
+
+    const detached = await detachPassengerFromAgent({
+      passengerUserId,
+      agentUserId: agentId,
+    });
+
+    if (!detached) {
+      return res.status(404).json({ error: 'Passenger referral not found for this agent' });
+    }
+
+    try {
+      await clearRecruitmentPrivateMetadata(passengerUserId);
+    } catch (metadataErr) {
+      console.error('DELETE passenger referral: Clerk metadata clear failed', metadataErr);
+    }
+
+    return res.json({ ok: true, passengerUserId });
+  } catch (err) {
+    console.error('DELETE /api/admin/agents/:agentId/referrals/passengers/:passengerUserId', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

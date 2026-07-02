@@ -62,6 +62,7 @@ export default function AgentDetailPage() {
 
   const [loading, setLoading] = useState(true)
   const [assigning, setAssigning] = useState(false)
+  const [delinkingId, setDelinkingId] = useState(null)
   const [driverIdentifier, setDriverIdentifier] = useState('')
   const [data, setData] = useState(null)
   const [typeFilter, setTypeFilter] = useState('all')
@@ -120,6 +121,29 @@ export default function AgentDetailPage() {
       }
     } finally {
       setAssigning(false)
+    }
+  }
+
+  const delinkReferral = async (item) => {
+    if (!canManageAgents) return
+    const userId = item.type === 'driver' ? item.driverUserId : item.passengerUserId
+    const displayName = item.driver?.fullName || item.driver?.email || userId
+    const confirmed = window.confirm(
+      `Remove ${item.type} "${displayName}" from this agent?\n\nThis clears the referral link. Completed rides are not deleted.`
+    )
+    if (!confirmed) return
+
+    const delinkKey = `${item.type}-${item.id}`
+    setDelinkingId(delinkKey)
+    try {
+      const segment = item.type === 'driver' ? 'drivers' : 'passengers'
+      await axios.delete(`${BASE_URL}/api/admin/agents/${agentId}/referrals/${segment}/${userId}`, { headers })
+      toast.success(`${item.type === 'driver' ? 'Driver' : 'Passenger'} delinked from agent.`)
+      await loadReferrals()
+    } catch (err) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to delink user')
+    } finally {
+      setDelinkingId(null)
     }
   }
 
@@ -202,7 +226,7 @@ export default function AgentDetailPage() {
           <form onSubmit={assignDriver} className="border border-slate-300 bg-white px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Assign Driver Manually</p>
             <p className="mt-1 text-xs text-slate-500">
-              Link a driver to this agent using their Clerk user ID, email, or vehicle plate.
+              Fallback when invite-link sync failed. Use Clerk user ID, email, or vehicle plate.
             </p>
             <input
               type="text"
@@ -250,7 +274,7 @@ export default function AgentDetailPage() {
                 <th className="px-4 py-2 font-semibold">Rides</th>
                 <th className="px-4 py-2 font-semibold">Source</th>
                 <th className="px-4 py-2 font-semibold">Referred</th>
-                <th className="px-4 py-2 font-semibold text-right">Profile</th>
+                <th className="px-4 py-2 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -297,12 +321,28 @@ export default function AgentDetailPage() {
                       <td className="px-4 py-3 text-slate-700">{item.source || '-'}</td>
                       <td className="px-4 py-3 text-slate-700">{formatDateTime(item.referredAt)}</td>
                       <td className="px-4 py-3 text-right">
-                        <Link
-                          to={profilePath}
-                          className="inline-flex rounded-sm bg-slate-100 px-3 py-1.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200"
-                        >
-                          View
-                        </Link>
+                        <div className="flex items-center justify-end gap-2">
+                          <Link
+                            to={profilePath}
+                            className="inline-flex rounded-sm bg-slate-100 px-3 py-1.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200"
+                          >
+                            View
+                          </Link>
+                          {canManageAgents ? (
+                            <button
+                              type="button"
+                              onClick={() => delinkReferral(item)}
+                              disabled={delinkingId === `${item.type}-${item.id}`}
+                              className={`rounded-sm px-3 py-1.5 text-[11px] font-semibold ring-1 ${
+                                delinkingId === `${item.type}-${item.id}`
+                                  ? 'cursor-not-allowed bg-slate-100 text-slate-400 ring-slate-200'
+                                  : 'bg-rose-50 text-rose-700 ring-rose-200 hover:bg-rose-100'
+                              }`}
+                            >
+                              {delinkingId === `${item.type}-${item.id}` ? 'Removing...' : 'Delink'}
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   )

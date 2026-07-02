@@ -135,3 +135,19 @@ export async function mergePrivateMetadata(userId, patch) {
 
   return nextPrivate;
 }
+
+export async function clearRecruitmentPrivateMetadata(userId) {
+  const clerkClient = getClerkClient();
+  const user = await clerkClient.users.getUser(userId);
+  const nextPrivate = { ...(user.privateMetadata || {}) };
+  delete nextPrivate.referredByAgentId;
+  delete nextPrivate.recruitmentSource;
+
+  await clerkClient.users.updateUserMetadata(userId, {
+    privateMetadata: nextPrivate,
+  });
+
+  clerkUserCache.delete(userId);
+
+  return nextPrivate;
+}

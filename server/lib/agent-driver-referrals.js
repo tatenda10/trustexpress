@@ -66,3 +66,25 @@ export async function getExistingDriverReferral(driverUserId) {
   );
   return rows[0] || null;
 }
+
+export async function detachDriverFromAgent({ driverUserId, agentUserId }) {
+  if (!driverUserId || !agentUserId) return false;
+
+  const result = await query(
+    `DELETE FROM agent_driver_referrals
+     WHERE driver_user_id = ? AND agent_user_id = ?`,
+    [driverUserId, agentUserId]
+  );
+  return result.affectedRows > 0;
+}
+
+export async function detachPassengerFromAgent({ passengerUserId, agentUserId }) {
+  if (!passengerUserId || !agentUserId) return false;
+
+  const result = await query(
+    `DELETE FROM agent_passenger_referrals
+     WHERE passenger_user_id = ? AND agent_user_id = ?`,
+    [passengerUserId, agentUserId]
+  );
+  return result.affectedRows > 0;
+}
