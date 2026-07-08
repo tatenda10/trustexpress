@@ -3,7 +3,11 @@ import {
   fetchCachedOsmPlaceDetails,
   hasOsmPlacesProvider,
 } from './osm-places.js';
-import { fetchHerePlaceAutocomplete, hasHerePlacesProvider } from './here-places.js';
+import {
+  fetchGooglePlaceAutocomplete,
+  fetchGooglePlaceDetails,
+  hasGooglePlacesProvider,
+} from './google-places.js';
 import {
   cacheResolvedSuggestions,
   findCachedPlaceSuggestions,
@@ -16,9 +20,9 @@ function normalizeQuery(value) {
 }
 
 export function getPlacesProviderName() {
-  if (hasOsmPlacesProvider() && hasHerePlacesProvider()) return 'osm+here';
+  if (hasOsmPlacesProvider() && hasGooglePlacesProvider()) return 'osm+google';
   if (hasOsmPlacesProvider()) return 'osm';
-  if (hasHerePlacesProvider()) return 'here';
+  if (hasGooglePlacesProvider()) return 'google';
   return 'none';
 }
 
@@ -51,17 +55,17 @@ export async function fetchCachedPlaceAutocomplete(options) {
     }
   }
 
-  if (hasHerePlacesProvider()) {
-    const hereResult = await fetchHerePlaceAutocomplete(options);
-    if (Array.isArray(hereResult?.suggestions) && hereResult.suggestions.length > 0) {
+  if (hasGooglePlacesProvider()) {
+    const googleResult = await fetchGooglePlaceAutocomplete(options);
+    if (Array.isArray(googleResult?.suggestions) && googleResult.suggestions.length > 0) {
       const suggestions = await cacheResolvedSuggestions({
-        provider: 'here',
+        provider: 'google',
         normalizedQuery,
-        suggestions: hereResult.suggestions,
+        suggestions: googleResult.suggestions,
       });
       return {
         suggestions,
-        cacheHit: Boolean(hereResult?.cacheHit),
+        cacheHit: Boolean(googleResult?.cacheHit),
       };
     }
   }
@@ -86,6 +90,10 @@ export async function fetchCachedPlaceDetails(options) {
     const cachedOsmPlace = await getCachedPlaceByProviderKey('osm', normalizedPlaceId);
     if (cachedOsmPlace?.place) {
       return { place: cachedOsmPlace.place, cacheHit: true };
+    }
+    const cachedGooglePlace = await getCachedPlaceByProviderKey('google', normalizedPlaceId);
+    if (cachedGooglePlace?.place) {
+      return { place: cachedGooglePlace.place, cacheHit: true };
     }
   }
 
@@ -118,6 +126,39 @@ export async function fetchCachedPlaceDetails(options) {
       }
     } catch (error) {
       console.warn('[maps-places] OSM place details failed', error?.message || error);
+    }
+  }
+
+  if (hasGooglePlacesProvider() && normalizedPlaceId) {
+    try {
+      const googleResult = await fetchGooglePlaceDetails({ placeId: normalizedPlaceId });
+      if (googleResult?.place) {
+        const savedSuggestions = await cacheResolvedSuggestions({
+          provider: 'google',
+          normalizedQuery: googleResult.place.title || googleResult.place.subtitle || 'selected place',
+          suggestions: [
+            {
+              providerPlaceId: googleResult.place.providerPlaceId || normalizedPlaceId,
+              title: googleResult.place.title,
+              subtitle: googleResult.place.subtitle,
+              coordinate: googleResult.place.coordinate,
+              context: googleResult.place.context,
+              rawPayload: googleResult.place.rawPayload || null,
+            },
+          ],
+        });
+
+        const savedPlaceId = savedSuggestions[0]?.placeId;
+        if (savedPlaceId) {
+          const savedPlace = await getCachedPlaceById(savedPlaceId);
+          if (savedPlace) return { place: savedPlace, cacheHit: Boolean(googleResult.cacheHit) };
+        }
+
+        return { place: googleResult.place, cacheHit: Boolean(googleResult.cacheHit) };
+      }
+    } catch (error) {
+      if (Number(error?.status) === 422) throw error;
+      console.warn('[maps-places] Google place details failed', error?.message || error);
     }
   }
 

@@ -27,6 +27,7 @@ const DEADLOCK_RETRY_DELAY_MS = 120;
 const DEADLOCK_RETRY_ATTEMPTS = 3;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
+const DRIVER_REQUEST_RADIUS_KM = 5;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -522,7 +523,10 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
 
     await query(
       `UPDATE ride_requests
-       SET status = 'expired'
+       SET status = 'expired',
+           cancellation_reason = COALESCE(cancellation_reason, 'No driver accepted the request in time'),
+           cancelled_by = COALESCE(cancelled_by, 'system'),
+           cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP)
        WHERE
          (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
          OR (
@@ -540,7 +544,14 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          AND rr.status = 'pending'
          AND (
            r.status NOT IN ('requested', 'driver_found')
-           OR r.requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)
+           OR (
+             r.status = 'requested'
+             AND r.requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)
+           )
+           OR (
+             r.status = 'driver_found'
+             AND COALESCE(r.driver_found_at, r.requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
+           )
          )`,
       [req.userId]
     );
@@ -596,7 +607,13 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          AND r.public_id NOT LIKE 'SIM-%'
          AND r.passenger_user_id IS NOT NULL
          AND r.status IN ('requested', 'driver_found')
-         AND TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP) <= ${(OPEN_REQUEST_TTL_MINUTES * 60) - OPEN_REQUEST_MIN_REMAINING_SECONDS}
+         AND (
+           (r.status = 'requested' AND TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP) <= ${(OPEN_REQUEST_TTL_MINUTES * 60) - OPEN_REQUEST_MIN_REMAINING_SECONDS})
+           OR (
+             r.status = 'driver_found'
+             AND TIMESTAMPDIFF(SECOND, COALESCE(r.driver_found_at, r.requested_at), CURRENT_TIMESTAMP) <= ${DRIVER_FOUND_SELECTION_TTL_SECONDS - OPEN_REQUEST_MIN_REMAINING_SECONDS}
+           )
+         )
        ORDER BY requested_at DESC
        LIMIT 20`,
       [req.userId]
@@ -655,6 +672,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     }));
 
     const nearestRequests = baseRequests
+      .filter((request) => Number(request.driverDistanceKm || 0) <= DRIVER_REQUEST_RADIUS_KM)
       .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
       .slice(0, 8);
 
@@ -915,6 +933,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
         `UPDATE ride_requests
          SET status = 'expired',
              cancellation_reason = 'No driver accepted the request in time',
+             cancelled_by = 'system',
              cancelled_at = CURRENT_TIMESTAMP
          WHERE id = ?
            AND (
@@ -1441,6 +1460,7 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
       `UPDATE ride_requests
        SET status = 'cancelled',
            cancellation_reason = ?,
+           cancelled_by = 'driver',
            cancelled_at = CURRENT_TIMESTAMP
        WHERE id = ?
          AND driver_user_id = ?
@@ -1761,7 +1781,23 @@ router.post('/documents', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'You are not allowed to resubmit documents. Contact support.' });
     }
 
-    const { nationalIdFrontUrl, nationalIdBackUrl, driverLicenceUrl, selfieUrl, selfieWithIdCardUrl } = req.body || {};
+    function normalizeIdentityValue(value) {
+      return String(value || '')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, '')
+        .replace(/-/g, '');
+    }
+
+    const {
+      nationalIdFrontUrl,
+      nationalIdBackUrl,
+      driverLicenceUrl,
+      selfieUrl,
+      selfieWithIdCardUrl,
+      nationalIdNumber,
+      driverLicenceNumber,
+    } = req.body || {};
     const currentProfile = existing.driverProfile || null;
     const currentValues = {
       nationalIdFrontUrl: currentProfile?.nationalIdFrontUrl || null,
@@ -1769,6 +1805,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       driverLicenceUrl: currentProfile?.driverLicenceUrl || null,
       selfieUrl: currentProfile?.selfieUrl || null,
       selfieWithIdCardUrl: currentProfile?.selfieWithIdCardUrl || null,
+      nationalIdNumber: currentProfile?.nationalIdNumber || null,
+      driverLicenceNumber: currentProfile?.driverLicenceNumber || null,
     };
     const nextValues = {
       nationalIdFrontUrl: nationalIdFrontUrl || currentValues.nationalIdFrontUrl,
@@ -1776,6 +1814,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       driverLicenceUrl: driverLicenceUrl || currentValues.driverLicenceUrl,
       selfieUrl: selfieUrl || currentValues.selfieUrl,
       selfieWithIdCardUrl: selfieWithIdCardUrl || currentValues.selfieWithIdCardUrl,
+      nationalIdNumber: normalizeIdentityValue(nationalIdNumber || currentValues.nationalIdNumber),
+      driverLicenceNumber: normalizeIdentityValue(driverLicenceNumber || currentValues.driverLicenceNumber),
     };
 
     const providedCount = [
@@ -1792,33 +1832,87 @@ router.post('/documents', requireAuth, async (req, res) => {
       });
     }
 
+    const isFullIdentitySubmit = providedCount >= 5;
+    if (isFullIdentitySubmit && !nextValues.nationalIdNumber) {
+      return res.status(400).json({ error: 'National ID number is required' });
+    }
+    if (isFullIdentitySubmit && !nextValues.driverLicenceNumber) {
+      return res.status(400).json({ error: 'Driver licence number is required' });
+    }
+
+    if (nextValues.nationalIdNumber) {
+      const [duplicateNationalId] = await query(
+        `SELECT driver_user_id
+         FROM driver_identity
+         WHERE national_id_number = ?
+           AND driver_user_id <> ?
+         LIMIT 1`,
+        [nextValues.nationalIdNumber, req.userId]
+      );
+      if (duplicateNationalId) {
+        return res.status(409).json({
+          error: 'This national ID number is already registered on another driver account.',
+        });
+      }
+    }
+
+    if (nextValues.driverLicenceNumber) {
+      const [duplicateLicence] = await query(
+        `SELECT driver_user_id
+         FROM driver_identity
+         WHERE driver_licence_number = ?
+           AND driver_user_id <> ?
+         LIMIT 1`,
+        [nextValues.driverLicenceNumber, req.userId]
+      );
+      if (duplicateLicence) {
+        return res.status(409).json({
+          error: 'This driver licence number is already registered on another driver account.',
+        });
+      }
+    }
+
     const submittedAt = new Date();
-    await query(
-      `INSERT INTO driver_identity (
-        driver_user_id, national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
-        profile_status, profile_submitted_at, profile_rejection_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
-      ON DUPLICATE KEY UPDATE
-        national_id_front_url = VALUES(national_id_front_url),
-        national_id_back_url = VALUES(national_id_back_url),
-        driver_licence_url = VALUES(driver_licence_url),
-        selfie_url = VALUES(selfie_url),
-        selfie_with_id_card_url = VALUES(selfie_with_id_card_url),
-        profile_status = 'pending',
-        profile_submitted_at = COALESCE(driver_identity.profile_submitted_at, VALUES(profile_submitted_at)),
-        profile_reviewed_at = NULL,
-        profile_rejection_reason = NULL,
-        updated_at = CURRENT_TIMESTAMP`,
-      [
-        req.userId,
-        nextValues.nationalIdFrontUrl,
-        nextValues.nationalIdBackUrl,
-        nextValues.driverLicenceUrl,
-        nextValues.selfieUrl,
-        nextValues.selfieWithIdCardUrl,
-        submittedAt,
-      ]
-    );
+    try {
+      await query(
+        `INSERT INTO driver_identity (
+          driver_user_id, national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
+          national_id_number, driver_licence_number,
+          profile_status, profile_submitted_at, profile_rejection_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+        ON DUPLICATE KEY UPDATE
+          national_id_front_url = VALUES(national_id_front_url),
+          national_id_back_url = VALUES(national_id_back_url),
+          driver_licence_url = VALUES(driver_licence_url),
+          selfie_url = VALUES(selfie_url),
+          selfie_with_id_card_url = VALUES(selfie_with_id_card_url),
+          national_id_number = COALESCE(VALUES(national_id_number), driver_identity.national_id_number),
+          driver_licence_number = COALESCE(VALUES(driver_licence_number), driver_identity.driver_licence_number),
+          profile_status = 'pending',
+          profile_submitted_at = COALESCE(driver_identity.profile_submitted_at, VALUES(profile_submitted_at)),
+          profile_reviewed_at = NULL,
+          profile_rejection_reason = NULL,
+          updated_at = CURRENT_TIMESTAMP`,
+        [
+          req.userId,
+          nextValues.nationalIdFrontUrl,
+          nextValues.nationalIdBackUrl,
+          nextValues.driverLicenceUrl,
+          nextValues.selfieUrl,
+          nextValues.selfieWithIdCardUrl,
+          nextValues.nationalIdNumber || null,
+          nextValues.driverLicenceNumber || null,
+          submittedAt,
+        ]
+      );
+    } catch (dbError) {
+      if (dbError?.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({
+          error: 'This national ID or driver licence number is already registered on another account.',
+        });
+      }
+      throw dbError;
+    }
 
     const [identity] = await query('SELECT * FROM driver_identity WHERE driver_user_id = ? LIMIT 1', [req.userId]);
     const row = identity || {};
@@ -1828,6 +1922,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       submittedAt: row.profile_submitted_at ? new Date(row.profile_submitted_at).toISOString() : submittedAt.toISOString(),
       rejectionReason: row.profile_rejection_reason || null,
       selfieWithIdCardUrl: row.selfie_with_id_card_url || null,
+      nationalIdNumber: row.national_id_number || null,
+      driverLicenceNumber: row.driver_licence_number || null,
     };
     return res.status(201).json(driverProfile);
   } catch (err) {

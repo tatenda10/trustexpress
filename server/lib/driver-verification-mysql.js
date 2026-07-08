@@ -64,6 +64,8 @@ function shapeProfileFromRow(row) {
     driverLicenceUrl: normalizeUploadPath(row.driver_licence_url),
     selfieUrl: normalizeUploadPath(row.selfie_url),
     selfieWithIdCardUrl: normalizeUploadPath(row.selfie_with_id_card_url),
+    nationalIdNumber: row.national_id_number || null,
+    driverLicenceNumber: row.driver_licence_number || null,
     ecocashNumber: row.ecocash_number || null,
     ecocashRegisteredName: row.ecocash_registered_name || null,
   };
@@ -110,6 +112,92 @@ function shapeVehicleFromRow(row) {
   };
 }
 
+function toIsoOrNull(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function shapeProfileFromLegacyMetadata(profileMeta = {}) {
+  if (!profileMeta || typeof profileMeta !== 'object') return null;
+  const status = String(profileMeta.status || '').trim().toLowerCase();
+  const hasAnyDoc = !!(
+    profileMeta.nationalIdFrontUrl ||
+    profileMeta.nationalIdBackUrl ||
+    profileMeta.driverLicenceUrl ||
+    profileMeta.selfieUrl ||
+    profileMeta.selfieWithIdCardUrl
+  );
+  if (!status && !hasAnyDoc) return null;
+
+  return {
+    id: profileMeta.id || null,
+    status: status || 'pending',
+    submittedAt: toIsoOrNull(profileMeta.submittedAt),
+    rejectionReason: profileMeta.rejectionReason || null,
+    canResubmit: profileMeta.canResubmit === undefined ? true : !!profileMeta.canResubmit,
+    nationalIdFrontUrl: normalizeUploadPath(profileMeta.nationalIdFrontUrl),
+    nationalIdBackUrl: normalizeUploadPath(profileMeta.nationalIdBackUrl),
+    driverLicenceUrl: normalizeUploadPath(profileMeta.driverLicenceUrl),
+    selfieUrl: normalizeUploadPath(profileMeta.selfieUrl),
+    selfieWithIdCardUrl: normalizeUploadPath(profileMeta.selfieWithIdCardUrl),
+    nationalIdNumber: profileMeta.nationalIdNumber || null,
+    driverLicenceNumber: profileMeta.driverLicenceNumber || null,
+    ecocashNumber: profileMeta.ecocashNumber || null,
+    ecocashRegisteredName: profileMeta.ecocashRegisteredName || null,
+  };
+}
+
+function shapeVehicleFromLegacyMetadata(vehicleMeta = {}) {
+  if (!vehicleMeta || typeof vehicleMeta !== 'object') return null;
+  const status = String(vehicleMeta.status || '').trim().toLowerCase();
+  const hasAnyVehicleData = !!(
+    vehicleMeta.carPhotoFrontUrl ||
+    vehicleMeta.carPhotoRearUrl ||
+    (Array.isArray(vehicleMeta.carPhotoUrls) && vehicleMeta.carPhotoUrls.length > 0) ||
+    vehicleMeta.numberPlate ||
+    vehicleMeta.make ||
+    vehicleMeta.model
+  );
+  if (!status && !hasAnyVehicleData) return null;
+
+  const normalizedCarPhotoUrls = (Array.isArray(vehicleMeta.carPhotoUrls) ? vehicleMeta.carPhotoUrls : [])
+    .map((item) => normalizeUploadPath(item))
+    .filter(Boolean);
+
+  return {
+    id: vehicleMeta.id || null,
+    status: status || 'pending',
+    submittedAt: toIsoOrNull(vehicleMeta.submittedAt),
+    rejectionReason: vehicleMeta.rejectionReason || null,
+    canResubmit: vehicleMeta.canResubmit === undefined ? true : !!vehicleMeta.canResubmit,
+    carPhotoFrontUrl: normalizeUploadPath(vehicleMeta.carPhotoFrontUrl) || normalizedCarPhotoUrls[0] || null,
+    carPhotoRearUrl: normalizeUploadPath(vehicleMeta.carPhotoRearUrl) || normalizedCarPhotoUrls[1] || null,
+    carPhotoUrls: normalizedCarPhotoUrls,
+    vehicleRegistrationUrl: normalizeUploadPath(vehicleMeta.vehicleRegistrationUrl),
+    vehicleRegistrationBookUrl: normalizeUploadPath(vehicleMeta.vehicleRegistrationBookUrl),
+    insuranceUrl: normalizeUploadPath(vehicleMeta.insuranceUrl),
+    zinaraUrl: normalizeUploadPath(vehicleMeta.zinaraUrl),
+    numberPlate: vehicleMeta.numberPlate || null,
+    make: vehicleMeta.make || null,
+    model: vehicleMeta.model || null,
+    year: vehicleMeta.year ?? null,
+    color: vehicleMeta.color || null,
+    vehicleTierKey: vehicleMeta.vehicleTierKey || null,
+    vehicleTierName: vehicleMeta.vehicleTierName || null,
+    seatCount: vehicleMeta.seatCount ?? null,
+    doorCount: vehicleMeta.doorCount ?? null,
+    vehicleCategory: vehicleMeta.vehicleCategory || null,
+    hasAirConditioning: !!vehicleMeta.hasAirConditioning,
+    hasChargingPorts: !!vehicleMeta.hasChargingPorts,
+    hasWifi: !!vehicleMeta.hasWifi,
+    hasLeatherSeats: !!vehicleMeta.hasLeatherSeats,
+    hasLargeLuggageSpace: !!vehicleMeta.hasLargeLuggageSpace,
+    hasSlidingDoors: !!vehicleMeta.hasSlidingDoors,
+    isHighEnd: !!vehicleMeta.isHighEnd,
+  };
+}
+
 /**
  * Build metadata for GET /api/drivers/me and app consumption.
  * Uses MySQL as source of truth; pass clerkUser only for pushToken (and optional fallback).
@@ -120,9 +208,10 @@ export async function getDriverVerificationFromMysql(driverUserId, clerkUser = n
     getDriverVehicle(driverUserId),
   ]);
 
-  const phoneVerified = !!identity?.phone_verified_at;
-  const driverProfile = shapeProfileFromRow(identity);
-  const vehicleShaped = shapeVehicleFromRow(vehicle);
+  const legacyMeta = clerkUser?.privateMetadata || {};
+  const phoneVerified = !!identity?.phone_verified_at || !!legacyMeta?.phoneVerifiedAt;
+  const driverProfile = shapeProfileFromRow(identity) || shapeProfileFromLegacyMetadata(legacyMeta.driverProfile);
+  const vehicleShaped = shapeVehicleFromRow(vehicle) || shapeVehicleFromLegacyMetadata(legacyMeta.vehicle);
 
   return {
     phoneVerified,

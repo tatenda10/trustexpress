@@ -3,9 +3,18 @@ import { query } from '../db/connection.js';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { buildRideStopsPayload } from '../lib/ride-stops.js';
+import { formatCancelledByLabel, inferCancelledBy } from '../lib/ride-cancellation.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
+
+function resolveCancelledBy(row) {
+  return inferCancelledBy({
+    cancelledBy: row?.cancelled_by,
+    status: row?.status,
+    cancellationReason: row?.cancellation_reason,
+  });
+}
 
 function decodePolyline(encoded, precision = 5) {
   if (!encoded) return [];
@@ -163,6 +172,8 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
           rr.requested_at,
           rr.completed_at,
           rr.cancelled_at,
+          rr.cancellation_reason,
+          rr.cancelled_by,
           COALESCE(li.open_lost_items, 0) AS open_lost_items,
           COALESCE(pa.open_panic_alerts, 0) AS open_panic_alerts
         FROM ride_requests rr
@@ -254,6 +265,9 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
         requestedAt: row.requested_at,
         completedAt: row.completed_at,
         cancelledAt: row.cancelled_at,
+        cancellationReason: row.cancellation_reason || null,
+        cancelledBy: resolveCancelledBy(row),
+        cancelledByLabel: formatCancelledByLabel(resolveCancelledBy(row)),
       })),
       total,
       page,
@@ -909,6 +923,10 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         actual_minutes,
         cancelled_at,
         cancellation_reason,
+        cancelled_by,
+        da.current_lat AS driver_current_lat,
+        da.current_lng AS driver_current_lng,
+        da.last_seen_at AS driver_last_seen_at,
         passenger_driver_rating,
         passenger_driver_review,
         passenger_driver_feedback_tags,
@@ -918,6 +936,7 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         driver_passenger_feedback_tags,
         driver_passenger_rated_at
       FROM ride_requests
+      LEFT JOIN driver_availability da ON da.driver_user_id = ride_requests.driver_user_id
       WHERE public_id = ? OR id = ?
       LIMIT 1`,
         [rideId, Number(rideId) || -1]
@@ -1021,6 +1040,11 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         actualMinutes: row.actual_minutes === null ? null : Number(row.actual_minutes),
         cancelledAt: row.cancelled_at || null,
         cancellationReason: row.cancellation_reason || null,
+        cancelledBy: resolveCancelledBy(row),
+        cancelledByLabel: formatCancelledByLabel(resolveCancelledBy(row)),
+        driverCurrentLat: row.driver_current_lat === null ? null : Number(row.driver_current_lat),
+        driverCurrentLng: row.driver_current_lng === null ? null : Number(row.driver_current_lng),
+        driverLastSeenAt: row.driver_last_seen_at || null,
         passengerDriverRating: row.passenger_driver_rating === null ? null : Number(row.passenger_driver_rating),
         passengerDriverReview: row.passenger_driver_review || '',
         passengerDriverFeedbackTags: (() => {

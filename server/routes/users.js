@@ -11,6 +11,7 @@ import {
   autoCloseInactiveSupportThreads,
   createSupportMessage,
   getOrCreateSupportThreadForUser,
+  getSupportThreadForUser,
   listSupportMessages,
   shapeSupportMessage,
   shapeSupportThread,
@@ -262,7 +263,7 @@ router.get('/support/thread', requireAuth, async (req, res) => {
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
-    const thread = await getOrCreateSupportThreadForUser(req.userId, appUser.role);
+    const thread = await getSupportThreadForUser(req.userId, appUser.role);
     return res.json({ thread: shapeSupportThread(thread) });
   } catch (err) {
     console.error('GET /api/users/support/thread', err);
@@ -276,8 +277,8 @@ router.get('/support/messages', requireAuth, async (req, res) => {
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
-    const thread = await getOrCreateSupportThreadForUser(req.userId, appUser.role);
-    const messages = await listSupportMessages(thread.id);
+    const thread = await getSupportThreadForUser(req.userId, appUser.role);
+    const messages = thread ? await listSupportMessages(thread.id) : [];
     return res.json({
       thread: shapeSupportThread(thread),
       messages: messages.map(shapeSupportMessage),

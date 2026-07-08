@@ -518,6 +518,8 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
           driverLicenceUrl: normalizeUploadPath(identityRow.driver_licence_url),
           selfieUrl: normalizeUploadPath(identityRow.selfie_url),
           selfieWithIdCardUrl: normalizeUploadPath(identityRow.selfie_with_id_card_url),
+          nationalIdNumber: identityRow.national_id_number || null,
+          driverLicenceNumber: identityRow.driver_licence_number || null,
         }
       : null;
 

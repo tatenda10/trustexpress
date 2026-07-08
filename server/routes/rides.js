@@ -49,7 +49,7 @@ const OPEN_REQUEST_TTL_MINUTES = 3;
 const DRIVER_FOUND_SELECTION_TTL_SECONDS = 30;
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
-const DRIVER_REQUEST_RADIUS_KM = 20;
+const DRIVER_REQUEST_RADIUS_KM = 5;
 const MAX_DRIVER_OFFERS = 8;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const LOST_ITEM_MAX_LENGTH = 2000;
@@ -387,6 +387,7 @@ async function expireRideRequestIfTimedOut(rideId, passengerUserId = null) {
     `UPDATE ride_requests
      SET status = 'expired',
          cancellation_reason = 'No driver accepted the request in time',
+         cancelled_by = 'system',
          cancelled_at = CURRENT_TIMESTAMP
      WHERE id = ?
        ${passengerClause}
@@ -2102,6 +2103,7 @@ router.patch('/passenger/:rideRequestId/cancel', requireAuth, async (req, res) =
       `UPDATE ride_requests
        SET status = 'cancelled',
            cancellation_reason = ?,
+           cancelled_by = 'passenger',
            cancelled_at = CURRENT_TIMESTAMP
        WHERE id = ? AND passenger_user_id = ?`,
       [String(req.body?.reason || 'Passenger cancelled').trim(), rideRequestId, req.userId]

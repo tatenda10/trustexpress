@@ -51,7 +51,7 @@ async function main() {
 
   const placeholders = clerkUserIds.map(() => '?').join(', ');
 
-  const [identityRows, vehicleRows, availabilityRows, rideRows, reimbursementRows] = await Promise.all([
+  const [identityRows, vehicleRows, availabilityRows, rideRows] = await Promise.all([
     query(
       `SELECT *
        FROM driver_identity
@@ -88,14 +88,18 @@ async function main() {
        LIMIT 20`,
       clerkUserIds
     ),
-    query(
+  ]);
+
+  let reimbursementRows = [];
+  try {
+    reimbursementRows = await query(
       `SELECT
          id,
          driver_user_id,
          period_start,
          period_end,
          ride_count,
-         total_reimbursement_amount,
+         total_discount_reimbursement,
          status,
          created_at,
          approved_at,
@@ -104,8 +108,13 @@ async function main() {
        WHERE driver_user_id IN (${placeholders})
        ORDER BY period_end DESC, id DESC`,
       clerkUserIds
-    ),
-  ]);
+    );
+  } catch (error) {
+    reimbursementRows = [{
+      warning: 'Could not load reimbursements table with this schema',
+      error: error?.message || String(error),
+    }];
+  }
 
   printSection('Driver Identity', identityRows.length ? identityRows : 'No driver_identity row found');
   printSection('Driver Vehicle', vehicleRows.length ? vehicleRows : 'No driver_vehicle row found');
