@@ -23,7 +23,7 @@ function MessageBubble({ item, isMine }) {
         className={`max-w-[82%] rounded-2xl px-4 py-3 ${isMine ? 'rounded-br-md' : 'rounded-bl-md'}`}
         style={{ backgroundColor: isMine ? PRIMARY_BLUE : '#f3f4f6' }}
       >
-        <Text style={{ color: isMine ? '#fff' : '#111827', fontSize: 15, lineHeight: 21 }}>
+        <Text style={{ color: isMine ? '#fff' : '#111827', fontSize: 17, lineHeight: 24 }}>
           {item.message}
         </Text>
       </View>

@@ -27,6 +27,21 @@ function getTierIconName(tier) {
   return 'car-sport-outline';
 }
 
+function getTierCapacityLabel(tier) {
+  const tierKey = String(tier?.tierKey || '').toLowerCase();
+  const tierName = String(tier?.tierName || '').toLowerCase();
+  if (tierKey.includes('xl') || tierName.includes('xl') || tierName.includes('extra large')) {
+    return 'Fits up to 7 people';
+  }
+  if (tierKey.includes('lux') || tierName.includes('lux')) {
+    return 'Fits up to 4 people';
+  }
+  if (tierKey.includes('express') || tierName.includes('express')) {
+    return 'Fits up to 4 people';
+  }
+  return 'Fits up to 4 people';
+}
+
 function encodePolyline(coordinates) {
   if (!Array.isArray(coordinates) || coordinates.length < 2) return '';
   let lastLat = 0;
@@ -108,6 +123,7 @@ function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
   const visibleTierAmount = getDiscountedAmount(tierAmount, appliedDiscount);
 
   const iconName = getTierIconName(tier);
+  const tierCapacityLabel = getTierCapacityLabel(tier);
 
   return (
     <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
@@ -133,6 +149,10 @@ function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
             <Text style={styles.tierSub}>
               {tier.regionName || `${Number(distanceKm || 0).toFixed(1)} km trip`}
             </Text>
+            <View style={styles.capacityBadge}>
+              <Ionicons name="people-outline" size={11} color="#0f766e" />
+              <Text style={styles.capacityBadgeText}>{tierCapacityLabel}</Text>
+            </View>
             {tier.estimatedArrival && (
               <View style={styles.etaBadge}>
                 <Ionicons name="time-outline" size={11} color={PRIMARY_BLUE} />
@@ -599,7 +619,7 @@ const styles = StyleSheet.create({
     }),
   },
   headerTitle: {
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '700',
     color: '#111827',
     letterSpacing: -0.3,
@@ -641,7 +661,7 @@ const styles = StyleSheet.create({
   },
   routeLabel: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: '600',
     color: '#111827',
     letterSpacing: -0.2,
@@ -663,7 +683,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   routeMetaText: {
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '500',
     color: '#6b7280',
   },
@@ -675,7 +695,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
   routeMetaPrice: {
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: '700',
     color: '#111827',
     marginLeft: 'auto',
@@ -690,12 +710,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   discountSummaryText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
     color: '#6b7280',
   },
   discountSummaryTextStrong: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '700',
     color: '#15803d',
   },
@@ -706,7 +726,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   sectionLabel: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '700',
     color: '#9ca3af',
     letterSpacing: 0.8,
@@ -771,13 +791,13 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   tierName: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
     color: '#111827',
     letterSpacing: -0.3,
   },
   tierSub: {
-    fontSize: 12,
+    fontSize: 14,
     color: '#9ca3af',
     marginTop: 2,
     fontWeight: '400',
@@ -793,8 +813,24 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 3,
   },
+  capacityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+    backgroundColor: '#ecfeff',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 20,
+    gap: 3,
+  },
+  capacityBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f766e',
+  },
   etaText: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '600',
     color: PRIMARY_BLUE,
   },
@@ -802,7 +838,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   tierPrice: {
-    fontSize: 20,
+    fontSize: 23,
     fontWeight: '800',
     color: '#111827',
     letterSpacing: -0.5,
@@ -815,7 +851,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   surgeText: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '700',
     color: '#d97706',
   },
@@ -852,13 +888,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   errorTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 6,
   },
   errorBody: {
-    fontSize: 13,
+    fontSize: 15,
     color: '#6b7280',
     textAlign: 'center',
     lineHeight: 20,
@@ -880,7 +916,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   infoPillText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '500',
     color: PRIMARY_BLUE,
   },
@@ -894,13 +930,13 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
   },
   discountCardTitle: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 10,
   },
   discountHintText: {
-    fontSize: 12,
+    fontSize: 14,
     color: '#6b7280',
     marginBottom: 10,
     lineHeight: 18,
@@ -918,7 +954,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     backgroundColor: '#f9fafb',
     color: '#111827',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '600',
   },
   discountApplyBtn: {
@@ -936,7 +972,7 @@ const styles = StyleSheet.create({
   },
   discountApplyBtnText: {
     color: '#fff',
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '700',
   },
   discountBreakdown: {
@@ -952,12 +988,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   discountBreakdownLabel: {
-    fontSize: 13,
+    fontSize: 15,
     color: '#6b7280',
     fontWeight: '600',
   },
   discountBreakdownValue: {
-    fontSize: 13,
+    fontSize: 15,
     color: '#111827',
     fontWeight: '700',
   },
@@ -965,12 +1001,12 @@ const styles = StyleSheet.create({
     color: '#15803d',
   },
   discountBreakdownTotalLabel: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#111827',
     fontWeight: '800',
   },
   discountBreakdownTotalValue: {
-    fontSize: 16,
+    fontSize: 18,
     color: '#111827',
     fontWeight: '900',
   },
@@ -996,7 +1032,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   ctaText: {
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '700',
     color: '#fff',
     letterSpacing: -0.3,

@@ -1,7 +1,6 @@
 {
   "expo": {
     "plugins": [
-      "@maplibre/maplibre-react-native",
       "@react-native-firebase/app",
       [
         "expo-notifications",
@@ -24,7 +23,7 @@
     ],
     "name": "Trust Express",
     "slug": "trust-express",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -42,12 +41,20 @@
       "supportsTablet": true,
       "googleServicesFile": "./GoogleService-Info.plist",
       "bundleIdentifier": "com.tatenda10.trustexpress",
+      "config": {
+        "googleMapsApiKey": "AIzaSyAFvd2lhakPBSdDoBw8rVlA2Q4HcUnLSIc"
+      },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyALiawY2GIvcMYuW6EIfKqqc2f8vdGdSsw"
+        }
+      },
       "permissions": [
         "VIBRATE",
         "WAKE_LOCK",

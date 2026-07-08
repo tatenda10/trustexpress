@@ -295,6 +295,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const currentRideRefreshQueuedRef = useRef(false);
   const requestLoadInFlightRef = useRef(false);
   const overlayPermissionPromptOpenRef = useRef(false);
+  const forceOpenIncomingOverlayRef = useRef(false);
   const lastAvailabilityAttemptRef = useRef({ target: null, at: 0 });
   const forwardedRideIdRef = useRef(null);
   const lastDbLocationRef = useRef({ coordinate: null, at: 0 });
@@ -429,14 +430,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     if (route?.params?.openIncomingRideOverlay) {
-      // Do not auto-open the in-app incoming request modal.
-      setShowIncomingRideOverlay(false);
+      forceOpenIncomingOverlayRef.current = true;
+      if (!currentRide && availableRequests.length > 0) {
+        setShowIncomingRideOverlay(true);
+      }
       navigation.setParams?.({
         openIncomingRideOverlay: false,
         notificationTs: route?.params?.notificationTs || undefined,
       });
     }
-  }, [navigation, route?.params?.notificationTs, route?.params?.openIncomingRideOverlay]);
+  }, [availableRequests.length, currentRide, navigation, route?.params?.notificationTs, route?.params?.openIncomingRideOverlay]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -677,6 +680,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
         });
         if (!nextRequest) {
           setShowIncomingRideOverlay(false);
+        } else if (forceOpenIncomingOverlayRef.current && !currentRide && !pendingSelectionRide) {
+          setShowIncomingRideOverlay(true);
+          forceOpenIncomingOverlayRef.current = false;
         }
         setShowNewRequestBadge(!!nextRequest);
         setIsListening(!nextRequest);

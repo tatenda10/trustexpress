@@ -490,6 +490,8 @@ export default function DriverVerificationDetailPage() {
               <Field label="Email" value={driver.email || '-'} />
               <Field label="Submitted At" value={submittedAtLabel} />
               <Field label="Current Status" value={verificationStatusLabel} />
+              <Field label="National ID Number" value={profileDocs.nationalIdNumber || '-'} />
+              <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
               <Field
                 label="Referred By Agent"
                 value={

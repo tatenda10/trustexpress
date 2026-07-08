@@ -242,6 +242,8 @@ export default function DriverDetailsPage() {
           <Field label="EcoCash Number" value={driver.profile?.ecocashNumber || '-'} />
           <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
+          <Field label="National ID Number" value={profileDocs.nationalIdNumber || '-'} />
+          <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
           <Field
             label="Referred By Agent"
             value={

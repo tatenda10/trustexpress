@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { AppState, Platform } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -314,6 +314,18 @@ function AppStack({ currentRouteName }) {
   }, [user?.id, isDriver, storageLoaded, roleLoading, roleBootstrapped, userRole]);
 
   useEffect(() => {
+    let active = true;
+
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (!active || !response) return;
+        const data = response?.notification?.request?.content?.data || {};
+        if (data?.type === 'driver_new_ride_request' && isDriver) {
+          openDriverIncomingRequest();
+        }
+      })
+      .catch(() => {});
+
     const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification?.request?.content?.data || {};
       console.log('[notifications] received', {
@@ -358,6 +370,7 @@ function AppStack({ currentRouteName }) {
     });
 
     return () => {
+      active = false;
       receivedSubscription.remove();
       responseSubscription.remove();
     };
@@ -1159,9 +1172,10 @@ function AppStack({ currentRouteName }) {
 
 // Main App Component – use isSignedIn so setActive() correctly switches to AppStack (no manual navigate)
 function AppContent() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, signOut } = useAuth();
   const { setInviteFromToken, hydrateStoredInvite } = useAgentInvite();
   const pendingInviteNavigationRef = useRef(null);
+  const sessionReplacedAlertShownRef = useRef(false);
   const [currentRouteName, setCurrentRouteName] = useState(null);
 
   const syncCurrentRouteName = useCallback(() => {
@@ -1214,11 +1228,31 @@ function AppContent() {
   // Avoid hard auto-logout on a single backend 401. Mobile networks can briefly
   // return transient auth errors while Clerk session is still valid.
   useEffect(() => {
-    setApiAuthErrorHandler(() => {
-      // Keep the current session and let individual screens handle request errors.
-      // Clerk auth state will still move to signed-out naturally if the session is actually invalid.
+    setApiAuthErrorHandler((authError) => {
+      const authCode = String(authError?.code || '').trim().toUpperCase();
+      if (authCode !== 'SESSION_REPLACED') return;
+      if (sessionReplacedAlertShownRef.current) return;
+      sessionReplacedAlertShownRef.current = true;
+      Alert.alert(
+        'Signed out',
+        'This account was signed in on another device. Please sign in again on this device if needed.',
+        [
+          {
+            text: 'OK',
+            onPress: async () => {
+              try {
+                await signOut();
+              } finally {
+                sessionReplacedAlertShownRef.current = false;
+              }
+            },
+          },
+        ],
+        { cancelable: false },
+      );
     });
-  }, []);
+    return () => setApiAuthErrorHandler(null);
+  }, [signOut]);
 
   useEffect(() => {
     // Complete OAuth session when app opens from redirect (Clerk Google/Apple sign-in)

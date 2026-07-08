@@ -35,7 +35,7 @@ function MessageBubble({ item, isMine }) {
         className={`max-w-[82%] rounded-2xl px-4 py-3 ${isMine ? 'rounded-br-md' : 'rounded-bl-md'}`}
         style={{ backgroundColor: bubbleBackgroundColor }}
       >
-        <Text style={{ color: textColor, fontSize: 15, lineHeight: 21 }}>
+        <Text style={{ color: textColor, fontSize: 17, lineHeight: 24 }}>
           {item.message}
         </Text>
       </View>
@@ -66,12 +66,18 @@ export default function SupportChatScreen({ navigation, route }) {
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  const getAuthToken = useCallback(async () => {
+    const getTokenFn = getTokenRef.current;
+    if (!getTokenFn) return null;
+    return (await getTokenFn({ skipCache: true })) || (await getTokenFn());
+  }, []);
+
   const loadMessages = useCallback(async ({ showLoader = false, showRefreshing = false } = {}) => {
     try {
       if (showRefreshing) setRefreshing(true);
       if (showLoader) setLoading(true);
       if (showLoader || showRefreshing) setError('');
-      const token = await getTokenRef.current?.();
+      const token = await getAuthToken();
       if (!token) throw new Error('Not signed in');
       const data = await getSupportMessages(token);
       setThreadId(data?.thread?.id || null);
@@ -122,7 +128,7 @@ export default function SupportChatScreen({ navigation, route }) {
       if (showRefreshing) setRefreshing(false);
       if (showLoader) setLoading(false);
     }
-  }, [threadId]);
+  }, [getAuthToken, threadId]);
 
   useEffect(() => {
     loadMessages({ showLoader: true });
@@ -141,7 +147,7 @@ export default function SupportChatScreen({ navigation, route }) {
 
     const subscribe = async () => {
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         if (!token || !isMounted) return;
         localSocket = connectRealtime(token);
         if (!localSocket) return;
@@ -170,7 +176,7 @@ export default function SupportChatScreen({ navigation, route }) {
       isMounted = false;
       if (typeof cleanup === 'function') cleanup();
     };
-  }, [threadId, loadMessages]);
+  }, [getAuthToken, threadId, loadMessages]);
 
   const sortedMessages = useMemo(
     () => [...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
@@ -184,7 +190,7 @@ export default function SupportChatScreen({ navigation, route }) {
     try {
       setSending(true);
       setError('');
-      const token = await getTokenRef.current?.();
+      const token = await getAuthToken();
       if (!token) throw new Error('Not signed in');
       const data = await sendSupportMessage(token, message);
       if (data?.thread?.id) setThreadId(data.thread.id);

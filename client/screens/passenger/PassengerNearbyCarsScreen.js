@@ -275,6 +275,12 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  const getAuthToken = useCallback(async () => {
+    const getTokenFn = getTokenRef.current;
+    if (!getTokenFn) return null;
+    return (await getTokenFn({ skipCache: true })) || (await getTokenFn());
+  }, []);
+
   const refreshRideStatus = useCallback(async ({ silent = false } = {}) => {
     if (!rideRequest?.id) return null;
     const now = Date.now();
@@ -282,7 +288,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     lastStatusRefreshAtRef.current = now;
     try {
       if (!silent) setLoadingStatus(true);
-      const token = await getTokenRef.current();
+      const token = await getAuthToken();
       if (!token) throw new Error('Not signed in');
       const data = await getPassengerRideRequestStatus(token, rideRequest.id);
       setRideStatus(data?.rideRequest ? { ...data.rideRequest, remainingSecondsCapturedAt: Date.now() } : null);
@@ -312,7 +318,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     let cancelled = false;
     (async () => {
       try {
-        const token = await getTokenRef.current();
+        const token = await getAuthToken();
         const coords = await fetchRouteCoordinates(token, pickupCoordinate, dropoffCoordinate);
         if (!cancelled) setRouteCoordinates(normalizeRouteCoordinates(coords));
       } catch {
@@ -342,7 +348,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     let localSocket = null;
     (async () => {
       try {
-        const token = await getTokenRef.current();
+        const token = await getAuthToken();
         if (!active || !token) return;
         localSocket = connectRealtime(token);
         if (!localSocket) return;

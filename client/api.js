@@ -1,8 +1,8 @@
 /**
  * Backend connection - BASE_URL and helpers for API routes.
  */
-export const BASE_URL = 'https://ridehailcarsserver.online';
-//export const BASE_URL = 'http://192.168.100.171:5000';
+//export const BASE_URL = 'https://ridehailcarsserver.online';
+export const BASE_URL = 'http://192.168.100.171:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {
@@ -79,10 +79,11 @@ export async function apiFetch(path, options = {}, token) {
     const message = getFriendlyApiErrorMessage(res.status, data?.error);
     const err = new Error(message);
     err.status = res.status;
+    err.code = data?.code || null;
     // If the backend reports an auth problem, trigger the global handler so the app can log out.
     if (res.status === 401 && authErrorHandler && !suppressAuthErrorHandler) {
       try {
-        authErrorHandler();
+        authErrorHandler(err, data);
       } catch {
         // ignore handler errors – still throw the original error
       }
@@ -492,17 +493,18 @@ export async function uploadFile(token, formData, options = {}) {
   }
   if (!res.ok) {
     let message = getFriendlyApiErrorMessage(res.status, data?.error);
+    const err = new Error(message);
+    err.status = res.status;
+    err.code = data?.code || null;
     if (res.status === 401) {
       if (authErrorHandler && !suppressAuthErrorHandler) {
         try {
-          authErrorHandler();
+          authErrorHandler(err, data);
         } catch {
           // ignore handler errors
         }
       }
     }
-    const err = new Error(message);
-    err.status = res.status;
     throw err;
   }
   return data;

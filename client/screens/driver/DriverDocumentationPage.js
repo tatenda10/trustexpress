@@ -129,6 +129,24 @@ export default function DriverDocumentationPage({ navigation, route }) {
           </Text>
         </View>
 
+        {(profile?.nationalIdNumber || profile?.driverLicenceNumber) ? (
+          <View className="mb-6 rounded-[20px] border border-gray-200 bg-white p-4">
+            <Text className="mb-3 text-sm font-semibold text-gray-900">Registered identity numbers</Text>
+            {profile?.nationalIdNumber ? (
+              <View className="mb-2">
+                <Text className="text-xs text-gray-500">National ID number</Text>
+                <Text className="mt-0.5 text-base font-medium text-gray-900">{profile.nationalIdNumber}</Text>
+              </View>
+            ) : null}
+            {profile?.driverLicenceNumber ? (
+              <View>
+                <Text className="text-xs text-gray-500">Driver licence number</Text>
+                <Text className="mt-0.5 text-base font-medium text-gray-900">{profile.driverLicenceNumber}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         <View className="mb-6 rounded-[20px] bg-[#f8fafc] px-4 py-5">
           <Text className="text-base font-semibold text-gray-900">Verification progress</Text>
           <Text className="mt-3 text-sm text-gray-500">

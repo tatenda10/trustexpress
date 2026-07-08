@@ -16,7 +16,7 @@ function TabLabel({ label, focused, color }) {
       <Text
         style={{
           color,
-          fontSize: 11,
+          fontSize: 13,
           fontWeight: '800',
           paddingBottom: 3,
           borderBottomWidth: focused ? 3 : 0,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -302,6 +302,12 @@ export default function PassengerHomeScreen({ navigation, route }) {
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  const getAuthToken = useCallback(async () => {
+    const getTokenFn = getTokenRef.current;
+    if (!getTokenFn) return null;
+    return (await getTokenFn({ skipCache: true })) || (await getTokenFn());
+  }, []);
+
   useEffect(() => {
     if (!isFocused) return undefined;
     let active = true;
@@ -310,7 +316,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       if (resumeCheckInFlightRef.current) return;
       resumeCheckInFlightRef.current = true;
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         if (!token || !active) return;
         const data = await getPassengerCurrentRide(token);
         const ride = data?.rideRequest;
@@ -382,7 +388,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       if (realtimeResumeInFlightRef.current) return;
       realtimeResumeInFlightRef.current = true;
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         if (!token || !active) return;
         const data = await getPassengerCurrentRide(token);
         const ride = data?.rideRequest;
@@ -439,7 +445,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
     const initRealtime = async () => {
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         if (!token || !active) return;
         localSocket = connectRealtime(token);
         if (!localSocket) return;
@@ -536,7 +542,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
     const loadNearbyDrivers = async () => {
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         if (!token || !active) return;
         const data = await getNearbyPassengerDrivers(token, {
           latitude: anchor.latitude,
@@ -564,7 +570,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     let active = true;
     const loadRecentTrips = async () => {
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         if (!token || !active) return;
         const data = await getPassengerRideHistory(token, { page: 1, limit: 6 });
         if (!active) return;
@@ -611,7 +617,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     const loadRoute = async () => {
       try {
         setIsCalculating(true);
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         const result = await fetchRideRoute(
           token,
           pickupCoordinate,
@@ -681,7 +687,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     searchTimeoutRef.current = setTimeout(async () => {
       setIsSearchingSuggestions(true);
       try {
-        const token = await getTokenRef.current?.();
+        const token = await getAuthToken();
         const results = await searchZimbabweFirst(
           token,
           query,
@@ -813,7 +819,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       );
       if (!details) {
         try {
-          const token = await getTokenRef.current?.();
+          const token = await getAuthToken();
           const data = token
             ? await getPlaceDetails(token, {
                 placeId: resolvedSuggestion.placeId,
@@ -1188,7 +1194,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                         const rerun = async () => {
                           let token = null;
                           for (let attempt = 0; attempt < 3; attempt += 1) {
-                            token = await getTokenRef.current?.();
+                            token = await getAuthToken();
                             if (token) break;
                             await new Promise((resolve) => setTimeout(resolve, 450));
                           }

@@ -229,7 +229,7 @@ export default function RideOperationDetailPage() {
           ))
           .filter(Boolean)
       : []
-    return [
+    const markers = [
       {
         id: 'pickup',
         lat: routePath[0].lat,
@@ -249,6 +249,22 @@ export default function RideOperationDetailPage() {
         label: 'Drop-off',
       },
     ]
+    if (
+      ride?.driverCurrentLat !== null &&
+      ride?.driverCurrentLat !== undefined &&
+      ride?.driverCurrentLng !== null &&
+      ride?.driverCurrentLng !== undefined
+    ) {
+      markers.push({
+        id: 'driver-live',
+        lat: Number(ride.driverCurrentLat),
+        lng: Number(ride.driverCurrentLng),
+        color: '#2563eb',
+        title: 'Driver (live)',
+        label: 'Driver',
+      })
+    }
+    return markers
   }, [ride?.currentStopIndex, ride?.intermediateStops, routePath])
 
   const mapPaths = useMemo(() => (
@@ -378,6 +394,23 @@ export default function RideOperationDetailPage() {
               <DetailField label="Started At" value={formatDateTime(ride.startedAt)} />
               <DetailField label="Completed At" value={formatDateTime(ride.completedAt)} />
               <DetailField label="Cancelled At" value={formatDateTime(ride.cancelledAt)} />
+              <DetailField
+                label="Driver Live Location"
+                value={
+                  ride.driverCurrentLat !== null && ride.driverCurrentLng !== null
+                    ? `${Number(ride.driverCurrentLat).toFixed(5)}, ${Number(ride.driverCurrentLng).toFixed(5)}`
+                    : '-'
+                }
+              />
+              <DetailField label="Driver Last Seen" value={formatDateTime(ride.driverLastSeenAt)} />
+              <DetailField
+                label="Cancelled By"
+                value={
+                  ride.cancelledAt || ride.status === 'Cancelled'
+                    ? ride.cancelledByLabel || 'Unknown'
+                    : '-'
+                }
+              />
             </div>
 
             {ride.cancellationReason ? (

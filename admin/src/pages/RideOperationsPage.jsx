@@ -11,6 +11,13 @@ function statusClass(status) {
   return 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
 }
 
+function cancelledByClass(cancelledBy) {
+  if (cancelledBy === 'driver') return 'bg-orange-50 text-orange-700 ring-1 ring-orange-200'
+  if (cancelledBy === 'passenger') return 'bg-violet-50 text-violet-700 ring-1 ring-violet-200'
+  if (cancelledBy === 'system') return 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
+  return 'bg-slate-50 text-slate-500 ring-1 ring-slate-200'
+}
+
 export default function RideOperationsPage() {
   const navigate = useNavigate()
   const { token } = useAuth()
@@ -181,17 +188,18 @@ export default function RideOperationsPage() {
               <th className="px-4 py-2 font-semibold">Fare</th>
               <th className="px-4 py-2 font-semibold">Safety</th>
               <th className="px-4 py-2 font-semibold">Status</th>
+              <th className="px-4 py-2 font-semibold">Cancelled By</th>
               <th className="rounded-tr-sm px-4 py-2 font-semibold text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="px-4 py-6 text-center text-slate-500">Loading rides...</td>
+                <td colSpan={10} className="px-4 py-6 text-center text-slate-500">Loading rides...</td>
               </tr>
             ) : rides.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-4 py-6 text-center text-slate-500">No ride activity yet.</td>
+                <td colSpan={10} className="px-4 py-6 text-center text-slate-500">No ride activity yet.</td>
               </tr>
             ) : (
               rides.map((row) => (
@@ -248,6 +256,15 @@ export default function RideOperationsPage() {
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass(row.status)}`}>
                       {row.status}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {row.status === 'Cancelled' || row.cancelledAt ? (
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${cancelledByClass(row.cancelledBy)}`}>
+                        {row.cancelledByLabel || 'Unknown'}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button

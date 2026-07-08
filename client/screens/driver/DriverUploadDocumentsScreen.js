@@ -2,12 +2,15 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
   Alert,
   Image,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -109,6 +112,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     selfie: null,
     selfieWithIdCard: null,
   });
+  const [nationalIdNumber, setNationalIdNumber] = useState(
+    () => String(profile?.nationalIdNumber || '').trim()
+  );
+  const [driverLicenceNumber, setDriverLicenceNumber] = useState(
+    () => String(profile?.driverLicenceNumber || '').trim()
+  );
   const [loading, setLoading] = useState(false);
   const [lockedSelfieDocKey, setLockedSelfieDocKey] = useState(null);
   const [capturingLockedSelfie, setCapturingLockedSelfie] = useState(false);
@@ -133,6 +142,13 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       navigation.replace('DriverTabs');
     }
   }, [navigation, profileApproved, vehicleApproved]);
+
+  useEffect(() => {
+    const nextNationalId = String(profile?.nationalIdNumber || '').trim();
+    const nextLicence = String(profile?.driverLicenceNumber || '').trim();
+    if (nextNationalId) setNationalIdNumber((prev) => prev || nextNationalId);
+    if (nextLicence) setDriverLicenceNumber((prev) => prev || nextLicence);
+  }, [profile?.nationalIdNumber, profile?.driverLicenceNumber]);
 
   // Pending review: leave upload screen — phone verify next if needed, otherwise tabs (matches App onboarding order).
   useLayoutEffect(() => {
@@ -289,6 +305,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     }
 
     const { nationalIdFront, nationalIdBack, driverLicence, selfie, selfieWithIdCard } = uris;
+    const trimmedNationalIdNumber = String(nationalIdNumber || '').trim();
+    const trimmedDriverLicenceNumber = String(driverLicenceNumber || '').trim();
+
     if (enhancedSelfieOnly) {
       if (!selfieWithIdCard) {
         Alert.alert('Missing selfie', 'Please take a selfie while holding your national ID.');
@@ -296,6 +315,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       }
     } else if (!nationalIdFront || !nationalIdBack || !driverLicence || !selfie || !selfieWithIdCard) {
       Alert.alert('Missing documents', 'Please upload all five required identity documents.');
+      return;
+    } else if (!trimmedNationalIdNumber) {
+      Alert.alert('National ID number required', 'Enter the national ID number exactly as shown on your ID card.');
+      return;
+    } else if (!trimmedDriverLicenceNumber) {
+      Alert.alert('Licence number required', 'Enter the driver licence number exactly as shown on your licence.');
       return;
     }
 
@@ -332,6 +357,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               driverLicenceUrl,
               selfieUrl,
               selfieWithIdCardUrl,
+              nationalIdNumber: trimmedNationalIdNumber,
+              driverLicenceNumber: trimmedDriverLicenceNumber,
             },
             { suppressAuthErrorHandler: true },
           );
@@ -346,6 +373,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               driverLicenceUrl,
               selfieUrl,
               selfieWithIdCardUrl,
+              nationalIdNumber: trimmedNationalIdNumber,
+              driverLicenceNumber: trimmedDriverLicenceNumber,
             },
           });
           throw new Error(formatUploadErrorMessage(error, 'Could not submit your documents for verification. Please try again.'));
@@ -424,7 +453,10 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   }
 
   return (
-    <View className="flex-1 bg-white">
+    <KeyboardAvoidingView
+      className="flex-1 bg-white"
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <Modal
         visible={!!lockedSelfieDocKey}
         animationType="slide"
@@ -508,6 +540,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         className="flex-1"
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 24) }}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <Text className="mt-4 text-sm font-semibold text-gray-500">STEP {STEP_CURRENT} OF {STEP_TOTAL}</Text>
         <View className="mt-2 mb-1 flex-row items-center gap-2">
@@ -558,6 +591,38 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           <View className="mb-4 rounded-xl bg-red-50 p-3">
             <Text className="font-medium text-red-700">Rejected</Text>
             <Text className="mt-1 text-sm text-red-600">{profile.rejectionReason}</Text>
+          </View>
+        ) : null}
+
+        {!enhancedSelfieOnly ? (
+          <View className="mb-6">
+            <Text className="mb-2 text-sm font-medium text-gray-700">
+              National ID number <Text className="text-red-500">*</Text>
+            </Text>
+            <TextInput
+              className="mb-4 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
+              placeholder="e.g. 63-123456A12"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              value={nationalIdNumber}
+              onChangeText={setNationalIdNumber}
+            />
+            <Text className="mb-2 text-sm font-medium text-gray-700">
+              Driver licence number <Text className="text-red-500">*</Text>
+            </Text>
+            <TextInput
+              className="mb-1 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
+              placeholder="Enter licence number"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              value={driverLicenceNumber}
+              onChangeText={setDriverLicenceNumber}
+            />
+            <Text className="mb-2 text-xs text-gray-500">
+              These numbers must match your documents and cannot be reused on another account.
+            </Text>
           </View>
         ) : null}
 
@@ -629,6 +694,6 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         </TouchableOpacity>
         */}
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }

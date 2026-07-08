@@ -20,7 +20,7 @@ export default function DriverTabNavigator({ route }) {
         tabBarActiveTintColor: PRIMARY_BLUE,
         tabBarInactiveTintColor: '#9ca3af',
         tabBarStyle: { borderTopColor: '#f3f4f6' },
-        tabBarLabelStyle: { fontSize: 12, fontWeight: '500' },
+        tabBarLabelStyle: { fontSize: 14, fontWeight: '500' },
       }}
     >
       <Tab.Screen
