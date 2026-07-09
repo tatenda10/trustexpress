@@ -5,6 +5,8 @@ import BASE_URL from '../context/Api'
 import { useAuth } from '../authcontext/AuthContext'
 import GeoPlotMap from '../components/GeoPlotMap'
 
+const LIVE_TRACK_REFRESH_MS = 5000
+
 function DetailField({ label, value }) {
   return (
     <div className="border border-slate-200 bg-slate-50 px-3 py-3">
@@ -27,6 +29,15 @@ function formatRating(value, review) {
 
 function formatTagList(tags) {
   return Array.isArray(tags) && tags.length ? tags.join(', ') : '-'
+}
+
+function formatDriverResponseStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (normalized === 'selected') return 'Selected by passenger'
+  if (normalized === 'accepted') return 'Accepted'
+  if (normalized === 'declined') return 'Declined'
+  if (normalized === 'expired') return 'Expired'
+  return 'Pending'
 }
 
 function coalesceNumber(...values) {
@@ -135,8 +146,14 @@ export default function RideOperationDetailPage() {
     }
 
     load()
+    const interval = setInterval(() => {
+      if (!active) return
+      load()
+    }, LIVE_TRACK_REFRESH_MS)
+
     return () => {
       active = false
+      clearInterval(interval)
     }
   }, [rideId, token])
 
@@ -212,7 +229,6 @@ export default function RideOperationDetailPage() {
   const tripTimeline = useMemo(() => buildTripTimeline(ride), [ride])
 
   const mapMarkers = useMemo(() => {
-    if (routePath.length < 2) return []
     const stopMarkers = Array.isArray(ride?.intermediateStops)
       ? ride.intermediateStops
           .map((stop, index) => (
@@ -229,8 +245,9 @@ export default function RideOperationDetailPage() {
           ))
           .filter(Boolean)
       : []
-    const markers = [
-      {
+    const markers = []
+    if (routePath.length > 0) {
+      markers.push({
         id: 'pickup',
         lat: routePath[0].lat,
         lng: routePath[0].lng,
@@ -238,17 +255,19 @@ export default function RideOperationDetailPage() {
         title: 'Pickup',
         label: 'Pickup',
         selected: true,
-      },
-      ...stopMarkers,
-      {
+      })
+    }
+    markers.push(...stopMarkers)
+    if (routePath.length > 1) {
+      markers.push({
         id: 'dropoff',
         lat: routePath[routePath.length - 1].lat,
         lng: routePath[routePath.length - 1].lng,
         color: '#059669',
         title: 'Drop-off',
         label: 'Drop-off',
-      },
-    ]
+      })
+    }
     if (
       ride?.driverCurrentLat !== null &&
       ride?.driverCurrentLat !== undefined &&
@@ -419,6 +438,37 @@ export default function RideOperationDetailPage() {
                 <p className="mt-1 text-sm text-slate-700">{ride.cancellationReason}</p>
               </div>
             ) : null}
+
+            <div className="border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Driver Request Timeline</p>
+                <span className="text-xs font-semibold text-slate-600">{Array.isArray(ride.driverResponses) ? ride.driverResponses.length : 0}</span>
+              </div>
+              {Array.isArray(ride.driverResponses) && ride.driverResponses.length ? (
+                <div className="mt-3 space-y-3">
+                  {ride.driverResponses.map((item) => (
+                    <div key={item.id} className="border border-slate-200 bg-white px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">{item.driverName || 'Driver'}</p>
+                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                          {formatDriverResponseStatus(item.status)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">Driver ID: {item.driverUserId || '-'}</p>
+                      <p className="mt-1 text-xs text-slate-500">Phone: {item.driverPhone || '-'}</p>
+                      <div className="mt-2 grid gap-2 md:grid-cols-2">
+                        <p className="text-xs text-slate-500">Viewed: {formatDateTime(item.viewedAt)}</p>
+                        <p className="text-xs text-slate-500">Responded: {formatDateTime(item.respondedAt)}</p>
+                        <p className="text-xs text-slate-500">Selected: {formatDateTime(item.selectedAt)}</p>
+                        <p className="text-xs text-slate-500">Last change: {formatDateTime(item.updatedAt || item.createdAt)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No driver response events recorded for this ride.</p>
+              )}
+            </div>
 
             <div className="border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="flex items-center justify-between">

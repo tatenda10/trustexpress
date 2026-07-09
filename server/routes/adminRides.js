@@ -999,6 +999,28 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
       return res.status(404).json({ error: 'Ride not found' });
     }
 
+    const driverResponses = await query(
+      `SELECT
+         rr.id,
+         rr.driver_user_id,
+         rr.status,
+         rr.responded_at,
+         rr.selected_at,
+         rr.viewed_at,
+         rr.created_at,
+         rr.updated_at,
+         da.driver_name,
+         da.phone_number
+       FROM ride_request_driver_responses rr
+       LEFT JOIN driver_availability da
+         ON da.driver_user_id = rr.driver_user_id
+       WHERE rr.ride_request_id = ?
+       ORDER BY
+         COALESCE(rr.viewed_at, rr.responded_at, rr.created_at) ASC,
+         rr.id ASC`,
+      [Number(row.id)]
+    );
+
     return res.json({
       ride: {
         id: row.id,
@@ -1107,6 +1129,18 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         resolvedAt: alert.resolved_at || null,
         createdAt: alert.created_at || null,
         updatedAt: alert.updated_at || null,
+      })),
+      driverResponses: (driverResponses || []).map((responseRow) => ({
+        id: responseRow.id,
+        driverUserId: responseRow.driver_user_id,
+        driverName: responseRow.driver_name || 'Driver',
+        driverPhone: responseRow.phone_number || null,
+        status: String(responseRow.status || '').trim().toLowerCase() || 'pending',
+        viewedAt: responseRow.viewed_at || null,
+        respondedAt: responseRow.responded_at || null,
+        selectedAt: responseRow.selected_at || null,
+        createdAt: responseRow.created_at || null,
+        updatedAt: responseRow.updated_at || null,
       })),
     });
   } catch (err) {
