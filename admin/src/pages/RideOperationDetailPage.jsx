@@ -49,12 +49,29 @@ function coalesceNumber(...values) {
   return 0
 }
 
-function decodePolyline(encoded) {
+function distanceKm(a, b) {
+  if (!a || !b) return Infinity
+  const earthRadiusKm = 6371
+  const toRadians = (value) => (Number(value) * Math.PI) / 180
+  const dLat = toRadians(Number(b.lat) - Number(a.lat))
+  const dLng = toRadians(Number(b.lng) - Number(a.lng))
+  const lat1 = toRadians(a.lat)
+  const lat2 = toRadians(b.lat)
+  const x = (
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
+  )
+  const y = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))
+  return earthRadiusKm * y
+}
+
+function decodePolylineWithPrecision(encoded, precision = 5) {
   if (!encoded) return []
   let index = 0
   let latitude = 0
   let longitude = 0
   const coordinates = []
+  const factor = Math.pow(10, precision)
 
   while (index < encoded.length) {
     let shift = 0
@@ -83,12 +100,27 @@ function decodePolyline(encoded) {
     longitude += deltaLng
 
     coordinates.push({
-      lat: latitude / 1e5,
-      lng: longitude / 1e5,
+      lat: latitude / factor,
+      lng: longitude / factor,
     })
   }
 
   return coordinates
+}
+
+function decodePolyline(encoded, pickupPoint, dropoffPoint) {
+  const decoded5 = decodePolylineWithPrecision(encoded, 5)
+  const decoded6 = decodePolylineWithPrecision(encoded, 6)
+  if (!pickupPoint || !dropoffPoint) {
+    return decoded5.length >= 2 ? decoded5 : decoded6
+  }
+  const score = (points) => {
+    if (!Array.isArray(points) || points.length < 2) return Infinity
+    const start = points[0]
+    const end = points[points.length - 1]
+    return distanceKm(start, pickupPoint) + distanceKm(end, dropoffPoint)
+  }
+  return score(decoded6) < score(decoded5) ? decoded6 : decoded5
 }
 
 function buildTripTimeline(ride) {
@@ -125,9 +157,9 @@ export default function RideOperationDetailPage() {
   useEffect(() => {
     let active = true
 
-    const load = async () => {
+    const load = async ({ background = false } = {}) => {
       if (!token) return
-      setLoading(true)
+      if (!background) setLoading(true)
       setError('')
       try {
         const { data } = await axios.get(`${BASE_URL}/api/admin/rides/${rideId}`, {
@@ -141,14 +173,14 @@ export default function RideOperationDetailPage() {
         if (!active) return
         setError(err?.response?.data?.error || err?.message || 'Failed to load ride details')
       } finally {
-        if (active) setLoading(false)
+        if (active && !background) setLoading(false)
       }
     }
 
     load()
     const interval = setInterval(() => {
       if (!active) return
-      load()
+      load({ background: true })
     }, LIVE_TRACK_REFRESH_MS)
 
     return () => {
@@ -194,7 +226,23 @@ export default function RideOperationDetailPage() {
   }
 
   const routePath = useMemo(() => {
-    const savedRoute = decodePolyline(ride?.routePolyline)
+    const pickupPoint = (
+      ride?.pickupLat !== null &&
+      ride?.pickupLat !== undefined &&
+      ride?.pickupLng !== null &&
+      ride?.pickupLng !== undefined
+    )
+      ? { lat: Number(ride.pickupLat), lng: Number(ride.pickupLng) }
+      : null
+    const dropoffPoint = (
+      ride?.dropoffLat !== null &&
+      ride?.dropoffLat !== undefined &&
+      ride?.dropoffLng !== null &&
+      ride?.dropoffLng !== undefined
+    )
+      ? { lat: Number(ride.dropoffLat), lng: Number(ride.dropoffLng) }
+      : null
+    const savedRoute = decodePolyline(ride?.routePolyline, pickupPoint, dropoffPoint)
     if (savedRoute.length > 1) return savedRoute
     if (
       ride?.pickupLat === null ||

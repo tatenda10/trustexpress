@@ -105,6 +105,49 @@ function buildPolyline(points, bounds) {
   return projected.map((point) => `${point.x},${point.y}`).join(' ')
 }
 
+function toStaticMapHexColor(color) {
+  const raw = String(color || '#2563eb').trim()
+  if (!raw.startsWith('#')) return '0x2563eb'
+  return `0x${raw.slice(1)}`
+}
+
+function buildStaticMapUrl(bounds, markers, paths) {
+  const west = Number(bounds.minLng)
+  const south = Number(bounds.minLat)
+  const east = Number(bounds.maxLng)
+  const north = Number(bounds.maxLat)
+  if (![west, south, east, north].every((value) => Number.isFinite(value))) return ''
+
+  const params = new URLSearchParams()
+  params.set('bbox', `${west},${south},${east},${north}`)
+  params.set('size', '1400x900')
+  params.set('maptype', 'mapnik')
+
+  const markerParts = (markers || [])
+    .map((marker) => normalizePoint(marker))
+    .filter(Boolean)
+    .slice(0, 50)
+    .map((point) => `${point.lat},${point.lng},lightblue1`)
+  if (markerParts.length) {
+    params.set('markers', markerParts.join('|'))
+  }
+
+  const simplifiedPath = (paths || [])
+    .flatMap((path) => (
+      Array.isArray(path?.points)
+        ? path.points.map((point) => normalizePoint(point)).filter(Boolean)
+        : []
+    ))
+    .slice(0, 120)
+  if (simplifiedPath.length > 1) {
+    const color = toStaticMapHexColor(paths?.[0]?.color || '#2563eb')
+    const pathPoints = simplifiedPath.map((point) => `${point.lat},${point.lng}`).join('|')
+    params.set('path', `color:${color}|weight:4|${pathPoints}`)
+  }
+
+  return `https://staticmap.openstreetmap.de/staticmap.php?${params.toString()}`
+}
+
 export default function GeoPlotMap({
   bounds,
   markers = [],
@@ -121,11 +164,43 @@ export default function GeoPlotMap({
     return paths.some((path) => (path.points || []).map(normalizePoint).filter(Boolean).length > 1)
   }, [markers, paths])
 
+  const staticMapUrl = useMemo(
+    () => buildStaticMapUrl(normalizedBounds, markers, paths),
+    [markers, normalizedBounds, paths],
+  )
+
+  const coordinateList = useMemo(
+    () => (markers || [])
+      .map((marker) => {
+        const point = normalizePoint(marker)
+        if (!point) return null
+        return {
+          id: marker.id,
+          label: marker.label || marker.title || marker.id || 'Point',
+          lat: point.lat,
+          lng: point.lng,
+        }
+      })
+      .filter(Boolean)
+      .slice(0, 8),
+    [markers],
+  )
+
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[radial-gradient(circle_at_top,#f8fbff_0%,#eef4ff_36%,#dce8ff_100%)]">
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(148,163,184,0.15)_1px,transparent_1px),linear-gradient(to_bottom,rgba(148,163,184,0.15)_1px,transparent_1px)] bg-[size:52px_52px]" />
+    <div className="relative h-full w-full overflow-hidden bg-slate-100">
       {hasGeometry ? (
         <>
+          {staticMapUrl ? (
+            <img
+              src={staticMapUrl}
+              alt="Trip map"
+              className="absolute inset-0 h-full w-full object-cover"
+              loading="lazy"
+            />
+          ) : null}
+
+          <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(148,163,184,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(148,163,184,0.06)_1px,transparent_1px)] bg-[size:60px_60px]" />
+
           <svg
             className="absolute inset-0 h-full w-full"
             viewBox="0 0 100 100"
@@ -141,7 +216,7 @@ export default function GeoPlotMap({
                   fill="none"
                   stroke={path.color || '#2563eb'}
                   strokeWidth={path.width || 0.7}
-                  strokeOpacity={path.opacity ?? 0.95}
+                  strokeOpacity={0.9}
                   strokeDasharray={path.dashed ? '1.2 1.1' : undefined}
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -204,8 +279,19 @@ export default function GeoPlotMap({
         </div>
       )}
 
+      {coordinateList.length ? (
+        <div className="absolute right-3 top-3 max-w-[320px] space-y-1 rounded-md border border-slate-200 bg-white/95 px-3 py-2 text-[11px] text-slate-700 shadow-sm">
+          <p className="font-semibold uppercase tracking-wide text-slate-500">Coordinates</p>
+          {coordinateList.map((item) => (
+            <p key={item.id}>
+              <span className="font-semibold">{item.label}:</span> {item.lat.toFixed(5)}, {item.lng.toFixed(5)}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
       <div className="absolute bottom-3 left-3 rounded-full bg-white/90 px-3 py-1 text-[11px] text-slate-600 shadow-sm">
-        Self-hosted coordinate view
+        Rendered map + coordinates
       </div>
     </div>
   )
