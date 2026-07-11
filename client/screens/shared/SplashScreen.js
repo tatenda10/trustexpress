@@ -54,7 +54,7 @@ const SplashScreen = ({ route }) => {
             />
           </View>
           <Text className="text-4xl font-bold text-white mb-2">Trust Express</Text>
-          <Text className="text-sm text-white uppercase tracking-wider">RELIABLE RIDES. ZIMBABWE</Text>
+          <Text className="text-sm text-white uppercase tracking-wider">RELIABLE RIDES</Text>
         </View>
 
         {/* Loading Indicator */}

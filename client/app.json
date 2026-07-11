@@ -28,12 +28,12 @@
       "policy": "appVersion"
     },
     "orientation": "portrait",
-    "icon": "./assets/logo.png",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "scheme": "trustexpress",
     "splash": {
-      "image": "./assets/logo.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#206EFF"
     },
@@ -62,14 +62,14 @@
         "USE_FULL_SCREEN_INTENT"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/logo.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
       "package": "com.tatenda10.trustexpress"
     },
     "web": {
-      "favicon": "./assets/logo.png",
+      "favicon": "./assets/icon.png",
       "bundler": "metro"
     },
     "updates": {

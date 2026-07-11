@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { submitDriverDocuments, uploadFile } from '../../api';
+import { submitDriverDocuments, uploadFile, resolveUploadedMediaUrl } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
@@ -89,6 +89,44 @@ function formatUploadErrorMessage(error, fallback) {
   return apiMessage;
 }
 
+function getDisplayImageUri(uri) {
+  if (!uri) return null;
+  const raw = String(uri).trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('file://') || raw.startsWith('content://')) {
+    return raw;
+  }
+  return resolveUploadedMediaUrl(raw) || raw;
+}
+
+function isAlreadyUploadedDocUri(uri) {
+  const raw = String(uri || '').trim();
+  if (!raw) return false;
+  if (raw.startsWith('/uploads/')) return true;
+  if (/^https?:\/\//i.test(raw)) {
+    return raw.includes('/uploads/');
+  }
+  return false;
+}
+
+function toStoredUploadPath(uri) {
+  const raw = String(uri || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('/uploads/')) return raw;
+  const uploadsIdx = raw.indexOf('/uploads/');
+  if (uploadsIdx >= 0) {
+    return raw.slice(uploadsIdx).split('?')[0];
+  }
+  const resolved = resolveUploadedMediaUrl(raw);
+  if (resolved) {
+    const resolvedIdx = resolved.indexOf('/uploads/');
+    if (resolvedIdx >= 0) {
+      return resolved.slice(resolvedIdx).split('?')[0];
+    }
+  }
+  return raw;
+}
+
 export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -124,6 +162,15 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   /** True while showing post-submit alert so useLayoutEffect does not replace before the user taps Continue. */
   const pendingSubmitAlertRef = useRef(false);
 
+  const getExistingDocUrl = (key) => {
+    if (key === 'driverLicence') return profile?.driverLicenceUrl || null;
+    if (key === 'nationalIdFront') return profile?.nationalIdFrontUrl || null;
+    if (key === 'nationalIdBack') return profile?.nationalIdBackUrl || null;
+    if (key === 'selfie') return profile?.selfieUrl || null;
+    if (key === 'selfieWithIdCard') return profile?.selfieWithIdCardUrl || null;
+    return null;
+  };
+
   const hasSubmittedDocs = !!(
     profile?.driverLicenceUrl ||
     profile?.nationalIdFrontUrl ||
@@ -134,8 +181,16 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const isPending = hasSubmittedDocs && profile?.status === 'pending';
   const isRejected = profile?.status === 'rejected';
   const isBlocked = isRejected && profile?.canResubmit === false;
-  const hasAtLeastOneDoc = enhancedSelfieOnly ? !!uris.selfieWithIdCard : Object.values(uris).some(Boolean);
+  const hasAtLeastOneDoc = enhancedSelfieOnly
+    ? !!(uris.selfieWithIdCard || getExistingDocUrl('selfieWithIdCard'))
+    : DOCS.some(({ key }) => !!(uris[key] || getExistingDocUrl(key)));
   const docsToRender = DOCS;
+
+  const getEffectiveDocUri = (key) => uris[key] || getExistingDocUrl(key);
+
+  const missingRequiredDocs = enhancedSelfieOnly
+    ? (getEffectiveDocUri('selfieWithIdCard') ? [] : ['Selfie with national ID'])
+    : DOCS.filter(({ key }) => !getEffectiveDocUri(key)).map(({ label }) => label);
 
   useEffect(() => {
     if (profileApproved && vehicleApproved) {
@@ -150,21 +205,29 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     if (nextLicence) setDriverLicenceNumber((prev) => prev || nextLicence);
   }, [profile?.nationalIdNumber, profile?.driverLicenceNumber]);
 
+  // Keep local state in sync with documents already saved on the server ("Already uploaded").
+  useEffect(() => {
+    setUris((prev) => ({
+      nationalIdFront: prev.nationalIdFront || profile?.nationalIdFrontUrl || null,
+      nationalIdBack: prev.nationalIdBack || profile?.nationalIdBackUrl || null,
+      driverLicence: prev.driverLicence || profile?.driverLicenceUrl || null,
+      selfie: prev.selfie || profile?.selfieUrl || null,
+      selfieWithIdCard: prev.selfieWithIdCard || profile?.selfieWithIdCardUrl || null,
+    }));
+  }, [
+    profile?.nationalIdFrontUrl,
+    profile?.nationalIdBackUrl,
+    profile?.driverLicenceUrl,
+    profile?.selfieUrl,
+    profile?.selfieWithIdCardUrl,
+  ]);
+
   // Pending review: leave upload screen — phone verify next if needed, otherwise tabs (matches App onboarding order).
   useLayoutEffect(() => {
     if (!isPending || enhancedSelfieOnly) return;
     if (pendingSubmitAlertRef.current) return;
     navigation.replace(nextRouteAfterDocumentsSubmit(driverStatus));
   }, [isPending, enhancedSelfieOnly, navigation, driverStatus]);
-
-  const getExistingDocUrl = (key) => {
-    if (key === 'driverLicence') return profile?.driverLicenceUrl || null;
-    if (key === 'nationalIdFront') return profile?.nationalIdFrontUrl || null;
-    if (key === 'nationalIdBack') return profile?.nationalIdBackUrl || null;
-    if (key === 'selfie') return profile?.selfieUrl || null;
-    if (key === 'selfieWithIdCard') return profile?.selfieWithIdCardUrl || null;
-    return null;
-  };
 
   const handleSkip = async () => {
     try {
@@ -279,7 +342,13 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   };
 
   const uploadUri = async (token, uri, label) => {
-    const uploadReadyUri = await prepareImageForUpload(uri);
+    const trimmedUri = String(uri || '').trim();
+    if (!trimmedUri) return null;
+    if (isAlreadyUploadedDocUri(trimmedUri)) {
+      return toStoredUploadPath(trimmedUri);
+    }
+
+    const uploadReadyUri = await prepareImageForUpload(trimmedUri);
     const formData = new FormData();
     formData.append('file', { uri: uploadReadyUri, name: 'photo.jpg', type: 'image/jpeg' });
     try {
@@ -304,17 +373,21 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       return;
     }
 
-    const { nationalIdFront, nationalIdBack, driverLicence, selfie, selfieWithIdCard } = uris;
     const trimmedNationalIdNumber = String(nationalIdNumber || '').trim();
     const trimmedDriverLicenceNumber = String(driverLicenceNumber || '').trim();
 
     if (enhancedSelfieOnly) {
-      if (!selfieWithIdCard) {
+      if (!getEffectiveDocUri('selfieWithIdCard')) {
         Alert.alert('Missing selfie', 'Please take a selfie while holding your national ID.');
         return;
       }
-    } else if (!nationalIdFront || !nationalIdBack || !driverLicence || !selfie || !selfieWithIdCard) {
-      Alert.alert('Missing documents', 'Please upload all five required identity documents.');
+    } else if (missingRequiredDocs.length > 0) {
+      Alert.alert(
+        'Missing documents',
+        missingRequiredDocs.length === 1
+          ? `Please upload: ${missingRequiredDocs[0]}.`
+          : `Please upload the following documents:\n\n• ${missingRequiredDocs.join('\n• ')}`,
+      );
       return;
     } else if (!trimmedNationalIdNumber) {
       Alert.alert('National ID number required', 'Enter the national ID number exactly as shown on your ID card.');
@@ -330,7 +403,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       if (!token) throw new Error('Not signed in');
 
       if (enhancedSelfieOnly) {
-        const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard, 'Selfie with national ID');
+        const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
         try {
           await submitDriverDocuments(token, { selfieWithIdCardUrl }, { suppressAuthErrorHandler: true });
         } catch (error) {
@@ -342,11 +415,11 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           throw new Error(formatUploadErrorMessage(error, 'Could not submit your selfie with national ID. Please try again.'));
         }
       } else {
-        const nationalIdFrontUrl = await uploadUri(token, nationalIdFront, 'National ID front');
-        const nationalIdBackUrl = await uploadUri(token, nationalIdBack, 'National ID back');
-        const driverLicenceUrl = await uploadUri(token, driverLicence, "Driver's license");
-        const selfieUrl = await uploadUri(token, selfie, 'Selfie');
-        const selfieWithIdCardUrl = await uploadUri(token, selfieWithIdCard, 'Selfie with national ID');
+        const nationalIdFrontUrl = await uploadUri(token, getEffectiveDocUri('nationalIdFront'), 'National ID front');
+        const nationalIdBackUrl = await uploadUri(token, getEffectiveDocUri('nationalIdBack'), 'National ID back');
+        const driverLicenceUrl = await uploadUri(token, getEffectiveDocUri('driverLicence'), "Driver's license");
+        const selfieUrl = await uploadUri(token, getEffectiveDocUri('selfie'), 'Selfie');
+        const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
 
         try {
           await submitDriverDocuments(
@@ -626,10 +699,15 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           </View>
         ) : null}
 
-        {docsToRender.map(({ key, label, subtitle, icon }) => (
+        {docsToRender.map(({ key, label, subtitle, icon }) => {
+          const effectiveUri = getEffectiveDocUri(key);
+          const displayUri = getDisplayImageUri(effectiveUri);
+          const hasDoc = !!effectiveUri;
+
+          return (
           <View key={key} className="mb-4 flex-row items-center rounded-2xl border border-gray-200 bg-white p-4">
-            {uris[key] ? (
-              <Image source={{ uri: uris[key] }} className="mr-4 h-12 w-12 rounded-xl" />
+            {displayUri ? (
+              <Image source={{ uri: displayUri }} className="mr-4 h-12 w-12 rounded-xl" />
             ) : (
               <View className="mr-4 h-12 w-12 items-center justify-center rounded-xl" style={{ backgroundColor: '#EFF6FF' }}>
                 <Ionicons name={icon} size={24} color={PRIMARY_BLUE} />
@@ -641,7 +719,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               <Text className="mt-0.5 text-sm text-gray-500">
                 {uris[key]
                   ? ((key === 'selfie' || key === 'selfieWithIdCard') ? 'Selfie captured' : 'Image selected')
-                  : getExistingDocUrl(key)
+                  : hasDoc
                     ? 'Already uploaded'
                     : subtitle}
               </Text>
@@ -661,7 +739,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               </TouchableOpacity>
             )}
           </View>
-        ))}
+          );
+        })}
 
         <View className="my-4 flex-row items-center justify-center gap-2">
           <Ionicons name="lock-closed-outline" size={16} color="#9ca3af" />
@@ -669,10 +748,10 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         </View>
 
         <TouchableOpacity
-          className={`mb-2 flex-row items-center justify-center gap-2 rounded-xl py-4 ${!hasAtLeastOneDoc ? 'opacity-60' : ''}`}
+          className={`mb-2 flex-row items-center justify-center gap-2 rounded-xl py-4 ${missingRequiredDocs.length > 0 && !enhancedSelfieOnly ? 'opacity-60' : !hasAtLeastOneDoc ? 'opacity-60' : ''}`}
           style={{ backgroundColor: '#EFF6FF' }}
           onPress={handleSubmit}
-          disabled={loading || !hasAtLeastOneDoc}
+          disabled={loading || !hasAtLeastOneDoc || (!enhancedSelfieOnly && missingRequiredDocs.length > 0)}
         >
           {loading ? (
             <ActivityIndicator size="small" color={PRIMARY_BLUE} />

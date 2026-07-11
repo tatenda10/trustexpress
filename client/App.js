@@ -119,6 +119,28 @@ import { DRIVER_SKIP_PHONE_VERIFY_KEY } from './screens/driver/DriverVerifyPhone
 const ROLE_STORAGE_KEY = 'trust_express_role';
 const getDriverStatusCacheKey = (userId) => `trust_express_driver_status:${userId}`;
 
+/** Survives AppStack remounts so Clerk reloads do not replay full role/driver bootstrap. */
+let sessionRoleBootstrapUserId = null;
+let sessionRoleBootstrapSnapshot = null;
+let sessionDriverStatusUserId = null;
+let sessionDriverStatusSnapshot = null;
+
+function rememberRoleBootstrap(userId, profile, storedRole) {
+  if (!userId) return;
+  sessionRoleBootstrapUserId = userId;
+  sessionRoleBootstrapSnapshot = {
+    profile,
+    storedRole: storedRole || profile?.role || null,
+    bootstrapped: true,
+  };
+}
+
+function rememberDriverStatus(userId, status) {
+  if (!userId || !status || typeof status !== 'object') return;
+  sessionDriverStatusUserId = userId;
+  sessionDriverStatusSnapshot = status;
+}
+
 // App Stack (for authenticated users)
 function AppStack({ currentRouteName }) {
   const { getToken } = useAuth();
@@ -128,11 +150,26 @@ function AppStack({ currentRouteName }) {
   const roleBootstrapUserRef = useRef(null);
   const pushSyncKeyRef = useRef('');
   const referralAttachKeyRef = useRef('');
-  const [userProfile, setUserProfile] = useState(null);
-  const [storedRole, setStoredRole] = useState(null);
-  const [roleLoading, setRoleLoading] = useState(true);
+  const hasSessionRoleBootstrap =
+    !!user?.id &&
+    sessionRoleBootstrapUserId === user.id &&
+    sessionRoleBootstrapSnapshot?.bootstrapped;
+  const hasSessionDriverStatus =
+    !!user?.id &&
+    sessionDriverStatusUserId === user.id &&
+    sessionDriverStatusSnapshot &&
+    typeof sessionDriverStatusSnapshot === 'object';
+  const [userProfile, setUserProfile] = useState(() =>
+    hasSessionRoleBootstrap ? sessionRoleBootstrapSnapshot.profile : null,
+  );
+  const [storedRole, setStoredRole] = useState(() =>
+    hasSessionRoleBootstrap ? sessionRoleBootstrapSnapshot.storedRole : null,
+  );
+  const [roleLoading, setRoleLoading] = useState(() => !hasSessionRoleBootstrap);
   const [storageLoaded, setStorageLoaded] = useState(false);
-  const [driverStatus, setDriverStatus] = useState(null);
+  const [driverStatus, setDriverStatus] = useState(() =>
+    hasSessionDriverStatus ? sessionDriverStatusSnapshot : null,
+  );
   /** Latest driver status for refetch error paths (avoids stale useCallback closure wiping state). */
   const driverStatusRef = useRef(null);
   const backgroundOverlayVisibleRef = useRef(false);
@@ -141,14 +178,20 @@ function AppStack({ currentRouteName }) {
   const backgroundOverlayLastVariantRef = useRef('online');
   const appStateRef = useRef(AppState.currentState);
   const lastDriverStatusForegroundFetchAtRef = useRef(0);
-  const [driverLoading, setDriverLoading] = useState(true);
+  const [driverLoading, setDriverLoading] = useState(() => !hasSessionDriverStatus);
   const [driverSkippedOnboarding, setDriverSkippedOnboarding] = useState(false);
   const [driverSkippedEnhancedSelfie, setDriverSkippedEnhancedSelfie] = useState(false);
   const [driverSkippedPhoneVerify, setDriverSkippedPhoneVerify] = useState(false);
-  const [driverStatusHydrated, setDriverStatusHydrated] = useState(false);
+  const [driverStatusHydrated, setDriverStatusHydrated] = useState(() => hasSessionDriverStatus);
   const [passengerLocationGranted, setPassengerLocationGranted] = useState(null);
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
-  const [roleBootstrapped, setRoleBootstrapped] = useState(false);
+  const [roleBootstrapped, setRoleBootstrapped] = useState(() => hasSessionRoleBootstrap);
+
+  useEffect(() => {
+    if (hasSessionRoleBootstrap && user?.id) {
+      roleBootstrapUserRef.current = user.id;
+    }
+  }, [hasSessionRoleBootstrap, user?.id]);
 
   useEffect(() => {
     driverStatusRef.current = driverStatus;
@@ -195,6 +238,17 @@ function AppStack({ currentRouteName }) {
   }, []);
 
   useEffect(() => {
+    if (!user?.id) {
+      sessionDriverStatusUserId = null;
+      sessionDriverStatusSnapshot = null;
+      return;
+    }
+    if (sessionDriverStatusUserId === user.id && sessionDriverStatusSnapshot) {
+      setDriverStatus(sessionDriverStatusSnapshot);
+      setDriverLoading(false);
+      setDriverStatusHydrated(true);
+      return;
+    }
     setDriverStatus(null);
     setDriverLoading(true);
     setDriverStatusHydrated(false);
@@ -216,6 +270,7 @@ function AppStack({ currentRouteName }) {
           const parsed = JSON.parse(cached);
           if (parsed && typeof parsed === 'object') {
             setDriverStatus(parsed);
+            rememberDriverStatus(user.id, parsed);
           }
         }
       } catch {
@@ -666,6 +721,14 @@ function AppStack({ currentRouteName }) {
     if (roleBootstrapUserRef.current === user.id) {
       return;
     }
+    if (sessionRoleBootstrapUserId === user.id && sessionRoleBootstrapSnapshot?.bootstrapped) {
+      roleBootstrapUserRef.current = user.id;
+      setUserProfile(sessionRoleBootstrapSnapshot.profile);
+      setStoredRole(sessionRoleBootstrapSnapshot.storedRole);
+      setRoleLoading(false);
+      setRoleBootstrapped(true);
+      return;
+    }
     let cancelled = false;
     roleBootstrapUserRef.current = user.id;
     setRoleLoading(true);
@@ -683,14 +746,16 @@ function AppStack({ currentRouteName }) {
         if (cancelled) return;
         const explicitRole = resolveExplicitRole(profile);
         if (explicitRole) {
-          setUserProfile({
+          const nextProfile = {
             ...profile,
             role: explicitRole,
-          });
+          };
+          setUserProfile(nextProfile);
           if (storedRole !== explicitRole) {
             setStoredRole(explicitRole);
             AsyncStorage.setItem(ROLE_STORAGE_KEY, explicitRole).catch(() => {});
           }
+          rememberRoleBootstrap(user.id, nextProfile, explicitRole);
         }
         else {
           const fallbackRole = storedRole || null;
@@ -712,6 +777,11 @@ function AppStack({ currentRouteName }) {
           if (storedRole !== fallbackRole) {
             setStoredRole(fallbackRole);
           }
+          rememberRoleBootstrap(user.id, {
+            first_name: user?.firstName || null,
+            last_name: user?.lastName || null,
+            role: fallbackRole,
+          }, fallbackRole);
           getTokenRef.current?.().then((t) => {
             if (t) {
               registerUser(t, {
@@ -734,14 +804,17 @@ function AppStack({ currentRouteName }) {
         if (cancelled) return;
         // On API error, fall back to stored role or null
         const fallbackRole = storedRole || null;
-        setUserProfile((prev) => ({
-          ...(prev || {}),
-          first_name: prev?.first_name || user?.firstName || null,
-          last_name: prev?.last_name || user?.lastName || null,
+        const nextProfile = {
+          first_name: user?.firstName || null,
+          last_name: user?.lastName || null,
           role: fallbackRole,
-        }));
+        };
+        setUserProfile(nextProfile);
         if (fallbackRole && storedRole !== fallbackRole) {
           setStoredRole(fallbackRole);
+        }
+        if (fallbackRole) {
+          rememberRoleBootstrap(user.id, nextProfile, fallbackRole);
         }
       })
       .finally(() => {
@@ -769,6 +842,7 @@ function AppStack({ currentRouteName }) {
       const data = await getDriverMe(token, { suppressAuthErrorHandler: true });
       setDriverStatus(data);
       if (user?.id) {
+        rememberDriverStatus(user.id, data);
         AsyncStorage.setItem(getDriverStatusCacheKey(user.id), JSON.stringify(data)).catch(() => {});
       }
       return data;
@@ -918,11 +992,7 @@ function AppStack({ currentRouteName }) {
   }, [isDriver, user?.id]);
 
   if (!storageLoaded || roleLoading || !roleBootstrapped || !userRole) {
-    return (
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Splash" component={SplashScreen} />
-      </Stack.Navigator>
-    );
+    return <SplashScreen />;
   }
 
   if (isBlockedAccount) {
@@ -965,7 +1035,7 @@ function AppStack({ currentRouteName }) {
       : undefined;
 
     return (
-      <Stack.Navigator key={passengerInitialRoute} screenOptions={{ headerShown: false }} initialRouteName={passengerInitialRoute}>
+      <Stack.Navigator key={`passenger-${user?.id || 'guest'}`} screenOptions={{ headerShown: false }} initialRouteName={passengerInitialRoute}>
         <Stack.Screen
           name="PassengerTabs"
           component={PassengerTabNavigator}
@@ -1098,7 +1168,7 @@ function AppStack({ currentRouteName }) {
       }}
     >
       <Stack.Navigator
-        key={initialRoute}
+        key={`driver-${user?.id || 'guest'}`}
         screenOptions={{ headerShown: false }}
         initialRouteName={initialRoute}
       >
@@ -1222,8 +1292,17 @@ function AppContent() {
   }, [isSignedIn, navigateToOnboardingIfAvailable, setInviteFromToken]);
 
   useEffect(() => {
-    console.log('[AppContent] auth state:', { isLoaded, isSignedIn, rendering: !isLoaded ? 'AuthStack' : isSignedIn ? 'AppStack' : 'AuthStack' });
+    console.log('[AppContent] auth state:', {
+      isLoaded,
+      isSignedIn,
+      rendering: !isLoaded ? 'Splash' : isSignedIn ? 'AppStack' : 'AuthStack',
+    });
   }, [isLoaded, isSignedIn]);
+
+  // Preload notification module during startup so signup/login does not trigger a mid-session bundle reload.
+  useEffect(() => {
+    import('./notifications').catch(() => {});
+  }, []);
 
   // Avoid hard auto-logout on a single backend 401. Mobile networks can briefly
   // return transient auth errors while Clerk session is still valid.
@@ -1312,7 +1391,7 @@ function AppContent() {
     >
       <SafeAreaProvider>
         <KeyboardProvider>
-          {!isLoaded ? <AuthStack /> : isSignedIn ? <AppStack currentRouteName={currentRouteName} /> : <AuthStack />}
+          {!isLoaded ? <SplashScreen /> : isSignedIn ? <AppStack currentRouteName={currentRouteName} /> : <AuthStack />}
           <StatusBar style="auto" />
         </KeyboardProvider>
       </SafeAreaProvider>

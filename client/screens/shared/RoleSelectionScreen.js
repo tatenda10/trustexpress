@@ -34,7 +34,7 @@ const RoleSelectionScreen = ({ navigation }) => {
         {/* Header - Below Logo */}
         <View className="items-center mb-8">
           <Text className="text-4xl font-bold text-gray-900 mb-2">Trust Express</Text>
-          <Text className="text-sm text-gray-600 uppercase tracking-wider">RELIABLE RIDES. ZIMBABWE</Text>
+          <Text className="text-sm text-gray-600 uppercase tracking-wider">RELIABLE RIDES</Text>
         </View>
 
         {/* Spacer */}

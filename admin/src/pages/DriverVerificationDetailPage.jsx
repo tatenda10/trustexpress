@@ -224,6 +224,7 @@ export default function DriverVerificationDetailPage() {
   }, [token])
 
   const documentGroups = useMemo(() => requiredDocumentEntries(driver), [driver])
+  const profileDocs = driver?.profileDocs || {}
   const identityDocuments = documentGroups.identity
   const vehicleDocuments = documentGroups.vehicle
   const hasProfileDocuments = identityDocuments.some((doc) => !!doc.url)
