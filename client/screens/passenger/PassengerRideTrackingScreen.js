@@ -220,6 +220,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
   const [submittingLostItem, setSubmittingLostItem] = useState(false);
   const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
+  const [confirmingPickup, setConfirmingPickup] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
   const bottomActionInset = Math.max(insets.bottom + tabBarHeight - 8, 20);
@@ -306,7 +307,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         const handleRideUpdate = (payload = {}) => {
           if (!active || Number(payload.rideRequestId) !== Number(rideRequestId)) return;
           const nextStatus = String(payload.status || '').toLowerCase();
-          const nextStage = mapRideStatusToStage(nextStatus);
+          const isPickupConfirmation = nextStatus === 'passenger_confirmed';
+          const nextStage = isPickupConfirmation ? '' : mapRideStatusToStage(nextStatus);
           const nextDriverCoordinate = payload?.driverCoordinate &&
             Number.isFinite(Number(payload.driverCoordinate.latitude)) &&
             Number.isFinite(Number(payload.driverCoordinate.longitude))
@@ -315,10 +317,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 longitude: Number(payload.driverCoordinate.longitude),
               }
             : null;
-          if (nextStatus || nextDriverCoordinate) {
+          const hasConfirmationUpdate = Boolean(payload?.confirmedAt);
+          if ((nextStatus && !isPickupConfirmation) || nextDriverCoordinate || hasConfirmationUpdate) {
             setRideStatus((current) => (current ? {
               ...current,
-              ...(nextStatus ? { status: nextStatus } : null),
+              ...(nextStatus && !isPickupConfirmation ? { status: nextStatus } : null),
               stage: nextStage || current.stage,
               ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
               ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
@@ -675,18 +678,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   };
 
   const handleConfirmPickup = async () => {
+    if (confirmingPickup || rideStatus?.passengerConfirmedAt) return;
+    setConfirmingPickup(true);
     try {
       const token = await getToken();
-      if (token && rideRequestId) {
-        await confirmPassengerPickup(token, rideRequestId);
-        // Update local state
-        setRideStatus((current) => current ? {
-          ...current,
-          passengerConfirmedAt: new Date().toISOString(),
-        } : current);
-      }
+      if (!token || !rideRequestId) throw new Error('Not signed in');
+      const result = await confirmPassengerPickup(token, rideRequestId);
+      const confirmedAt = String(result?.confirmedAt || '').trim();
+      if (!confirmedAt) throw new Error('Could not confirm pickup.');
+      setRideStatus((current) => current ? {
+        ...current,
+        passengerConfirmedAt: confirmedAt,
+      } : current);
     } catch (error) {
       Alert.alert('Confirmation failed', error?.message || 'Could not confirm pickup.');
+    } finally {
+      setConfirmingPickup(false);
     }
   };
 
@@ -1314,40 +1321,52 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       </TouchableOpacity>
                     </View>
                   ) : stage !== 'on_trip' ? (
-                    <View className="flex-row items-center gap-3">
-                      {!rideStatus?.passengerConfirmedAt ? (
+                    <View>
+                      <View className="flex-row items-center gap-3">
+                        {!rideStatus?.passengerConfirmedAt ? (
+                          <TouchableOpacity
+                            onPress={handleConfirmPickup}
+                            disabled={confirmingPickup}
+                            className="flex-1 h-14 rounded-[22px] items-center justify-center"
+                            style={{ backgroundColor: PRIMARY_BLUE, opacity: confirmingPickup ? 0.7 : 1 }}
+                          >
+                            {confirmingPickup ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
+                            )}
+                          </TouchableOpacity>
+                        ) : (
+                          <View className="flex-1 h-14 rounded-[22px] items-center justify-center border border-green-200 bg-green-50 px-3">
+                            <Text className="text-base font-bold text-green-700">You're on your way</Text>
+                          </View>
+                        )}
                         <TouchableOpacity
-                          onPress={handleConfirmPickup}
-                          className="flex-1 h-14 rounded-[22px] items-center justify-center"
+                          onPress={() => navigation.navigate('RideChat', {
+                            rideRequestId,
+                            role: 'passenger',
+                            chatTitle: driver?.driverName || 'Driver chat',
+                          })}
+                          className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
+                        >
+                          <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
+                          className="h-14 w-14 rounded-[22px] items-center justify-center"
                           style={{ backgroundColor: PRIMARY_BLUE }}
                         >
-                          <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
+                          <Ionicons name="call" size={22} color="#fff" />
                         </TouchableOpacity>
-                      ) : (
+                      </View>
+                      {rideStatus?.passengerConfirmedAt ? (
                         <TouchableOpacity
                           onPress={handleCancelRide}
-                          className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                          className="mt-3 h-12 rounded-[22px] border border-red-200 items-center justify-center bg-white"
                         >
-                          <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                          <Text className="text-base font-bold text-red-500">Cancel ride</Text>
                         </TouchableOpacity>
-                      )}
-                      <TouchableOpacity
-                        onPress={() => navigation.navigate('RideChat', {
-                          rideRequestId,
-                          role: 'passenger',
-                          chatTitle: driver?.driverName || 'Driver chat',
-                        })}
-                        className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
-                      >
-                        <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
-                        className="h-14 w-14 rounded-[22px] items-center justify-center"
-                        style={{ backgroundColor: PRIMARY_BLUE }}
-                      >
-                        <Ionicons name="call" size={22} color="#fff" />
-                      </TouchableOpacity>
+                      ) : null}
                     </View>
                   ) : null}
                 </View>

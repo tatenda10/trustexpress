@@ -152,7 +152,7 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
         <View className="flex-row items-center gap-1">
           <Ionicons name="time-outline" size={12} color="#6b7280" />
           <Text className="text-[11px] font-semibold text-gray-500">
-            {formatCountdown(remainingSeconds)}
+            {remainingSeconds > 0 ? `${formatCountdown(remainingSeconds)} to select` : 'Offer expired'}
           </Text>
         </View>
       </View>
@@ -291,8 +291,18 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       const token = await getAuthToken();
       if (!token) throw new Error('Not signed in');
       const data = await getPassengerRideRequestStatus(token, rideRequest.id);
-      setRideStatus(data?.rideRequest ? { ...data.rideRequest, remainingSecondsCapturedAt: Date.now() } : null);
-      setAcceptedDrivers(Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : []);
+      const capturedAt = Date.now();
+      const nextAcceptedDrivers = (Array.isArray(data?.acceptedDrivers) ? data.acceptedDrivers : [])
+        .filter((driver) => {
+          const remaining = getEffectiveRemainingSeconds(
+            driver.offerExpiresAt,
+            driver.remainingSeconds,
+            capturedAt,
+          );
+          return remaining == null || remaining > 0;
+        });
+      setRideStatus(data?.rideRequest ? { ...data.rideRequest, remainingSecondsCapturedAt: capturedAt } : null);
+      setAcceptedDrivers(nextAcceptedDrivers);
       setAssignedDriver(data?.assignedDriver || null);
       return data || null;
     } catch {
@@ -593,13 +603,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
               </Text>
             </View>
 
-            {/* Countdown badge */}
-            {isWaitingForDrivers && (
-              <View className="ml-3 items-center rounded-xl bg-blue-50 px-3 py-2">
-                <Text className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Left</Text>
-                <Text className="text-sm font-extrabold text-gray-900">{formatCountdown(remainingSeconds)}</Text>
-              </View>
-            )}
+            {/* Countdown badge removed — open requests no longer auto-expire */}
           </View>
 
           {isWaitingForDrivers ? (
@@ -660,7 +664,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                     key={driver.id}
                     driver={driver}
                     estimatedAmount={finalEstimatedAmount}
-                    remainingSeconds={remainingSeconds}
+                    remainingSeconds={getEffectiveRemainingSeconds(
+                      driver.offerExpiresAt,
+                      driver.remainingSeconds,
+                      rideStatus?.remainingSecondsCapturedAt ?? rideRequest?.remainingSecondsCapturedAt,
+                    )}
                     onAccept={handleAccept}
                     onDecline={() => handleDeclineDriver(driver)}
                     isSubmitting={isSubmittingDriverId === driver.id}
@@ -690,16 +698,8 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
               <Text className="text-xl font-bold text-gray-900">Finding your driver</Text>
               <Text className="mt-1.5 text-center text-sm text-gray-400">
-                Nearby drivers have been notified.{'\n'}Accepted offers will appear here.
+                Nearby drivers have been notified.{'\n'}Accepted offers will appear here. Your request stays active until you cancel or choose a driver.
               </Text>
-
-              {/* Countdown pill */}
-              <View className="mt-5 flex-row items-center gap-2 rounded-xl bg-gray-900 px-5 py-3">
-                <Ionicons name="time-outline" size={15} color="#fff" />
-                <Text className="text-sm font-bold text-white">
-                  Auto-cancels in {formatCountdown(remainingSeconds)}
-                </Text>
-              </View>
 
               {/* Cancel */}
               <TouchableOpacity

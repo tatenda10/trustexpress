@@ -635,14 +635,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
             ...request,
             remainingSecondsCapturedAt: serverCapturedAt,
           }))
-          .filter(
-            (request) =>
+          .filter((request) => {
+            if (!request?.expiresAt) return true;
+            return (
               getRemainingSeconds(
                 request?.expiresAt,
                 request?.remainingSeconds,
                 request?.remainingSecondsCapturedAt,
               ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
-          );
+            );
+          });
         const nextRequest = nextList[0] || null;
 
         const prevCount = prevRequestCountRef.current;
@@ -843,9 +845,10 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     if (!pendingSelectionRide || currentRide?.id) return;
+    const offerExpiresAt = pendingSelectionRide.offerExpiresAt || pendingSelectionRide.expiresAt;
     if (
       getRemainingSeconds(
-        pendingSelectionRide.expiresAt,
+        offerExpiresAt,
         pendingSelectionRide?.remainingSeconds,
         pendingSelectionRide?.remainingSecondsCapturedAt,
       ) > 0
@@ -853,8 +856,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
     setPendingSelectionRide(null);
     Alert.alert(
-      'Request expired',
-      'Passenger did not select in time. You can accept a new incoming request.',
+      'Offer expired',
+      'The passenger did not select you in time. You can accept a new incoming request.',
     );
   }, [currentRide?.id, nowTick, pendingSelectionRide]);
 
@@ -1262,7 +1265,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
     const req = request || activeRequest;
     try {
       if (!req) return;
-      if (getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt) < 1) {
+      if (req?.expiresAt && getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt) < 1) {
         if (__DEV__) {
           console.log('[driver.home] accept blocked locally as expired', {
             rideRequestId: req?.id,
@@ -1302,8 +1305,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setShowNewRequestBadge(false);
       setIsListening(true);
       setCurrentRide(nextRide?.ride || null);
-      setPendingSelectionRide(nextRide?.ride ? null : req);
-      Alert.alert('Request accepted', nextRide?.ride ? 'Ride assigned. Open the trip route when ready.' : 'Waiting for passenger to choose a driver.');
+      setPendingSelectionRide(nextRide?.ride ? null : {
+        ...req,
+        remainingSeconds: Number(acceptResult?.rideRequest?.remainingSeconds ?? 30),
+        remainingSecondsCapturedAt: Date.now(),
+        offerExpiresAt: acceptResult?.rideRequest?.offerExpiresAt || null,
+        expiresAt: acceptResult?.rideRequest?.offerExpiresAt || null,
+      });
+      Alert.alert('Request accepted', nextRide?.ride ? 'Ride assigned. Open the trip route when ready.' : 'Waiting for passenger to choose a driver. You have 30 seconds to be selected.');
     } catch (error) {
       if (__DEV__) {
         console.log('[driver.home] accept failed', {

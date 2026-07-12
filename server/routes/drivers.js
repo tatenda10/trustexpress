@@ -17,11 +17,12 @@ import {
   emitTripRatingToPassenger,
 } from '../lib/realtime.js';
 import { markRideRequestsViewedByDriver } from '../lib/ride-driver-responses.js';
+import {
+  DRIVER_ACCEPT_OFFER_TTL_SECONDS,
+  refreshOpenRideOffers,
+} from '../lib/ride-offer-expiry.js';
 
 const router = Router();
-const OPEN_REQUEST_TTL_MINUTES = 3;
-const DRIVER_FOUND_SELECTION_TTL_SECONDS = 30;
-const OPEN_REQUEST_MIN_REMAINING_SECONDS = 30;
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DEADLOCK_RETRY_DELAY_MS = 120;
 const DEADLOCK_RETRY_ATTEMPTS = 3;
@@ -118,22 +119,8 @@ function isDriverAvailabilityFresh(lastSeenAt) {
   return (Date.now() - lastSeenMs) <= DRIVER_ONLINE_STALE_DAYS * 24 * 60 * 60 * 1000;
 }
 
-function computeExpiresAt(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  date.setMinutes(date.getMinutes() + OPEN_REQUEST_TTL_MINUTES);
-  return date.toISOString();
-}
-
-function computeRideExpiresAt(status, requestedAt, driverFoundAt = null) {
-  const normalized = String(status || '');
-  if (normalized === 'driver_found') {
-    if (!requestedAt && !driverFoundAt) return null;
-    const date = new Date(driverFoundAt || requestedAt);
-    date.setSeconds(date.getSeconds() + DRIVER_FOUND_SELECTION_TTL_SECONDS);
-    return date.toISOString();
-  }
-  return computeExpiresAt(requestedAt);
+function computeRideExpiresAt() {
+  return null;
 }
 
 function sleep(ms) {
@@ -521,40 +508,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       return res.json({ requests: [] });
     }
 
-    await query(
-      `UPDATE ride_requests
-       SET status = 'expired',
-           cancellation_reason = COALESCE(cancellation_reason, 'No driver accepted the request in time'),
-           cancelled_by = COALESCE(cancelled_by, 'system'),
-           cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP)
-       WHERE
-         (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
-         OR (
-           status = 'driver_found'
-           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
-         )`
-    );
-
-    await query(
-      `UPDATE ride_request_driver_responses rr
-       INNER JOIN ride_requests r ON r.id = rr.ride_request_id
-       SET rr.status = 'expired',
-           rr.responded_at = CURRENT_TIMESTAMP
-       WHERE rr.driver_user_id = ?
-         AND rr.status = 'pending'
-         AND (
-           r.status NOT IN ('requested', 'driver_found')
-           OR (
-             r.status = 'requested'
-             AND r.requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)
-           )
-           OR (
-             r.status = 'driver_found'
-             AND COALESCE(r.driver_found_at, r.requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
-           )
-         )`,
-      [req.userId]
-    );
+    await refreshOpenRideOffers();
 
     const driverPoint = {
       latitude: Number(availability.current_lat),
@@ -591,14 +545,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.status,
          r.requested_at,
          r.driver_found_at,
-         GREATEST(
-           0,
-           CASE
-             WHEN r.status = 'driver_found'
-               THEN ${DRIVER_FOUND_SELECTION_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, COALESCE(r.driver_found_at, r.requested_at), CURRENT_TIMESTAMP)
-             ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP)
-           END
-         ) AS remaining_seconds,
          r.driver_user_id
        FROM ride_request_driver_responses rr
        INNER JOIN ride_requests r ON r.id = rr.ride_request_id
@@ -607,13 +553,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          AND r.public_id NOT LIKE 'SIM-%'
          AND r.passenger_user_id IS NOT NULL
          AND r.status IN ('requested', 'driver_found')
-         AND (
-           (r.status = 'requested' AND TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP) <= ${(OPEN_REQUEST_TTL_MINUTES * 60) - OPEN_REQUEST_MIN_REMAINING_SECONDS})
-           OR (
-             r.status = 'driver_found'
-             AND TIMESTAMPDIFF(SECOND, COALESCE(r.driver_found_at, r.requested_at), CURRENT_TIMESTAMP) <= ${DRIVER_FOUND_SELECTION_TTL_SECONDS - OPEN_REQUEST_MIN_REMAINING_SECONDS}
-           )
-         )
+         AND r.driver_user_id IS NULL
        ORDER BY requested_at DESC
        LIMIT 20`,
       [req.userId]
@@ -664,8 +604,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         discountCode: row.discount_code || null,
         status: row.status,
         requestedAt: toIsoOrNull(row.requested_at),
-        expiresAt: computeRideExpiresAt(row.status, row.requested_at, row.driver_found_at),
-        remainingSeconds: Number(row.remaining_seconds || 0),
+        expiresAt: null,
+        remainingSeconds: null,
         driverDistanceKm,
         etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
       };
@@ -754,13 +694,10 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       return res.status(409).json({ error: 'Finish the current trip before accepting another ride' });
     }
 
+    await refreshOpenRideOffers(rideRequestId);
+
     const [ride] = await query(
-      `SELECT *,
-              CASE
-                WHEN status = 'driver_found'
-                  THEN TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
-                ELSE TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
-              END AS age_seconds
+      `SELECT *
        FROM ride_requests
        WHERE id = ?
        LIMIT 1`,
@@ -779,10 +716,8 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       rideStatus: ride.status,
       requestedAt: ride.requested_at,
       driverFoundAt: ride.driver_found_at || null,
-      ageSeconds: Number(ride?.age_seconds || 0),
       nowIso: new Date().toISOString(),
-      openRequestTtlMinutes: OPEN_REQUEST_TTL_MINUTES,
-      driverFoundSelectionTtlSeconds: DRIVER_FOUND_SELECTION_TTL_SECONDS,
+      acceptOfferTtlSeconds: DRIVER_ACCEPT_OFFER_TTL_SECONDS,
     });
     if (!['requested', 'driver_found'].includes(String(ride.status || ''))) {
       console.log('[drivers.accept] blocked by ride status', {
@@ -885,16 +820,10 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
            driver_found_at = COALESCE(driver_found_at, CURRENT_TIMESTAMP)
        WHERE id = ?
          AND status IN ('requested', 'driver_found')
-         AND (
-           (status = 'requested' AND requested_at >= (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
-           OR (
-             status = 'driver_found'
-             AND COALESCE(driver_found_at, requested_at) >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
-           )
-         )`,
+         AND driver_user_id IS NULL`,
       [rideRequestId]
     );
-    console.log('[drivers.accept] ttl-gated update result', {
+    console.log('[drivers.accept] ride status update result', {
       driverUserId: req.userId,
       rideRequestId,
       affectedRows: Number(acceptableRideUpdate?.affectedRows || 0),
@@ -902,59 +831,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       nowIso: new Date().toISOString(),
     });
     if (Number(acceptableRideUpdate?.affectedRows || 0) < 1) {
-      const [latestRide] = await query(
-        `SELECT
-           id,
-           status,
-           requested_at,
-           driver_found_at,
-           TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP) AS requested_age_seconds,
-           TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP) AS selection_age_seconds
-         FROM ride_requests
-         WHERE id = ?
-         LIMIT 1`,
-        [rideRequestId]
-      );
-      const latestStatus = String(latestRide?.status || '');
-      const requestedAgeSeconds = Number(latestRide?.requested_age_seconds || 0);
-      const selectionAgeSeconds = Number(latestRide?.selection_age_seconds || 0);
-      const stillEligibleNoop =
-        (latestStatus === 'requested' && requestedAgeSeconds < OPEN_REQUEST_TTL_MINUTES * 60) ||
-        (latestStatus === 'driver_found' && selectionAgeSeconds < DRIVER_FOUND_SELECTION_TTL_SECONDS);
-      if (stillEligibleNoop) {
-        console.log('[drivers.accept] ttl-gated update no-op but still eligible', {
-          driverUserId: req.userId,
-          rideRequestId,
-          latestRide,
-          nowIso: new Date().toISOString(),
-        });
-      } else {
-      await query(
-        `UPDATE ride_requests
-         SET status = 'expired',
-             cancellation_reason = 'No driver accepted the request in time',
-             cancelled_by = 'system',
-             cancelled_at = CURRENT_TIMESTAMP
-         WHERE id = ?
-           AND (
-             (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
-             OR (
-               status = 'driver_found'
-               AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
-             )
-           )`,
-        [rideRequestId]
-      );
-      console.log('[drivers.accept] marked expired after ttl gate miss', {
-        driverUserId: req.userId,
-        rideRequestId,
-        latestRide: latestRide || null,
-        openRequestTtlSeconds: OPEN_REQUEST_TTL_MINUTES * 60,
-        driverFoundSelectionTtlSeconds: DRIVER_FOUND_SELECTION_TTL_SECONDS,
-        nowIso: new Date().toISOString(),
-      });
-      return res.status(409).json({ error: 'Ride request has expired' });
-      }
+      return res.status(409).json({ error: 'Ride request is no longer available' });
     }
 
     emitRideStatusToPassenger(ride.passenger_user_id, {
@@ -986,6 +863,8 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
         driverDistanceKm: Number(driverDistanceKm.toFixed(2)),
         driverEtaMinutes,
         awaitingPassengerSelection: true,
+        remainingSeconds: DRIVER_ACCEPT_OFFER_TTL_SECONDS,
+        offerExpiresAt: new Date(Date.now() + (DRIVER_ACCEPT_OFFER_TTL_SECONDS * 1000)).toISOString(),
       },
     });
   } catch (err) {

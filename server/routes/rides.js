@@ -19,6 +19,10 @@ import {
   emitTripRatingToDriver,
 } from '../lib/realtime.js';
 import { loadDriversViewingSnapshot } from '../lib/ride-driver-responses.js';
+import {
+  DRIVER_ACCEPT_OFFER_TTL_SECONDS,
+  refreshOpenRideOffers,
+} from '../lib/ride-offer-expiry.js';
 
 const router = Router();
 
@@ -45,8 +49,6 @@ function createPublicRideId() {
   return `TR-${crypto.randomInt(100000, 999999)}`;
 }
 
-const OPEN_REQUEST_TTL_MINUTES = 3;
-const DRIVER_FOUND_SELECTION_TTL_SECONDS = 30;
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DRIVER_REQUEST_RADIUS_KM = 5;
@@ -163,6 +165,15 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     ? { latitude: lat, longitude: lng }
     : null;
   const driverDistanceKm = coordinate ? calculateDistanceKm(pickupCoordinate, coordinate) : null;
+  const remainingSeconds = Number.isFinite(Number(row.offer_remaining_seconds))
+    ? Math.max(0, Number(row.offer_remaining_seconds))
+    : null;
+  const respondedAt = row.responded_at ? new Date(row.responded_at).toISOString() : null;
+  let offerExpiresAt = null;
+  if (respondedAt) {
+    const expiresMs = new Date(respondedAt).getTime() + (DRIVER_ACCEPT_OFFER_TTL_SECONDS * 1000);
+    offerExpiresAt = Number.isFinite(expiresMs) ? new Date(expiresMs).toISOString() : null;
+  }
   return {
     id: row.driver_user_id,
     tierName: row.vehicle_tier_name || 'Ride',
@@ -182,6 +193,9 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     },
     carImage: row.car_photo_url || null,
     profileImageUrl: row.profile_image_url || null,
+    respondedAt,
+    offerExpiresAt,
+    remainingSeconds,
   };
 }
 
@@ -240,25 +254,8 @@ function toIsoOrNull(value) {
   return value ? new Date(value).toISOString() : null;
 }
 
-function computeExpiresAt(value, ttlMinutes = OPEN_REQUEST_TTL_MINUTES) {
-  if (!value) return null;
-  const date = new Date(value);
-  date.setMinutes(date.getMinutes() + ttlMinutes);
-  return date.toISOString();
-}
-
-function computeExpiresAtSeconds(value, ttlSeconds) {
-  if (!value) return null;
-  const date = new Date(value);
-  date.setSeconds(date.getSeconds() + ttlSeconds);
-  return date.toISOString();
-}
-
-function computeRideExpiresAt(status, requestedAt, driverFoundAt = null) {
-  if (String(status || '') === 'driver_found') {
-    return computeExpiresAtSeconds(driverFoundAt || requestedAt, DRIVER_FOUND_SELECTION_TTL_SECONDS);
-  }
-  return computeExpiresAt(requestedAt, OPEN_REQUEST_TTL_MINUTES);
+function computeRideExpiresAt() {
+  return null;
 }
 
 function isOpenRideRequest(status) {
@@ -373,35 +370,9 @@ async function loadAuthorizedRideChat(rideRequestId, userId) {
   };
 }
 
-async function expireRideRequestIfTimedOut(rideId, passengerUserId = null) {
-  if (!rideId) return false;
-
-  const params = [rideId];
-  let passengerClause = '';
-  if (passengerUserId) {
-    passengerClause = ' AND passenger_user_id = ?';
-    params.push(passengerUserId);
-  }
-
-  const result = await query(
-    `UPDATE ride_requests
-     SET status = 'expired',
-         cancellation_reason = 'No driver accepted the request in time',
-         cancelled_by = 'system',
-         cancelled_at = CURRENT_TIMESTAMP
-     WHERE id = ?
-       ${passengerClause}
-       AND (
-         (status = 'requested' AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE))
-         OR (
-           status = 'driver_found'
-           AND COALESCE(driver_found_at, requested_at) < (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_FOUND_SELECTION_TTL_SECONDS} SECOND)
-         )
-       )`,
-    params
-  );
-
-  return Number(result?.affectedRows || 0) > 0;
+async function refreshOpenRideRequestState(rideId) {
+  if (!rideId) return;
+  await refreshOpenRideOffers(rideId);
 }
 
 async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKey }) {
@@ -965,8 +936,8 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         publicId,
         status: 'requested',
         requestedAt,
-        expiresAt: computeExpiresAt(requestedAt),
-        remainingSeconds: OPEN_REQUEST_TTL_MINUTES * 60,
+        expiresAt: null,
+        remainingSeconds: null,
         pickupLabel: String(pickupLabel).trim(),
         pickupCoordinate: pickupPoint,
         dropoffLabel: String(dropoffLabel).trim(),
@@ -1015,15 +986,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
     if (!user) return;
 
     const [ride] = await query(
-      `SELECT *,
-              GREATEST(
-                0,
-                CASE
-                  WHEN status = 'driver_found'
-                    THEN ${DRIVER_FOUND_SELECTION_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
-                  ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
-                END
-              ) AS remaining_seconds
+      `SELECT *
        FROM ride_requests
        WHERE passenger_user_id = ?
          AND (
@@ -1040,6 +1003,15 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
       return res.json({ rideRequest: null, assignedDriver: null });
     }
 
+    if (isOpenRideRequest(ride.status)) {
+      await refreshOpenRideRequestState(ride.id);
+      const [refreshedRide] = await query(
+        `SELECT * FROM ride_requests WHERE id = ? LIMIT 1`,
+        [ride.id]
+      );
+      if (refreshedRide) Object.assign(ride, refreshedRide);
+    }
+
     const pickupCoordinate = {
       latitude: Number(ride.pickup_lat),
       longitude: Number(ride.pickup_lng),
@@ -1049,6 +1021,11 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
       `SELECT
          rr.driver_user_id,
          rr.status AS response_status,
+         rr.responded_at,
+         GREATEST(
+           0,
+           ${DRIVER_ACCEPT_OFFER_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
+         ) AS offer_remaining_seconds,
          da.driver_name,
          da.phone_number,
          da.vehicle_tier_key,
@@ -1149,8 +1126,8 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
-        expiresAt: computeRideExpiresAt(ride.status, ride.requested_at, ride.driver_found_at),
-        remainingSeconds: Number(ride.remaining_seconds || 0),
+        expiresAt: null,
+        remainingSeconds: null,
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
         driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
         driverCoordinate,
@@ -1181,15 +1158,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     }
 
     const [ride] = await query(
-      `SELECT *,
-              GREATEST(
-                0,
-                CASE
-                  WHEN status = 'driver_found'
-                    THEN ${DRIVER_FOUND_SELECTION_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, COALESCE(driver_found_at, requested_at), CURRENT_TIMESTAMP)
-                  ELSE ${(OPEN_REQUEST_TTL_MINUTES * 60)} - TIMESTAMPDIFF(SECOND, requested_at, CURRENT_TIMESTAMP)
-                END
-              ) AS remaining_seconds
+      `SELECT *
        FROM ride_requests
        WHERE id = ? AND passenger_user_id = ?
        LIMIT 1`,
@@ -1200,17 +1169,12 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     }
 
     if (isOpenRideRequest(ride.status)) {
-      const expired = await expireRideRequestIfTimedOut(ride.id, req.userId);
-      if (expired) {
-        const [nextRide] = await query(
-          `SELECT *
-           FROM ride_requests
-           WHERE id = ? AND passenger_user_id = ?
-           LIMIT 1`,
-          [rideRequestId, req.userId]
-        );
-        if (nextRide) Object.assign(ride, nextRide);
-      }
+      await refreshOpenRideRequestState(ride.id);
+      const [refreshedRide] = await query(
+        `SELECT * FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1`,
+        [rideRequestId, req.userId]
+      );
+      if (refreshedRide) Object.assign(ride, refreshedRide);
     }
 
     const pickupCoordinate = {
@@ -1222,6 +1186,11 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
       `SELECT
          rr.driver_user_id,
          rr.status AS response_status,
+         rr.responded_at,
+         GREATEST(
+           0,
+           ${DRIVER_ACCEPT_OFFER_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
+         ) AS offer_remaining_seconds,
          da.driver_name,
          da.phone_number,
          da.vehicle_tier_key,
@@ -1300,8 +1269,8 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
-        expiresAt: computeRideExpiresAt(ride.status, ride.requested_at, ride.driver_found_at),
-        remainingSeconds: Number(ride.remaining_seconds || 0),
+        expiresAt: null,
+        remainingSeconds: null,
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
         driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
         driverCoordinate,
@@ -2038,32 +2007,18 @@ router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req
       [rideRequestId]
     );
     const acceptedCount = Number(acceptedCountRow?.total || 0);
-    const [pendingCountRow] = await query(
-      `SELECT COUNT(*) AS total
-       FROM ride_request_driver_responses
-       WHERE ride_request_id = ?
-         AND status = 'pending'`,
-      [rideRequestId]
-    );
-    const pendingCount = Number(pendingCountRow?.total || 0);
-    const nextRideStatus = acceptedCount > 0
-      ? 'driver_found'
-      : pendingCount > 0
-        ? 'requested'
-        : 'expired';
+    const nextRideStatus = acceptedCount > 0 ? 'driver_found' : 'requested';
 
-    if (acceptedCount === 0) {
-      await query(
-        `UPDATE ride_requests
-         SET status = ?,
-             driver_found_at = CASE WHEN ? = 'requested' THEN NULL ELSE driver_found_at END
-         WHERE id = ?
-           AND passenger_user_id = ?
-           AND status = 'driver_found'
-           AND driver_user_id IS NULL`,
-        [nextRideStatus, nextRideStatus, rideRequestId, req.userId]
-      );
-    }
+    await query(
+      `UPDATE ride_requests
+       SET status = ?,
+           driver_found_at = CASE WHEN ? = 'requested' THEN NULL ELSE driver_found_at END
+       WHERE id = ?
+         AND passenger_user_id = ?
+         AND status IN ('requested', 'driver_found')
+         AND driver_user_id IS NULL`,
+      [nextRideStatus, nextRideStatus, rideRequestId, req.userId]
+    );
 
     emitRideRequestRemovedFromDriver(driverUserId, {
       rideRequestId,
@@ -2195,17 +2150,31 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
 
     await query(
       `UPDATE ride_requests
-       SET passenger_confirmed_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND passenger_user_id = ? AND status = 'driver_arrived'`,
+       SET passenger_confirmed_at = COALESCE(passenger_confirmed_at, CURRENT_TIMESTAMP)
+       WHERE id = ?
+         AND passenger_user_id = ?
+         AND status IN ('driver_assigned', 'driver_arrived')
+         AND passenger_confirmed_at IS NULL`,
       [rideRequestId, req.userId]
     );
-
-    const confirmedAt = new Date().toISOString();
 
     const [ride] = await query(
-      'SELECT driver_user_id FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
+      `SELECT driver_user_id, passenger_confirmed_at, status
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
       [rideRequestId, req.userId]
     );
+
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const confirmedAt = toIsoOrNull(ride.passenger_confirmed_at);
+    if (!confirmedAt) {
+      return res.status(409).json({ error: 'This ride is not ready for pickup confirmation yet.' });
+    }
+
     if (ride?.driver_user_id) {
       try {
         const driverUser = await getClerkUserById(ride.driver_user_id);
@@ -2227,18 +2196,16 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
       }
       emitRideStatusToDriver(ride.driver_user_id, {
         rideRequestId,
-        status: 'passenger_confirmed',
         confirmedAt,
         passengerUserId: req.userId,
       });
     }
     emitRideStatusToPassenger(req.userId, {
       rideRequestId,
-      status: 'passenger_confirmed',
       confirmedAt,
     });
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, confirmedAt });
   } catch (err) {
     console.error('PATCH /api/rides/passenger/:rideRequestId/confirm-pickup', err);
     return res.status(500).json({ error: 'Server error' });
