@@ -32,6 +32,7 @@
     "db:migrate:passenger-peer-referrals": "node scripts/run-migration.js sql/migrations/046_add_passenger_peer_referrals.sql",
     "db:migrate:ride-safety-pin": "node scripts/run-migration.js sql/migrations/047_add_ride_safety_pin.sql",
     "db:migrate:admin-ride-share-links": "node scripts/run-migration.js sql/migrations/048_add_admin_ride_share_links.sql",
+    "db:migrate:ride-safety-pin-settings": "node scripts/run-migration.js sql/migrations/049_add_ride_safety_pin_settings.sql",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
     "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",
     "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",

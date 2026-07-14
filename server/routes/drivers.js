@@ -1143,7 +1143,7 @@ router.patch('/current-ride/:rideRequestId/start', requireAuth, async (req, res)
     if (!rideBeforeStart) {
       return res.status(404).json({ error: 'Ride request not found' });
     }
-    assertSafetyPinVerifiedForStart(rideBeforeStart);
+    await assertSafetyPinVerifiedForStart(rideBeforeStart);
 
     await queryWithDeadlockRetry(
       `UPDATE ride_requests
