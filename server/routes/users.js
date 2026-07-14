@@ -4,6 +4,7 @@ import { getClerkClient } from '../lib/clerk-client.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
 import { attachDriverToAgentInvite, attachPassengerToAgentInvite } from '../lib/agent-invites.js';
+import { attachPassengerPeerReferral } from '../lib/passenger-referrals.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { emitSupportChatMessageToUser } from '../lib/realtime.js';
@@ -18,21 +19,9 @@ import {
 } from '../lib/support-chat.js';
 import { generateSupportAgentReply, getSupportAgentSettings } from '../lib/support-agent.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
+import { normalizeLookupIdentifier } from '../lib/phone-number.js';
 
 const router = Router();
-
-function normalizeLookupIdentifier(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (raw.includes('@')) return raw.toLowerCase();
-
-  const digits = raw.replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
-  if (digits.startsWith('263')) return `+${digits}`;
-  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
-  return raw;
-}
 
 router.post('/lookup-role', async (req, res) => {
   try {
@@ -89,7 +78,7 @@ router.get('/me', requireAuth, async (req, res) => {
 
 router.post('/register', requireAuth, async (req, res) => {
   try {
-    const { role, inviteToken } = req.body || {};
+    const { role, inviteToken, referrerEmail } = req.body || {};
     await setRoleForUser(req.userId, role);
 
     let referral = null;
@@ -103,6 +92,23 @@ router.post('/register', requireAuth, async (req, res) => {
         passengerUserId: req.userId,
         inviteToken,
       });
+    }
+
+    let passengerPeerReferral = null;
+    if (role === 'passenger' && referrerEmail) {
+      try {
+        const peerResult = await attachPassengerPeerReferral({
+          referredUserId: req.userId,
+          referrerEmail,
+          source: 'signup_email',
+        });
+        passengerPeerReferral = peerResult.referral;
+      } catch (peerError) {
+        if (peerError.status === 400) {
+          return res.status(400).json({ error: peerError.message || 'Invalid referral' });
+        }
+        throw peerError;
+      }
     }
 
     if (referral) {
@@ -122,7 +128,10 @@ router.post('/register', requireAuth, async (req, res) => {
 
     const user = await getClerkUserById(req.userId);
     await upsertClerkUserToMysql(user);
-    return res.status(201).json(toAppUser(user));
+    return res.status(201).json({
+      ...toAppUser(user),
+      passengerPeerReferral,
+    });
   } catch (err) {
     if (err.status === 400) {
       return res.status(400).json({ error: err.message || 'Invalid invite link' });
@@ -277,6 +286,7 @@ router.get('/support/messages', requireAuth, async (req, res) => {
     const user = await getClerkUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
+    // Do not create a thread on open — only after the user actually sends a message.
     const thread = await getSupportThreadForUser(req.userId, appUser.role);
     const messages = thread ? await listSupportMessages(thread.id) : [];
     return res.json({
@@ -324,7 +334,7 @@ router.post('/support/messages', requireAuth, async (req, res) => {
           isAiReply: true,
           aiProvider: aiReply.provider,
           aiModel: aiReply.model,
-          message: aiReply.message,
+          message: String(aiReply?.message || '').trim(),
         });
 
         aiReplyRecord = shapeSupportMessage(createdAiReply);

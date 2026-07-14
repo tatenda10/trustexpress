@@ -18,15 +18,12 @@ import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification, getMe } from '../../api';
 import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
-
-function normalizePhone(phone) {
-  const digits = (phone || '').replace(/\D/g, '');
-  if (digits.length < 9) return null;
-  if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
-  if (digits.startsWith('263')) return `+${digits}`;
-  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
-  return `+${digits}`;
-}
+import {
+  INVALID_LOCAL_PHONE_MESSAGE,
+  e164ToLocalPhone,
+  normalizeZimbabwePhoneNumber,
+  sanitizeLocalPhoneInput,
+} from '../../utils/phoneNumber';
 
 export default function PassengerPhoneVerificationScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -73,9 +70,9 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
   }, [isFocused]);
 
   const handleVerifyPhone = async () => {
-    const normalizedPhone = normalizePhone(phone);
-    if (!normalizedPhone) {
-      Alert.alert('Invalid number', 'Enter a valid phone number like 077 123 4567.');
+    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    if (!phoneResult.ok) {
+      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
       return;
     }
 
@@ -83,10 +80,10 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
       setSubmitting(true);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, normalizedPhone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone);
       const data = await getMe(token);
       setPhoneVerified(data?.phoneVerified === true);
-      setCurrentPhone(data?.phone_number || normalizedPhone);
+      setCurrentPhone(data?.phone_number || phoneResult.e164Phone);
       setPhone('');
       Alert.alert('Phone saved', 'Your phone number has been saved on your account.');
       navigateToPassengerAccountMain(navigation);
@@ -157,28 +154,28 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
                   <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">
                     {phoneVerified ? 'Saved phone' : 'Current phone'}
                   </Text>
-                  <Text className="mt-2 text-[18px] font-semibold text-gray-950">{currentPhone}</Text>
+                  <Text className="mt-2 text-[18px] font-semibold text-gray-950">
+                    {e164ToLocalPhone(currentPhone) || currentPhone}
+                  </Text>
                 </View>
               ) : null}
 
               {!phoneVerified ? (
                 <View className="mt-5">
                   <Text className="mb-2 text-sm font-medium text-gray-700">Phone number</Text>
-                  <View className="flex-row items-stretch">
-                    <View className="mr-3 w-[92px] items-center justify-center rounded-[18px] border border-gray-200 bg-[#f8fafc] px-3 py-3">
-                      <Text className="text-lg">ZW</Text>
-                      <Text className="mt-1 text-sm font-semibold text-gray-700">+263</Text>
-                    </View>
-                    <TextInput
-                      value={phone}
-                      onChangeText={setPhone}
-                      placeholder="77 123 4567"
-                      placeholderTextColor="#9ca3af"
-                      keyboardType="phone-pad"
-                      editable={!submitting}
-                      className="flex-1 rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-lg font-medium text-gray-900"
-                    />
-                  </View>
+                  <TextInput
+                    value={phone}
+                    onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
+                    placeholder="0771234567"
+                    placeholderTextColor="#9ca3af"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    editable={!submitting}
+                    className="rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-lg font-medium text-gray-900"
+                  />
+                  <Text className="mt-2 text-xs text-gray-500">
+                    10 digits starting with 07 (e.g. 0771234567).
+                  </Text>
                 </View>
               ) : null}
             </View>

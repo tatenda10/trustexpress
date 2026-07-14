@@ -8,6 +8,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { verifyToken } from '@clerk/backend';
 import routes from './routes/index.js';
 import { getRealtimeUserRoom, setRealtimeServer } from './lib/realtime.js';
+import { buildAuthorityShareTrackingHtml } from './lib/admin-share-page.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT);
@@ -96,6 +97,25 @@ function buildInviteLandingHtml({ title, appDeepLink, openLabel, androidStoreUrl
 
 function handleInviteLanding(req, res, type) {
   const invite = String(req.query.invite || '').trim();
+  const referrerEmail = String(req.query.referrerEmail || req.query.referrer || '').trim().toLowerCase();
+
+  if (type === 'passenger' && referrerEmail && referrerEmail.includes('@') && !invite) {
+    const title = 'Trust Express - Friend invite';
+    const openLabel = 'Open passenger signup in app';
+    const appDeepLink = `trustexpress://passenger-signup?referrerEmail=${encodeURIComponent(referrerEmail)}`;
+    const androidStoreUrl = buildPlayStoreInviteUrl({ invite: referrerEmail, type: 'passenger' });
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(buildInviteLandingHtml({
+      title,
+      appDeepLink,
+      openLabel,
+      androidStoreUrl,
+      iosStoreUrl: IOS_APP_STORE_SEARCH_URL,
+    }));
+    return;
+  }
+
   if (!invite || invite.length > 200 || !/^[a-zA-Z0-9_-]+$/.test(invite)) {
     res.status(400).send('Invalid invite token');
     return;
@@ -133,6 +153,19 @@ app.get('/driver-signup', (req, res) => {
 
 app.get('/passenger-signup', (req, res) => {
   handleInviteLanding(req, res, 'passenger');
+});
+
+app.get('/admin/share/:token', (req, res) => {
+  const token = String(req.params.token || '').trim();
+  if (!token) {
+    return res.status(400).type('html').send('<p>Missing share token.</p>');
+  }
+  res
+    .type('html')
+    .send(buildAuthorityShareTrackingHtml({
+      token,
+      apiPath: `/api/public/admin-share/${encodeURIComponent(token)}`,
+    }));
 });
 
 app.use('/api', routes);

@@ -51,7 +51,7 @@ export async function fetchCachedPlaceAutocomplete(options) {
         };
       }
     } catch (error) {
-      console.warn('[maps-places] OSM autocomplete failed, trying HERE fallback', error?.message || error);
+      console.warn('[maps-places] OSM autocomplete failed, trying Google fallback', error?.message || error);
     }
   }
 

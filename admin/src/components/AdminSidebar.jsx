@@ -19,6 +19,7 @@ const navSections = [
     items: [
       { id: 'drivers', label: 'Drivers', icon: UsersIcon, to: '/dashboard/drivers', permission: 'drivers.read' },
       { id: 'passengers', label: 'Passengers', icon: UsersIcon, to: '/dashboard/passengers', permission: 'passengers.read' },
+      { id: 'passenger-referrals', label: 'Passenger Referrals', icon: UsersIcon, to: '/dashboard/passenger-referrals', permission: 'passengers.read' },
       { id: 'agents', label: 'Agents', icon: UsersIcon, to: '/dashboard/agents', permission: 'agents.read' },
       { id: 'support', label: 'Support Tickets', icon: LockIcon, to: '/dashboard/support', permission: 'support.read' },
       { id: 'support-agent', label: 'Support Agent', icon: LockIcon, to: '/dashboard/support-agent', permission: 'support.read' },

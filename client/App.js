@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Alert, AppState, Platform } from 'react-native';
+import { Alert, AppState, DeviceEventEmitter, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -49,6 +49,7 @@ import DriverEmailLoginScreen from './screens/driver/auth/DriverEmailLoginScreen
 import DriverPhoneLoginScreen from './screens/driver/auth/DriverPhoneLoginScreen';
 import { DriverStatusProvider } from './context/DriverStatusContext';
 import { AgentInviteProvider, useAgentInvite } from './context/AgentInviteContext';
+import { PassengerReferralProvider, usePassengerReferral } from './context/PassengerReferralContext';
 import { restoreAgentInviteFromAndroidInstallReferrer } from './services/agentInstallReferrer';
 import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
@@ -57,7 +58,17 @@ import {
   showTripOverlay,
   updateTripOverlay,
   hideTripOverlay,
+  showFullScreenRideRequest,
 } from './services/tripOverlay';
+import {
+  clearOverlayRideRequest,
+  filterActiveRideRequests,
+  getDriverRideOverlayState,
+  isRideRequestDismissed,
+  markRideRequestDismissed,
+  setOverlayRideRequest,
+  subscribeDriverRideOverlayState,
+} from './services/driverRideOverlayState';
 
 const BACKGROUND_OVERLAY_SHOW_DELAY_MS = 0;
 
@@ -146,6 +157,7 @@ function AppStack({ currentRouteName }) {
   const { getToken } = useAuth();
   const { user } = useUser();
   const { inviteToken, attachedUserId, markInviteAttached, clearInvite } = useAgentInvite();
+  const { referrerEmail: pendingReferrerEmail, clearReferral } = usePassengerReferral();
   const getTokenRef = useRef(getToken);
   const roleBootstrapUserRef = useRef(null);
   const pushSyncKeyRef = useRef('');
@@ -223,14 +235,18 @@ function AppStack({ currentRouteName }) {
     return null;
   }, []);
 
-  const openDriverIncomingRequest = useCallback(() => {
+  const openDriverIncomingRequest = useCallback((rideRequestId = null) => {
     if (!navigationRef.isReady()) return;
+    const parsedRideRequestId = Number(rideRequestId);
     navigationRef.navigate('DriverTabs', {
       screen: 'DriverHome',
       params: {
         screen: 'DriverHomeMain',
         params: {
           openIncomingRideOverlay: true,
+          notificationRideRequestId: Number.isInteger(parsedRideRequestId) && parsedRideRequestId > 0
+            ? parsedRideRequestId
+            : undefined,
           notificationTs: Date.now(),
         },
       },
@@ -298,6 +314,57 @@ function AppStack({ currentRouteName }) {
   // user to passenger here, otherwise fresh driver signups can be mis-registered during bootstrap.
   const userRole = userProfile?.role || storedRole || null;
   const isDriver = userRole === 'driver';
+
+  const maybeShowBackgroundRideRequestAlert = useCallback(async (payload = {}) => {
+    if (!isDriver || Platform.OS !== 'android') return;
+    if (AppState.currentState === 'active') return;
+
+    const rideRequestId = payload?.rideRequestId ?? null;
+    if (isRideRequestDismissed(rideRequestId)) return;
+
+    const pickupLabel = payload?.pickupLabel || '';
+    const dropoffLabel = payload?.dropoffLabel || '';
+    const body = payload?.body
+      || (pickupLabel || dropoffLabel
+        ? `${pickupLabel || 'Pickup'} to ${dropoffLabel || 'Drop-off'}`
+        : 'A new ride request is waiting for you.');
+
+    setOverlayRideRequest({
+      id: rideRequestId,
+      pickupLabel,
+      dropoffLabel,
+      estimatedAmount: payload?.estimatedAmount,
+      tierName: payload?.tierName,
+      passengerName: payload?.passengerName,
+      expiresAt: payload?.expiresAt,
+      remainingSeconds: payload?.remainingSeconds,
+    });
+
+    backgroundOverlayLastVariantRef.current = 'request';
+    const requestPayload = {
+      variant: 'request',
+      title: payload?.title || 'New ride request',
+      subtitle: body,
+      pickupLabel,
+      dropoffLabel,
+      fareLabel: payload?.fareLabel,
+      estimatedAmount: payload?.estimatedAmount,
+      rideRequestId,
+    };
+
+    if (backgroundOverlayVisibleRef.current) {
+      const updated = await updateTripOverlay(requestPayload).catch(() => false);
+      if (updated) return;
+    }
+
+    const shown = await showTripOverlay(requestPayload).catch(() => false);
+    if (shown) {
+      backgroundOverlayVisibleRef.current = true;
+      return;
+    }
+
+    await showFullScreenRideRequest(requestPayload);
+  }, [isDriver]);
 
   // Register push notifications once we know the user and role
   useEffect(() => {
@@ -376,7 +443,7 @@ function AppStack({ currentRouteName }) {
         if (!active || !response) return;
         const data = response?.notification?.request?.content?.data || {};
         if (data?.type === 'driver_new_ride_request' && isDriver) {
-          openDriverIncomingRequest();
+          openDriverIncomingRequest(data?.rideRequestId);
         }
       })
       .catch(() => {});
@@ -389,11 +456,17 @@ function AppStack({ currentRouteName }) {
         data,
       });
       if (data?.type === 'driver_new_ride_request' && isDriver) {
-        backgroundOverlayLastVariantRef.current = 'request';
-        if (AppState.currentState === 'background' && backgroundOverlayVisibleRef.current) {
-          updateTripOverlay({ variant: 'request' }).catch(() => {});
+        maybeShowBackgroundRideRequestAlert({
+          title: notification?.request?.content?.title || 'New ride request',
+          body: notification?.request?.content?.body || null,
+          pickupLabel: data?.pickupLabel,
+          dropoffLabel: data?.dropoffLabel,
+          rideRequestId: data?.rideRequestId,
+        }).catch(() => {});
+        // Only navigate into the ride overlay immediately if the app is already open.
+        if (AppState.currentState === 'active') {
+          openDriverIncomingRequest(data?.rideRequestId);
         }
-        openDriverIncomingRequest();
       } else if (data?.type === 'ride_status' && isDriver) {
         const rideStatus = String(data?.status || '').toLowerCase();
         if (['driver_assigned', 'driver_arrived', 'in_progress'].includes(rideStatus)) {
@@ -420,7 +493,7 @@ function AppStack({ currentRouteName }) {
         data,
       });
       if (data?.type === 'driver_new_ride_request') {
-        openDriverIncomingRequest();
+        openDriverIncomingRequest(data?.rideRequestId);
       }
     });
 
@@ -428,6 +501,66 @@ function AppStack({ currentRouteName }) {
       active = false;
       receivedSubscription.remove();
       responseSubscription.remove();
+    };
+  }, [isDriver, maybeShowBackgroundRideRequestAlert, openDriverIncomingRequest]);
+
+  useEffect(() => {
+    if (!isDriver) return undefined;
+
+    const syncOverlayFromSharedState = (state) => {
+      const nextVariant = state?.desiredVariant || 'online';
+      backgroundOverlayLastVariantRef.current = nextVariant;
+      if (!backgroundOverlayVisibleRef.current) return;
+      if (AppState.currentState === 'active') return;
+
+      if (nextVariant === 'request' && state?.pendingOverlayRideRequest) {
+        const pending = state.pendingOverlayRideRequest;
+        updateTripOverlay({
+          variant: 'request',
+          title: 'New ride request',
+          subtitle: `${pending.pickupLabel || 'Pickup'} to ${pending.dropoffLabel || 'Drop-off'}`,
+          pickupLabel: pending.pickupLabel,
+          dropoffLabel: pending.dropoffLabel,
+          estimatedAmount: pending.estimatedAmount,
+          rideRequestId: pending.id,
+        }).catch(() => {});
+        return;
+      }
+
+      updateTripOverlay({
+        variant: nextVariant === 'trip' ? 'trip' : 'online',
+        title: 'Trust Express',
+        subtitle: nextVariant === 'trip' ? 'Active trip' : 'Online - Ready for rides',
+      }).catch(() => {});
+    };
+
+    const unsubscribe = subscribeDriverRideOverlayState(syncOverlayFromSharedState);
+
+    const handleOverlayAction = (event) => {
+      const action = String(event?.action || '').toLowerCase();
+      const rideRequestId = event?.rideRequestId;
+      if (action === 'decline') {
+        markRideRequestDismissed(rideRequestId);
+        clearOverlayRideRequest();
+        backgroundOverlayLastVariantRef.current = 'online';
+        if (backgroundOverlayVisibleRef.current && AppState.currentState !== 'active') {
+          updateTripOverlay({
+            variant: 'online',
+            title: 'Trust Express',
+            subtitle: 'Online - Ready for rides',
+          }).catch(() => {});
+        }
+        return;
+      }
+      if (action === 'accept' || action === 'open') {
+        openDriverIncomingRequest(rideRequestId);
+      }
+    };
+
+    const subscription = DeviceEventEmitter.addListener('TrustOverlayRideAction', handleOverlayAction);
+    return () => {
+      unsubscribe();
+      subscription.remove();
     };
   }, [isDriver, openDriverIncomingRequest]);
 
@@ -463,10 +596,18 @@ function AppStack({ currentRouteName }) {
     const resolveBackgroundOverlayVariant = async () => {
       try {
         console.log('[BackgroundOverlay] variant resolve:start');
+        const sharedState = getDriverRideOverlayState();
+        if (sharedState.desiredVariant === 'online' && !sharedState.pendingOverlayRideRequest) {
+          // Local decline / clear should win immediately over a stale orange bubble.
+          if (backgroundOverlayLastVariantRef.current === 'request') {
+            backgroundOverlayLastVariantRef.current = 'online';
+          }
+        }
+
         const token = await getTokenRef.current?.();
         if (!token) {
           console.log('[BackgroundOverlay] variant fallback: missing auth token');
-          return backgroundOverlayLastVariantRef.current || 'online';
+          return sharedState.desiredVariant || backgroundOverlayLastVariantRef.current || 'online';
         }
 
         const currentRideData = await getDriverCurrentRide(token, { suppressAuthErrorHandler: true });
@@ -476,22 +617,28 @@ function AppStack({ currentRouteName }) {
         }
 
         const requestsData = await getDriverRideRequests(token);
-        const hasRequests = Array.isArray(requestsData?.requests) && requestsData.requests.length > 0;
+        const activeRequests = filterActiveRideRequests(requestsData?.requests || []);
+        if (activeRequests[0]) {
+          setOverlayRideRequest(activeRequests[0]);
+        } else {
+          clearOverlayRideRequest();
+        }
         console.log('[BackgroundOverlay] variant resolved', {
-          variant: hasRequests ? 'request' : 'online',
-          requestCount: Array.isArray(requestsData?.requests) ? requestsData.requests.length : 0,
+          variant: activeRequests.length > 0 ? 'request' : 'online',
+          requestCount: activeRequests.length,
         });
-        return hasRequests ? 'request' : 'online';
+        return activeRequests.length > 0 ? 'request' : 'online';
       } catch (error) {
         console.log('[BackgroundOverlay] variant fallback after error', {
           message: error?.message || null,
           status: error?.status ?? null,
         });
-        return backgroundOverlayLastVariantRef.current || 'online';
+        return getDriverRideOverlayState().desiredVariant || backgroundOverlayLastVariantRef.current || 'online';
       }
     };
 
     const getOverlayCopy = (variant) => {
+      const pending = getDriverRideOverlayState().pendingOverlayRideRequest;
       if (variant === 'trip') {
         return {
           title: 'Trust Express',
@@ -501,11 +648,20 @@ function AppStack({ currentRouteName }) {
         };
       }
       if (variant === 'request') {
+        const pickupLabel = pending?.pickupLabel || '';
+        const dropoffLabel = pending?.dropoffLabel || '';
+        const body = pickupLabel || dropoffLabel
+          ? `${pickupLabel || 'Pickup'} to ${dropoffLabel || 'Drop-off'}`
+          : 'New ride request';
         return {
-          title: 'Trust Express',
-          subtitle: 'New ride request',
-          meta: 'Tap to respond',
+          title: 'New ride request',
+          subtitle: body,
+          meta: 'Accept, decline, or open app',
           variant: 'request',
+          pickupLabel,
+          dropoffLabel,
+          estimatedAmount: pending?.estimatedAmount,
+          rideRequestId: pending?.id,
         };
       }
       return {
@@ -788,10 +944,16 @@ function AppStack({ currentRouteName }) {
                 role: fallbackRole,
                 email: user?.primaryEmailAddress?.emailAddress,
                 inviteToken: inviteToken || undefined,
+                ...(fallbackRole === 'passenger' && pendingReferrerEmail
+                  ? { referrerEmail: pendingReferrerEmail }
+                  : {}),
               })
                 .then(() => {
                   if (inviteToken) {
                     clearInvite().catch(() => {});
+                  }
+                  if (fallbackRole === 'passenger' && pendingReferrerEmail) {
+                    clearReferral().catch(() => {});
                   }
                 })
                 .catch(() => {});
@@ -824,7 +986,7 @@ function AppStack({ currentRouteName }) {
         }
       });
     return () => { cancelled = true; };
-  }, [resolveExplicitRole, storageLoaded, storedRole, user?.firstName, user?.id, user?.lastName, inviteToken, clearInvite]);
+  }, [resolveExplicitRole, storageLoaded, storedRole, user?.firstName, user?.id, user?.lastName, inviteToken, clearInvite, pendingReferrerEmail, clearReferral]);
 
   const patchDriverStatus = useCallback((patch) => {
     if (!patch || typeof patch !== 'object') return;
@@ -1244,6 +1406,7 @@ function AppStack({ currentRouteName }) {
 function AppContent() {
   const { isLoaded, isSignedIn, signOut } = useAuth();
   const { setInviteFromToken, hydrateStoredInvite } = useAgentInvite();
+  const { setReferrerEmailFromDeepLink, hydrateStoredReferral } = usePassengerReferral();
   const pendingInviteNavigationRef = useRef(null);
   const sessionReplacedAlertShownRef = useRef(false);
   const [currentRouteName, setCurrentRouteName] = useState(null);
@@ -1272,9 +1435,61 @@ function AppContent() {
     const path = String(parsed?.path || parsed?.hostname || '').toLowerCase();
     const queryInvite = parsed?.queryParams?.invite;
     const inviteToken = Array.isArray(queryInvite) ? queryInvite[0] : String(queryInvite || '').trim();
+    const queryReferrerEmail = parsed?.queryParams?.referrerEmail || parsed?.queryParams?.referrer;
+    const referrerEmail = Array.isArray(queryReferrerEmail)
+      ? queryReferrerEmail[0]
+      : String(queryReferrerEmail || '').trim();
+
+    if (path.includes('incoming-ride') || path.includes('driver/incoming')) {
+      const queryRideRequestId = parsed?.queryParams?.rideRequestId;
+      const rideRequestIdRaw = Array.isArray(queryRideRequestId)
+        ? queryRideRequestId[0]
+        : queryRideRequestId;
+      const parsedRideRequestId = Number(rideRequestIdRaw);
+      const queryAction = parsed?.queryParams?.action;
+      const actionRaw = Array.isArray(queryAction) ? queryAction[0] : queryAction;
+      const action = String(actionRaw || 'open').trim().toLowerCase();
+
+      if (action === 'decline' && Number.isInteger(parsedRideRequestId) && parsedRideRequestId > 0) {
+        markRideRequestDismissed(parsedRideRequestId);
+        clearOverlayRideRequest();
+      }
+
+      if (navigationRef.isReady()) {
+        navigationRef.navigate('DriverTabs', {
+          screen: 'DriverHome',
+          params: {
+            screen: 'DriverHomeMain',
+            params: {
+              openIncomingRideOverlay: action !== 'decline',
+              notificationRideRequestId:
+                Number.isInteger(parsedRideRequestId) && parsedRideRequestId > 0
+                  ? parsedRideRequestId
+                  : undefined,
+              notificationAction: action,
+              notificationTs: Date.now(),
+            },
+          },
+        });
+      }
+      return true;
+    }
 
     const looksLikeDriverSignup = path.includes('driver-signup') || path.includes('driver-onboarding');
     const looksLikePassengerSignup = path.includes('passenger-signup') || path.includes('passenger-onboarding');
+
+    if (referrerEmail && looksLikePassengerSignup) {
+      try {
+        await setReferrerEmailFromDeepLink(referrerEmail);
+        if (!isSignedIn && !navigateToOnboardingIfAvailable('passenger')) {
+          pendingInviteNavigationRef.current = 'passenger';
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     if (!inviteToken || (!looksLikeDriverSignup && !looksLikePassengerSignup)) {
       return false;
     }
@@ -1289,7 +1504,7 @@ function AppContent() {
     } catch {
       return false;
     }
-  }, [isSignedIn, navigateToOnboardingIfAvailable, setInviteFromToken]);
+  }, [isSignedIn, navigateToOnboardingIfAvailable, setInviteFromToken, setReferrerEmailFromDeepLink]);
 
   useEffect(() => {
     console.log('[AppContent] auth state:', {
@@ -1339,6 +1554,7 @@ function AppContent() {
 
     let cancelled = false;
     hydrateStoredInvite().catch(() => {});
+    hydrateStoredReferral().catch(() => {});
 
     const queueInviteNavigation = (target) => {
       if (cancelled || isSignedIn) return;
@@ -1407,7 +1623,9 @@ export default function App() {
       tokenCache={tokenCache}
     >
       <AgentInviteProvider>
-        <AppContent />
+        <PassengerReferralProvider>
+          <AppContent />
+        </PassengerReferralProvider>
       </AgentInviteProvider>
     </ClerkProvider>
   );

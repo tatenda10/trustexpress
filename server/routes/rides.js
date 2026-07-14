@@ -23,6 +23,10 @@ import {
   DRIVER_ACCEPT_OFFER_TTL_SECONDS,
   refreshOpenRideOffers,
 } from '../lib/ride-offer-expiry.js';
+import {
+  assignSafetyPinIfNeeded,
+  buildPassengerSafetyPinPayload,
+} from '../lib/ride-safety-pin.js';
 
 const router = Router();
 
@@ -502,7 +506,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           channelId: 'ride-requests',
           notification: {
             sound: 'default',
-            clickAction: 'TRUST_EXPRESS_FULL_SCREEN_RIDE_REQUEST',
+            clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
         },
         data: {
@@ -1126,6 +1130,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
+        ...buildPassengerSafetyPinPayload(ride),
         expiresAt: null,
         remainingSeconds: null,
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
@@ -1269,6 +1274,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
+        ...buildPassengerSafetyPinPayload(ride),
         expiresAt: null,
         remainingSeconds: null,
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
@@ -1903,6 +1909,14 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
       });
     }
 
+    await assignSafetyPinIfNeeded(rideRequestId, new Date());
+
+    const [assignedRide] = await query(
+      'SELECT * FROM ride_requests WHERE id = ? LIMIT 1',
+      [rideRequestId]
+    );
+    const safetyPinPayload = buildPassengerSafetyPinPayload(assignedRide || ride);
+
     emitRideStatusToPassenger(req.userId, {
       rideRequestId,
       status: 'driver_assigned',
@@ -1947,6 +1961,7 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
         status: 'driver_assigned',
         driverDistanceKm: Number(driverDistanceKm.toFixed(2)),
         driverEtaMinutes,
+        ...safetyPinPayload,
       },
       assignedDriver,
     });

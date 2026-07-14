@@ -169,6 +169,43 @@ export default function PanicAlertsPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={Boolean(savingId)}
+                    onClick={async () => {
+                      if (!token) return
+                      const rideKey = alert.ridePublicId || alert.rideRequestId
+                      const note = window.prompt('Optional note for authorities (e.g. ZRP unit)', '')
+                      if (note === null) return
+                      setSavingId(`share-${alert.id}`)
+                      setError('')
+                      try {
+                        const { data } = await axios.post(
+                          `${BASE_URL}/api/admin/rides/${rideKey}/authority-share`,
+                          { recipientNote: note.trim() || null, ttlHours: 6 },
+                          { headers: { Authorization: `Bearer ${token}` } },
+                        )
+                        const url = data?.shareLink?.url
+                        if (url) {
+                          try {
+                            await navigator.clipboard.writeText(url)
+                            window.alert(`Authority share link copied:\n${url}`)
+                          } catch {
+                            window.prompt('Copy this authority share link', url)
+                          }
+                        } else {
+                          window.alert('Share link created, but no URL was returned.')
+                        }
+                      } catch (err) {
+                        setError(err?.response?.data?.error || err?.message || 'Failed to create authority share link')
+                      } finally {
+                        setSavingId('')
+                      }
+                    }}
+                    className="rounded-md bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                  >
+                    Share with authorities
+                  </button>
+                  <button
+                    type="button"
                     disabled={savingId === String(alert.id)}
                     onClick={() => updateAlert(alert, { status: 'reviewed', followUpStatus: 'monitoring' })}
                     className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"

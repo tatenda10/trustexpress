@@ -19,16 +19,12 @@ import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
-
-/** Normalize to E.164 (e.g. +263771234567) */
-function normalizePhone(phone) {
-  const digits = (phone || '').replace(/\D/g, '');
-  if (digits.length < 9) return null;
-  if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
-  if (digits.startsWith('263')) return `+${digits}`;
-  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
-  return `+${digits}`;
-}
+import {
+  INVALID_LOCAL_PHONE_MESSAGE,
+  isValidLocalPhoneNumber,
+  normalizeZimbabwePhoneNumber,
+  sanitizeLocalPhoneInput,
+} from '../../utils/phoneNumber';
 
 export const DRIVER_SKIP_PHONE_VERIFY_KEY = 'trust_express_driver_skip_phone_verify';
 
@@ -97,18 +93,18 @@ const DriverVerifyPhoneScreen = () => {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const normalizedPhone = normalizePhone(phone);
-  const canSend = !!normalizedPhone;
+  const canSend = isValidLocalPhoneNumber(phone);
   const handleVerify = async () => {
-    if (!canSend) {
-      Alert.alert('Invalid number', 'Enter a valid phone number (e.g. 077 123 4567 or +263771234567).');
+    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    if (!phoneResult.ok) {
+      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
       return;
     }
     setLoading(true);
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, normalizedPhone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone);
       // Do not refetch before this Alert: refetch updates App's driver stack `key` and remounts the
       // navigator, which invalidates this screen's `navigation` object.
       // After Continue: merge `phoneVerified` (confirm already succeeded), then root `reset` — survives
@@ -185,15 +181,17 @@ const DriverVerifyPhoneScreen = () => {
         <>
           <Text className="text-sm font-medium text-gray-700 mb-2">Phone number</Text>
           <TextInput
-            className="border border-gray-200 rounded-xl px-4 py-3 text-base text-gray-900 mb-4"
-            placeholder="e.g. 077 123 4567 or +263 77 123 4567"
+            className="border border-gray-200 rounded-xl px-4 py-3 text-base text-gray-900 mb-1"
+            placeholder="0771234567"
             placeholderTextColor="#9ca3af"
             value={phone}
-            onChangeText={setPhone}
+            onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
             keyboardType="phone-pad"
+            maxLength={10}
             autoCapitalize="none"
             editable={!loading}
           />
+          <Text className="text-xs text-gray-500 mb-4">10 digits starting with 07.</Text>
           <TouchableOpacity
             className="flex-row items-center justify-center gap-2 py-4 rounded-xl mb-2"
             style={{ backgroundColor: canSend ? PRIMARY_BLUE : '#cbd5e1' }}

@@ -31,6 +31,7 @@ export default function PassengerDetailsPage() {
   const [warning, setWarning] = useState('')
   const [passenger, setPassenger] = useState(location.state?.passenger || null)
   const [reviewing, setReviewing] = useState(false)
+  const [referralSummary, setReferralSummary] = useState(null)
 
   useEffect(() => {
     const run = async () => {
@@ -52,6 +53,23 @@ export default function PassengerDetailsPage() {
     }
 
     run()
+  }, [passengerId, token])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadReferrals = async () => {
+      if (!token || !passengerId) return
+      try {
+        const { data } = await axios.get(`${BASE_URL}/api/admin/passenger-referrals/${encodeURIComponent(passengerId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!cancelled) setReferralSummary(data || null)
+      } catch {
+        if (!cancelled) setReferralSummary(null)
+      }
+    }
+    loadReferrals()
+    return () => { cancelled = true }
   }, [passengerId, token])
 
   if (loading) {
@@ -160,13 +178,46 @@ export default function PassengerDetailsPage() {
       </div>
 
       {activeTab === 'profile' ? (
-        <section className="grid gap-3 rounded-sm border border-slate-300 bg-white p-4 md:grid-cols-2">
+        <section className="space-y-3">
+          <div className="grid gap-3 rounded-sm border border-slate-300 bg-white p-4 md:grid-cols-2">
           <Field label="Passenger ID" value={passenger.id} />
           <Field label="Email" value={passenger.email} />
           <Field label="Phone" value={passenger.phoneNumber} />
           <Field label="Phone Verified" value={passenger.phoneVerified ? 'Yes' : 'No'} />
           <Field label="Status" value={passenger.status} />
           <Field label="Joined" value={String(passenger.createdAt || '').slice(0, 19).replace('T', ' ')} />
+          </div>
+
+          <div className="rounded-sm border border-slate-300 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-800">Peer referrals</h2>
+                <p className="text-xs text-slate-500">Friend-to-friend passenger referrals for this account.</p>
+              </div>
+              <Link
+                to={`/dashboard/passenger-referrals/${encodeURIComponent(passenger.id)}`}
+                className="text-xs font-semibold text-indigo-700 hover:text-indigo-500"
+              >
+                Open referral drill-down
+              </Link>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Field
+                label="People they referred"
+                value={referralSummary?.stats?.totalReferrals ?? 0}
+              />
+              <Field
+                label="Referred by"
+                value={
+                  referralSummary?.referredBy
+                    ? (referralSummary.referredBy.referrerName
+                      || referralSummary.referredBy.referrerEmail
+                      || referralSummary.referredBy.referrerUserId)
+                    : 'None'
+                }
+              />
+            </div>
+          </div>
         </section>
       ) : null}
 

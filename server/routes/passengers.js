@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
+import passengerReferralsRouter from './passengerReferrals.js';
 
 const router = Router();
 const DRIVER_ONLINE_STALE_DAYS = 1;
@@ -199,5 +200,7 @@ router.post('/identity', requireAuth, async (req, res) => {
     return res.status(500).json({ error: 'Server error' });
   }
 });
+
+router.use('/referrals', passengerReferralsRouter);
 
 export default router;

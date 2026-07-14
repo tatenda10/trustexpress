@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, Platform, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
@@ -29,7 +29,16 @@ import {
   getTripOverlaySupportInfo,
   isTripOverlaySupported,
   openTripOverlaySettings,
+  showFullScreenRideRequest,
+  updateTripOverlay,
 } from '../../services/tripOverlay';
+import {
+  clearOverlayRideRequest,
+  filterActiveRideRequests,
+  markRideRequestDismissed,
+  setOverlayRideRequest,
+  subscribeDriverRideOverlayState,
+} from '../../services/driverRideOverlayState';
 
 const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
 const REQUEST_REFRESH_INTERVAL_MS = 2500;
@@ -296,6 +305,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const requestLoadInFlightRef = useRef(false);
   const overlayPermissionPromptOpenRef = useRef(false);
   const forceOpenIncomingOverlayRef = useRef(false);
+  const pendingNotificationRideRequestIdRef = useRef(null);
+  const pendingNotificationActionRef = useRef(null);
+  const acceptRequestHandlerRef = useRef(null);
   const lastAvailabilityAttemptRef = useRef({ target: null, at: 0 });
   const forwardedRideIdRef = useRef(null);
   const lastDbLocationRef = useRef({ coordinate: null, at: 0 });
@@ -429,17 +441,57 @@ const DriverHomeScreen = ({ navigation, route }) => {
   }, [currentRide, isOnline, pendingSelectionRide]);
 
   useEffect(() => {
-    if (route?.params?.openIncomingRideOverlay) {
+    if (route?.params?.openIncomingRideOverlay || route?.params?.notificationAction) {
       forceOpenIncomingOverlayRef.current = true;
-      if (!currentRide && availableRequests.length > 0) {
-        setShowIncomingRideOverlay(true);
+      const notificationRideRequestId = Number(route?.params?.notificationRideRequestId || 0);
+      const notificationAction = String(route?.params?.notificationAction || '').toLowerCase();
+      if (Number.isInteger(notificationRideRequestId) && notificationRideRequestId > 0) {
+        pendingNotificationRideRequestIdRef.current = notificationRideRequestId;
+      }
+      if (notificationAction === 'accept' || notificationAction === 'decline' || notificationAction === 'open') {
+        pendingNotificationActionRef.current = notificationAction;
+      }
+      if (notificationAction === 'decline' && Number.isInteger(notificationRideRequestId) && notificationRideRequestId > 0) {
+        markRideRequestDismissed(notificationRideRequestId);
+        setDismissedRequestIds((current) => [...new Set([...current, notificationRideRequestId])]);
+        clearOverlayRideRequest();
+        updateTripOverlay({
+          variant: 'online',
+          title: 'Trust Express',
+          subtitle: 'Online - Ready for rides',
+        }).catch(() => {});
+        setShowIncomingRideOverlay(false);
+      } else if (!currentRide && availableRequests.length > 0) {
+        const matchedRequest = Number.isInteger(notificationRideRequestId) && notificationRideRequestId > 0
+          ? availableRequests.find((request) => Number(request.id) === notificationRideRequestId)
+          : null;
+        if (matchedRequest) {
+          setActiveRequest(matchedRequest);
+        }
+        if (notificationAction !== 'decline') {
+          setShowIncomingRideOverlay(true);
+        }
       }
       navigation.setParams?.({
         openIncomingRideOverlay: false,
+        notificationRideRequestId: undefined,
+        notificationAction: undefined,
         notificationTs: route?.params?.notificationTs || undefined,
       });
     }
-  }, [availableRequests.length, currentRide, navigation, route?.params?.notificationTs, route?.params?.openIncomingRideOverlay]);
+  }, [availableRequests, currentRide, navigation, route?.params?.notificationAction, route?.params?.notificationRideRequestId, route?.params?.notificationTs, route?.params?.openIncomingRideOverlay]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeDriverRideOverlayState((state) => {
+      const ids = Array.isArray(state?.dismissedRideRequestIds) ? state.dismissedRideRequestIds : [];
+      if (!ids.length) return;
+      setDismissedRequestIds((current) => {
+        const merged = [...new Set([...current, ...ids])];
+        return merged.length === current.length ? current : merged;
+      });
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -626,9 +678,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
         const data = await getDriverRideRequests(token);
         if (!active) return;
 
-        const nextListRaw = Array.isArray(data?.requests)
-          ? data.requests.filter((request) => !dismissedRequestIds.includes(request.id))
-          : [];
+        const nextListRaw = filterActiveRideRequests(
+          Array.isArray(data?.requests)
+            ? data.requests.filter((request) => !dismissedRequestIds.includes(request.id))
+            : []
+        );
         const serverCapturedAt = Date.now();
         const nextList = nextListRaw
           .map((request) => ({
@@ -654,22 +708,52 @@ const DriverHomeScreen = ({ navigation, route }) => {
           } catch (_) {}
           try {
             const newestRequest = nextList[0];
+            const notificationBody = newestRequest
+              ? getRequestNotificationBody(newestRequest)
+              : 'A new ride request is waiting for you.';
+            setOverlayRideRequest(newestRequest);
             await showLocalRideNotification({
               title: 'New ride request',
-              body: newestRequest
-                ? getRequestNotificationBody(newestRequest)
-                : 'A new ride request is waiting for you.',
+              body: notificationBody,
               data: {
                 type: 'driver_new_ride_request',
                 rideRequestId: newestRequest?.id || null,
                 publicId: newestRequest?.publicId || null,
+                pickupLabel: newestRequest?.pickup || newestRequest?.pickupLabel || null,
+                dropoffLabel: newestRequest?.dropoff || newestRequest?.dropoffLabel || null,
               },
             });
+            if (AppState.currentState !== 'active' && Platform.OS === 'android') {
+              const requestPayload = {
+                title: 'New ride request',
+                body: notificationBody,
+                subtitle: notificationBody,
+                pickupLabel: newestRequest?.pickup || newestRequest?.pickupLabel || '',
+                dropoffLabel: newestRequest?.dropoff || newestRequest?.dropoffLabel || '',
+                estimatedAmount: newestRequest?.estimatedAmount,
+                rideRequestId: newestRequest?.id || null,
+                variant: 'request',
+              };
+              const updated = await updateTripOverlay(requestPayload).catch(() => false);
+              if (!updated) {
+                await showFullScreenRideRequest(requestPayload);
+              }
+            }
           } catch (_) {}
         }
         prevRequestCountRef.current = nextList.length;
 
         setAvailableRequests(nextList);
+        if (nextList[0]) {
+          setOverlayRideRequest(nextList[0]);
+        } else {
+          clearOverlayRideRequest();
+          updateTripOverlay({
+            variant: 'online',
+            title: 'Trust Express',
+            subtitle: 'Online - Ready for rides',
+          }).catch(() => {});
+        }
         // Keep requests in the list UI; avoid auto popup duplicate with top notification banner.
         setActiveRequest((current) => {
           if (current) {
@@ -680,13 +764,36 @@ const DriverHomeScreen = ({ navigation, route }) => {
           }
           return nextRequest;
         });
-        if (!nextRequest) {
-          setShowIncomingRideOverlay(false);
-        } else if (forceOpenIncomingOverlayRef.current && !currentRide && !pendingSelectionRide) {
-          setShowIncomingRideOverlay(true);
+        const notificationRideRequestId = Number(pendingNotificationRideRequestIdRef.current || 0);
+        const notificationAction = String(pendingNotificationActionRef.current || '').toLowerCase();
+        if (forceOpenIncomingOverlayRef.current && !currentRide && !pendingSelectionRide) {
+          if (Number.isInteger(notificationRideRequestId) && notificationRideRequestId > 0) {
+            const matchedRequest = nextList.find((request) => Number(request.id) === notificationRideRequestId);
+            if (matchedRequest) {
+              setActiveRequest(matchedRequest);
+              if (notificationAction === 'accept') {
+                setShowIncomingRideOverlay(false);
+                acceptRequestHandlerRef.current?.(matchedRequest);
+              } else if (notificationAction !== 'decline') {
+                setShowIncomingRideOverlay(true);
+              }
+            } else {
+              setShowIncomingRideOverlay(false);
+              setShowNewRequestBadge(false);
+            }
+          } else if (nextRequest) {
+            setShowIncomingRideOverlay(true);
+          } else {
+            setShowIncomingRideOverlay(false);
+            setShowNewRequestBadge(false);
+          }
           forceOpenIncomingOverlayRef.current = false;
+          pendingNotificationRideRequestIdRef.current = null;
+          pendingNotificationActionRef.current = null;
+        } else if (!nextRequest) {
+          setShowIncomingRideOverlay(false);
         }
-        setShowNewRequestBadge(!!nextRequest);
+        setShowNewRequestBadge(nextList.length > 0);
         setIsListening(!nextRequest);
       } catch (error) {
         if (!active) return;
@@ -839,8 +946,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
   });
 
   const activeRequestCountdown = useMemo(
-    () => formatCountdown(getRemainingSeconds(activeRequest?.expiresAt)),
-    [activeRequest?.expiresAt, nowTick]
+    () => formatCountdown(getRemainingSeconds(
+      activeRequest?.expiresAt,
+      activeRequest?.remainingSeconds,
+      activeRequest?.remainingSecondsCapturedAt,
+    )),
+    [activeRequest?.expiresAt, activeRequest?.remainingSeconds, activeRequest?.remainingSecondsCapturedAt, nowTick]
   );
 
   useEffect(() => {
@@ -855,10 +966,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
     ) return;
 
     setPendingSelectionRide(null);
-    Alert.alert(
-      'Offer expired',
-      'The passenger did not select you in time. You can accept a new incoming request.',
-    );
   }, [currentRide?.id, nowTick, pendingSelectionRide]);
 
   // Load a route for the current ride or active request from the backend map provider.
@@ -1276,7 +1383,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
           });
         }
         Alert.alert('Request expired', 'This request expired before acceptance. Please take the next request.');
+        markRideRequestDismissed(req.id);
         setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
+        clearOverlayRideRequest();
+        updateTripOverlay({
+          variant: 'online',
+          title: 'Trust Express',
+          subtitle: 'Online - Ready for rides',
+        }).catch(() => {});
         return;
       }
       setAcceptingRideId(req.id);
@@ -1304,6 +1418,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setShowIncomingRideOverlay(false);
       setShowNewRequestBadge(false);
       setIsListening(true);
+      clearOverlayRideRequest();
+      updateTripOverlay({
+        variant: 'online',
+        title: 'Trust Express',
+        subtitle: 'Online - Ready for rides',
+      }).catch(() => {});
       setCurrentRide(nextRide?.ride || null);
       setPendingSelectionRide(nextRide?.ride ? null : {
         ...req,
@@ -1312,7 +1432,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
         offerExpiresAt: acceptResult?.rideRequest?.offerExpiresAt || null,
         expiresAt: acceptResult?.rideRequest?.offerExpiresAt || null,
       });
-      Alert.alert('Request accepted', nextRide?.ride ? 'Ride assigned. Open the trip route when ready.' : 'Waiting for passenger to choose a driver. You have 30 seconds to be selected.');
     } catch (error) {
       if (__DEV__) {
         console.log('[driver.home] accept failed', {
@@ -1327,10 +1446,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setAcceptingRideId(null);
     }
   };
+  acceptRequestHandlerRef.current = handleAcceptRequest;
 
   const handleDeclineRequest = (request) => {
     const req = request || activeRequest;
     if (!req) return;
+    markRideRequestDismissed(req.id);
     setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
     const nextList = availableRequests.filter((r) => r.id !== req.id);
     setAvailableRequests(nextList);
@@ -1338,6 +1459,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
     setShowIncomingRideOverlay(nextList.length > 0);
     setShowNewRequestBadge(nextList.length > 0);
     setIsListening(nextList.length === 0);
+    if (nextList[0]) {
+      setOverlayRideRequest(nextList[0]);
+    } else {
+      clearOverlayRideRequest();
+      updateTripOverlay({
+        variant: 'online',
+        title: 'Trust Express',
+        subtitle: 'Online - Ready for rides',
+      }).catch(() => {});
+    }
   };
 
   const handleCancelCurrentRide = () => {
@@ -1459,7 +1590,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
           </View>
         </View>
 
-        {showNewRequestBadge && availableRequests.length === 0 ? (
+        {showNewRequestBadge && availableRequests.length > 0 ? (
           <View className="mt-7 items-center">
             <View className="rounded-full bg-[#2f73c9] px-9 py-4">
               <Text className="text-base font-bold uppercase text-white">New Request</Text>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -16,14 +16,12 @@ import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
-
-function normalizePhone(phone) {
-  const digits = String(phone || '').replace(/\D/g, '');
-  if (digits.length < 9) return null;
-  if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
-  if (digits.startsWith('263')) return `+${digits}`;
-  return `+${digits}`;
-}
+import {
+  INVALID_LOCAL_PHONE_MESSAGE,
+  isValidLocalPhoneNumber,
+  normalizeZimbabwePhoneNumber,
+  sanitizeLocalPhoneInput,
+} from '../../utils/phoneNumber';
 
 const DriverPhoneVerificationPage = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
@@ -35,11 +33,12 @@ const DriverPhoneVerificationPage = ({ navigation, route }) => {
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const normalizedPhone = useMemo(() => normalizePhone(phone), [phone]);
+  const canSend = isValidLocalPhoneNumber(phone);
 
   const handleVerify = async () => {
-    if (!normalizedPhone) {
-      Alert.alert('Invalid number', 'Enter a valid phone number like 077 123 4567 or +263771234567.');
+    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    if (!phoneResult.ok) {
+      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
       return;
     }
 
@@ -47,7 +46,7 @@ const DriverPhoneVerificationPage = ({ navigation, route }) => {
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, normalizedPhone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone);
       await refetchDriverStatus?.();
       Alert.alert('Phone verified', 'Your phone number was verified successfully.', [
         { text: 'OK', onPress: () => navigation.goBack() },
@@ -103,28 +102,24 @@ const DriverPhoneVerificationPage = ({ navigation, route }) => {
         {!phoneVerified ? (
           <>
             <Text className="mb-2 text-sm font-medium text-gray-700">Phone number</Text>
-            <View className="mb-4 flex-row items-center rounded-xl border border-gray-200 bg-white px-3">
-              <View className="mr-3 flex-row items-center border-r border-gray-200 pr-3">
-                <Text className="text-base font-semibold text-gray-900">+263</Text>
-                <Ionicons name="chevron-down" size={16} color="#6b7280" style={{ marginLeft: 6 }} />
-              </View>
-              <TextInput
-                className="flex-1 py-3 text-base text-gray-900"
-                placeholder="77 123 4567"
-                placeholderTextColor="#9ca3af"
-                value={phone}
-                onChangeText={setPhone}
-                keyboardType="phone-pad"
-                autoCapitalize="none"
-                editable={!submitting}
-              />
-            </View>
+            <TextInput
+              className="mb-1 rounded-xl border border-gray-200 bg-white px-4 py-3 text-base text-gray-900"
+              placeholder="0771234567"
+              placeholderTextColor="#9ca3af"
+              value={phone}
+              onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
+              keyboardType="phone-pad"
+              maxLength={10}
+              autoCapitalize="none"
+              editable={!submitting}
+            />
+            <Text className="mb-4 text-xs text-gray-500">10 digits starting with 07.</Text>
 
             <TouchableOpacity
               className="items-center justify-center rounded-[16px] py-4"
-              style={{ backgroundColor: normalizedPhone && !submitting ? PRIMARY_BLUE : '#93c5fd' }}
+              style={{ backgroundColor: canSend && !submitting ? PRIMARY_BLUE : '#93c5fd' }}
               onPress={handleVerify}
-              disabled={!normalizedPhone || submitting}
+              disabled={!canSend || submitting}
             >
               {submitting ? (
                 <ActivityIndicator size="small" color="#fff" />

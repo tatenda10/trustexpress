@@ -21,6 +21,11 @@ import {
   DRIVER_ACCEPT_OFFER_TTL_SECONDS,
   refreshOpenRideOffers,
 } from '../lib/ride-offer-expiry.js';
+import {
+  assertSafetyPinVerifiedForStart,
+  buildDriverSafetyPinPayload,
+  verifyRideSafetyPin,
+} from '../lib/ride-safety-pin.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -29,6 +34,24 @@ const DEADLOCK_RETRY_ATTEMPTS = 3;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
 const DRIVER_REQUEST_RADIUS_KM = 5;
+/** How long an open ride request stays accept-able for drivers (incoming request countdown). */
+const OPEN_REQUEST_TTL_MINUTES = 3;
+
+function computeOpenRequestExpiry(requestedAt) {
+  if (!requestedAt) {
+    return { expiresAt: null, remainingSeconds: null };
+  }
+  const requestedMs = new Date(requestedAt).getTime();
+  if (!Number.isFinite(requestedMs)) {
+    return { expiresAt: null, remainingSeconds: null };
+  }
+  const expiresMs = requestedMs + (OPEN_REQUEST_TTL_MINUTES * 60 * 1000);
+  const remainingSeconds = Math.max(0, Math.ceil((expiresMs - Date.now()) / 1000));
+  return {
+    expiresAt: new Date(expiresMs).toISOString(),
+    remainingSeconds,
+  };
+}
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -570,6 +593,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         longitude: Number(row.dropoff_lng),
       };
       const driverDistanceKm = calculateDistanceKm(driverPoint, pickupCoordinate);
+      const requestedAt = toIsoOrNull(row.requested_at);
+      const { expiresAt, remainingSeconds } = computeOpenRequestExpiry(row.requested_at);
 
       return {
         id: row.id,
@@ -603,9 +628,9 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         driverReimbursementAmount: Number(row.driver_reimbursement_amount || 0),
         discountCode: row.discount_code || null,
         status: row.status,
-        requestedAt: toIsoOrNull(row.requested_at),
-        expiresAt: null,
-        remainingSeconds: null,
+        requestedAt,
+        expiresAt,
+        remainingSeconds,
         driverDistanceKm,
         etaMinutes: Math.max(1, Math.round(driverDistanceKm * 4)),
       };
@@ -908,7 +933,10 @@ router.get('/current-ride', requireAuth, async (req, res) => {
          requested_at,
          assigned_at,
          arrived_at,
-         completed_at
+         completed_at,
+         safety_pin_required,
+         safety_pin_verified_at,
+         safety_pin_attempts
        FROM ride_requests
        WHERE driver_user_id = ?
          AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
@@ -971,6 +999,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         assignedAt: toIsoOrNull(ride.assigned_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
+        ...buildDriverSafetyPinPayload(ride),
         completedAt: toIsoOrNull(ride.completed_at),
         passengerProfileImageUrl,
       },
@@ -1037,6 +1066,63 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
   }
 });
 
+router.patch('/current-ride/:rideRequestId/verify-pin', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const result = await verifyRideSafetyPin({
+      rideRequestId,
+      driverUserId: req.userId,
+      pin: req.body?.pin,
+    });
+
+    if (result.passengerUserId) {
+      emitRideStatusToPassenger(result.passengerUserId, {
+        rideRequestId,
+        safetyPinVerified: true,
+        safetyPinVerifiedAt: result.verifiedAt,
+      });
+    }
+    emitRideStatusToDriver(req.userId, {
+      rideRequestId,
+      safetyPinVerified: true,
+      safetyPinVerifiedAt: result.verifiedAt,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    if (err.status === 400 || err.status === 401 || err.status === 404 || err.status === 429) {
+      const [ride] = await query(
+        `SELECT passenger_user_id, safety_pin_attempts, safety_pin_required, safety_pin_verified_at
+         FROM ride_requests
+         WHERE id = ? AND driver_user_id = ?
+         LIMIT 1`,
+        [Number(req.params.rideRequestId), req.userId]
+      );
+      if (ride?.passenger_user_id && Number(ride.safety_pin_required || 0) === 1 && !ride.safety_pin_verified_at) {
+        emitRideStatusToPassenger(ride.passenger_user_id, {
+          rideRequestId: Number(req.params.rideRequestId),
+          safetyPinAttempts: Number(ride.safety_pin_attempts || err.attempts || 0),
+          safetyPinLocked: Boolean(err.locked),
+        });
+      }
+      return res.status(err.status).json({
+        error: err.message,
+        attempts: err.attempts ?? undefined,
+        locked: err.locked ?? undefined,
+      });
+    }
+    console.error('PATCH /api/drivers/current-ride/:rideRequestId/verify-pin', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.patch('/current-ride/:rideRequestId/start', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -1046,6 +1132,18 @@ router.patch('/current-ride/:rideRequestId/start', requireAuth, async (req, res)
     if (!Number.isInteger(rideRequestId)) {
       return res.status(400).json({ error: 'Invalid rideRequestId' });
     }
+
+    const [rideBeforeStart] = await query(
+      `SELECT safety_pin_required, safety_pin_verified_at, safety_pin_attempts
+       FROM ride_requests
+       WHERE id = ? AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!rideBeforeStart) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+    assertSafetyPinVerifiedForStart(rideBeforeStart);
 
     await queryWithDeadlockRetry(
       `UPDATE ride_requests
@@ -1085,6 +1183,9 @@ router.patch('/current-ride/:rideRequestId/start', requireAuth, async (req, res)
 
     return res.json({ ok: true });
   } catch (err) {
+    if (err.status === 409 || err.status === 429) {
+      return res.status(err.status).json({ error: err.message });
+    }
     console.error('PATCH /api/drivers/current-ride/:rideRequestId/start', err);
     return res.status(500).json({ error: 'Server error' });
   }

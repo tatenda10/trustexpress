@@ -14,6 +14,8 @@ import DriversPage from './pages/DriversPage'
 import DriverDetailsPage from './pages/DriverDetailsPage'
 import PassengersPage from './pages/PassengersPage'
 import PassengerDetailsPage from './pages/PassengerDetailsPage'
+import PassengerReferralsPage from './pages/PassengerReferralsPage'
+import PassengerReferralDetailPage from './pages/PassengerReferralDetailPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AgentsPage from './pages/AgentsPage'
 import AgentDetailPage from './pages/AgentDetailPage'
@@ -111,6 +113,14 @@ function AppRoutes() {
         <Route
           path="passengers"
           element={<PermissionRoute permission="passengers.read"><PassengersPage /></PermissionRoute>}
+        />
+        <Route
+          path="passenger-referrals"
+          element={<PermissionRoute permission="passengers.read"><PassengerReferralsPage /></PermissionRoute>}
+        />
+        <Route
+          path="passenger-referrals/:referrerUserId"
+          element={<PermissionRoute permission="passengers.read"><PassengerReferralDetailPage /></PermissionRoute>}
         />
         <Route
           path="agents"

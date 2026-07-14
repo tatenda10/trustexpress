@@ -44,11 +44,21 @@ function logUnsupported(source) {
 function normalizePayload(payload = {}) {
   const variant = String(payload.variant || 'online').trim().toLowerCase();
   const normalizedVariant = ['request', 'trip'].includes(variant) ? variant : 'online';
+  const rideRequestId = payload?.rideRequestId != null ? String(payload.rideRequestId) : '';
+  const estimatedAmount = Number(payload?.estimatedAmount);
+  const fareLabel = payload?.fareLabel
+    || (Number.isFinite(estimatedAmount) && estimatedAmount > 0
+      ? `$${estimatedAmount.toFixed(2)}`
+      : '');
   return {
     title: String(payload.title || 'Trust Express'),
-    subtitle: String(payload.subtitle || 'Active trip'),
+    subtitle: String(payload.subtitle || payload.body || 'Active trip'),
     meta: String(payload.meta || ''),
     variant: normalizedVariant,
+    pickupLabel: String(payload.pickupLabel || payload.pickup || ''),
+    dropoffLabel: String(payload.dropoffLabel || payload.dropoff || ''),
+    fareLabel: String(fareLabel || ''),
+    rideRequestId,
   };
 }
 
@@ -160,6 +170,44 @@ export async function hideTripOverlay() {
     return true;
   } catch (error) {
     logOverlay('hide:error', {
+      message: error?.message || String(error),
+      code: error?.code || null,
+    });
+    return false;
+  }
+}
+
+export async function showFullScreenRideRequest(payload = {}) {
+  if (!isSupported()) {
+    logUnsupported('showFullScreenRideRequest');
+    return false;
+  }
+
+  try {
+    const overlayModule = getOverlayModule();
+    if (typeof overlayModule?.showFullScreenRideRequest !== 'function') {
+      logOverlay('showFullScreenRideRequest:missing-native-method');
+      return false;
+    }
+
+    const normalized = normalizePayload({
+      ...payload,
+      variant: 'request',
+      title: payload?.title || 'New ride request',
+      subtitle: payload?.body || payload?.subtitle || 'A new ride request has arrived.',
+    });
+    await overlayModule.showFullScreenRideRequest({
+      title: normalized.title,
+      body: normalized.subtitle,
+      pickupLabel: normalized.pickupLabel,
+      dropoffLabel: normalized.dropoffLabel,
+      fareLabel: normalized.fareLabel,
+      rideRequestId: normalized.rideRequestId,
+    });
+    logOverlay('showFullScreenRideRequest:done', { rideRequestId: normalized.rideRequestId || null });
+    return true;
+  } catch (error) {
+    logOverlay('showFullScreenRideRequest:error', {
       message: error?.message || String(error),
       code: error?.code || null,
     });

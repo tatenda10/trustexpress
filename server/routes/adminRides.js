@@ -4,6 +4,13 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { buildRideStopsPayload } from '../lib/ride-stops.js';
 import { formatCancelledByLabel, inferCancelledBy } from '../lib/ride-cancellation.js';
+import {
+  createOrRefreshAdminShareLink,
+  getActiveAdminShareLink,
+  resolveRideForAdminShare,
+  revokeAdminShareLinks,
+  serializeAdminShareLink,
+} from '../lib/admin-ride-share.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
@@ -1275,6 +1282,62 @@ router.patch('/:rideId/panic-alerts/:alertId', requireAdminAuth, requirePermissi
     return res.json({ ok: true });
   } catch (err) {
     console.error('PATCH /api/admin/rides/:rideId/panic-alerts/:alertId', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/:rideId/authority-share', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const ride = await resolveRideForAdminShare(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+    const link = await getActiveAdminShareLink(ride.id);
+    return res.json({
+      shareLink: serializeAdminShareLink(link, req),
+    });
+  } catch (err) {
+    console.error('GET /api/admin/rides/:rideId/authority-share', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/:rideId/authority-share', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const ride = await resolveRideForAdminShare(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const result = await createOrRefreshAdminShareLink({
+      ride,
+      adminId: req.admin?.id || null,
+      adminEmail: req.admin?.email || null,
+      recipientNote: req.body?.recipientNote || req.body?.note || null,
+      ttlHours: req.body?.ttlHours,
+      req,
+    });
+
+    return res.status(result.created ? 201 : 200).json({
+      shareLink: serializeAdminShareLink(result.link, req),
+      created: result.created,
+    });
+  } catch (err) {
+    console.error('POST /api/admin/rides/:rideId/authority-share', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/:rideId/authority-share', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const ride = await resolveRideForAdminShare(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+    await revokeAdminShareLinks(ride.id);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /api/admin/rides/:rideId/authority-share', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

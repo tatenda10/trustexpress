@@ -74,6 +74,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -87,11 +88,14 @@ import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
 import android.view.animation.AnimationSet;
 import android.view.animation.ScaleAnimation;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -99,6 +103,8 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.UiThreadUtil;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 public class TrustOverlayModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
   private static final String TAG = "TrustOverlay";
@@ -107,6 +113,12 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
   private View overlayView;
   private WindowManager.LayoutParams layoutParams;
   private String currentVariant = "";
+  private String currentRideRequestId = "";
+  private String currentPickupLabel = "";
+  private String currentDropoffLabel = "";
+  private String currentFareLabel = "";
+  private String currentTitle = "New ride request";
+  private String currentBody = "A new ride request has arrived.";
 
   private int initialX;
   private int initialY;
@@ -150,10 +162,164 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     return "online";
   }
 
-  private void renderVariant(FrameLayout container, String variant) {
-    if (variant.equals(currentVariant) && container.getChildCount() > 0) return;
+  private void rememberRequestConfig(ReadableMap config) {
+    currentTitle = getMapString(config, "title", "New ride request");
+    currentBody = getMapString(config, "subtitle", getMapString(config, "body", "A new ride request has arrived."));
+    currentPickupLabel = getMapString(config, "pickupLabel", "");
+    currentDropoffLabel = getMapString(config, "dropoffLabel", "");
+    currentFareLabel = getMapString(config, "fareLabel", "");
+    currentRideRequestId = getMapString(config, "rideRequestId", "");
+  }
 
-    currentVariant = variant;
+  private void emitAction(String action) {
+    try {
+      WritableMap payload = Arguments.createMap();
+      payload.putString("action", action);
+      payload.putString("rideRequestId", currentRideRequestId == null ? "" : currentRideRequestId);
+      payload.putString("pickupLabel", currentPickupLabel == null ? "" : currentPickupLabel);
+      payload.putString("dropoffLabel", currentDropoffLabel == null ? "" : currentDropoffLabel);
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+        .emit("TrustOverlayRideAction", payload);
+    } catch (Exception error) {
+      Log.e(TAG, "emitAction failed", error);
+    }
+  }
+
+  private void openAppWithAction(String action) {
+    Intent launchIntent = reactContext.getPackageManager().getLaunchIntentForPackage(reactContext.getPackageName());
+    if (launchIntent == null) return;
+    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    String deepLink = "trustexpress://driver/incoming-ride";
+    String query = "";
+    if (currentRideRequestId != null && currentRideRequestId.trim().length() > 0) {
+      query += "rideRequestId=" + Uri.encode(currentRideRequestId.trim());
+      launchIntent.putExtra("rideRequestId", currentRideRequestId.trim());
+    }
+    if (action != null && action.trim().length() > 0) {
+      if (query.length() > 0) query += "&";
+      query += "action=" + Uri.encode(action.trim());
+    }
+    if (query.length() > 0) {
+      deepLink = deepLink + "?" + query;
+    }
+    launchIntent.setData(Uri.parse(deepLink));
+    launchIntent.putExtra("openIncomingRideOverlay", true);
+    if (action != null) launchIntent.putExtra("overlayAction", action);
+    reactContext.startActivity(launchIntent);
+  }
+
+  private GradientDrawable roundedRect(String fillColor, float radiusDp) {
+    GradientDrawable background = new GradientDrawable();
+    background.setColor(Color.parseColor(fillColor));
+    background.setCornerRadius(dp(radiusDp));
+    return background;
+  }
+
+  private TextView createLabel(String text, int sizeSp, String color, boolean bold) {
+    TextView view = new TextView(reactContext);
+    view.setText(text == null ? "" : text);
+    view.setTextSize(sizeSp);
+    view.setTextColor(Color.parseColor(color));
+    if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
+    return view;
+  }
+
+  private Button createActionButton(String label, String fillColor, String textColor, final String action) {
+    Button button = new Button(reactContext);
+    button.setText(label);
+    button.setAllCaps(false);
+    button.setTextColor(Color.parseColor(textColor));
+    button.setBackground(roundedRect(fillColor, 14));
+    button.setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        emitAction(action);
+        if ("decline".equals(action)) {
+          // Collapse back to online bubble immediately for feedback.
+          applyVariant("online", null);
+        } else {
+          openAppWithAction(action);
+        }
+      }
+    });
+    return button;
+  }
+
+  private View createRequestCard() {
+    LinearLayout card = new LinearLayout(reactContext);
+    card.setOrientation(LinearLayout.VERTICAL);
+    card.setPadding(dp(18), dp(18), dp(18), dp(18));
+    card.setBackground(roundedRect("#111827", 24));
+    card.setElevation(dp(14));
+
+    FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(
+      FrameLayout.LayoutParams.MATCH_PARENT,
+      FrameLayout.LayoutParams.WRAP_CONTENT
+    );
+    card.setLayoutParams(cardParams);
+
+    card.addView(createLabel("Trust Express", 12, "#93C5FD", true));
+    TextView title = createLabel(currentTitle == null || currentTitle.isEmpty() ? "New ride request" : currentTitle, 20, "#FFFFFF", true);
+    title.setPadding(0, dp(8), 0, dp(6));
+    card.addView(title);
+
+    String bodyText = currentBody;
+    if ((bodyText == null || bodyText.trim().isEmpty()) && (currentPickupLabel.length() > 0 || currentDropoffLabel.length() > 0)) {
+      bodyText = (currentPickupLabel.length() > 0 ? currentPickupLabel : "Pickup")
+        + " to "
+        + (currentDropoffLabel.length() > 0 ? currentDropoffLabel : "Drop-off");
+    }
+    TextView body = createLabel(bodyText == null ? "A new ride request has arrived." : bodyText, 14, "#E5E7EB", false);
+    body.setPadding(0, 0, 0, dp(10));
+    card.addView(body);
+
+    if (currentPickupLabel != null && currentPickupLabel.length() > 0) {
+      card.addView(createLabel("From: " + currentPickupLabel, 13, "#D1D5DB", false));
+    }
+    if (currentDropoffLabel != null && currentDropoffLabel.length() > 0) {
+      TextView dropoff = createLabel("To: " + currentDropoffLabel, 13, "#D1D5DB", false);
+      dropoff.setPadding(0, dp(4), 0, 0);
+      card.addView(dropoff);
+    }
+    if (currentFareLabel != null && currentFareLabel.length() > 0) {
+      TextView fare = createLabel(currentFareLabel, 16, "#FFFFFF", true);
+      fare.setPadding(0, dp(10), 0, 0);
+      card.addView(fare);
+    }
+
+    LinearLayout actions = new LinearLayout(reactContext);
+    actions.setOrientation(LinearLayout.HORIZONTAL);
+    actions.setPadding(0, dp(16), 0, 0);
+    actions.setGravity(Gravity.CENTER_VERTICAL);
+
+    LinearLayout.LayoutParams declineParams = new LinearLayout.LayoutParams(0, dp(48), 1f);
+    declineParams.setMargins(0, 0, dp(8), 0);
+    Button decline = createActionButton("Decline", "#374151", "#FFFFFF", "decline");
+    decline.setLayoutParams(declineParams);
+    actions.addView(decline);
+
+    LinearLayout.LayoutParams acceptParams = new LinearLayout.LayoutParams(0, dp(48), 1.2f);
+    acceptParams.setMargins(dp(8), 0, 0, 0);
+    Button accept = createActionButton("Accept", "#206EFF", "#FFFFFF", "accept");
+    accept.setLayoutParams(acceptParams);
+    actions.addView(accept);
+
+    card.addView(actions);
+
+    Button openApp = createActionButton("Open app", "#1F2937", "#E5E7EB", "open");
+    LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(
+      LinearLayout.LayoutParams.MATCH_PARENT,
+      dp(44)
+    );
+    openParams.setMargins(0, dp(10), 0, 0);
+    openApp.setLayoutParams(openParams);
+    card.addView(openApp);
+
+    return card;
+  }
+
+  private void renderBubble(FrameLayout container, String variant) {
     container.removeAllViews();
 
     if (variant.equals("trip")) {
@@ -165,10 +331,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     }
 
     if (variant.equals("request")) {
-      container.addView(createPulseRing(94, "#66F59E0B", 1.6f, 0.52f, 0.08f, 780, 0));
-      container.addView(createPulseRing(74, "#99F97316", 1.36f, 0.44f, 0.10f, 780, 140));
-      container.addView(createCenterCircle("#F59E0B", "#FEF3C7", 66));
-      container.addView(createBadge("#EF4444", "#FFFFFF", 24, 14, 14));
+      container.addView(createRequestCard());
       return;
     }
 
@@ -177,17 +340,41 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     container.addView(createCenterCircle("#206EFF", "#E8F0FF", 58));
   }
 
-  private void updateOverlay(ReadableMap config) {
+  private void applyLayoutForVariant(String variant) {
+    if (layoutParams == null || windowManager == null || overlayView == null) return;
+
+    boolean isRequest = "request".equals(variant);
+    layoutParams.width = isRequest
+      ? WindowManager.LayoutParams.MATCH_PARENT
+      : WindowManager.LayoutParams.WRAP_CONTENT;
+    layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT;
+    layoutParams.gravity = isRequest ? (Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL) : (Gravity.TOP | Gravity.START);
+    layoutParams.x = isRequest ? 0 : dp(16);
+    layoutParams.y = isRequest ? dp(24) : dp(120);
+    layoutParams.flags = isRequest
+      ? (WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
+      : WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+
+    try {
+      windowManager.updateViewLayout(overlayView, layoutParams);
+    } catch (Exception error) {
+      Log.e(TAG, "applyLayoutForVariant failed", error);
+    }
+  }
+
+  private void applyVariant(String variant, ReadableMap config) {
+    if (config != null && "request".equals(variant)) {
+      rememberRequestConfig(config);
+    }
     if (!(overlayView instanceof FrameLayout)) return;
 
-    renderVariant((FrameLayout) overlayView, getVariant(config));
+    currentVariant = variant;
+    renderBubble((FrameLayout) overlayView, variant);
+    applyLayoutForVariant(variant);
   }
 
   private void openApp() {
-    Intent launchIntent = reactContext.getPackageManager().getLaunchIntentForPackage(reactContext.getPackageName());
-    if (launchIntent == null) return;
-    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-    reactContext.startActivity(launchIntent);
+    openAppWithAction("open");
   }
 
   private void hideOverlay() {
@@ -270,35 +457,6 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     return badge;
   }
 
-  private View createCloseButton() {
-    TextView button = new TextView(reactContext);
-    button.setText("×");
-    button.setTextSize(14);
-    button.setTextColor(Color.WHITE);
-    button.setGravity(Gravity.CENTER);
-    button.setTypeface(button.getTypeface(), android.graphics.Typeface.BOLD);
-
-    GradientDrawable background = new GradientDrawable();
-    background.setShape(GradientDrawable.OVAL);
-    background.setColor(Color.parseColor("#88000000"));
-    button.setBackground(background);
-    button.setElevation(dp(14));
-    button.setClickable(true);
-
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP | Gravity.END);
-    params.setMargins(0, dp(8), dp(8), 0);
-    button.setLayoutParams(params);
-
-    button.setOnTouchListener((view, event) -> {
-      if (event.getAction() == MotionEvent.ACTION_UP) {
-        hideOverlay();
-      }
-      return true;
-    });
-
-    return button;
-  }
-
   private View createOverlayView() {
     FrameLayout container = new FrameLayout(reactContext);
     container.setClipChildren(false);
@@ -307,11 +465,13 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     container.setMinimumWidth(dp(116));
     container.setMinimumHeight(dp(116));
     container.setElevation(dp(8));
+    container.setPadding(dp(12), dp(12), dp(12), dp(12));
 
-    renderVariant(container, "online");
+    renderBubble(container, "online");
 
     container.setOnTouchListener((view, event) -> {
       if (layoutParams == null || windowManager == null) return false;
+      if ("request".equals(currentVariant)) return false;
 
       switch (event.getAction()) {
         case MotionEvent.ACTION_DOWN:
@@ -384,7 +544,8 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
 
   @ReactMethod
   public void show(ReadableMap config, Promise promise) {
-    Log.d(TAG, "show called variant=" + getVariant(config) + " canDraw=" + canDrawOverlaysInternal());
+    final String variant = getVariant(config);
+    Log.d(TAG, "show called variant=" + variant + " canDraw=" + canDrawOverlaysInternal());
     if (!canDrawOverlaysInternal()) {
       promise.reject("overlay_permission_missing", "Display over other apps permission is not enabled.");
       return;
@@ -394,11 +555,9 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
       try {
         if (windowManager == null) {
           windowManager = (WindowManager) reactContext.getSystemService(Context.WINDOW_SERVICE);
-          Log.d(TAG, "windowManager initialized=" + (windowManager != null));
         }
 
         if (overlayView == null) {
-          Log.d(TAG, "creating overlay view");
           overlayView = createOverlayView();
           overlayCreatedAt = System.currentTimeMillis();
           int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -416,11 +575,9 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
           layoutParams.x = dp(16);
           layoutParams.y = dp(120);
           windowManager.addView(overlayView, layoutParams);
-          Log.d(TAG, "overlay view added x=" + layoutParams.x + " y=" + layoutParams.y);
         }
 
-        updateOverlay(config);
-        Log.d(TAG, "show resolved variant=" + getVariant(config));
+        applyVariant(variant, config);
         promise.resolve(true);
       } catch (Exception error) {
         Log.e(TAG, "show failed", error);
@@ -434,12 +591,10 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     UiThreadUtil.runOnUiThread(() -> {
       try {
         if (overlayView == null) {
-          Log.d(TAG, "update skipped: no overlay view");
           promise.resolve(false);
           return;
         }
-        updateOverlay(config);
-        Log.d(TAG, "update resolved variant=" + getVariant(config));
+        applyVariant(getVariant(config), config);
         promise.resolve(true);
       } catch (Exception error) {
         Log.e(TAG, "update failed", error);
@@ -452,7 +607,6 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
   public void hide(Promise promise) {
     UiThreadUtil.runOnUiThread(() -> {
       try {
-        Log.d(TAG, "hide called");
         hideOverlay();
         promise.resolve(true);
       } catch (Exception error) {
@@ -460,6 +614,29 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
         promise.reject("overlay_hide_failed", error);
       }
     });
+  }
+
+  @ReactMethod
+  public void showFullScreenRideRequest(ReadableMap config, Promise promise) {
+    try {
+      Intent intent = new Intent(reactContext, RideRequestFullScreenActivity.class);
+      intent.addFlags(
+        Intent.FLAG_ACTIVITY_NEW_TASK |
+        Intent.FLAG_ACTIVITY_CLEAR_TOP |
+        Intent.FLAG_ACTIVITY_SINGLE_TOP
+      );
+      intent.putExtra("title", getMapString(config, "title", "New ride request"));
+      intent.putExtra("body", getMapString(config, "body", "A new ride request has arrived."));
+      intent.putExtra("pickupLabel", getMapString(config, "pickupLabel", null));
+      intent.putExtra("dropoffLabel", getMapString(config, "dropoffLabel", null));
+      intent.putExtra("fareLabel", getMapString(config, "fareLabel", null));
+      intent.putExtra("rideRequestId", getMapString(config, "rideRequestId", null));
+      reactContext.startActivity(intent);
+      promise.resolve(true);
+    } catch (Exception error) {
+      Log.e(TAG, "showFullScreenRideRequest failed", error);
+      promise.reject("fullscreen_ride_request_failed", error);
+    }
   }
 }
 `;
@@ -499,6 +676,8 @@ function fullScreenActivitySource(androidPackage) {
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -509,6 +688,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public class RideRequestFullScreenActivity extends Activity {
+  private String rideRequestId = "";
+
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
@@ -526,7 +707,16 @@ public class RideRequestFullScreenActivity extends Activity {
     String title = getIntent().getStringExtra("title");
     String body = getIntent().getStringExtra("body");
     String pickup = getIntent().getStringExtra("pickupLabel");
+    if (pickup == null) pickup = getIntent().getStringExtra("pickup");
     String dropoff = getIntent().getStringExtra("dropoffLabel");
+    if (dropoff == null) dropoff = getIntent().getStringExtra("dropoff");
+    String fareLabel = getIntent().getStringExtra("fareLabel");
+    rideRequestId = getIntent().getStringExtra("rideRequestId");
+    if (rideRequestId == null) rideRequestId = "";
+
+    if ((body == null || body.trim().isEmpty()) && (pickup != null || dropoff != null)) {
+      body = (pickup != null ? pickup : "Pickup") + " to " + (dropoff != null ? dropoff : "Drop-off");
+    }
 
     LinearLayout root = new LinearLayout(this);
     root.setOrientation(LinearLayout.VERTICAL);
@@ -534,10 +724,17 @@ public class RideRequestFullScreenActivity extends Activity {
     root.setBackgroundColor(Color.parseColor("#FF101820"));
     root.setGravity(Gravity.CENTER_VERTICAL);
 
+    TextView brandView = new TextView(this);
+    brandView.setText("Trust Express");
+    brandView.setTextColor(Color.parseColor("#8EB6FF"));
+    brandView.setTextSize(14);
+    brandView.setPadding(0, 0, 0, 12);
+    root.addView(brandView);
+
     TextView titleView = new TextView(this);
     titleView.setText(title != null ? title : "New ride request");
     titleView.setTextColor(Color.WHITE);
-    titleView.setTextSize(22);
+    titleView.setTextSize(26);
     titleView.setPadding(0, 0, 0, 24);
     root.addView(titleView);
 
@@ -556,30 +753,101 @@ public class RideRequestFullScreenActivity extends Activity {
       routeView.setText(routeText.trim());
       routeView.setTextColor(Color.parseColor("#CCCCCC"));
       routeView.setTextSize(14);
-      routeView.setPadding(0, 0, 0, 32);
+      routeView.setPadding(0, 0, 0, 16);
       root.addView(routeView);
     }
 
-    Button openButton = new Button(this);
-    openButton.setText("Open app");
-    openButton.setAllCaps(false);
-    openButton.setBackgroundColor(Color.parseColor("#206EFF"));
-    openButton.setTextColor(Color.WHITE);
+    if (fareLabel != null && fareLabel.trim().length() > 0) {
+      TextView fareView = new TextView(this);
+      fareView.setText(fareLabel);
+      fareView.setTextColor(Color.WHITE);
+      fareView.setTextSize(18);
+      fareView.setPadding(0, 0, 0, 28);
+      root.addView(fareView);
+    }
+
+    LinearLayout actions = new LinearLayout(this);
+    actions.setOrientation(LinearLayout.HORIZONTAL);
+    actions.setGravity(Gravity.CENTER);
+
+    Button declineButton = createButton("Decline", "#374151");
+    declineButton.setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        openApp("decline");
+      }
+    });
+    LinearLayout.LayoutParams declineParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+    declineParams.setMargins(0, 0, 16, 0);
+    declineButton.setLayoutParams(declineParams);
+    actions.addView(declineButton);
+
+    Button acceptButton = createButton("Accept", "#206EFF");
+    acceptButton.setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        openApp("accept");
+      }
+    });
+    LinearLayout.LayoutParams acceptParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f);
+    acceptParams.setMargins(16, 0, 0, 0);
+    acceptButton.setLayoutParams(acceptParams);
+    actions.addView(acceptButton);
+
+    root.addView(actions);
+
+    Button openButton = createButton("Open app", "#1F2937");
+    LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(
+      LinearLayout.LayoutParams.MATCH_PARENT,
+      LinearLayout.LayoutParams.WRAP_CONTENT
+    );
+    openParams.setMargins(0, 28, 0, 0);
+    openButton.setLayoutParams(openParams);
     openButton.setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View view) {
-        openApp();
+        openApp("open");
       }
     });
-
     root.addView(openButton);
+
     setContentView(root);
   }
 
-  private void openApp() {
+  private Button createButton(String label, String fillColor) {
+    Button button = new Button(this);
+    button.setText(label);
+    button.setAllCaps(false);
+    button.setTextColor(Color.WHITE);
+    GradientDrawable background = new GradientDrawable();
+    background.setColor(Color.parseColor(fillColor));
+    background.setCornerRadius(28);
+    button.setBackground(background);
+    return button;
+  }
+
+  private void openApp(String action) {
     Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
     if (launchIntent != null) {
-      launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+      launchIntent.addFlags(
+        Intent.FLAG_ACTIVITY_NEW_TASK |
+        Intent.FLAG_ACTIVITY_SINGLE_TOP |
+        Intent.FLAG_ACTIVITY_CLEAR_TOP
+      );
+      String deepLink = "trustexpress://driver/incoming-ride";
+      String query = "";
+      if (rideRequestId != null && rideRequestId.trim().length() > 0) {
+        query += "rideRequestId=" + Uri.encode(rideRequestId.trim());
+        launchIntent.putExtra("rideRequestId", rideRequestId.trim());
+      }
+      if (action != null && action.trim().length() > 0) {
+        if (query.length() > 0) query += "&";
+        query += "action=" + Uri.encode(action.trim());
+      }
+      if (query.length() > 0) deepLink = deepLink + "?" + query;
+      launchIntent.setData(Uri.parse(deepLink));
+      launchIntent.putExtra("openIncomingRideOverlay", true);
+      launchIntent.putExtra("overlayAction", action);
       startActivity(launchIntent);
     }
     finish();

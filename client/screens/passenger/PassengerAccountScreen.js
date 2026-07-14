@@ -211,6 +211,13 @@ const PassengerAccountScreen = ({ navigation }) => {
       onPress: () => navigation.navigate('PassengerReviews'),
     },
     {
+      key: 'referrals',
+      title: 'Invite friends',
+      subtitle: 'Share your email and invite passengers',
+      icon: 'gift-outline',
+      onPress: () => navigation.navigate('PassengerReferrals'),
+    },
+    {
       key: 'support',
       title: 'Support',
       subtitle: 'Chat with the support team',
@@ -470,7 +477,7 @@ const PassengerAccountScreen = ({ navigation }) => {
                     <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
                     <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
                   </View>
-                  {row.key === 'profile' || row.key === 'reviews' || row.key === 'support' ? (
+                  {row.key === 'profile' || row.key === 'reviews' || row.key === 'referrals' || row.key === 'support' ? (
                     <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
                   ) : null}
                 </TouchableOpacity>

@@ -60,9 +60,30 @@ export async function autoCloseInactiveSupportThreads(hours = SUPPORT_AUTO_CLOSE
     [safeHours]
   );
 
+  await pruneEmptySupportThreads();
+
   return {
     affectedRows: Number(result?.affectedRows || 0),
     hours: safeHours,
+  };
+}
+
+/** Remove threads that were created without any real user/admin message (e.g. old open-on-load bug). */
+export async function pruneEmptySupportThreads() {
+  await query(
+    `DELETE FROM support_messages
+     WHERE TRIM(COALESCE(message, '')) = ''`
+  );
+
+  const result = await query(
+    `DELETE t
+     FROM support_threads t
+     LEFT JOIN support_messages m ON m.thread_id = t.id
+     WHERE m.id IS NULL`
+  );
+
+  return {
+    affectedRows: Number(result?.affectedRows || 0),
   };
 }
 
@@ -96,6 +117,7 @@ export async function listSupportMessages(threadId) {
     `SELECT *
      FROM support_messages
      WHERE thread_id = ?
+       AND TRIM(COALESCE(message, '')) <> ''
      ORDER BY created_at ASC, id ASC`,
     [threadId]
   );
@@ -157,11 +179,12 @@ export async function listSupportThreads() {
        m.message AS latest_message,
        m.sender_type AS latest_sender_type
      FROM support_threads t
-     LEFT JOIN support_messages m
+     INNER JOIN support_messages m
        ON m.id = (
          SELECT sm.id
          FROM support_messages sm
          WHERE sm.thread_id = t.id
+           AND TRIM(COALESCE(sm.message, '')) <> ''
          ORDER BY sm.created_at DESC, sm.id DESC
          LIMIT 1
        )

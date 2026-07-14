@@ -183,12 +183,15 @@ export function DriverTripMapPanel({
   passengerName,
   passengerSubtitle,
   passengerConfirmationText,
+  safetyPinReminderText,
   stopTimeline,
   remainingIntermediateStopsCount,
   guidanceText,
   showGuidance,
   showMarkArrived,
   showStartRide,
+  startRideLabel = 'Start Ride',
+  startRideDisabled = false,
   showAdvanceStop,
   advanceStopLabel,
   showCompleteRide,
@@ -361,6 +364,13 @@ export function DriverTripMapPanel({
             </View>
           ) : null}
 
+          {safetyPinReminderText ? (
+            <View className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+              <Text className="text-xs font-bold uppercase tracking-widest text-indigo-700">Night safety PIN</Text>
+              <Text className="mt-1 text-sm font-semibold text-indigo-900">{safetyPinReminderText}</Text>
+            </View>
+          ) : null}
+
           {showGuidance ? (
             <View className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-4">
               <View className="flex-row items-center">
@@ -444,11 +454,11 @@ export function DriverTripMapPanel({
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={onStartRide}
-                disabled={submitting}
+                disabled={submitting || startRideDisabled}
                 className="ml-2 h-14 flex-1 items-center justify-center rounded-[20px]"
-                style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
+                style={{ backgroundColor: primaryBlue, opacity: submitting || startRideDisabled ? 0.7 : 1 }}
               >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Start Ride</Text>}
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">{startRideLabel}</Text>}
             </TouchableOpacity>
           </View>
           ) : null}

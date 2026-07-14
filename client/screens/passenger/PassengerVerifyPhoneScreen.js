@@ -10,21 +10,16 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
-
-/** Normalize to E.164 for Zimbabwe (e.g. +263771234567). */
-function normalizePhone(phone) {
-  const digits = (phone || '').replace(/\D/g, '');
-  if (digits.length < 9) return null;
-  if (digits.startsWith('0')) return `+263${digits.slice(1)}`;
-  if (digits.startsWith('263')) return `+${digits}`;
-  if (digits.length === 9 && digits.startsWith('7')) return `+263${digits}`;
-  return `+${digits}`;
-}
+import {
+  INVALID_LOCAL_PHONE_MESSAGE,
+  isValidLocalPhoneNumber,
+  normalizeZimbabwePhoneNumber,
+  sanitizeLocalPhoneInput,
+} from '../../utils/phoneNumber';
 
 const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = null }) => {
   const insets = useSafeAreaInsets();
@@ -32,18 +27,18 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = nu
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const normalizedPhone = normalizePhone(phone);
-  const canSend = !!normalizedPhone;
+  const canSend = isValidLocalPhoneNumber(phone);
   const handleVerify = async () => {
-    if (!canSend) {
-      Alert.alert('Invalid number', 'Enter a valid phone number like 077 123 4567.');
+    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    if (!phoneResult.ok) {
+      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
       return;
     }
     setLoading(true);
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, normalizedPhone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone);
       Alert.alert('Phone saved', 'Your phone number has been saved on your account.', [
         {
           text: 'Continue',
@@ -92,26 +87,17 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = nu
         </Text>
 
         <Text className="mb-2 mt-8 text-sm font-medium text-gray-700">Phone number</Text>
-        <View className="flex-row items-stretch">
-          <TouchableOpacity
-            activeOpacity={0.85}
-            className="mr-3 w-[148px] rounded-xl border border-gray-200 bg-gray-50 px-4 py-3"
-          >
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm text-gray-700">+263</Text>
-              <Ionicons name="chevron-down" size={16} color="#6b7280" />
-            </View>
-          </TouchableOpacity>
-          <TextInput
-            className="flex-1 rounded-xl border border-gray-200 px-4 py-3 text-base text-gray-900"
-            placeholder="77 123 4567"
-            placeholderTextColor="#9ca3af"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-            editable={!loading}
-          />
-        </View>
+        <TextInput
+          className="rounded-xl border border-gray-200 px-4 py-3 text-base text-gray-900"
+          placeholder="0771234567"
+          placeholderTextColor="#9ca3af"
+          value={phone}
+          onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
+          keyboardType="phone-pad"
+          maxLength={10}
+          editable={!loading}
+        />
+        <Text className="mt-2 text-xs text-gray-500">10 digits starting with 07.</Text>
       </ScrollView>
 
       <View

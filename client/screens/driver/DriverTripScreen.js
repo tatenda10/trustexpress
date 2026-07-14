@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Platform } from 'react-native';
+import { Alert, Dimensions, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
@@ -16,6 +16,7 @@ import {
   resolveUploadedMediaUrl,
   sendRidePanicAlert,
   startDriverCurrentRide,
+  verifyDriverRidePin,
   submitDriverPassengerRating,
   updateDriverAvailability,
 } from '../../api';
@@ -342,6 +343,9 @@ export default function DriverTripScreen({ navigation, route }) {
     routeCoordinatesRef.current = routeCoordinates;
   }, [routeCoordinates]);
   const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [verifyingPin, setVerifyingPin] = useState(false);
 
   const exitPassengerRatingFlow = useCallback(() => {
     setShowPassengerRating(false);
@@ -962,10 +966,10 @@ export default function DriverTripScreen({ navigation, route }) {
     };
   }, [driverCoordinate, handleMarkArrived, pickupCoordinate, ride?.id, ride?.stage, submitting]);
 
-  const handleStartRide = async () => {
+  const performStartRide = async () => {
+    if (!ride?.id) return;
+    setSubmitting(true);
     try {
-      if (!ride?.id) return;
-      setSubmitting(true);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
       await startDriverCurrentRide(token, ride.id, { suppressAuthErrorHandler: true });
@@ -979,9 +983,57 @@ export default function DriverTripScreen({ navigation, route }) {
           // Keep the action successful even if the follow-up refresh fails.
         });
     } catch (error) {
-      Alert.alert('Start ride failed', error?.message || 'Could not start the ride.');
+      throw error;
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleStartRide = async () => {
+    try {
+      if (!ride?.id) return;
+      if (ride?.safetyPinRequired && !ride?.safetyPinVerified) {
+        setPinInput('');
+        setShowPinModal(true);
+        return;
+      }
+      await performStartRide();
+    } catch (error) {
+      Alert.alert('Start ride failed', error?.message || 'Could not start the ride.');
+    }
+  };
+
+  const handleVerifyPinAndStart = async () => {
+    const normalizedPin = String(pinInput || '').trim();
+    if (!/^\d{4}$/.test(normalizedPin)) {
+      Alert.alert('Enter PIN', 'Ask the passenger for their 4-digit safety PIN.');
+      return;
+    }
+
+    try {
+      setVerifyingPin(true);
+      const token = await getTokenRef.current();
+      if (!token || !ride?.id) throw new Error('Not signed in');
+      await verifyDriverRidePin(token, ride.id, normalizedPin, { suppressAuthErrorHandler: true });
+      setShowPinModal(false);
+      setPinInput('');
+      setRide((current) => current ? {
+        ...current,
+        safetyPinVerified: true,
+        safetyPinVerifiedAt: new Date().toISOString(),
+      } : current);
+    } catch (error) {
+      Alert.alert('PIN verification failed', error?.message || 'Could not verify the passenger PIN.');
+      setRealtimeSignal((current) => current + 1);
+      return;
+    } finally {
+      setVerifyingPin(false);
+    }
+
+    try {
+      await performStartRide();
+    } catch (error) {
+      Alert.alert('Start ride failed', error?.message || 'Could not start the ride.');
     }
   };
 
@@ -1240,6 +1292,14 @@ export default function DriverTripScreen({ navigation, route }) {
   const passengerConfirmationText = ride.passengerConfirmedAt
     ? 'Passenger confirmed they are coming to the pickup point.'
     : '';
+  const safetyPinReminderText = ride?.safetyPinRequired && !ride?.safetyPinVerified
+    ? ride?.safetyPinLocked
+      ? 'Too many incorrect PIN attempts. Confirm the passenger before starting.'
+      : 'Ask the passenger for their 4-digit night safety PIN before starting.'
+    : '';
+  const startRideLabel = ride?.safetyPinRequired && !ride?.safetyPinVerified
+    ? (ride?.safetyPinLocked ? 'PIN locked' : 'Enter passenger PIN')
+    : 'Start Ride';
   const stopTimeline = [
     ride.pickupLabel,
     ...intermediateStops.map((stop) => stop?.label).filter(Boolean),
@@ -1291,6 +1351,7 @@ export default function DriverTripScreen({ navigation, route }) {
   };
 
   return (
+    <>
     <DriverTripMapPanel
       mapRef={mapRef}
       mapRegion={mapRegion}
@@ -1331,12 +1392,15 @@ export default function DriverTripScreen({ navigation, route }) {
       passengerName={ride.passengerName}
       passengerSubtitle={ride.passengerPhone || targetLabel}
       passengerConfirmationText={passengerConfirmationText}
+      safetyPinReminderText={safetyPinReminderText}
       stopTimeline={stopTimeline}
       remainingIntermediateStopsCount={remainingIntermediateStopsCount}
       guidanceText={guidanceText}
       showGuidance={Boolean(ride.stage === 'on_trip' || nextInstruction)}
       showMarkArrived={ride.stage === 'to_pickup'}
       showStartRide={ride.stage === 'waiting_for_customer'}
+      startRideLabel={startRideLabel}
+      startRideDisabled={Boolean(ride?.safetyPinLocked)}
       showAdvanceStop={ride.stage === 'on_trip' && Boolean(currentIntermediateStop)}
       advanceStopLabel={stopActionLabel}
       showCompleteRide={ride.stage === 'on_trip' && !currentIntermediateStop}
@@ -1350,5 +1414,52 @@ export default function DriverTripScreen({ navigation, route }) {
       onCancelRide={handleCancelRide}
       submittingPanicAlert={submittingPanicAlert}
     />
+
+    <Modal
+      visible={showPinModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => {
+        if (!verifyingPin) setShowPinModal(false);
+      }}
+    >
+      <View className="flex-1 justify-end bg-black/50">
+        <View className="rounded-t-[28px] bg-white px-5 pt-5 pb-8">
+          <Text className="text-xs font-bold uppercase tracking-[1px] text-indigo-700">Night safety PIN</Text>
+          <Text className="mt-2 text-2xl font-bold text-gray-900">Enter passenger PIN</Text>
+          <Text className="mt-2 text-sm leading-6 text-gray-500">
+            Ask the passenger for their 4-digit PIN shown in their app before starting the trip.
+          </Text>
+          <TextInput
+            className="mt-5 rounded-[18px] border border-gray-200 bg-[#f8fafc] px-4 py-4 text-center text-3xl font-bold tracking-[12px] text-gray-900"
+            value={pinInput}
+            onChangeText={(value) => setPinInput(String(value || '').replace(/\D/g, '').slice(0, 4))}
+            keyboardType="number-pad"
+            maxLength={4}
+            placeholder="0000"
+            placeholderTextColor="#cbd5e1"
+            editable={!verifyingPin}
+          />
+          <TouchableOpacity
+            onPress={handleVerifyPinAndStart}
+            disabled={verifyingPin || pinInput.length !== 4}
+            className="mt-4 h-14 items-center justify-center rounded-[20px]"
+            style={{ backgroundColor: PRIMARY_BLUE, opacity: verifyingPin || pinInput.length !== 4 ? 0.6 : 1 }}
+          >
+            <Text className="text-base font-bold text-white">
+              {verifyingPin ? 'Verifying...' : 'Verify PIN and start ride'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setShowPinModal(false)}
+            disabled={verifyingPin}
+            className="mt-3 h-12 items-center justify-center"
+          >
+            <Text className="text-base font-semibold text-gray-500">Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+    </>
   );
 }

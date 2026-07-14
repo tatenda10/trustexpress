@@ -61,7 +61,9 @@ export async function sendFcmNotifications(messages) {
           notification: {
             channelId: message.android?.channelId || 'ride-requests',
             sound: message.android?.notification?.sound || 'default',
-            clickAction: message.android?.notification?.clickAction || 'TRUST_EXPRESS_FULL_SCREEN_RIDE_REQUEST',
+            clickAction:
+              message.android?.notification?.clickAction
+              || 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
             defaultVibrateTimings: true,
           },
         },

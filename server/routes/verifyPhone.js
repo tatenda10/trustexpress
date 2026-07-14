@@ -4,6 +4,7 @@ import { getClerkUserById, mergePrivateMetadata, normalizeRole } from '../lib/cl
 import { getClerkClient } from '../lib/clerk-client.js';
 import { query } from '../db/connection.js';
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
+import { normalizeZimbabwePhoneNumber } from '../lib/phone-number.js';
 
 const router = Router();
 
@@ -46,8 +47,13 @@ router.post('/confirm', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'phoneNumber required' });
     }
 
+    const phoneResult = normalizeZimbabwePhoneNumber(rawPhone);
+    if (!phoneResult.ok) {
+      return res.status(400).json({ error: phoneResult.error });
+    }
+
     const user = await getClerkUserById(req.userId); // Ensure user exists / 404 otherwise
-    const phoneNumber = rawPhone;
+    const phoneNumber = phoneResult.e164Phone;
 
     const meta = await mergePrivateMetadata(req.userId, {
       phoneNumber,

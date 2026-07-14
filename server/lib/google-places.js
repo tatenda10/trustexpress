@@ -36,16 +36,11 @@ function calculateDistanceKm(start, end) {
 }
 
 function getGoogleApiKey() {
-  return String(
-    process.env.GOOGLE_MAPS_API_KEY ||
-    process.env.GOOGLE_PLACES_API_KEY ||
-    process.env.GOOGLE_MAPS_DIRECTIONS_API_KEY ||
-    ''
-  ).trim();
+  return String(process.env.GOOGLE_MAPS_API_KEY || '').trim();
 }
 
 function getGoogleBaseUrl() {
-  return (process.env.GOOGLE_PLACES_BASE_URL || DEFAULT_GOOGLE_BASE_URL).replace(/\/+$/, '');
+  return (process.env.GOOGLE_MAPS_BASE_URL || process.env.GOOGLE_PLACES_BASE_URL || DEFAULT_GOOGLE_BASE_URL).replace(/\/+$/, '');
 }
 
 async function fetchJson(url) {

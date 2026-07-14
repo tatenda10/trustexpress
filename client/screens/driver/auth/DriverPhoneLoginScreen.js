@@ -9,6 +9,11 @@ import {
   Alert,
 } from 'react-native';
 import { useSignIn } from '@clerk/clerk-expo';
+import {
+  INVALID_LOCAL_PHONE_MESSAGE,
+  normalizeZimbabwePhoneNumber,
+  sanitizeLocalPhoneInput,
+} from '../../../utils/phoneNumber';
 
 const DriverPhoneLoginScreen = ({ navigation }) => {
   const { signIn, setActive, isLoaded } = useSignIn();
@@ -20,15 +25,16 @@ const DriverPhoneLoginScreen = ({ navigation }) => {
   const handleSendCode = async () => {
     if (!isLoaded) return;
 
-    if (!phoneNumber) {
-      Alert.alert('Error', 'Please enter your phone number');
+    const phoneResult = normalizeZimbabwePhoneNumber(phoneNumber);
+    if (!phoneResult.ok) {
+      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
       return;
     }
 
     setLoading(true);
     try {
       await signIn.create({
-        identifier: phoneNumber,
+        identifier: phoneResult.e164Phone,
       });
 
       await signIn.prepareFirstFactor({
@@ -85,10 +91,11 @@ const DriverPhoneLoginScreen = ({ navigation }) => {
             <>
               <TextInput
                 className="border border-gray-300 rounded-xl p-4 text-base bg-gray-50"
-                placeholder="+263 77 123 4567"
+                placeholder="0771234567"
                 value={phoneNumber}
-                onChangeText={setPhoneNumber}
+                onChangeText={(value) => setPhoneNumber(sanitizeLocalPhoneInput(value))}
                 keyboardType="phone-pad"
+                maxLength={10}
                 autoComplete="tel"
               />
 

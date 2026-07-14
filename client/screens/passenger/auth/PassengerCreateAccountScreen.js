@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { KeyboardAwareScrollView, KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSignUp, useOAuth, useAuth, useClerk } from '@clerk/clerk-expo';
 import { getMe, registerUser } from '../../../api';
+import { usePassengerReferral } from '../../../context/PassengerReferralContext';
 import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,10 +32,12 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
   const { signOut } = useClerk();
   const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
   const { startOAuthFlow: startAppleOAuth } = useOAuth({ strategy: 'oauth_apple' });
+  const { referrerEmail: storedReferrerEmail, clearReferral } = usePassengerReferral();
   const insets = useSafeAreaInsets();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [referrerEmailInput, setReferrerEmailInput] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -47,6 +50,12 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
   const getRedirectUrl = useCallback(() => Linking.createURL('oauth-callback', { scheme: 'trustexpress' }), []);
   const headerHeight = insets.top + 48;
   const bottomPadding = Math.max(insets.bottom, 24);
+
+  useEffect(() => {
+    if (storedReferrerEmail && !referrerEmailInput) {
+      setReferrerEmailInput(storedReferrerEmail);
+    }
+  }, [storedReferrerEmail, referrerEmailInput]);
 
   const closeModal = () => setModalState((current) => ({ ...current, visible: false }));
 
@@ -76,12 +85,25 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
     return true;
   };
 
+  const buildReferralPayload = () => {
+    const raw = String(referrerEmailInput || storedReferrerEmail || '').trim().toLowerCase();
+    if (!raw || !raw.includes('@')) return {};
+    return { referrerEmail: raw };
+  };
+
   const completeSignUp = async (sessionId) => {
     await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'passenger');
     await setActive({ session: sessionId });
     try {
       const token = await getToken();
-      if (token) await registerUser(token, { role: 'passenger', email });
+      if (token) {
+        await registerUser(token, {
+          role: 'passenger',
+          email,
+          ...buildReferralPayload(),
+        });
+        await clearReferral().catch(() => {});
+      }
     } catch (e) {
       await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
       await signOut().catch(() => {});
@@ -181,7 +203,10 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
         await setActiveSession({ session: createdSessionId });
         try {
           const token = await getToken();
-          if (token) await registerUser(token, { role: 'passenger', email: null });
+          if (token) {
+            await registerUser(token, { role: 'passenger', email: null, ...buildReferralPayload() });
+            await clearReferral().catch(() => {});
+          }
         } catch (e) {}
         const allowed = await ensurePassengerRole();
         if (!allowed) return;
@@ -205,7 +230,10 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
         await setActiveSession({ session: createdSessionId });
         try {
           const token = await getToken();
-          if (token) await registerUser(token, { role: 'passenger', email: null });
+          if (token) {
+            await registerUser(token, { role: 'passenger', email: null, ...buildReferralPayload() });
+            await clearReferral().catch(() => {});
+          }
         } catch (e) {}
         const allowed = await ensurePassengerRole();
         if (!allowed) return;
@@ -386,6 +414,27 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
                   <TouchableOpacity onPress={() => setShowConfirmPassword((current) => !current)} className="pl-3">
                     <Ionicons name={showConfirmPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color="#6b7280" />
                   </TouchableOpacity>
+                </View>
+              </View>
+
+              <View className="mt-2 rounded-xl border border-gray-100 bg-gray-50 px-4 py-4">
+                <Text className="mb-1 text-sm font-semibold text-gray-800">
+                  Referred by a friend? (optional)
+                </Text>
+                <Text className="mb-3 text-sm leading-5 text-gray-500">
+                  If you have been referred by a friend, put their email below.
+                </Text>
+                <View className="rounded-xl border border-gray-200 bg-white px-4">
+                  <TextInput
+                    className="py-4 text-base"
+                    placeholder="friend@email.com"
+                    placeholderTextColor="#9ca3af"
+                    value={referrerEmailInput}
+                    onChangeText={setReferrerEmailInput}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
                 </View>
               </View>
 

@@ -137,8 +137,7 @@ DB_USER=
 DB_PASSWORD=
 DB_NAME=
 CLERK_SECRET_KEY=
-GOOGLE_MAPS_DIRECTIONS_API_KEY=
-GOOGLE_MAPS_PLACES_API_KEY=
+GOOGLE_MAPS_API_KEY=
 GOOGLE_APPLICATION_CREDENTIALS=
 FIREBASE_SERVICE_ACCOUNT_JSON=
 ```
@@ -149,7 +148,6 @@ Client env:
 EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=
 ANDROID_GOOGLE_MAPS_API_KEY=
 IOS_GOOGLE_MAPS_API_KEY=
-EXPO_PUBLIC_GOOGLE_MAPS_DIRECTIONS_API_KEY=
 ```
 
 Admin env:
@@ -164,6 +162,7 @@ Notes:
 - `client/api.js` currently has a hard-coded production API base URL.
 - `admin/src/context/Api.jsx` also has a hard-coded production API base URL.
 - A future cleanup should move these fully into env-based config for dev/staging/prod.
+- Server Google Places fallback uses **`GOOGLE_MAPS_API_KEY` only** (enable Places API on that key).
 
 ## Google Maps And Cost Controls
 

@@ -21,10 +21,12 @@ import adminAgentsRouter from './adminAgents.js';
 import adminAgentRewardsRouter from './adminAgentRewards.js';
 import adminDiscountsRouter from './adminDiscounts.js';
 import adminDriverDiscountReimbursementsRouter from './adminDriverDiscountReimbursements.js';
+import adminPassengerReferralsRouter from './adminPassengerReferrals.js';
 import agentAuthRouter from './agentAuth.js';
 import agentInvitesRouter from './agentInvites.js';
 import agentRecruitmentRouter from './agentRecruitment.js';
 import agentRewardsRouter from './agentRewards.js';
+import publicShareRouter from './publicShare.js';
 
 const router = Router();
 
@@ -32,6 +34,7 @@ router.get('/health', (req, res) => {
   res.json({ ok: true, service: 'trust-express-api' });
 });
 
+router.use('/public', publicShareRouter);
 router.use('/users', usersRouter);
 router.use('/passengers', passengersRouter);
 router.use('/drivers', driversRouter);
@@ -42,6 +45,7 @@ router.use('/verify-phone', verifyPhoneRouter);
 router.use('/admin/auth', adminAuthRouter);
 router.use('/admin/drivers', adminDriversRouter);
 router.use('/admin/passengers', adminPassengersRouter);
+router.use('/admin/passenger-referrals', adminPassengerReferralsRouter);
 router.use('/admin/roles', adminRolesRouter);
 router.use('/admin/agents', adminAgentsRouter);
 router.use('/admin/agent-rewards', adminAgentRewardsRouter);

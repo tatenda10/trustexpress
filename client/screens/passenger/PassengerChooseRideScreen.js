@@ -8,7 +8,6 @@ import {
   Alert,
   StyleSheet,
   Animated,
-  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,14 +17,7 @@ import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions, va
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 import { connectRealtime } from '../../realtime';
-
-function getTierIconName(tier) {
-  const tierName = String(tier?.tierName || '').toLowerCase();
-  const tierKey = String(tier?.tierKey || '').toLowerCase();
-  if (tierName.includes('lux') || tierKey.includes('lux')) return 'diamond-outline';
-  if (tierName.includes('express') || tierKey.includes('express')) return 'flash-outline';
-  return 'car-sport-outline';
-}
+import RideTierCarIcon from '../../components/RideTierCarIcon';
 
 function getTierCapacityLabel(tier) {
   const tierKey = String(tier?.tierKey || '').toLowerCase();
@@ -121,8 +113,6 @@ function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
 
   const tierAmount = getTierAmount(tier, distanceKm);
   const visibleTierAmount = getDiscountedAmount(tierAmount, appliedDiscount);
-
-  const iconName = getTierIconName(tier);
   const tierCapacityLabel = getTierCapacityLabel(tier);
 
   return (
@@ -138,9 +128,8 @@ function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
         {selected && <View style={styles.selectedBar} />}
 
         <View style={styles.tierInner}>
-          {/* Icon */}
           <View style={[styles.tierIconWrap, selected && styles.tierIconWrapSelected]}>
-            <Ionicons name={iconName} size={26} color={selected ? '#fff' : PRIMARY_BLUE} />
+            <RideTierCarIcon tier={tier} size={40} color="#111827" />
           </View>
 
           {/* Info */}
@@ -613,10 +602,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   headerTitle: {
     fontSize: 20,
@@ -633,10 +620,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     marginBottom: 20,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 10 },
-      android: { elevation: 3 },
-    }),
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   routeRow: {
     flexDirection: 'row',
@@ -744,19 +729,12 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     marginBottom: 10,
     borderWidth: 1.5,
-    borderColor: '#f0f0f0',
+    borderColor: '#e5e7eb',
     overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 6 },
-      android: { elevation: 1 },
-    }),
   },
   tierCardSelected: {
     borderColor: PRIMARY_BLUE,
-    ...Platform.select({
-      ios: { shadowColor: PRIMARY_BLUE, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 10 },
-      android: { elevation: 4 },
-    }),
+    backgroundColor: '#f8fbff',
   },
   selectedBar: {
     position: 'absolute',
@@ -775,15 +753,15 @@ const styles = StyleSheet.create({
     paddingLeft: 18,
   },
   tierIconWrap: {
-    width: 52,
+    width: 68,
     height: 52,
     borderRadius: 14,
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#f3f4f6',
     alignItems: 'center',
     justifyContent: 'center',
   },
   tierIconWrapSelected: {
-    backgroundColor: PRIMARY_BLUE,
+    backgroundColor: '#e5e7eb',
   },
   tierInfo: {
     flex: 1,
@@ -1016,15 +994,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    ...Platform.select({
-      ios: { shadowColor: PRIMARY_BLUE, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 12 },
-      android: { elevation: 6 },
-    }),
   },
   ctaBtnDisabled: {
     backgroundColor: '#93c5fd',
-    shadowOpacity: 0,
-    elevation: 0,
   },
   ctaInner: {
     flexDirection: 'row',

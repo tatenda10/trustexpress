@@ -9,6 +9,7 @@ import {
   getSupportThreadById,
   listSupportMessages,
   listSupportThreads,
+  pruneEmptySupportThreads,
   searchSupportThreadIdsByMessage,
   shapeSupportMessage,
   shapeSupportThread,
@@ -120,6 +121,7 @@ router.post('/agent/test', requireAdminAuth, requirePermission('support.read'), 
 router.get('/threads', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
   try {
     await autoCloseInactiveSupportThreads();
+    await pruneEmptySupportThreads();
     const status = String(req.query.status || 'all').toLowerCase();
     const filter = String(req.query.filter || 'all').toLowerCase();
     const search = String(req.query.q || '').trim().toLowerCase();

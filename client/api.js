@@ -116,6 +116,17 @@ export async function attachAgentReferral(token, inviteToken) {
   }, token);
 }
 
+export async function getPassengerReferralDashboard(token) {
+  return apiFetch('/api/passengers/referrals/me', {}, token);
+}
+
+export async function applyPassengerReferral(token, payload) {
+  return apiFetch('/api/passengers/referrals/apply', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
 export async function getMe(token) {
   return apiFetch('/api/users/me', {}, token);
 }
@@ -210,6 +221,14 @@ export async function startDriverCurrentRide(token, rideRequestId, options = {})
   return apiFetch(`/api/drivers/current-ride/${rideRequestId}/start`, {
     method: 'PATCH',
     body: JSON.stringify({}),
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
+  }, token);
+}
+
+export async function verifyDriverRidePin(token, rideRequestId, pin, options = {}) {
+  return apiFetch(`/api/drivers/current-ride/${rideRequestId}/verify-pin`, {
+    method: 'PATCH',
+    body: JSON.stringify({ pin }),
     suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
   }, token);
 }

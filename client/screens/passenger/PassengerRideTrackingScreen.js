@@ -318,7 +318,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               }
             : null;
           const hasConfirmationUpdate = Boolean(payload?.confirmedAt);
-          if ((nextStatus && !isPickupConfirmation) || nextDriverCoordinate || hasConfirmationUpdate) {
+          const hasSafetyPinUpdate = payload?.safetyPinVerified !== undefined
+            || payload?.safetyPinAttempts !== undefined
+            || payload?.safetyPinLocked !== undefined;
+          if ((nextStatus && !isPickupConfirmation) || nextDriverCoordinate || hasConfirmationUpdate || hasSafetyPinUpdate) {
             setRideStatus((current) => (current ? {
               ...current,
               ...(nextStatus && !isPickupConfirmation ? { status: nextStatus } : null),
@@ -326,6 +329,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
               ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
               ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
+              ...(payload?.safetyPinVerified ? {
+                safetyPinVerified: true,
+                safetyPinVerifiedAt: payload.safetyPinVerifiedAt || current.safetyPinVerifiedAt,
+                safetyPin: null,
+              } : {}),
+              ...(payload?.safetyPinAttempts !== undefined ? { safetyPinAttempts: Number(payload.safetyPinAttempts || 0) } : {}),
+              ...(payload?.safetyPinLocked !== undefined ? { safetyPinLocked: Boolean(payload.safetyPinLocked) } : {}),
             } : current));
           }
           setRealtimeSignal((current) => current + 1);
@@ -364,6 +374,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const totalAmount = Number(rideStatus?.totalAmount || (estimatedAmount + tipAmount) || 0);
   const stage = rideStatus?.stage || 'driver_on_the_way';
   const isCompleted = stage === 'completed';
+  const safetyPinRequired = Boolean(rideStatus?.safetyPinRequired);
+  const safetyPinVerified = Boolean(rideStatus?.safetyPinVerified);
+  const safetyPinLocked = Boolean(rideStatus?.safetyPinLocked);
+  const safetyPinValue = String(rideStatus?.safetyPin || '').trim();
+  const showSafetyPinBanner = safetyPinRequired && !safetyPinVerified && !isCompleted && stage !== 'on_trip' && safetyPinValue;
   const hasPassengerDriverRating = Number(rideStatus?.passengerDriverRating || 0) > 0;
   const canPromptForTip = Boolean(rideStatus?.canTipDriver) && tipAmount <= 0;
   const shouldPromptForRating = isCompleted && !hasPassengerDriverRating;
@@ -996,6 +1011,32 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   />
                 </View>
               </TouchableOpacity>
+
+              {showSafetyPinBanner ? (
+                <View className="mt-4 rounded-[22px] border border-indigo-200 bg-indigo-50 px-4 py-4">
+                  <View className="flex-row items-center">
+                    <Ionicons name="moon" size={20} color="#4338ca" />
+                    <Text className="ml-2 text-xs font-bold uppercase tracking-[1px] text-indigo-700">
+                      Night safety PIN
+                    </Text>
+                  </View>
+                  <Text className="mt-3 text-4xl font-extrabold tracking-[8px] text-indigo-950">
+                    {safetyPinValue}
+                  </Text>
+                  <Text className="mt-3 text-sm leading-6 text-indigo-900">
+                    Share this PIN with your driver only when you are at the car. Do not share it in chat.
+                  </Text>
+                  {safetyPinLocked ? (
+                    <Text className="mt-2 text-sm font-semibold text-red-600">
+                      Too many wrong attempts were made. Confirm your driver before starting the trip.
+                    </Text>
+                  ) : Number(rideStatus?.safetyPinAttempts || 0) > 0 ? (
+                    <Text className="mt-2 text-sm font-semibold text-amber-700">
+                      Someone entered the wrong PIN. Only share it with your assigned driver.
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
 
               {stage !== 'on_trip' ? (
                 <View className="mt-4 rounded-[22px] bg-white px-4 py-3">
