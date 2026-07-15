@@ -92,6 +92,10 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
     const total = Number(countRow?.total || 0);
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+    const orderBySql = sortColumn === 'referral_count'
+      ? `referral_count ${sortOrder}, last_referral_at DESC`
+      : `${sortColumn} ${sortOrder}, referral_count DESC`;
+
     const referrerRows = await query(
       `SELECT
          r.referrer_user_id,
@@ -112,9 +116,9 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
          u.first_name,
          u.last_name,
          u.image_url
-       ORDER BY ${sortColumn} ${sortOrder}, referral_count DESC
-       LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset]
+       ORDER BY ${orderBySql}
+       LIMIT ${pageSize} OFFSET ${offset}`,
+      params
     );
 
     return res.json({
