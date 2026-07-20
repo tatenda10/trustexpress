@@ -36,6 +36,7 @@ import {
   clearOverlayRideRequest,
   filterActiveRideRequests,
   markRideRequestDismissed,
+  restoreRideRequestDismissal,
   setOverlayRideRequest,
   subscribeDriverRideOverlayState,
 } from '../../services/driverRideOverlayState';
@@ -57,6 +58,8 @@ const DRIVER_IDLE_REGION = { latitudeDelta: 0.05, longitudeDelta: 0.05 };
 const DRIVER_KEEP_AWAKE_TAG = 'driver-home-online';
 const INCOMING_RIDE_ALERT_INTERVAL_MS = 4500;
 const MIN_ACCEPTABLE_REQUEST_SECONDS = 8;
+const REQUEST_REAPPEAR_DELAY_MS = 5000;
+const PRIORITY_DRIVER_DISTANCE_KM = 1.5;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -276,6 +279,13 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const [availableRequests, setAvailableRequests] = useState([]);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
   const [availabilityActionPending, setAvailabilityActionPending] = useState(false);
+  const [walletStatus, setWalletStatus] = useState({
+    availableBalance: 0,
+    minimumRequiredBalance: 1,
+    paymentsEnabled: false,
+    sufficientBalance: true,
+    lowBalanceMessage: '',
+  });
   const [loadingRequests, setLoadingRequests] = useState(false);
   const [acceptingRideId, setAcceptingRideId] = useState(null);
   const [dismissedRequestIds, setDismissedRequestIds] = useState([]);
@@ -315,6 +325,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const LABEL_UPDATE_INTERVAL_MS = 120000; // at most every 2 minutes
   const LABEL_UPDATE_MIN_DISTANCE_KM = 0.3; // or every ~300m
   const placeLabelCacheRef = useRef(new Map());
+  const hiddenRequestUntilRef = useRef(new Map());
   const suppressTripAutoOpenUntilRef = useRef(0);
 
   useEffect(() => {
@@ -455,6 +466,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
         markRideRequestDismissed(notificationRideRequestId);
         setDismissedRequestIds((current) => [...new Set([...current, notificationRideRequestId])]);
         clearOverlayRideRequest();
+        hiddenRequestUntilRef.current.set(notificationRideRequestId, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
+        setTimeout(() => {
+          restoreRideRequestDismissal(notificationRideRequestId);
+          setDismissedRequestIds((current) => current.filter((item) => item !== notificationRideRequestId));
+        }, REQUEST_REAPPEAR_DELAY_MS);
         updateTripOverlay({
           variant: 'online',
           title: 'Trust Express',
@@ -576,6 +592,13 @@ const DriverHomeScreen = ({ navigation, route }) => {
         if (!active) return;
 
         setIsOnline(!!data?.availability?.isOnline);
+        setWalletStatus({
+          availableBalance: Number(data?.wallet?.availableBalance || 0),
+          minimumRequiredBalance: Number(data?.wallet?.minimumRequiredBalance || 1),
+          paymentsEnabled: data?.wallet?.paymentsEnabled === true,
+          sufficientBalance: data?.wallet?.sufficientBalance !== false,
+          lowBalanceMessage: data?.wallet?.lowBalanceMessage || '',
+        });
         if (Number.isFinite(data?.availability?.latitude) && Number.isFinite(data?.availability?.longitude)) {
           const coords = {
             latitude: Number(data.availability.latitude),
@@ -680,7 +703,10 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
         const nextListRaw = filterActiveRideRequests(
           Array.isArray(data?.requests)
-            ? data.requests.filter((request) => !dismissedRequestIds.includes(request.id))
+            ? data.requests.filter((request) => {
+                const hiddenUntil = Number(hiddenRequestUntilRef.current.get(request.id) || 0);
+                return !dismissedRequestIds.includes(request.id) && hiddenUntil <= Date.now();
+              })
             : []
         );
         const serverCapturedAt = Date.now();
@@ -691,13 +717,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
           }))
           .filter((request) => {
             if (!request?.expiresAt) return true;
-            return (
-              getRemainingSeconds(
-                request?.expiresAt,
-                request?.remainingSeconds,
-                request?.remainingSecondsCapturedAt,
-              ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
+            const remaining = getRemainingSeconds(
+              request?.expiresAt,
+              request?.remainingSeconds,
+              request?.remainingSecondsCapturedAt,
             );
+            if (remaining < 1) {
+              hiddenRequestUntilRef.current.set(request.id, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
+              return false;
+            }
+            return remaining >= MIN_ACCEPTABLE_REQUEST_SECONDS;
           });
         const nextRequest = nextList[0] || null;
 
@@ -715,12 +744,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
             await showLocalRideNotification({
               title: 'New ride request',
               body: notificationBody,
+              priorityType: Number(newestRequest?.driverDistanceKm || 0) <= PRIORITY_DRIVER_DISTANCE_KM ? 'priority' : 'standard',
               data: {
                 type: 'driver_new_ride_request',
                 rideRequestId: newestRequest?.id || null,
                 publicId: newestRequest?.publicId || null,
                 pickupLabel: newestRequest?.pickup || newestRequest?.pickupLabel || null,
                 dropoffLabel: newestRequest?.dropoff || newestRequest?.dropoffLabel || null,
+                priorityType: Number(newestRequest?.driverDistanceKm || 0) <= PRIORITY_DRIVER_DISTANCE_KM ? 'priority' : 'standard',
               },
             });
             if (AppState.currentState !== 'active' && Platform.OS === 'android') {
@@ -1139,6 +1170,10 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
   const handleGoOnline = async () => {
     if (availabilityActionPending || isOnline) return;
+    if (walletStatus.paymentsEnabled && !walletStatus.sufficientBalance && walletStatus.lowBalanceMessage) {
+      Alert.alert('Wallet top-up required', walletStatus.lowBalanceMessage);
+      return;
+    }
     try {
       setAvailabilityActionPending(true);
       await syncAvailability(true);
@@ -1385,6 +1420,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
         Alert.alert('Request expired', 'This request expired before acceptance. Please take the next request.');
         markRideRequestDismissed(req.id);
         setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
+        hiddenRequestUntilRef.current.set(req.id, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
+        setTimeout(() => {
+          restoreRideRequestDismissal(req.id);
+          setDismissedRequestIds((current) => current.filter((item) => item !== req.id));
+        }, REQUEST_REAPPEAR_DELAY_MS);
         clearOverlayRideRequest();
         updateTripOverlay({
           variant: 'online',
@@ -1453,6 +1493,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
     if (!req) return;
     markRideRequestDismissed(req.id);
     setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
+    hiddenRequestUntilRef.current.set(req.id, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
+    setTimeout(() => {
+      restoreRideRequestDismissal(req.id);
+      setDismissedRequestIds((current) => current.filter((item) => item !== req.id));
+    }, REQUEST_REAPPEAR_DELAY_MS);
     const nextList = availableRequests.filter((r) => r.id !== req.id);
     setAvailableRequests(nextList);
     setActiveRequest(nextList[0] || null);
@@ -1606,6 +1651,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
             {!isOnline ? (
               <>
+                {walletStatus.paymentsEnabled && !walletStatus.sufficientBalance && walletStatus.lowBalanceMessage ? (
+                  <View className="mt-6 rounded-[20px] bg-amber-50 px-5 py-4">
+                    <Text className="text-center text-sm font-semibold text-amber-700">
+                      {walletStatus.lowBalanceMessage}
+                    </Text>
+                    <Text className="mt-1 text-center text-xs text-amber-600">
+                      Current balance: ${Number(walletStatus.availableBalance || 0).toFixed(2)} | Minimum: ${Number(walletStatus.minimumRequiredBalance || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                ) : null}
                 <TouchableOpacity
                   onPress={handleGoOnline}
                   disabled={loadingAvailability || availabilityActionPending}
@@ -1721,9 +1776,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
               {availableRequests.map((req, index) => (
                 <View
                   key={req.id}
-                  className="mb-4 rounded-[28px] border border-[#d7dfec] bg-white/95 p-5"
+                  className="mb-3 rounded-[24px] border border-[#d7dfec] bg-white/95 p-4"
                 >
-                  <View className="mb-3 flex-row items-center justify-between">
+                  <View className="mb-2 flex-row items-center justify-between">
                     <View className="flex-row items-center">
                       <View className="rounded-full bg-[#2f73c9] px-3 py-1.5">
                         <Text className="text-xs font-bold uppercase tracking-[1px] text-white">
@@ -1767,7 +1822,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                     <View className="items-end">
                       <Text className="text-xs font-semibold uppercase tracking-wide text-[#5a6474]">Fare</Text>
-                      <Text className="mt-1 text-3xl font-extrabold text-[#111111]">${Number(req.estimatedAmount || 0).toFixed(2)}</Text>
+                      <Text className="mt-1 text-2xl font-extrabold text-[#111111]">${Number(req.estimatedAmount || 0).toFixed(2)}</Text>
                       {Number(req.discountAmount || 0) > 0 ? (
                         <View className="mt-2 rounded-full bg-emerald-50 px-3 py-1">
                           <Text className="text-[11px] font-semibold uppercase tracking-wide text-[#15803d]">
@@ -1778,7 +1833,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                   </View>
 
-                  <View className="mt-4 rounded-[22px] bg-[#f8fafc] px-4 py-4">
+                  <View className="mt-3 rounded-[20px] bg-[#f8fafc] px-4 py-3">
                     <View className="flex-row">
                       <View className="mr-4 items-center pt-1">
                         <View className="h-3.5 w-3.5 rounded-full bg-[#2f73c9]" />
@@ -1796,7 +1851,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
                   <RequestStopsPreview request={req} />
 
-                  <View className="mt-4 flex-row items-center gap-6">
+                  <View className="mt-3 flex-row items-center gap-5">
                     <View className="flex-row items-center">
                       <Ionicons name="navigate" size={15} color="#2f73c9" />
                       <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
@@ -1811,7 +1866,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                   </View>
 
-                  <View className="mt-2 flex-row items-center gap-6">
+                  <View className="mt-1.5 flex-row items-center gap-5">
                     <View className="flex-row items-center">
                       <Ionicons name="swap-horizontal" size={15} color="#111827" />
                       <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
@@ -1827,7 +1882,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   </View>
 
                   {Number(req.discountAmount || 0) > 0 ? (
-                    <View className="mt-4 rounded-[18px] border border-[#dbeafe] bg-[#eff6ff] px-4 py-3">
+                    <View className="mt-3 rounded-[18px] border border-[#dbeafe] bg-[#eff6ff] px-4 py-3">
                       <View className="flex-row items-center justify-between">
                         <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
                           Promo ride
@@ -1859,7 +1914,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                   ) : null}
 
-                  <View className="mt-4 flex-row gap-3">
+                  <View className="mt-3 flex-row gap-3">
                     <TouchableOpacity
                       onPress={() => handleDeclineRequest(req)}
                       className="h-12 flex-1 items-center justify-center rounded-[14px] border border-[#d7d9df] bg-white"
@@ -2034,14 +2089,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   >
                     <Text className="text-sm font-bold uppercase text-[#5d6470]">Decline</Text>
                   </TouchableOpacity>
-                  {availableRequests.length > 1 ? (
-                    <TouchableOpacity
-                      onPress={() => setShowIncomingRideOverlay(false)}
-                      className="h-14 flex-1 items-center justify-center rounded-[18px] bg-[#eef2ff]"
-                    >
-                      <Text className="text-sm font-bold uppercase text-[#2f73c9]">View queue</Text>
-                    </TouchableOpacity>
-                  ) : null}
                 </View>
               </View>
             </View>

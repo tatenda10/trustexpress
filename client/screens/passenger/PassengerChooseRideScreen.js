@@ -128,8 +128,8 @@ function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
         {selected && <View style={styles.selectedBar} />}
 
         <View style={styles.tierInner}>
-          <View style={[styles.tierIconWrap, selected && styles.tierIconWrapSelected]}>
-            <RideTierCarIcon tier={tier} size={40} color="#111827" />
+          <View style={styles.tierIconWrap}>
+            <RideTierCarIcon tier={tier} size={44} />
           </View>
 
           {/* Info */}
@@ -753,15 +753,10 @@ const styles = StyleSheet.create({
     paddingLeft: 18,
   },
   tierIconWrap: {
-    width: 68,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#f3f4f6',
+    width: 76,
+    height: 56,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  tierIconWrapSelected: {
-    backgroundColor: '#e5e7eb',
   },
   tierInfo: {
     flex: 1,

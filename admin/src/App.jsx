@@ -30,6 +30,7 @@ import SupportInboxPage from './pages/SupportInboxPage'
 import SupportAgentPage from './pages/SupportAgentPage'
 import DiscountCodesPage from './pages/DiscountCodesPage'
 import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursementsPage'
+import DriverWalletSettingsPage from './pages/DriverWalletSettingsPage'
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -162,6 +163,10 @@ function AppRoutes() {
         <Route
           path="driver-payouts"
           element={<PermissionRoute permission="payouts.read"><DriverDiscountReimbursementsPage /></PermissionRoute>}
+        />
+        <Route
+          path="driver-wallet-settings"
+          element={<PermissionRoute permission="payouts.read"><DriverWalletSettingsPage /></PermissionRoute>}
         />
         <Route
           path="promotions"

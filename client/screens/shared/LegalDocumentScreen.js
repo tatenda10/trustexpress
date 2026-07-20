@@ -54,7 +54,7 @@ const PRIVACY_POLICY = {
       heading: '8. Contact Us',
       body: [
         'If you have any questions about this Privacy Policy, please contact us at:',
-        'Email: info@trustexpress.co.za',
+        'Email: support@trustexpress.co.za',
         'Address: Flat 107 Roma Court corner Harare Street and Fife Avenue',
       ],
     },
@@ -116,7 +116,7 @@ const TERMS_OF_USE = {
     {
       heading: '9. Contact Us',
       body: [
-        'If you have questions about these Terms of Use, please contact us at info@trustexpress.co.za.',
+        'If you have questions about these Terms of Use, please contact us at support@trustexpress.co.za.',
       ],
     },
   ],

@@ -2,7 +2,7 @@
  * Backend connection - BASE_URL and helpers for API routes.
  */
 export const BASE_URL = 'https://ridehailcarsserver.online';
-//export const BASE_URL = 'http://192.168.100.171:5000';
+// export const BASE_URL = 'http://192.168.100.171:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {
@@ -197,6 +197,27 @@ export async function getDriverRideHistory(token, options = {}) {
   if (options.limit) params.set('limit', String(options.limit));
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return apiFetch(`/api/drivers/history${suffix}`, {}, token);
+}
+
+export async function getDriverWallet(token, options = {}) {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return apiFetch(`/api/drivers/wallet${suffix}`, {}, token);
+}
+
+export async function initiateDriverWalletTopup(token, payload) {
+  return apiFetch('/api/drivers/wallet/top-ups/initiate', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
+export async function verifyDriverWalletTopup(token, reference) {
+  return apiFetch('/api/drivers/wallet/top-ups/verify', {
+    method: 'POST',
+    body: JSON.stringify({ reference }),
+  }, token);
 }
 
 export async function getDriverDiscountReimbursements(token) {

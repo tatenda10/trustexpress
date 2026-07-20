@@ -37,6 +37,7 @@ import {
   getPlaceDetails,
 } from '../../api';
 import { connectRealtime } from '../../realtime';
+import RideTierCarIcon from '../../components/RideTierCarIcon';
 
 const HARARE_FALLBACK = BULAWAYO_DEFAULT_REGION;
 
@@ -1029,6 +1030,15 @@ export default function PassengerHomeScreen({ navigation, route }) {
                   <Ionicons name="pencil" size={20} color="#111827" />
                 </TouchableOpacity>
               </View>
+              <TouchableOpacity
+                onPress={openRouteModal}
+                className="mt-3 self-start flex-row items-center rounded-full bg-[#eff6ff] px-3 py-2"
+              >
+                <Ionicons name="add" size={16} color={PRIMARY_BLUE} />
+                <Text className="ml-1.5 text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
+                  Add stop
+                </Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View className="self-end rounded-2xl bg-white/95 px-4 py-3">
@@ -1237,8 +1247,8 @@ export default function PassengerHomeScreen({ navigation, route }) {
                           style={{ borderWidth: selected ? 2 : 1, borderColor: selected ? '#111827' : '#e5e7eb' }}
                         >
                           <View className="flex-row items-center">
-                            <View className={`h-14 w-14 items-center justify-center rounded-[18px] ${selected ? 'bg-black' : 'bg-[#f3f4f6]'}`}>
-                              <Ionicons name={tier.tierKey?.toLowerCase().includes('lux') || tier.tierName?.toLowerCase().includes('lux') ? 'diamond-outline' : tier.tierKey?.toLowerCase().includes('xl') ? 'car-sport-outline' : 'car-outline'} size={24} color={selected ? '#fff' : '#111827'} />
+                            <View className="h-16 w-[76px] items-center justify-center">
+                              <RideTierCarIcon tier={tier} size={44} />
                             </View>
                             <View className="ml-4 flex-1 pr-3">
                               <Text className="text-[22px] font-bold text-gray-950">{tier.tierName}</Text>
@@ -1401,9 +1411,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     onPress={addIntermediateStopSlot}
                     className="mt-3 flex-row items-center justify-center rounded-[18px] border border-dashed border-[#cbd5e1] bg-white px-4 py-3"
                   >
-                    <Ionicons name="add-circle-outline" size={18} color={PRIMARY_BLUE} />
+                    <Ionicons name="add-circle" size={18} color={PRIMARY_BLUE} />
                     <Text className="ml-2 text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
-                      Add stop
+                      Add stop +
                     </Text>
                   </TouchableOpacity>
                 ) : null}

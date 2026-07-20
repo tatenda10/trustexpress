@@ -45,6 +45,16 @@ export function markRideRequestDismissed(rideRequestId) {
   return getDriverRideOverlayState();
 }
 
+export function restoreRideRequestDismissal(rideRequestId) {
+  const id = Number(rideRequestId);
+  if (!Number.isInteger(id) || id <= 0) return getDriverRideOverlayState();
+  if (dismissedRideRequestIds.has(id)) {
+    dismissedRideRequestIds.delete(id);
+    notify();
+  }
+  return getDriverRideOverlayState();
+}
+
 export function setOverlayRideRequest(request) {
   const id = Number(request?.id || request?.rideRequestId || 0);
   if (!Number.isInteger(id) || id <= 0 || dismissedRideRequestIds.has(id)) {

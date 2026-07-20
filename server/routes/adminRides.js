@@ -11,6 +11,7 @@ import {
   revokeAdminShareLinks,
   serializeAdminShareLink,
 } from '../lib/admin-ride-share.js';
+import { expireAbandonedOpenRideRequests } from '../lib/ride-offer-expiry.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
@@ -153,6 +154,12 @@ function normalizePanicCasePriority(value) {
 
 router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
   try {
+    await expireAbandonedOpenRideRequests().catch((cleanupError) => {
+      console.warn('[admin.rides] abandoned open-request cleanup failed', {
+        message: cleanupError?.message || String(cleanupError),
+      });
+    });
+
     const page = Math.max(Number(req.query.page) || 1, 1);
     const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 10, 1), 100);
     const offset = (page - 1) * pageSize;
@@ -241,7 +248,7 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
       if (['driver_assigned', 'driver_arrived', 'in_progress'].includes(status)) summary.activeTrips += total;
       else if (status === 'completed') summary.completed += total;
       else if (status === 'cancelled' || status === 'expired') summary.cancelled += total;
-      else summary.requested += total;
+      else if (status === 'requested' || status === 'driver_found') summary.requested += total;
     }
 
     const total = Number(countRows?.[0]?.total || 0);

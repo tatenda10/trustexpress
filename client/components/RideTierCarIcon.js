@@ -1,7 +1,13 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { Image, View, StyleSheet } from 'react-native';
 
-function getVariant(tier) {
+const TIER_IMAGES = {
+  sedan: require('../assets/trust express.jpeg'),
+  luxury: require('../assets/trust luxury.jpeg'),
+  suv: require('../assets/trust xl.jpeg'),
+};
+
+export function getTierVariant(tier) {
   const key = String(tier?.tierKey || '').toLowerCase();
   const name = String(tier?.tierName || '').toLowerCase();
   if (key.includes('xl') || name.includes('xl') || name.includes('extra large') || name.includes('suv')) {
@@ -13,6 +19,10 @@ function getVariant(tier) {
   return 'sedan';
 }
 
+export function getTierImageSource(tier) {
+  return TIER_IMAGES[getTierVariant(tier)] || TIER_IMAGES.sedan;
+}
+
 function Wheel({ style }) {
   return (
     <View style={[styles.wheel, style]}>
@@ -21,9 +31,7 @@ function Wheel({ style }) {
   );
 }
 
-/** Black side-view car icons built with Views — no react-native-svg required. */
-export default function RideTierCarIcon({ tier, size = 54, color = '#111827' }) {
-  const variant = getVariant(tier);
+function DrawnTierCarIcon({ variant, size, color }) {
   const width = size * 1.45;
   const height = size;
   const scale = size / 54;
@@ -52,8 +60,8 @@ export default function RideTierCarIcon({ tier, size = 54, color = '#111827' }) 
       <View style={{ width, height, justifyContent: 'flex-end' }}>
         <View style={[styles.stage, { transform: [{ scale }] }]}>
           <View style={[styles.cabinLong, { backgroundColor: color }]}>
-            <View style={[styles.windowFrontLong]} />
-            <View style={[styles.windowRearLong]} />
+            <View style={styles.windowFrontLong} />
+            <View style={styles.windowRearLong} />
           </View>
           <View style={[styles.bodyLong, { backgroundColor: color }]}>
             <View style={styles.lightFront} />
@@ -82,6 +90,25 @@ export default function RideTierCarIcon({ tier, size = 54, color = '#111827' }) 
       </View>
     </View>
   );
+}
+
+export default function RideTierCarIcon({ tier, size = 54, color = '#111827', useImage = true }) {
+  const variant = getTierVariant(tier);
+  const width = size * 1.55;
+  const height = size;
+
+  if (useImage) {
+    return (
+      <Image
+        source={getTierImageSource(tier)}
+        style={{ width, height }}
+        resizeMode="contain"
+        accessibilityLabel={tier?.tierName || 'Vehicle tier'}
+      />
+    );
+  }
+
+  return <DrawnTierCarIcon variant={variant} size={size} color={color} />;
 }
 
 const styles = StyleSheet.create({

@@ -163,6 +163,7 @@ export function DriverTripMapPanel({
   intermediateStops,
   currentStopIndex,
   safeRouteCoordinates,
+  vehicleHeadingDegrees = 0,
   primaryBlue,
   insets,
   targetLabel,
@@ -218,9 +219,20 @@ export function DriverTripMapPanel({
         showsTraffic={true}
       >
         {driverCoordinate ? (
-          <Marker coordinate={driverCoordinate} title="Driver" tracksViewChanges={false}>
-            <View className="h-12 w-12 items-center justify-center rounded-full border-4 border-white" style={{ backgroundColor: primaryBlue }}>
-              <Ionicons name="car-sport" size={22} color="#fff" />
+          <Marker
+            coordinate={driverCoordinate}
+            title="Driver"
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View
+              className="h-12 w-12 items-center justify-center rounded-full border-4 border-white"
+              style={{
+                backgroundColor: primaryBlue,
+                transform: [{ rotate: `${Number(vehicleHeadingDegrees) || 0}deg` }],
+              }}
+            >
+              <Ionicons name="airplane" size={22} color="#fff" />
             </View>
           </Marker>
         ) : null}
@@ -304,9 +316,9 @@ export function DriverTripMapPanel({
         <TouchableOpacity
           onPress={onOpenExternalNavigation}
           activeOpacity={0.85}
-          className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-gray-100"
+          className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-[#dbeafe]"
         >
-          <Ionicons name="map-outline" size={19} color="#111827" />
+          <Ionicons name="navigate" size={19} color="#1d4ed8" />
         </TouchableOpacity>
       </View>
 

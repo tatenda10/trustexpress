@@ -26,7 +26,7 @@ export async function sendExpoPushNotifications(messages) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(
       payload.map((message) => ({
-        sound: 'default',
+        sound: message.sound || 'default',
         priority: 'high',
         ...message,
       })),

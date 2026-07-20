@@ -11,6 +11,7 @@ import {
 
 const DRIVER_REQUEST_SOUND_FILE = 'notificationaudio.mpeg';
 const DRIVER_REQUEST_CHANNEL_ID = 'ride-requests';
+const DRIVER_REQUEST_PRIORITY_CHANNEL_ID = 'ride-requests-priority';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -61,11 +62,20 @@ export async function registerForPushNotificationsAsync() {
     }
 
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync(DRIVER_REQUEST_CHANNEL_ID, {
-        name: 'Ride requests',
+      await Notifications.setNotificationChannelAsync(DRIVER_REQUEST_PRIORITY_CHANNEL_ID, {
+        name: 'Nearby ride requests',
         importance: Notifications.AndroidImportance.MAX,
         sound: DRIVER_REQUEST_SOUND_FILE,
-        vibrationPattern: [0, 300, 180, 300, 180, 300],
+        vibrationPattern: [0, 500, 180, 500, 180, 500],
+        bypassDnd: true,
+        lightColor: '#2f73c9',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+      await Notifications.setNotificationChannelAsync(DRIVER_REQUEST_CHANNEL_ID, {
+        name: 'Ride requests',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+        vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2f73c9',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
@@ -122,16 +132,18 @@ export async function showLocalRideNotification({
   title = 'New ride request',
   body = 'A new ride request is waiting for you.',
   data = {},
+  priorityType = 'standard',
 } = {}) {
   try {
+    const usePriorityChannel = String(priorityType || '').toLowerCase() === 'priority';
     await Notifications.scheduleNotificationAsync({
       content: {
         title,
         body,
-        sound: DRIVER_REQUEST_SOUND_FILE,
+        sound: usePriorityChannel ? DRIVER_REQUEST_SOUND_FILE : 'default',
         priority: Notifications.AndroidNotificationPriority.MAX,
         sticky: true,
-        channelId: DRIVER_REQUEST_CHANNEL_ID,
+        channelId: usePriorityChannel ? DRIVER_REQUEST_PRIORITY_CHANNEL_ID : DRIVER_REQUEST_CHANNEL_ID,
         data,
       },
       trigger: null,

@@ -2,10 +2,16 @@ import { query } from '../db/connection.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideStatusToDriver,
+  emitRideStatusToPassenger,
 } from './realtime.js';
 
 /** How long a captain's accepted offer stays selectable before it is removed. */
 export const DRIVER_ACCEPT_OFFER_TTL_SECONDS = 30;
+export const DRIVER_REQUEST_REOFFER_DELAY_SECONDS = 5;
+/** Abandoned open searches expire so admin/driver queues do not keep ghost "requested" rides forever. */
+export const OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES = Number(
+  process.env.OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES || 15
+);
 
 export async function reconcileOpenRideRequestStatus(rideRequestId) {
   if (!Number.isInteger(Number(rideRequestId)) || Number(rideRequestId) <= 0) return;
@@ -82,8 +88,8 @@ export async function expireStaleAcceptedDriverOffers(rideRequestId = null) {
   await query(
     `UPDATE ride_request_driver_responses rr
      INNER JOIN ride_requests r ON r.id = rr.ride_request_id
-     SET rr.status = 'expired',
-         rr.responded_at = CURRENT_TIMESTAMP
+     SET rr.status = 'pending',
+         rr.responded_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ${DRIVER_REQUEST_REOFFER_DELAY_SECONDS} SECOND)
      WHERE rr.status = 'accepted'
        AND rr.responded_at < (CURRENT_TIMESTAMP - INTERVAL ? SECOND)
        AND r.status IN ('requested', 'driver_found')
@@ -104,7 +110,7 @@ export async function expireStaleAcceptedDriverOffers(rideRequestId = null) {
     });
     emitRideStatusToDriver(row.driver_user_id, {
       rideRequestId: row.ride_request_id,
-      status: 'requested',
+      status: 'pending',
       reason: 'accept_offer_expired',
     });
   });
@@ -115,6 +121,84 @@ export async function expireStaleAcceptedDriverOffers(rideRequestId = null) {
   };
 }
 
+export async function expireAbandonedOpenRideRequests({ ttlMinutes = OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES } = {}) {
+  const safeTtlMinutes = Math.max(5, Math.min(Number(ttlMinutes) || OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES, 24 * 60));
+
+  const abandonedRows = await query(
+    `SELECT id, passenger_user_id
+     FROM ride_requests
+     WHERE status IN ('requested', 'driver_found')
+       AND driver_user_id IS NULL
+       AND requested_at < (CURRENT_TIMESTAMP - INTERVAL ${safeTtlMinutes} MINUTE)`
+  );
+
+  if (!Array.isArray(abandonedRows) || abandonedRows.length === 0) {
+    return { expiredRideIds: [] };
+  }
+
+  const rideIds = abandonedRows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+  if (!rideIds.length) {
+    return { expiredRideIds: [] };
+  }
+
+  const placeholders = rideIds.map(() => '?').join(', ');
+  await query(
+    `UPDATE ride_requests
+     SET status = 'expired',
+         cancellation_reason = 'No driver accepted before the request expired',
+         cancelled_by = 'system',
+         cancelled_at = CURRENT_TIMESTAMP
+     WHERE id IN (${placeholders})
+       AND status IN ('requested', 'driver_found')
+       AND driver_user_id IS NULL`,
+    rideIds
+  );
+
+  const responseRows = await query(
+    `SELECT ride_request_id, driver_user_id
+     FROM ride_request_driver_responses
+     WHERE ride_request_id IN (${placeholders})`,
+    rideIds
+  );
+
+  const notifiedDrivers = new Set();
+  (Array.isArray(responseRows) ? responseRows : []).forEach((row) => {
+    const driverUserId = String(row.driver_user_id || '').trim();
+    const rideRequestId = Number(row.ride_request_id);
+    if (!driverUserId || !Number.isInteger(rideRequestId) || rideRequestId <= 0) return;
+    const key = `${driverUserId}:${rideRequestId}`;
+    if (notifiedDrivers.has(key)) return;
+    notifiedDrivers.add(key);
+    emitRideRequestRemovedFromDriver(driverUserId, {
+      rideRequestId,
+      reason: 'request_expired',
+    });
+    emitRideStatusToDriver(driverUserId, {
+      rideRequestId,
+      status: 'expired',
+      reason: 'request_expired',
+    });
+  });
+
+  abandonedRows.forEach((row) => {
+    if (!row.passenger_user_id) return;
+    emitRideStatusToPassenger(row.passenger_user_id, {
+      rideRequestId: row.id,
+      status: 'expired',
+      reason: 'request_expired',
+    });
+  });
+
+  return { expiredRideIds: rideIds };
+}
+
 export async function refreshOpenRideOffers(rideRequestId = null) {
-  return expireStaleAcceptedDriverOffers(rideRequestId);
+  const [offers, abandoned] = await Promise.all([
+    expireStaleAcceptedDriverOffers(rideRequestId),
+    expireAbandonedOpenRideRequests(),
+  ]);
+  return {
+    ...offers,
+    abandoned,
+  };
 }

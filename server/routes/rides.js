@@ -21,6 +21,7 @@ import {
 import { loadDriversViewingSnapshot } from '../lib/ride-driver-responses.js';
 import {
   DRIVER_ACCEPT_OFFER_TTL_SECONDS,
+  DRIVER_REQUEST_REOFFER_DELAY_SECONDS,
   refreshOpenRideOffers,
 } from '../lib/ride-offer-expiry.js';
 import {
@@ -449,6 +450,11 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
   if (!Array.isArray(drivers) || !drivers.length) return;
   const stopCount = Array.isArray(intermediateStops) ? intermediateStops.length : 0;
   const notificationBody = buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops });
+  const prioritizedDriverIds = new Set(
+    drivers
+      .filter((driver, index) => Number(driver?.driverDistanceKm || 0) <= 1.5 || index < 3)
+      .map((driver) => String(driver.id))
+  );
 
   const destinations = (
     await Promise.all(
@@ -456,33 +462,44 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         try {
           const driverUser = await getClerkUserById(driver.id);
           return {
+            driverId: String(driver.id),
             expoToken: String(driverUser?.privateMetadata?.pushToken || '').trim() || null,
             fcmToken: String(driverUser?.privateMetadata?.fcmToken || '').trim() || null,
+            isPriority: prioritizedDriverIds.has(String(driver.id)),
           };
         } catch {
-          return { expoToken: null, fcmToken: null };
+          return {
+            driverId: String(driver.id),
+            expoToken: null,
+            fcmToken: null,
+            isPriority: prioritizedDriverIds.has(String(driver.id)),
+          };
         }
       })
     )
   ).filter((item) => item.expoToken || item.fcmToken);
 
-  const expoTokens = destinations.map((item) => item.expoToken).filter(Boolean);
-  const fcmTokens = destinations.map((item) => item.fcmToken).filter(Boolean);
+  const priorityExpoTokens = destinations.filter((item) => item.isPriority).map((item) => item.expoToken).filter(Boolean);
+  const standardExpoTokens = destinations.filter((item) => !item.isPriority).map((item) => item.expoToken).filter(Boolean);
+  const priorityFcmTokens = destinations.filter((item) => item.isPriority).map((item) => item.fcmToken).filter(Boolean);
+  const standardFcmTokens = destinations.filter((item) => !item.isPriority).map((item) => item.fcmToken).filter(Boolean);
 
   console.log('[rides.findDriver] push notification targets', {
     rideRequestId,
     driverCount: drivers.length,
-    expoTokenCount: expoTokens.length,
-    fcmTokenCount: fcmTokens.length,
+    expoTokenCount: priorityExpoTokens.length + standardExpoTokens.length,
+    fcmTokenCount: priorityFcmTokens.length + standardFcmTokens.length,
+    priorityDriverCount: prioritizedDriverIds.size,
     driverIds: drivers.map((driver) => driver.id),
   });
 
-  if (expoTokens.length) {
+  if (priorityExpoTokens.length) {
     await sendExpoPushNotifications(
-      expoTokens.map((token) => ({
+      priorityExpoTokens.map((token) => ({
         to: token,
         title: 'New ride request',
         body: notificationBody,
+        sound: 'notificationaudio.mpeg',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -491,21 +508,42 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           pickupLabel,
           dropoffLabel,
           tierName,
+          priorityType: 'priority',
         },
       }))
     );
   }
 
-  if (fcmTokens.length) {
+  if (standardExpoTokens.length) {
+    await sendExpoPushNotifications(
+      standardExpoTokens.map((token) => ({
+        to: token,
+        title: 'New ride request',
+        body: notificationBody,
+        sound: 'default',
+        data: {
+          type: 'driver_new_ride_request',
+          rideRequestId,
+          publicId,
+          passengerName,
+          pickupLabel,
+          dropoffLabel,
+          tierName,
+          priorityType: 'standard',
+        },
+      }))
+    );
+  }
+
+  if (priorityFcmTokens.length) {
     await sendFcmNotifications(
-      fcmTokens.map((token) => ({
+      priorityFcmTokens.map((token) => ({
         to: token,
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests',
+          channelId: 'ride-requests-priority',
           notification: {
-            sound: 'default',
             clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
         },
@@ -518,6 +556,34 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           dropoffLabel: String(dropoffLabel || ''),
           intermediateStopCount: String(stopCount || 0),
           tierName: String(tierName || ''),
+          priorityType: 'priority',
+        },
+      }))
+    );
+  }
+
+  if (standardFcmTokens.length) {
+    await sendFcmNotifications(
+      standardFcmTokens.map((token) => ({
+        to: token,
+        title: 'New ride request',
+        body: notificationBody,
+        android: {
+          channelId: 'ride-requests',
+          notification: {
+            clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
+          },
+        },
+        data: {
+          type: 'driver_new_ride_request',
+          rideRequestId: String(rideRequestId),
+          publicId: String(publicId || ''),
+          passengerName: String(passengerName || ''),
+          pickupLabel: String(pickupLabel || ''),
+          dropoffLabel: String(dropoffLabel || ''),
+          intermediateStopCount: String(stopCount || 0),
+          tierName: String(tierName || ''),
+          priorityType: 'standard',
         },
       }))
     );
@@ -2006,8 +2072,8 @@ router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req
 
     await query(
       `UPDATE ride_request_driver_responses
-       SET status = 'declined',
-           responded_at = CURRENT_TIMESTAMP
+       SET status = 'pending',
+           responded_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ${DRIVER_REQUEST_REOFFER_DELAY_SECONDS} SECOND)
        WHERE ride_request_id = ?
          AND driver_user_id = ?
          AND status = 'accepted'`,
@@ -2041,7 +2107,7 @@ router.patch('/passenger/:rideRequestId/decline-driver', requireAuth, async (req
     });
     emitRideStatusToDriver(driverUserId, {
       rideRequestId,
-      status: nextRideStatus,
+      status: 'pending',
       passengerUserId: req.userId,
       reason: 'declined_by_passenger',
     });

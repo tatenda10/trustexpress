@@ -66,6 +66,7 @@ import {
   getDriverRideOverlayState,
   isRideRequestDismissed,
   markRideRequestDismissed,
+  restoreRideRequestDismissal,
   setOverlayRideRequest,
   subscribeDriverRideOverlayState,
 } from './services/driverRideOverlayState';
@@ -542,6 +543,9 @@ function AppStack({ currentRouteName }) {
       if (action === 'decline') {
         markRideRequestDismissed(rideRequestId);
         clearOverlayRideRequest();
+        setTimeout(() => {
+          restoreRideRequestDismissal(rideRequestId);
+        }, 5000);
         backgroundOverlayLastVariantRef.current = 'online';
         if (backgroundOverlayVisibleRef.current && AppState.currentState !== 'active') {
           updateTripOverlay({

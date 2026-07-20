@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -39,6 +39,10 @@ function toRadians(value) {
   return (value * Math.PI) / 180;
 }
 
+function toDegrees(value) {
+  return (value * 180) / Math.PI;
+}
+
 function calculateDistanceKm(start, end) {
   if (!start || !end) return 0;
   const earthRadiusKm = 6371;
@@ -52,6 +56,37 @@ function calculateDistanceKm(start, end) {
   );
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadiusKm * c;
+}
+
+/** Bearing in degrees (0 = north, 90 = east) from `from` toward `to`. */
+function calculateBearingDegrees(from, to) {
+  const start = normalizeCoordinate(from);
+  const end = normalizeCoordinate(to);
+  if (!start || !end) return 0;
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const dLng = toRadians(end.longitude - start.longitude);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+}
+
+function getHeadingAlongRoute(routeCoordinates, currentCoordinate, fallbackTarget) {
+  const current = normalizeCoordinate(currentCoordinate);
+  const route = normalizeCoordinates(routeCoordinates);
+  if (!current) return 0;
+
+  if (route.length >= 2) {
+    const nearestIndex = findNearestRouteIndex(route, current);
+    const lookAhead = route[Math.min(nearestIndex + 2, route.length - 1)];
+    if (lookAhead && calculateDistanceKm(current, lookAhead) > 0.005) {
+      return calculateBearingDegrees(current, lookAhead);
+    }
+  }
+
+  const target = normalizeCoordinate(fallbackTarget);
+  if (target) return calculateBearingDegrees(current, target);
+  return 0;
 }
 
 function normalizeCoordinate(value) {
@@ -206,7 +241,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [nowTick, setNowTick] = useState(Date.now());
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
-  const [rideSheetCollapsed, setRideSheetCollapsed] = useState(false);
+  const [rideSheetCollapsed, setRideSheetCollapsed] = useState(true);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [tripRouteCoordinates, setTripRouteCoordinates] = useState([]);
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
@@ -223,8 +258,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [confirmingPickup, setConfirmingPickup] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
-  const bottomActionInset = Math.max(insets.bottom + tabBarHeight - 8, 20);
-  const collapsedSheetHeight = Math.max(300, bottomActionInset + 220);
+  const windowHeight = Dimensions.get('window').height;
+  const safeTabBarHeight = Number.isFinite(tabBarHeight)
+    ? Math.min(Math.max(tabBarHeight, 48), 72)
+    : 56;
+  const bottomActionInset = Math.min(Math.max(insets.bottom + safeTabBarHeight - 8, 16), 80);
+  const collapsedSheetHeight = Math.min(Math.max(280, bottomActionInset + 200), Math.round(windowHeight * 0.42));
+  const expandedSheetMaxHeight = Math.round(windowHeight * 0.58);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -602,6 +642,15 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return [driverCoordinate, pickupCoordinate].filter(Boolean);
   }, [activeTarget, driverCoordinate, pickupCoordinate, routeCoordinates, stage, tripRouteCoordinates]);
 
+  const vehicleHeadingDegrees = useMemo(
+    () => getHeadingAlongRoute(
+      activeRouteCoordinates,
+      driverCoordinate,
+      stage === 'on_trip' ? activeTarget : pickupCoordinate,
+    ),
+    [activeRouteCoordinates, activeTarget, driverCoordinate, pickupCoordinate, stage],
+  );
+
   const pickupWaitRemainingSeconds = useMemo(() => {
     if (stage !== 'waiting_at_pickup') return null;
     const arrivedAtMs = parseTimestampMs(rideStatus?.arrivedAt);
@@ -873,13 +922,21 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           pitchEnabled={false}
         >
           {driverCoordinate ? (
-            <Marker coordinate={driverCoordinate} title="Driver" tracksViewChanges={false}>
-              <View className="items-center">
+            <Marker
+              coordinate={driverCoordinate}
+              title="Driver"
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+            >
+              <View className="items-center justify-center">
                 <View
                   className="h-12 w-12 items-center justify-center rounded-full border-4 border-white"
-                  style={{ backgroundColor: PRIMARY_BLUE }}
+                  style={{
+                    backgroundColor: PRIMARY_BLUE,
+                    transform: [{ rotate: `${vehicleHeadingDegrees}deg` }],
+                  }}
                 >
-                  <Ionicons name="car-sport" size={22} color="#fff" />
+                  <Ionicons name="airplane" size={22} color="#fff" />
                 </View>
                 <View className="mt-1 rounded-full bg-white px-2 py-1">
                   <Text className="text-xs font-bold text-gray-900">{liveEtaText}</Text>
@@ -907,12 +964,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           />
         </MapView>
 
-        <View pointerEvents="none" className="absolute inset-0 bg-white/10" />
+        <View pointerEvents="none" className="absolute inset-0" />
 
         <View
           pointerEvents="box-none"
           className="absolute right-5"
-          style={{ bottom: collapsedSheetHeight + bottomActionInset + 24 }}
+          style={{ bottom: (rideSheetCollapsed ? collapsedSheetHeight : Math.min(expandedSheetMaxHeight, 360)) + 16 }}
         >
           <TouchableOpacity
             onPress={handleSendPanicAlert}
@@ -984,14 +1041,24 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           style={{ flex: 1, justifyContent: 'flex-end' }}
         >
           <View
-            className="mt-auto rounded-t-[30px] bg-[#f8fafc]"
-            style={{ height: rideSheetCollapsed ? collapsedSheetHeight : '78%' }}
+            className="mt-auto overflow-hidden rounded-t-[30px] bg-[#f8fafc]"
+            style={
+              rideSheetCollapsed
+                ? { height: collapsedSheetHeight }
+                : { maxHeight: expandedSheetMaxHeight }
+            }
           >
             <ScrollView
-              className="flex-1 px-5 pt-4"
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: bottomActionInset + 20 }}
+              nestedScrollEnabled
+              bounces={false}
+              contentContainerStyle={{
+                paddingHorizontal: 20,
+                paddingTop: 16,
+                paddingBottom: isCompleted ? bottomActionInset + 12 : 12,
+                flexGrow: 0,
+              }}
             >
               <TouchableOpacity
                 onPress={() => setRideSheetCollapsed((current) => !current)}
@@ -1148,7 +1215,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       </View>
                     </View>
 
-                    <View className="mt-5 rounded-[22px] bg-[#eff5ff] px-4 py-4">
+                    <View className="mt-5 rounded-[22px] border border-[#dbeafe] bg-white px-4 py-4">
                       <View className={stage === 'on_trip' ? 'items-center' : 'flex-row items-center justify-between'}>
                         {stage === 'on_trip' ? (
                           <>
@@ -1346,10 +1413,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
                 </>
               ) : null}
+            </ScrollView>
 
               {!isCompleted ? (
                 <View
-                  className="border-t border-gray-200 bg-[#f8fafc] pt-4"
+                  className="border-t border-gray-200 bg-[#f8fafc] px-5 pt-4"
                   style={{ paddingBottom: bottomActionInset }}
                 >
                   {stage === 'on_trip' ? (
@@ -1412,7 +1480,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   ) : null}
                 </View>
               ) : null}
-            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </View>

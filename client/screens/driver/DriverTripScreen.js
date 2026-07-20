@@ -87,6 +87,40 @@ function calculateDistanceKm(start, end) {
   return earthRadiusKm * c;
 }
 
+function toDegrees(value) {
+  return (value * 180) / Math.PI;
+}
+
+function calculateBearingDegrees(from, to) {
+  const start = normalizeCoordinate(from);
+  const end = normalizeCoordinate(to);
+  if (!start || !end) return 0;
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const dLng = toRadians(end.longitude - start.longitude);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+}
+
+function getHeadingAlongRoute(routeCoordinates, currentCoordinate, fallbackTarget) {
+  const current = normalizeCoordinate(currentCoordinate);
+  const route = normalizeCoordinates(routeCoordinates);
+  if (!current) return 0;
+
+  if (route.length >= 2) {
+    const nearestIndex = findNearestRouteIndex(route, current);
+    const lookAhead = route[Math.min(nearestIndex + 2, route.length - 1)];
+    if (lookAhead && calculateDistanceKm(current, lookAhead) > 0.005) {
+      return calculateBearingDegrees(current, lookAhead);
+    }
+  }
+
+  const target = normalizeCoordinate(fallbackTarget);
+  if (target) return calculateBearingDegrees(current, target);
+  return 0;
+}
+
 function formatCountdown(totalSeconds) {
   const safeSeconds = Math.max(0, Number(totalSeconds || 0));
   const minutes = Math.floor(safeSeconds / 60);
@@ -1260,6 +1294,10 @@ export default function DriverTripScreen({ navigation, route }) {
   }
 
   const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
+  const vehicleHeadingDegrees = useMemo(
+    () => getHeadingAlongRoute(safeRouteCoordinates, driverCoordinate, targetCoordinate),
+    [driverCoordinate, safeRouteCoordinates, targetCoordinate],
+  );
   const destinationForMaps = ride.stage === 'on_trip'
     ? (currentTargetCoordinate || dropoffCoordinate)
     : pickupCoordinate;
@@ -1365,6 +1403,7 @@ export default function DriverTripScreen({ navigation, route }) {
       intermediateStops={intermediateStops}
       currentStopIndex={currentStopIndex}
       safeRouteCoordinates={safeRouteCoordinates}
+      vehicleHeadingDegrees={vehicleHeadingDegrees}
       primaryBlue={PRIMARY_BLUE}
       insets={insets}
       targetLabel={targetLabel}
