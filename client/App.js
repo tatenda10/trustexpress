@@ -478,6 +478,9 @@ function AppStack({ currentRouteName }) {
             });
           }
         } else if (['completed', 'cancelled', 'expired'].includes(rideStatus)) {
+          import('./notifications').then(({ clearRideRequestNotifications }) => {
+            clearRideRequestNotifications().catch(() => {});
+          }).catch(() => {});
           backgroundOverlayLastVariantRef.current = 'online';
           if (AppState.currentState === 'background' && backgroundOverlayVisibleRef.current) {
             updateTripOverlay({ variant: 'online' }).catch(() => {});
@@ -543,6 +546,9 @@ function AppStack({ currentRouteName }) {
       if (action === 'decline') {
         markRideRequestDismissed(rideRequestId);
         clearOverlayRideRequest();
+        import('./notifications').then(({ clearRideRequestNotifications }) => {
+          clearRideRequestNotifications({ rideRequestId }).catch(() => {});
+        }).catch(() => {});
         setTimeout(() => {
           restoreRideRequestDismissal(rideRequestId);
         }, 5000);

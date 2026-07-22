@@ -9,9 +9,84 @@ import {
   requestPermission,
 } from '@react-native-firebase/messaging';
 
-const DRIVER_REQUEST_SOUND_FILE = 'notificationaudio.mpeg';
-const DRIVER_REQUEST_CHANNEL_ID = 'ride-requests';
-const DRIVER_REQUEST_PRIORITY_CHANNEL_ID = 'ride-requests-priority';
+const NEARBY_RIDE_SOUND_FILE = 'notificationaudio.mpeg';
+const DISTANT_RIDE_SOUND_FILE = 'sound2.mpeg';
+// Android channel sounds cannot be changed after channel creation, so use new IDs.
+const DISTANT_RIDE_CHANNEL_ID = 'ride-requests-distant-v2';
+const NEARBY_RIDE_CHANNEL_ID = 'ride-requests-nearby-v2';
+const RIDE_REQUEST_NOTIFICATION_TYPE = 'driver_new_ride_request';
+
+const rideRequestNotificationIdsByRide = new Map();
+
+function rememberRideRequestNotificationId(rideRequestId, notificationId) {
+  const id = Number(rideRequestId);
+  if (!Number.isInteger(id) || id <= 0 || !notificationId) return;
+  const existing = rideRequestNotificationIdsByRide.get(id) || new Set();
+  existing.add(notificationId);
+  rideRequestNotificationIdsByRide.set(id, existing);
+}
+
+function isRideRequestNotificationData(data, rideRequestId = null) {
+  if (String(data?.type || '') !== RIDE_REQUEST_NOTIFICATION_TYPE) {
+    return false;
+  }
+  if (rideRequestId === null || rideRequestId === undefined || rideRequestId === '') {
+    return true;
+  }
+  return Number(data?.rideRequestId || 0) === Number(rideRequestId);
+}
+
+function isRideRequestNotification(notification, rideRequestId = null) {
+  const data = notification?.request?.content?.data || {};
+  if (isRideRequestNotificationData(data, rideRequestId)) {
+    return true;
+  }
+  if (rideRequestId !== null && rideRequestId !== undefined && rideRequestId !== '') {
+    return false;
+  }
+  const title = String(notification?.request?.content?.title || '').trim().toLowerCase();
+  return title === 'new ride request';
+}
+
+export async function clearRideRequestNotifications({ rideRequestId } = {}) {
+  try {
+    const hasTargetRide = rideRequestId !== undefined && rideRequestId !== null && rideRequestId !== '';
+    const targetRideId = hasTargetRide ? Number(rideRequestId) : null;
+    const dismissPromises = [];
+
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    for (const notification of presented) {
+      if (!isRideRequestNotification(notification, hasTargetRide ? targetRideId : null)) {
+        continue;
+      }
+      const identifier = notification?.request?.identifier;
+      if (identifier) {
+        dismissPromises.push(Notifications.dismissNotificationAsync(identifier));
+      }
+    }
+
+    if (hasTargetRide && Number.isInteger(targetRideId) && targetRideId > 0) {
+      const tracked = rideRequestNotificationIdsByRide.get(targetRideId);
+      if (tracked) {
+        tracked.forEach((identifier) => {
+          dismissPromises.push(Notifications.dismissNotificationAsync(identifier));
+        });
+        rideRequestNotificationIdsByRide.delete(targetRideId);
+      }
+    } else {
+      rideRequestNotificationIdsByRide.forEach((tracked) => {
+        tracked.forEach((identifier) => {
+          dismissPromises.push(Notifications.dismissNotificationAsync(identifier));
+        });
+      });
+      rideRequestNotificationIdsByRide.clear();
+    }
+
+    await Promise.allSettled(dismissPromises);
+  } catch (error) {
+    console.warn('[notifications] clearRideRequestNotifications failed', error);
+  }
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -62,19 +137,19 @@ export async function registerForPushNotificationsAsync() {
     }
 
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync(DRIVER_REQUEST_PRIORITY_CHANNEL_ID, {
+      await Notifications.setNotificationChannelAsync(NEARBY_RIDE_CHANNEL_ID, {
         name: 'Nearby ride requests',
         importance: Notifications.AndroidImportance.MAX,
-        sound: DRIVER_REQUEST_SOUND_FILE,
+        sound: NEARBY_RIDE_SOUND_FILE,
         vibrationPattern: [0, 500, 180, 500, 180, 500],
         bypassDnd: true,
         lightColor: '#2f73c9',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
-      await Notifications.setNotificationChannelAsync(DRIVER_REQUEST_CHANNEL_ID, {
-        name: 'Ride requests',
+      await Notifications.setNotificationChannelAsync(DISTANT_RIDE_CHANNEL_ID, {
+        name: 'Distant ride requests',
         importance: Notifications.AndroidImportance.HIGH,
-        sound: 'default',
+        sound: DISTANT_RIDE_SOUND_FILE,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2f73c9',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
@@ -82,7 +157,7 @@ export async function registerForPushNotificationsAsync() {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'default',
         importance: Notifications.AndroidImportance.MAX,
-        sound: DRIVER_REQUEST_SOUND_FILE,
+        sound: 'default',
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2f73c9',
       });
@@ -135,20 +210,28 @@ export async function showLocalRideNotification({
   priorityType = 'standard',
 } = {}) {
   try {
+    const rideRequestId = data?.rideRequestId;
+    // Only one incoming request notification should be visible at a time.
+    await clearRideRequestNotifications();
+
     const usePriorityChannel = String(priorityType || '').toLowerCase() === 'priority';
-    await Notifications.scheduleNotificationAsync({
+    const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
         title,
         body,
-        sound: usePriorityChannel ? DRIVER_REQUEST_SOUND_FILE : 'default',
+        sound: usePriorityChannel ? NEARBY_RIDE_SOUND_FILE : DISTANT_RIDE_SOUND_FILE,
         priority: Notifications.AndroidNotificationPriority.MAX,
-        sticky: true,
-        channelId: usePriorityChannel ? DRIVER_REQUEST_PRIORITY_CHANNEL_ID : DRIVER_REQUEST_CHANNEL_ID,
+        channelId: usePriorityChannel ? NEARBY_RIDE_CHANNEL_ID : DISTANT_RIDE_CHANNEL_ID,
         data,
       },
       trigger: null,
     });
+    if (rideRequestId) {
+      rememberRideRequestNotificationId(rideRequestId, notificationId);
+    }
+    return notificationId;
   } catch (error) {
     console.warn('[notifications] showLocalRideNotification failed', error);
+    return null;
   }
 }

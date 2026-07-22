@@ -452,7 +452,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
   const notificationBody = buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops });
   const prioritizedDriverIds = new Set(
     drivers
-      .filter((driver, index) => Number(driver?.driverDistanceKm || 0) <= 1.5 || index < 3)
+      .filter((driver) => Number(driver?.driverDistanceKm || 0) <= 1.5)
       .map((driver) => String(driver.id))
   );
 
@@ -479,8 +479,10 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
     )
   ).filter((item) => item.expoToken || item.fcmToken);
 
-  const priorityExpoTokens = destinations.filter((item) => item.isPriority).map((item) => item.expoToken).filter(Boolean);
-  const standardExpoTokens = destinations.filter((item) => !item.isPriority).map((item) => item.expoToken).filter(Boolean);
+  // Prefer FCM when both tokens belong to the same device; sending through both
+  // transports creates duplicate notifications for one ride request.
+  const priorityExpoTokens = destinations.filter((item) => item.isPriority && !item.fcmToken).map((item) => item.expoToken).filter(Boolean);
+  const standardExpoTokens = destinations.filter((item) => !item.isPriority && !item.fcmToken).map((item) => item.expoToken).filter(Boolean);
   const priorityFcmTokens = destinations.filter((item) => item.isPriority).map((item) => item.fcmToken).filter(Boolean);
   const standardFcmTokens = destinations.filter((item) => !item.isPriority).map((item) => item.fcmToken).filter(Boolean);
 
@@ -500,6 +502,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         sound: 'notificationaudio.mpeg',
+        channelId: 'ride-requests-nearby-v2',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -520,7 +523,8 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         to: token,
         title: 'New ride request',
         body: notificationBody,
-        sound: 'default',
+        sound: 'sound2.mpeg',
+        channelId: 'ride-requests-distant-v2',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -542,8 +546,11 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests-priority',
+          channelId: 'ride-requests-nearby-v2',
+          collapseKey: 'driver-ride-request',
           notification: {
+            sound: 'notificationaudio.mpeg',
+            tag: 'driver-ride-request',
             clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
         },
@@ -569,8 +576,11 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests',
+          channelId: 'ride-requests-distant-v2',
+          collapseKey: 'driver-ride-request',
           notification: {
+            sound: 'sound2.mpeg',
+            tag: 'driver-ride-request',
             clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
         },

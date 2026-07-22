@@ -4,7 +4,7 @@ import { getDriverWalletSettings } from './driver-wallet-settings.js';
 /** @deprecated Use getDriverWalletSettings().commissionRatePercent */
 export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
 /** @deprecated Use getDriverWalletSettings().currency */
-export const DRIVER_WALLET_CURRENCY = 'USD';
+export const DRIVER_WALLET_CURRENCY = 'ZAR';
 const PAYSTACK_API_BASE_URL = 'https://api.paystack.co';
 const LOW_BALANCE_MESSAGE = 'Your Trust Express Wallet balance is too low. Please top up your wallet to continue receiving ride requests.';
 const PAYMENTS_UNAVAILABLE_MESSAGE = 'Wallet top-ups are not available yet. Please check back soon.';

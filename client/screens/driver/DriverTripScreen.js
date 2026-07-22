@@ -22,7 +22,7 @@ import {
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
-import { showLocalRideNotification } from '../../notifications';
+import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
 import { connectRealtime } from '../../realtime';
 import {
   DriverTripEmptyState,
@@ -1100,6 +1100,7 @@ export default function DriverTripScreen({ navigation, route }) {
               setNextInstruction('');
               setRide(null);
               setRealtimeSignal((current) => current + 1);
+              clearRideRequestNotifications().catch(() => {});
               Alert.alert('Ride cancelled', 'The ride has been cancelled.');
               const parentNavigator = navigation.getParent?.();
               if (parentNavigator) parentNavigator.navigate('DriverActivity');
@@ -1138,6 +1139,7 @@ export default function DriverTripScreen({ navigation, route }) {
       });
       setCompletedRideId(ride.id);
       setRide(null);
+      clearRideRequestNotifications().catch(() => {});
       setRealtimeSignal((current) => current + 1);
       setShowPassengerRating(true);
     } catch (error) {

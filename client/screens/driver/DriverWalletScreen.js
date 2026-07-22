@@ -11,8 +11,8 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 
 WebBrowser.maybeCompleteAuthSession();
 
-function formatCurrency(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+function formatCurrency(value, currency = 'ZAR') {
+  return `${String(currency || 'ZAR').toUpperCase()} ${Number(value || 0).toFixed(2)}`;
 }
 
 function formatDate(value) {
@@ -56,7 +56,7 @@ const DriverWalletScreen = () => {
   const [transactions, setTransactions] = useState([]);
   const [wallet, setWallet] = useState({
     availableBalance: 0,
-    currency: 'USD',
+    currency: 'ZAR',
     minimumRequiredBalance: 1,
     topupMinAmount: 1,
     topupMaxAmount: 500,
@@ -107,7 +107,7 @@ const DriverWalletScreen = () => {
       setPendingTopups(Array.isArray(data?.pendingTopups) ? data.pendingTopups : []);
       setWallet({
         availableBalance: Number(data?.wallet?.availableBalance || 0),
-        currency: data?.wallet?.currency || 'USD',
+        currency: data?.wallet?.currency || 'ZAR',
         minimumRequiredBalance: Number(data?.wallet?.minimumRequiredBalance || 1),
         topupMinAmount: Number(data?.wallet?.topupMinAmount || data?.settings?.topupMinAmount || 1),
         topupMaxAmount: Number(data?.wallet?.topupMaxAmount || data?.settings?.topupMaxAmount || 500),
@@ -127,7 +127,7 @@ const DriverWalletScreen = () => {
       setPendingTopups([]);
       setWallet({
         availableBalance: 0,
-        currency: 'USD',
+        currency: 'ZAR',
         minimumRequiredBalance: 1,
         topupMinAmount: 1,
         topupMaxAmount: 500,
@@ -159,11 +159,11 @@ const DriverWalletScreen = () => {
         return;
       }
       if (amount < Number(wallet.topupMinAmount || 1)) {
-        Alert.alert('Amount too low', `Minimum top-up is ${formatCurrency(wallet.topupMinAmount)}.`);
+        Alert.alert('Amount too low', `Minimum top-up is ${formatCurrency(wallet.topupMinAmount, wallet.currency)}.`);
         return;
       }
       if (amount > Number(wallet.topupMaxAmount || 500)) {
-        Alert.alert('Amount too high', `Maximum top-up is ${formatCurrency(wallet.topupMaxAmount)}.`);
+        Alert.alert('Amount too high', `Maximum top-up is ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}.`);
         return;
       }
       setStartingTopup(true);
@@ -229,13 +229,13 @@ const DriverWalletScreen = () => {
           >
             <View className="mb-5 rounded-2xl p-5" style={{ backgroundColor: PRIMARY_BLUE }}>
               <Text className="mb-1 text-sm font-medium text-white/90">Current Wallet Balance</Text>
-              <Text className="text-3xl font-bold text-white">{formatCurrency(wallet.availableBalance)}</Text>
+              <Text className="text-3xl font-bold text-white">{formatCurrency(wallet.availableBalance, wallet.currency)}</Text>
               <Text className="mt-1 text-sm text-white/80">
-                Minimum required to receive requests: {formatCurrency(wallet.minimumRequiredBalance)}
+                Minimum required to receive requests: {formatCurrency(wallet.minimumRequiredBalance, wallet.currency)}
               </Text>
               <View className="mt-4 flex-row items-center justify-between border-t border-white/20 pt-3">
-                <Text className="text-xs text-white/80">Top-ups: {formatCurrency(summary.totalTopups)}</Text>
-                <Text className="text-xs text-white/80">Commission paid: {formatCurrency(summary.totalCommissionPaid)}</Text>
+                <Text className="text-xs text-white/80">Top-ups: {formatCurrency(summary.totalTopups, wallet.currency)}</Text>
+                <Text className="text-xs text-white/80">Commission paid: {formatCurrency(summary.totalCommissionPaid, wallet.currency)}</Text>
               </View>
             </View>
           </View>
@@ -262,13 +262,13 @@ const DriverWalletScreen = () => {
               <Text className="text-base font-bold text-gray-900">Top up wallet</Text>
               <Text className="mt-1 text-sm text-gray-500">
                 {wallet.paymentsEnabled
-                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount)} – ${formatCurrency(wallet.topupMaxAmount)}). Commission on completed trips is ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}%.`
+                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount, wallet.currency)} – ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}). Commission on completed trips is ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}%.`
                   : 'Wallet top-ups are not available yet. You can still view your balance and transaction history here.'}
               </Text>
               {wallet.paymentsEnabled ? (
                 <>
               <View className="mt-4 flex-row items-center rounded-2xl border border-gray-200 bg-gray-50 px-4">
-                <Text className="mr-2 text-lg font-semibold text-gray-900">$</Text>
+                <Text className="mr-2 text-sm font-semibold text-gray-900">{wallet.currency}</Text>
                 <TextInput
                   value={topupAmount}
                   onChangeText={setTopupAmount}
@@ -290,7 +290,7 @@ const DriverWalletScreen = () => {
                     className="mr-2 mt-2 rounded-full bg-[#eff6ff] px-4 py-2"
                   >
                     <Text className="text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
-                      {formatCurrency(preset)}
+                      {formatCurrency(preset, wallet.currency)}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -311,9 +311,9 @@ const DriverWalletScreen = () => {
 
             <View className="mb-8 flex-row justify-between">
               {[
-                { key: 'balance', label: 'Balance', value: formatCurrency(wallet.availableBalance), icon: 'wallet-outline' },
-                { key: 'topups', label: 'Top-ups', value: formatCurrency(summary.totalTopups), icon: 'add-circle-outline' },
-                { key: 'commission', label: 'Commission', value: formatCurrency(summary.totalCommissionPaid), icon: 'remove-circle-outline' },
+                { key: 'balance', label: 'Balance', value: formatCurrency(wallet.availableBalance, wallet.currency), icon: 'wallet-outline' },
+                { key: 'topups', label: 'Top-ups', value: formatCurrency(summary.totalTopups, wallet.currency), icon: 'add-circle-outline' },
+                { key: 'commission', label: 'Commission', value: formatCurrency(summary.totalCommissionPaid, wallet.currency), icon: 'remove-circle-outline' },
               ].map(({ key, label, value, icon }) => (
                 <View key={key} className="items-center">
                   <View className="mb-2 h-14 w-14 items-center justify-center rounded-full" style={{ backgroundColor: '#EFF6FF' }}>
@@ -368,7 +368,7 @@ const DriverWalletScreen = () => {
                         </Text>
                         {transaction.tripId ? (
                           <Text className="mt-1 text-xs font-semibold text-gray-500">
-                            Passenger: {transaction.passengerName || 'Passenger'} | Fare: {formatCurrency(transaction.tripFareAmount)}
+                            Passenger: {transaction.passengerName || 'Passenger'} | Fare: {formatCurrency(transaction.tripFareAmount, transaction.currency || wallet.currency)}
                           </Text>
                         ) : null}
                         {transaction.paymentMethod ? (
@@ -377,7 +377,7 @@ const DriverWalletScreen = () => {
                           </Text>
                         ) : null}
                         <Text className="mt-1 text-xs text-gray-400">
-                          Balance: {formatCurrency(transaction.balanceBefore)} -> {formatCurrency(transaction.balanceAfter)}
+                          Balance: {formatCurrency(transaction.balanceBefore, transaction.currency || wallet.currency)} → {formatCurrency(transaction.balanceAfter, transaction.currency || wallet.currency)}
                         </Text>
                         {transaction.commissionRatePercent ? (
                           <Text className="mt-1 text-xs font-semibold text-amber-600">
@@ -387,7 +387,7 @@ const DriverWalletScreen = () => {
                       </View>
                       <View className="items-end">
                         <Text className={`text-base font-semibold ${meta.amountColor}`}>
-                          {meta.amountPrefix}{formatCurrency(Math.abs(Number(transaction.amount || 0)))}
+                          {meta.amountPrefix}{formatCurrency(Math.abs(Number(transaction.amount || 0)), transaction.currency || wallet.currency)}
                         </Text>
                         <Text className="text-xs text-gray-400">
                           {String(transaction.transactionType || '').replace(/_/g, ' ').toUpperCase()}

@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import * as Location from 'expo-location';
 import { connectRealtime } from '../../realtime';
-import { showLocalRideNotification } from '../../notifications';
+import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
 import {
   acceptDriverRideRequest,
   cancelDriverCurrentRide,
@@ -679,6 +679,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setActiveRequest(null);
       setAvailableRequests([]);
       setShowIncomingRideOverlay(false);
+      clearRideRequestNotifications().catch(() => {});
       setDismissedRequestIds((current) => (current.length ? [] : current));
       prevRequestCountRef.current = 0;
       return undefined;
@@ -775,6 +776,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
         prevRequestCountRef.current = nextList.length;
 
         setAvailableRequests(nextList);
+        if (nextList.length === 0) {
+          clearRideRequestNotifications().catch(() => {});
+        }
         if (nextList[0]) {
           setOverlayRideRequest(nextList[0]);
         } else {
@@ -984,6 +988,24 @@ const DriverHomeScreen = ({ navigation, route }) => {
     )),
     [activeRequest?.expiresAt, activeRequest?.remainingSeconds, activeRequest?.remainingSecondsCapturedAt, nowTick]
   );
+
+  const primaryIncomingRequest = useMemo(
+    () => activeRequest || availableRequests[0] || null,
+    [activeRequest, availableRequests],
+  );
+
+  const activeIncomingRequestIndex = useMemo(() => {
+    if (!primaryIncomingRequest) return 0;
+    const index = availableRequests.findIndex((request) => request.id === primaryIncomingRequest.id);
+    return index >= 0 ? index : 0;
+  }, [availableRequests, primaryIncomingRequest]);
+
+  const cycleToNextIncomingRequest = () => {
+    if (availableRequests.length <= 1) return;
+    const currentIndex = availableRequests.findIndex((request) => request.id === primaryIncomingRequest?.id);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % availableRequests.length;
+    setActiveRequest(availableRequests[nextIndex]);
+  };
 
   useEffect(() => {
     if (!pendingSelectionRide || currentRide?.id) return;
@@ -1426,6 +1448,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
           setDismissedRequestIds((current) => current.filter((item) => item !== req.id));
         }, REQUEST_REAPPEAR_DELAY_MS);
         clearOverlayRideRequest();
+        clearRideRequestNotifications({ rideRequestId: req.id }).catch(() => {});
         updateTripOverlay({
           variant: 'online',
           title: 'Trust Express',
@@ -1455,6 +1478,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       }
       setActiveRequest(null);
       setAvailableRequests([]);
+      clearRideRequestNotifications().catch(() => {});
       setShowIncomingRideOverlay(false);
       setShowNewRequestBadge(false);
       setIsListening(true);
@@ -1499,6 +1523,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setDismissedRequestIds((current) => current.filter((item) => item !== req.id));
     }, REQUEST_REAPPEAR_DELAY_MS);
     const nextList = availableRequests.filter((r) => r.id !== req.id);
+    clearRideRequestNotifications({ rideRequestId: req.id }).catch(() => {});
     setAvailableRequests(nextList);
     setActiveRequest(nextList[0] || null);
     setShowIncomingRideOverlay(nextList.length > 0);
@@ -1530,6 +1555,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       await cancelDriverCurrentRide(token, currentRide.id, reasonLabel);
       setCurrentRide(null);
       setPendingSelectionRide(null);
+      clearRideRequestNotifications().catch(() => {});
       Alert.alert('Ride cancelled', 'The ride has been cancelled.');
     } catch (error) {
       Alert.alert('Cancel ride failed', error?.message || 'Could not cancel this ride.');
@@ -1582,14 +1608,14 @@ const DriverHomeScreen = ({ navigation, route }) => {
               )}
             </>
           ) : null}
-          {activeRequest ? (
+          {primaryIncomingRequest ? (
             <>
-              <Marker coordinate={activeRequest.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
-              {Array.isArray(activeRequest.intermediateStops)
-                ? activeRequest.intermediateStops.map((stop, index) => (
+              <Marker coordinate={primaryIncomingRequest.pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+              {Array.isArray(primaryIncomingRequest.intermediateStops)
+                ? primaryIncomingRequest.intermediateStops.map((stop, index) => (
                     stop?.coordinate ? (
                       <Marker
-                        key={`incoming-stop-${activeRequest.id}-${index}`}
+                        key={`incoming-stop-${primaryIncomingRequest.id}-${index}`}
                         coordinate={stop.coordinate}
                         title={stop.label || `Stop ${index + 1}`}
                         pinColor="#f97316"
@@ -1598,7 +1624,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     ) : null
                   ))
                 : null}
-              <Marker coordinate={activeRequest.dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
+              <Marker coordinate={primaryIncomingRequest.dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
               {routeCoordinates.length > 1 ? (
                 <>
                   <Polyline
@@ -1614,7 +1640,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 </>
               ) : (
                 <Polyline
-                  coordinates={[activeRequest.pickupCoordinate, activeRequest.dropoffCoordinate]}
+                  coordinates={[primaryIncomingRequest.pickupCoordinate, primaryIncomingRequest.dropoffCoordinate]}
                   strokeColor="#2563eb"
                   strokeWidth={4}
                 />
@@ -1635,7 +1661,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
           </View>
         </View>
 
-        {showNewRequestBadge && availableRequests.length > 0 ? (
+        {showNewRequestBadge && availableRequests.length > 0 && !primaryIncomingRequest ? (
           <View className="mt-7 items-center">
             <View className="rounded-full bg-[#2f73c9] px-9 py-4">
               <Text className="text-base font-bold uppercase text-white">New Request</Text>
@@ -1763,181 +1789,183 @@ const DriverHomeScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             </View>
           </View>
-        ) : (
+        ) : primaryIncomingRequest ? (
           <View
-            className="absolute left-0 right-0"
+            className="absolute left-0 right-0 justify-end"
             style={{ top: insets.top + 118, bottom: insets.bottom + 88, paddingHorizontal: 16 }}
             pointerEvents="box-none"
           >
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: 24 }}
-            >
-              {availableRequests.map((req, index) => (
-                <View
-                  key={req.id}
-                  className="mb-3 rounded-[24px] border border-[#d7dfec] bg-white/95 p-4"
-                >
-                  <View className="mb-2 flex-row items-center justify-between">
-                    <View className="flex-row items-center">
-                      <View className="rounded-full bg-[#2f73c9] px-3 py-1.5">
-                        <Text className="text-xs font-bold uppercase tracking-[1px] text-white">
-                          {index === 0 ? 'New request' : `Request ${index + 1}`}
-                        </Text>
-                      </View>
-                      {index === 0 && availableRequests.length > 1 ? (
-                        <View className="ml-2 rounded-full bg-[#dcfce7] px-2 py-0.5">
-                          <Text className="text-xs font-bold uppercase text-[#15803d]">Nearest</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <View className="rounded-full bg-[#111827] px-3 py-1.5">
-                      <Text className="text-xs font-bold uppercase tracking-[1px] text-white">
-                        {formatCountdown(getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt))}
-                      </Text>
-                    </View>
+            {availableRequests.length > 1 ? (
+              <TouchableOpacity
+                onPress={cycleToNextIncomingRequest}
+                className="mb-3 self-center rounded-full bg-white/95 px-4 py-2"
+                style={{ borderWidth: 1, borderColor: '#d7dfec' }}
+              >
+                <Text className="text-xs font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                  Request {activeIncomingRequestIndex + 1} of {availableRequests.length} • Tap for next
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <View className="rounded-[24px] border border-[#d7dfec] bg-white/95 p-4">
+              <View className="mb-2 flex-row items-center justify-between">
+                <View className="flex-row items-center">
+                  <View className="rounded-full bg-[#2f73c9] px-3 py-1.5">
+                    <Text className="text-xs font-bold uppercase tracking-[1px] text-white">
+                      {activeIncomingRequestIndex === 0 ? 'New request' : `Request ${activeIncomingRequestIndex + 1}`}
+                    </Text>
                   </View>
-
-                  <View className="flex-row items-start justify-between">
-                    <View className="flex-1 pr-4">
-                      <Text className="text-xs font-semibold uppercase tracking-wide text-[#2f73c9]">Incoming request</Text>
-                      <View className="mt-2 flex-row items-center">
-                        {resolveUploadedMediaUrl(req?.passengerProfile?.imageUrl) ? (
-                          <Image
-                            source={{ uri: resolveUploadedMediaUrl(req?.passengerProfile?.imageUrl) }}
-                            style={{ width: 40, height: 40, borderRadius: 20 }}
-                          />
-                        ) : (
-                          <View className="h-10 w-10 items-center justify-center rounded-full bg-[#e0e7ff]">
-                            <Ionicons name="person" size={18} color={PRIMARY_BLUE} />
-                          </View>
-                        )}
-                        <Text className="ml-3 text-xl font-bold text-[#111111]">
-                          {req.passengerName || 'Passenger'}
-                        </Text>
-                      </View>
-                      <View className="mt-2 self-start rounded-full bg-[#e3e9f2] px-3 py-1">
-                        <Text className="text-xs font-bold uppercase text-[#2f73c9]">{req.tierName || 'Ride'}</Text>
-                      </View>
-                    </View>
-                    <View className="items-end">
-                      <Text className="text-xs font-semibold uppercase tracking-wide text-[#5a6474]">Fare</Text>
-                      <Text className="mt-1 text-2xl font-extrabold text-[#111111]">${Number(req.estimatedAmount || 0).toFixed(2)}</Text>
-                      {Number(req.discountAmount || 0) > 0 ? (
-                        <View className="mt-2 rounded-full bg-emerald-50 px-3 py-1">
-                          <Text className="text-[11px] font-semibold uppercase tracking-wide text-[#15803d]">
-                            Promo applied
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
-
-                  <View className="mt-3 rounded-[20px] bg-[#f8fafc] px-4 py-3">
-                    <View className="flex-row">
-                      <View className="mr-4 items-center pt-1">
-                        <View className="h-3.5 w-3.5 rounded-full bg-[#2f73c9]" />
-                        <View className="my-2 h-10 w-[2px] rounded-full bg-[#cbd5e1]" />
-                        <View className="h-3.5 w-3.5 rounded-full bg-[#111827]" />
-                      </View>
-                      <View className="flex-1">
-                        <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
-                        <Text className="mt-1 text-base font-semibold text-[#111111]">{req.pickup}</Text>
-                        <Text className="mt-4 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
-                        <Text className="mt-1 text-base font-semibold text-[#111111]">{req.dropoff}</Text>
-                      </View>
-                    </View>
-                  </View>
-
-                  <RequestStopsPreview request={req} />
-
-                  <View className="mt-3 flex-row items-center gap-5">
-                    <View className="flex-row items-center">
-                      <Ionicons name="navigate" size={15} color="#2f73c9" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Number((req.pickupRouteDistanceKm ?? req.driverDistanceKm) || 0).toFixed(1)} km to pickup
-                      </Text>
-                    </View>
-                    <View className="flex-row items-center">
-                      <Ionicons name="time" size={15} color="#2f73c9" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Math.max(1, Number((req.pickupRouteMinutes ?? req.etaMinutes) || 0))} min to pickup
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View className="mt-1.5 flex-row items-center gap-5">
-                    <View className="flex-row items-center">
-                      <Ionicons name="swap-horizontal" size={15} color="#111827" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Number((req.tripDistanceKm ?? req.estimatedDistanceKm) || 0).toFixed(1)} km trip
-                      </Text>
-                    </View>
-                    <View className="flex-row items-center">
-                      <Ionicons name="time-outline" size={15} color="#111827" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Math.max(1, Number((req.tripDurationMinutes ?? req.estimatedMinutes) || 0))} min trip
-                      </Text>
-                    </View>
-                  </View>
-
-                  {Number(req.discountAmount || 0) > 0 ? (
-                    <View className="mt-3 rounded-[18px] border border-[#dbeafe] bg-[#eff6ff] px-4 py-3">
-                      <View className="flex-row items-center justify-between">
-                        <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
-                          Promo ride
-                        </Text>
-                        {req.discountCode ? (
-                          <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
-                            {req.discountCode}
-                          </Text>
-                        ) : null}
-                      </View>
-                      <View className="mt-2 flex-row items-center justify-between">
-                        <Text className="text-sm text-[#1e3a8a]">Passenger total</Text>
-                        <Text className="text-sm font-semibold text-[#1e3a8a]">
-                          ${Number(req.finalEstimatedAmount || 0).toFixed(2)}
-                        </Text>
-                      </View>
-                      <View className="mt-1 flex-row items-center justify-between">
-                        <Text className="text-sm text-[#1e3a8a]">Discount</Text>
-                        <Text className="text-sm font-semibold text-[#1e3a8a]">
-                          ${Number(req.discountAmount || 0).toFixed(2)}
-                        </Text>
-                      </View>
-                      <View className="mt-1 flex-row items-center justify-between">
-                        <Text className="text-sm text-[#1e3a8a]">Admin reimbursement</Text>
-                        <Text className="text-sm font-semibold text-[#1e3a8a]">
-                          ${Number(req.driverReimbursementAmount || 0).toFixed(2)}
-                        </Text>
-                      </View>
+                  {activeIncomingRequestIndex === 0 && availableRequests.length > 1 ? (
+                    <View className="ml-2 rounded-full bg-[#dcfce7] px-2 py-0.5">
+                      <Text className="text-xs font-bold uppercase text-[#15803d]">Nearest</Text>
                     </View>
                   ) : null}
+                </View>
+                <View className="rounded-full bg-[#111827] px-3 py-1.5">
+                  <Text className="text-xs font-bold uppercase tracking-[1px] text-white">
+                    {formatCountdown(getRemainingSeconds(primaryIncomingRequest.expiresAt, primaryIncomingRequest?.remainingSeconds, primaryIncomingRequest?.remainingSecondsCapturedAt))}
+                  </Text>
+                </View>
+              </View>
 
-                  <View className="mt-3 flex-row gap-3">
-                    <TouchableOpacity
-                      onPress={() => handleDeclineRequest(req)}
-                      className="h-12 flex-1 items-center justify-center rounded-[14px] border border-[#d7d9df] bg-white"
-                    >
-                      <Text className="text-xs font-bold uppercase text-[#5d6470]">Decline</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => handleAcceptRequest(req)}
-                      disabled={acceptingRideId === req.id}
-                      className="h-12 flex-[1.15] flex-row items-center justify-center rounded-[14px] bg-[#2f73c9]"
-                    >
-                      {acceptingRideId === req.id ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <Text className="text-xs font-bold uppercase text-white">Accept</Text>
-                      )}
-                    </TouchableOpacity>
+              <View className="flex-row items-start justify-between">
+                <View className="flex-1 pr-4">
+                  <Text className="text-xs font-semibold uppercase tracking-wide text-[#2f73c9]">Incoming request</Text>
+                  <View className="mt-2 flex-row items-center">
+                    {resolveUploadedMediaUrl(primaryIncomingRequest?.passengerProfile?.imageUrl) ? (
+                      <Image
+                        source={{ uri: resolveUploadedMediaUrl(primaryIncomingRequest?.passengerProfile?.imageUrl) }}
+                        style={{ width: 40, height: 40, borderRadius: 20 }}
+                      />
+                    ) : (
+                      <View className="h-10 w-10 items-center justify-center rounded-full bg-[#e0e7ff]">
+                        <Ionicons name="person" size={18} color={PRIMARY_BLUE} />
+                      </View>
+                    )}
+                    <Text className="ml-3 text-xl font-bold text-[#111111]">
+                      {primaryIncomingRequest.passengerName || 'Passenger'}
+                    </Text>
+                  </View>
+                  <View className="mt-2 self-start rounded-full bg-[#e3e9f2] px-3 py-1">
+                    <Text className="text-xs font-bold uppercase text-[#2f73c9]">{primaryIncomingRequest.tierName || 'Ride'}</Text>
                   </View>
                 </View>
-              ))}
-            </ScrollView>
+                <View className="items-end">
+                  <Text className="text-xs font-semibold uppercase tracking-wide text-[#5a6474]">Fare</Text>
+                  <Text className="mt-1 text-2xl font-extrabold text-[#111111]">${Number(primaryIncomingRequest.estimatedAmount || 0).toFixed(2)}</Text>
+                  {Number(primaryIncomingRequest.discountAmount || 0) > 0 ? (
+                    <View className="mt-2 rounded-full bg-emerald-50 px-3 py-1">
+                      <Text className="text-[11px] font-semibold uppercase tracking-wide text-[#15803d]">
+                        Promo applied
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+
+              <View className="mt-3 rounded-[20px] bg-[#f8fafc] px-4 py-3">
+                <View className="flex-row">
+                  <View className="mr-4 items-center pt-1">
+                    <View className="h-3.5 w-3.5 rounded-full bg-[#2f73c9]" />
+                    <View className="my-2 h-10 w-[2px] rounded-full bg-[#cbd5e1]" />
+                    <View className="h-3.5 w-3.5 rounded-full bg-[#111827]" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
+                    <Text className="mt-1 text-base font-semibold text-[#111111]">{primaryIncomingRequest.pickup}</Text>
+                    <Text className="mt-4 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
+                    <Text className="mt-1 text-base font-semibold text-[#111111]">{primaryIncomingRequest.dropoff}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <RequestStopsPreview request={primaryIncomingRequest} />
+
+              <View className="mt-3 flex-row items-center gap-5">
+                <View className="flex-row items-center">
+                  <Ionicons name="navigate" size={15} color="#2f73c9" />
+                  <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                    {Number((primaryIncomingRequest.pickupRouteDistanceKm ?? primaryIncomingRequest.driverDistanceKm) || 0).toFixed(1)} km to pickup
+                  </Text>
+                </View>
+                <View className="flex-row items-center">
+                  <Ionicons name="time" size={15} color="#2f73c9" />
+                  <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                    {Math.max(1, Number((primaryIncomingRequest.pickupRouteMinutes ?? primaryIncomingRequest.etaMinutes) || 0))} min to pickup
+                  </Text>
+                </View>
+              </View>
+
+              <View className="mt-1.5 flex-row items-center gap-5">
+                <View className="flex-row items-center">
+                  <Ionicons name="swap-horizontal" size={15} color="#111827" />
+                  <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                    {Number((primaryIncomingRequest.tripDistanceKm ?? primaryIncomingRequest.estimatedDistanceKm) || 0).toFixed(1)} km trip
+                  </Text>
+                </View>
+                <View className="flex-row items-center">
+                  <Ionicons name="time-outline" size={15} color="#111827" />
+                  <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                    {Math.max(1, Number((primaryIncomingRequest.tripDurationMinutes ?? primaryIncomingRequest.estimatedMinutes) || 0))} min trip
+                  </Text>
+                </View>
+              </View>
+
+              {Number(primaryIncomingRequest.discountAmount || 0) > 0 ? (
+                <View className="mt-3 rounded-[18px] border border-[#dbeafe] bg-[#eff6ff] px-4 py-3">
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                      Promo ride
+                    </Text>
+                    {primaryIncomingRequest.discountCode ? (
+                      <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
+                        {primaryIncomingRequest.discountCode}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View className="mt-2 flex-row items-center justify-between">
+                    <Text className="text-sm text-[#1e3a8a]">Passenger total</Text>
+                    <Text className="text-sm font-semibold text-[#1e3a8a]">
+                      ${Number(primaryIncomingRequest.finalEstimatedAmount || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                  <View className="mt-1 flex-row items-center justify-between">
+                    <Text className="text-sm text-[#1e3a8a]">Discount</Text>
+                    <Text className="text-sm font-semibold text-[#1e3a8a]">
+                      ${Number(primaryIncomingRequest.discountAmount || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                  <View className="mt-1 flex-row items-center justify-between">
+                    <Text className="text-sm text-[#1e3a8a]">Admin reimbursement</Text>
+                    <Text className="text-sm font-semibold text-[#1e3a8a]">
+                      ${Number(primaryIncomingRequest.driverReimbursementAmount || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
+              <View className="mt-3 flex-row gap-3">
+                <TouchableOpacity
+                  onPress={() => handleDeclineRequest(primaryIncomingRequest)}
+                  className="h-12 flex-1 items-center justify-center rounded-[14px] border border-[#d7d9df] bg-white"
+                >
+                  <Text className="text-xs font-bold uppercase text-[#5d6470]">Decline</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleAcceptRequest(primaryIncomingRequest)}
+                  disabled={acceptingRideId === primaryIncomingRequest.id}
+                  className="h-12 flex-[1.15] flex-row items-center justify-center rounded-[14px] bg-[#2f73c9]"
+                >
+                  {acceptingRideId === primaryIncomingRequest.id ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-xs font-bold uppercase text-white">Accept</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
-        )}
+        ) : null}
       </View>
 
       <Modal

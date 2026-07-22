@@ -58,9 +58,15 @@ export async function sendFcmNotifications(messages) {
         },
         android: {
           priority: 'high',
+          ...(message.android?.collapseKey
+            ? { collapseKey: message.android.collapseKey }
+            : {}),
           notification: {
             channelId: message.android?.channelId || 'ride-requests',
             sound: message.android?.notification?.sound || 'default',
+            ...(message.android?.notification?.tag
+              ? { tag: message.android.notification.tag }
+              : {}),
             clickAction:
               message.android?.notification?.clickAction
               || 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',

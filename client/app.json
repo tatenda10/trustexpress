@@ -6,7 +6,8 @@
         "expo-notifications",
         {
           "sounds": [
-            "./assets/notificationaudio.mpeg"
+            "./assets/notificationaudio.mpeg",
+            "./assets/sound2.mpeg"
           ]
         }
       ],

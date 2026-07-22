@@ -37,6 +37,7 @@
     "db:migrate:driver-wallet-settings": "node scripts/run-migration.js sql/migrations/051_add_driver_wallet_settings.sql",
     "db:migrate:driver-wallet-payments-enabled": "node scripts/run-migration.js sql/migrations/052_add_driver_wallet_payments_enabled.sql",
     "db:migrate:driver-wallet-defaults-off": "node scripts/run-migration.js sql/migrations/053_driver_wallet_defaults_off.sql",
+    "db:migrate:driver-wallet-currency-zar": "node scripts/run-migration.js sql/migrations/054_set_driver_wallet_currency_zar.sql",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
     "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",
     "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",
