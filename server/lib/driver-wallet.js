@@ -1,11 +1,11 @@
 import { query, withTransaction } from '../db/connection.js';
 import { getDriverWalletSettings } from './driver-wallet-settings.js';
+import { getPaymentProvider, normalizePaymentProvider } from './payment-providers/index.js';
 
 /** @deprecated Use getDriverWalletSettings().commissionRatePercent */
 export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
 /** @deprecated Use getDriverWalletSettings().currency */
 export const DRIVER_WALLET_CURRENCY = 'ZAR';
-const PAYSTACK_API_BASE_URL = 'https://api.paystack.co';
 const LOW_BALANCE_MESSAGE = 'Your Trust Express Wallet balance is too low. Please top up your wallet to continue receiving ride requests.';
 const PAYMENTS_UNAVAILABLE_MESSAGE = 'Wallet top-ups are not available yet. Please check back soon.';
 
@@ -13,14 +13,6 @@ function normalizeMoney(value) {
   const amount = Number(value || 0);
   if (!Number.isFinite(amount)) return 0;
   return Math.round(amount * 100) / 100;
-}
-
-function toMinorUnits(amount) {
-  return Math.round(normalizeMoney(amount) * 100);
-}
-
-function fromMinorUnits(value) {
-  return normalizeMoney(Number(value || 0) / 100);
 }
 
 function buildWalletError(message, status = 400) {
@@ -32,36 +24,6 @@ function buildWalletError(message, status = 400) {
 function makeReference(driverUserId) {
   const rawId = String(driverUserId || 'driver').replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'driver';
   return `dw_${rawId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function getPaystackSecretKey() {
-  const key = String(process.env.PAYSTACK_SECRET_KEY || '').trim();
-  if (!key) {
-    throw buildWalletError('PAYSTACK_SECRET_KEY is not configured on the server', 500);
-  }
-  return key;
-}
-
-async function paystackRequest(path, { method = 'GET', body } = {}) {
-  const res = await fetch(`${PAYSTACK_API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${getPaystackSecretKey()}`,
-      'Content-Type': 'application/json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data?.status === false) {
-    const error = buildWalletError(
-      data?.message || `Paystack request failed with status ${res.status}`,
-      502
-    );
-    error.providerPayload = data;
-    throw error;
-  }
-  return data;
 }
 
 async function ensureDriverWallet(driverUserId, connection = null) {
@@ -107,6 +69,7 @@ function mapWalletStatus(walletRow, settings) {
     commissionRatePercent: Number(settings?.commissionRatePercent || 9.5),
     walletEnabled,
     paymentsEnabled,
+    paymentProvider: normalizePaymentProvider(settings?.paymentProvider, 'paystack'),
     paymentsUnavailableMessage: paymentsEnabled ? '' : PAYMENTS_UNAVAILABLE_MESSAGE,
     sufficientBalance,
     lowBalanceMessage: sufficientBalance ? '' : LOW_BALANCE_MESSAGE,
@@ -174,6 +137,7 @@ function mapTopupRow(row, settings = null) {
     status: row.status,
     authorizationUrl: row.authorization_url || null,
     accessCode: row.access_code || null,
+    providerTransactionId: row.provider_transaction_id || null,
     paymentMethod: row.payment_method || null,
     paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
     verifiedAt: row.verified_at ? new Date(row.verified_at).toISOString() : null,
@@ -222,6 +186,7 @@ export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}
       topupMaxAmount: normalizeMoney(settings.topupMaxAmount || 500),
       walletEnabled: settings.walletEnabled !== false,
       paymentsEnabled: settings.paymentsEnabled === true,
+      paymentProvider: normalizePaymentProvider(settings.paymentProvider, 'paystack'),
       paymentsUnavailableMessage: settings.paymentsEnabled === true ? '' : PAYMENTS_UNAVAILABLE_MESSAGE,
     },
     summary: {
@@ -238,6 +203,9 @@ export async function initializeDriverWalletTopup({
   driverEmail,
   amount,
   callbackUrl = null,
+  firstName = '',
+  lastName = '',
+  mobilePhoneNumber = '',
 }) {
   const settings = await getDriverWalletSettings();
   if (settings.paymentsEnabled !== true) {
@@ -246,6 +214,8 @@ export async function initializeDriverWalletTopup({
     throw error;
   }
   const currency = settings.currency || DRIVER_WALLET_CURRENCY;
+  const providerId = normalizePaymentProvider(settings.paymentProvider, 'paystack');
+  const provider = getPaymentProvider(providerId);
   const topupMinAmount = normalizeMoney(settings.topupMinAmount || 1);
   const topupMaxAmount = normalizeMoney(settings.topupMaxAmount || 500);
   const normalizedAmount = normalizeMoney(amount);
@@ -266,20 +236,16 @@ export async function initializeDriverWalletTopup({
   const reference = makeReference(driverUserId);
   const nextCallbackUrl = String(callbackUrl || '').trim() || undefined;
 
-  const initializePayload = await paystackRequest('/transaction/initialize', {
-    method: 'POST',
-    body: {
-      email,
-      amount: toMinorUnits(normalizedAmount),
-      currency,
-      reference,
-      callback_url: nextCallbackUrl,
-      metadata: {
-        driverUserId,
-        walletTopup: true,
-        amount: normalizedAmount,
-      },
-    },
+  const initializeResult = await provider.initializeTopup({
+    reference,
+    amount: normalizedAmount,
+    currency,
+    email,
+    callbackUrl: nextCallbackUrl,
+    driverUserId,
+    firstName,
+    lastName,
+    mobilePhoneNumber,
   });
 
   await ensureDriverWallet(driverUserId);
@@ -294,62 +260,50 @@ export async function initializeDriverWalletTopup({
        status,
        authorization_url,
        access_code,
+       provider_transaction_id,
        raw_initialize_payload
-     ) VALUES (?, 'paystack', ?, ?, NULL, ?, 'pending', ?, ?, ?)
+     ) VALUES (?, ?, ?, ?, NULL, ?, 'pending', ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
+       provider = VALUES(provider),
        requested_amount = VALUES(requested_amount),
        authorization_url = VALUES(authorization_url),
        access_code = VALUES(access_code),
+       provider_transaction_id = VALUES(provider_transaction_id),
        raw_initialize_payload = VALUES(raw_initialize_payload),
        updated_at = CURRENT_TIMESTAMP`,
     [
       driverUserId,
+      providerId,
       reference,
       normalizedAmount,
       currency,
-      initializePayload?.data?.authorization_url || null,
-      initializePayload?.data?.access_code || null,
-      JSON.stringify(initializePayload),
+      initializeResult.authorizationUrl || null,
+      initializeResult.accessCode || null,
+      initializeResult.externalTransactionId || null,
+      JSON.stringify(initializeResult.rawInitializePayload || {}),
     ]
   );
 
   return {
     reference,
-    authorizationUrl: initializePayload?.data?.authorization_url || null,
-    accessCode: initializePayload?.data?.access_code || null,
+    provider: providerId,
+    authorizationUrl: initializeResult.authorizationUrl || null,
+    accessCode: initializeResult.accessCode || null,
     amount: normalizedAmount,
     currency,
   };
 }
 
-export async function verifyDriverWalletTopup(driverUserId, reference) {
-  const settings = await getDriverWalletSettings();
+async function applyVerifiedTopupCredit({
+  driverUserId,
+  reference,
+  verification,
+  settings,
+}) {
   const currency = settings.currency || DRIVER_WALLET_CURRENCY;
   const safeReference = String(reference || '').trim();
-  if (!safeReference) {
-    throw buildWalletError('reference is required');
-  }
 
-  const [existingTopup] = await query(
-    `SELECT *
-     FROM driver_wallet_topups
-     WHERE reference = ?
-       AND driver_user_id = ?
-     LIMIT 1`,
-    [safeReference, driverUserId]
-  );
-  if (!existingTopup) {
-    throw buildWalletError('Top-up not found', 404);
-  }
-
-  const verifyPayload = await paystackRequest(`/transaction/verify/${encodeURIComponent(safeReference)}`);
-  const transactionData = verifyPayload?.data || {};
-  const wasSuccessful = String(transactionData.status || '').toLowerCase() === 'success';
-  const verifiedAmount = fromMinorUnits(transactionData.amount);
-  const verifiedCurrency = String(transactionData.currency || currency).toUpperCase();
-  const paymentMethod = transactionData.channel || transactionData.authorization?.channel || null;
-
-  const result = await withTransaction(async (connection) => {
+  return withTransaction(async (connection) => {
     const [topupRows] = await connection.execute(
       `SELECT *
        FROM driver_wallet_topups
@@ -376,15 +330,10 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
     }
 
     const expectedAmount = normalizeMoney(topup.requested_amount || 0);
-    const exactAmountMatched = verifiedAmount === expectedAmount && verifiedCurrency === currency;
-    const nextStatus = wasSuccessful && exactAmountMatched
-      ? 'success'
-      : ['abandoned', 'failed', 'cancelled'].includes(String(transactionData.status || '').toLowerCase())
-        ? String(transactionData.status || '').toLowerCase()
-        : 'failed';
-
+    const nextStatus = verification.nextStatus || 'failed';
     let nextBalance = currentBalance;
-    if (wasSuccessful && exactAmountMatched) {
+
+    if (verification.wasSuccessful) {
       const creditedAmount = expectedAmount;
       nextBalance = normalizeMoney(currentBalance + creditedAmount);
 
@@ -410,18 +359,19 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
            provider_reference,
            external_transaction_id,
            description
-         ) VALUES (?, 'top_up_credit', ?, ?, ?, 'paystack_topup', ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, 'top_up_credit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           driverUserId,
           creditedAmount,
           currency,
-          paymentMethod,
+          verification.paymentMethod || null,
+          verification.sourceType || `${String(topup.provider || 'wallet')}_topup`,
           safeReference,
           currentBalance,
           nextBalance,
           safeReference,
-          transactionData.id == null ? null : String(transactionData.id),
-          'Wallet top-up via Paystack',
+          verification.externalTransactionId || null,
+          verification.description || 'Wallet top-up',
         ]
       );
     }
@@ -430,7 +380,7 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
       `UPDATE driver_wallet_topups
        SET status = ?,
            credited_amount = ?,
-           paystack_transaction_id = ?,
+           provider_transaction_id = ?,
            payment_method = ?,
            paid_at = CASE WHEN ? = 'success' THEN CURRENT_TIMESTAMP ELSE paid_at END,
            verified_at = CURRENT_TIMESTAMP,
@@ -440,11 +390,11 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
          AND driver_user_id = ?`,
       [
         nextStatus,
-        wasSuccessful ? normalizeMoney(topup.requested_amount || verifiedAmount) : null,
-        transactionData.id == null ? null : String(transactionData.id),
-        paymentMethod,
+        verification.wasSuccessful ? expectedAmount : null,
+        verification.externalTransactionId || null,
+        verification.paymentMethod || null,
         nextStatus,
-        JSON.stringify(verifyPayload),
+        JSON.stringify(verification.rawVerifyPayload || {}),
         safeReference,
         driverUserId,
       ]
@@ -472,8 +422,82 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
       alreadyVerified: false,
     };
   });
+}
 
-  return result;
+export async function verifyDriverWalletTopup(driverUserId, reference) {
+  const settings = await getDriverWalletSettings();
+  const currency = settings.currency || DRIVER_WALLET_CURRENCY;
+  const safeReference = String(reference || '').trim();
+  if (!safeReference) {
+    throw buildWalletError('reference is required');
+  }
+
+  const [existingTopup] = await query(
+    `SELECT *
+     FROM driver_wallet_topups
+     WHERE reference = ?
+       AND driver_user_id = ?
+     LIMIT 1`,
+    [safeReference, driverUserId]
+  );
+  if (!existingTopup) {
+    throw buildWalletError('Top-up not found', 404);
+  }
+
+  const providerId = normalizePaymentProvider(existingTopup.provider || settings.paymentProvider, 'paystack');
+  const provider = getPaymentProvider(providerId);
+  const verification = await provider.verifyTopup({
+    reference: safeReference,
+    expectedAmount: existingTopup.requested_amount,
+    expectedCurrency: existingTopup.currency || currency,
+  });
+
+  return applyVerifiedTopupCredit({
+    driverUserId,
+    reference: safeReference,
+    verification,
+    settings,
+  });
+}
+
+export async function handleSmilePayWalletWebhook(body = {}) {
+  const settings = await getDriverWalletSettings();
+  const provider = getPaymentProvider('smilepay');
+  const parsed = provider.parseWebhook(body);
+  const safeReference = String(parsed.reference || '').trim();
+  if (!safeReference) {
+    throw buildWalletError('orderReference is required', 400);
+  }
+
+  const [existingTopup] = await query(
+    `SELECT *
+     FROM driver_wallet_topups
+     WHERE reference = ?
+     LIMIT 1`,
+    [safeReference]
+  );
+  if (!existingTopup) {
+    throw buildWalletError('Top-up not found', 404);
+  }
+
+  const expectedAmount = normalizeMoney(existingTopup.requested_amount || 0);
+  const expectedCurrency = String(existingTopup.currency || settings.currency || 'USD').toUpperCase();
+  const amountMatched = normalizeMoney(parsed.verifiedAmount) === expectedAmount;
+  const currencyMatched = String(parsed.verifiedCurrency || '').toUpperCase() === expectedCurrency;
+  const verification = {
+    ...parsed,
+    wasSuccessful: parsed.wasSuccessful && amountMatched && currencyMatched,
+    nextStatus: parsed.wasSuccessful && amountMatched && currencyMatched
+      ? 'success'
+      : parsed.nextStatus || 'failed',
+  };
+
+  return applyVerifiedTopupCredit({
+    driverUserId: existingTopup.driver_user_id,
+    reference: safeReference,
+    verification,
+    settings,
+  });
 }
 
 export async function deductCommissionForCompletedRide({

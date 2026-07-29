@@ -62,10 +62,12 @@ const DriverWalletScreen = () => {
     topupMaxAmount: 500,
     commissionRatePercent: 9.5,
     paymentsEnabled: false,
+    paymentProvider: 'paystack',
     paymentsUnavailableMessage: '',
     sufficientBalance: true,
     lowBalanceMessage: '',
   });
+  const providerLabel = wallet.paymentProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack';
   const [summary, setSummary] = useState({
     totalTopups: 0,
     totalCommissionPaid: 0,
@@ -113,6 +115,7 @@ const DriverWalletScreen = () => {
         topupMaxAmount: Number(data?.wallet?.topupMaxAmount || data?.settings?.topupMaxAmount || 500),
         commissionRatePercent: Number(data?.wallet?.commissionRatePercent || data?.settings?.commissionRatePercent || 9.5),
         paymentsEnabled: data?.wallet?.paymentsEnabled === true || data?.settings?.paymentsEnabled === true,
+        paymentProvider: String(data?.wallet?.paymentProvider || data?.settings?.paymentProvider || 'paystack').toLowerCase(),
         paymentsUnavailableMessage: data?.wallet?.paymentsUnavailableMessage || data?.settings?.paymentsUnavailableMessage || '',
         sufficientBalance: data?.wallet?.sufficientBalance !== false,
         lowBalanceMessage: data?.wallet?.lowBalanceMessage || '',
@@ -133,6 +136,7 @@ const DriverWalletScreen = () => {
         topupMaxAmount: 500,
         commissionRatePercent: 9.5,
         paymentsEnabled: false,
+        paymentProvider: 'paystack',
         paymentsUnavailableMessage: '',
         sufficientBalance: true,
         lowBalanceMessage: '',
@@ -177,16 +181,19 @@ const DriverWalletScreen = () => {
       });
 
       if (!topup?.authorizationUrl) {
-        throw new Error('Could not start Paystack checkout.');
+        throw new Error(`Could not start ${providerLabel} checkout.`);
       }
 
       const authResult = await WebBrowser.openAuthSessionAsync(topup.authorizationUrl, callbackUrl);
-      const references = [topup.reference];
+      const references = [topup.reference].filter(Boolean);
       if (authResult?.type === 'success' && authResult?.url) {
         const parsed = ExpoLinking.parse(authResult.url);
-        const returnedReference = parsed?.queryParams?.reference;
-        if (returnedReference && !references.includes(returnedReference)) {
-          references.push(returnedReference);
+        const returnedReference =
+          parsed?.queryParams?.reference
+          || parsed?.queryParams?.orderReference
+          || parsed?.queryParams?.transactionReference;
+        if (returnedReference && !references.includes(String(returnedReference))) {
+          references.push(String(returnedReference));
         }
       }
 
@@ -302,7 +309,7 @@ const DriverWalletScreen = () => {
                 style={{ backgroundColor: startingTopup ? '#93c5fd' : PRIMARY_BLUE }}
               >
                 <Text className="text-base font-bold text-white">
-                  {startingTopup ? 'Opening Paystack...' : 'Top Up'}
+                  {startingTopup ? `Opening ${providerLabel}...` : 'Top Up'}
                 </Text>
               </TouchableOpacity>
                 </>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PassengerHomeStack from './PassengerHomeStack';
@@ -9,6 +10,12 @@ import PassengerAccountStack from './PassengerAccountStack';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 const Tab = createBottomTabNavigator();
+
+const HIDDEN_TAB_BAR_ROUTES = new Set([
+  'PassengerNearbyCars',
+  'PassengerRideTracking',
+  'RideChat',
+]);
 
 function TabLabel({ label, focused, color }) {
   return (
@@ -29,8 +36,35 @@ function TabLabel({ label, focused, color }) {
   );
 }
 
+function shouldHideTabBar(route) {
+  const focusedRouteName = getFocusedRouteNameFromRoute(route) ?? 'PassengerBookingHome';
+  return HIDDEN_TAB_BAR_ROUTES.has(focusedRouteName);
+}
+
 export default function PassengerTabNavigator() {
   const insets = useSafeAreaInsets();
+
+  const baseTabBarStyle = {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: Math.max(insets.bottom, 6),
+    height: 30 + Math.max(insets.bottom, 1),
+    borderTopColor: '#f3f4f6',
+    borderTopWidth: 1,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    paddingTop: 0,
+    paddingBottom: Math.max(insets.bottom, 0),
+    elevation: 12,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+  };
 
   return (
     <Tab.Navigator
@@ -38,37 +72,20 @@ export default function PassengerTabNavigator() {
         headerShown: false,
         tabBarActiveTintColor: PRIMARY_BLUE,
         tabBarInactiveTintColor: '#9ca3af',
-        tabBarStyle: {
-          position: 'absolute',
-          left: 16,
-          right: 16,
-          bottom: Math.max(insets.bottom, 6),
-          height: 30 + Math.max(insets.bottom, 1),
-          borderTopColor: '#f3f4f6',
-          borderTopWidth: 1,
-          borderTopLeftRadius: 22,
-          borderTopRightRadius: 22,
-          borderBottomLeftRadius: 0,
-          borderBottomRightRadius: 0,
-          backgroundColor: 'rgba(255,255,255,0.96)',
-          paddingTop: 0,
-          paddingBottom: Math.max(insets.bottom, 0),
-          elevation: 12,
-          shadowColor: '#0f172a',
-          shadowOpacity: 0.08,
-          shadowRadius: 16,
-          shadowOffset: { width: 0, height: 8 },
-        },
+        tabBarStyle: baseTabBarStyle,
       }}
     >
       <Tab.Screen
         name="PassengerHome"
         component={PassengerHomeStack}
-        options={{
+        options={({ route }) => ({
           title: 'Home',
           tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={20} color={color} />,
           tabBarLabel: ({ focused, color }) => <TabLabel label="Home" focused={focused} color={color} />,
-        }}
+          tabBarStyle: shouldHideTabBar(route)
+            ? { display: 'none' }
+            : baseTabBarStyle,
+        })}
       />
       <Tab.Screen
         name="PassengerActivity"

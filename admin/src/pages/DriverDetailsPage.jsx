@@ -242,8 +242,8 @@ export default function DriverDetailsPage() {
           <Field label="EcoCash Number" value={driver.profile?.ecocashNumber || '-'} />
           <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
-          <Field label="National ID Number" value={profileDocs.nationalIdNumber || '-'} />
-          <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
+          <Field label="National ID Number" value={driver?.profileDocs?.nationalIdNumber || '-'} />
+          <Field label="Driver Licence Number" value={driver?.profileDocs?.driverLicenceNumber || '-'} />
           <Field
             label="Referred By Agent"
             value={
@@ -361,7 +361,7 @@ export default function DriverDetailsPage() {
                     </div>
 
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      {evaluation.checks.map((check, index) => (
+                      {(evaluation.checks || []).map((check, index) => (
                         <div key={`${evaluation.tierKey}-${index}`} className="border border-slate-200 bg-white px-3 py-2">
                           <div className="flex items-center justify-between gap-3">
                             <p className="text-xs font-semibold text-slate-800">{check.label}</p>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Alert, AppState, DeviceEventEmitter, Platform } from 'react-native';
+import { Alert, AppState, DeviceEventEmitter, Platform, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -1627,6 +1627,25 @@ function AppContent() {
 
 // Root App with Clerk Provider
 export default function App() {
+  // ClerkProvider throws on an undefined key, which shows up as an instant crash
+  // on launch for any build where EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY wasn't injected.
+  if (!CLERK_PUBLISHABLE_KEY) {
+    return (
+      <SafeAreaProvider>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#ffffff' }}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827', textAlign: 'center' }}>
+            App configuration missing
+          </Text>
+          <Text style={{ marginTop: 8, fontSize: 14, color: '#4b5563', textAlign: 'center' }}>
+            EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is not set for this build. Add it to the build profile
+            environment and rebuild.
+          </Text>
+        </View>
+        <StatusBar style="auto" />
+      </SafeAreaProvider>
+    );
+  }
+
   return (
     <ClerkProvider
       publishableKey={CLERK_PUBLISHABLE_KEY}

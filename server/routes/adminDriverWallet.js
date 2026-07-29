@@ -23,6 +23,7 @@ router.put('/settings', requireAdminAuth, requirePermission('payouts.manage'), a
     const settings = await updateDriverWalletSettings({
       walletEnabled: req.body?.walletEnabled,
       paymentsEnabled: req.body?.paymentsEnabled,
+      paymentProvider: req.body?.paymentProvider,
       minimumBalanceUsd: req.body?.minimumBalanceUsd,
       commissionRatePercent: req.body?.commissionRatePercent,
       topupMinAmount: req.body?.topupMinAmount,

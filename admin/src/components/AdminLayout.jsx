@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import AdminSidebar from './AdminSidebar'
+import ErrorBoundary from './ErrorBoundary'
 import { useAuth } from '../authcontext/AuthContext'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 
 export default function AdminLayout() {
   const { admin } = useAuth()
+  const location = useLocation()
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   useEffect(() => {
@@ -61,7 +63,10 @@ export default function AdminLayout() {
         </div>
 
         <div className="p-2 sm:p-2.5 md:p-4">
-          <Outlet />
+          {/* Keyed by path so a crashed page recovers when the admin navigates away. */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </main>
     </div>

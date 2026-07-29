@@ -3,7 +3,11 @@ import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 
-const CURRENCY_OPTIONS = ['USD', 'ZWL', 'ZAR', 'NGN', 'GHS', 'KES'];
+const CURRENCY_OPTIONS = ['USD', 'ZWG', 'ZAR', 'NGN', 'GHS', 'KES'];
+const PROVIDER_DEFAULT_CURRENCY = {
+  paystack: 'ZAR',
+  smilepay: 'USD',
+};
 
 function formatMoney(value, currency = 'USD') {
   const amount = Number(value || 0)
@@ -23,6 +27,11 @@ export default function DriverWalletSettingsPage() {
   const [settings, setSettings] = useState({
     walletEnabled: false,
     paymentsEnabled: false,
+    paymentProvider: 'paystack',
+    paymentProviderOptions: [
+      { id: 'paystack', label: 'Paystack', defaultCurrency: 'ZAR' },
+      { id: 'smilepay', label: 'Smile&Pay (ZB Bank)', defaultCurrency: 'USD' },
+    ],
     minimumBalanceUsd: 1,
     commissionRatePercent: 9.5,
     topupMinAmount: 1,
@@ -32,6 +41,8 @@ export default function DriverWalletSettingsPage() {
   })
 
   const paymentsLive = !!settings.paymentsEnabled
+  const activeProvider = String(settings.paymentProvider || 'paystack').toLowerCase()
+  const providerLabel = activeProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack'
 
   const loadSettings = async () => {
     setLoading(true)
@@ -68,6 +79,7 @@ export default function DriverWalletSettingsPage() {
           // When payments are off, force gating off so the app stays in legacy mode.
           walletEnabled: settings.paymentsEnabled ? !!settings.walletEnabled : false,
           paymentsEnabled: !!settings.paymentsEnabled,
+          paymentProvider: String(settings.paymentProvider || 'paystack').toLowerCase(),
           minimumBalanceUsd: Number(settings.minimumBalanceUsd),
           commissionRatePercent: Number(settings.commissionRatePercent),
           topupMinAmount: Number(settings.topupMinAmount),
@@ -96,7 +108,7 @@ export default function DriverWalletSettingsPage() {
       <div>
         <h1 className="text-xl font-semibold text-slate-900">Driver wallet settings</h1>
         <p className="mt-1 text-xs text-slate-500">
-          Master payments switch: Off = default ride flow (no Paystack). On = full wallet payments system.
+          Master payments switch and provider. Off = default ride flow. On = wallet top-ups via Paystack or Smile&Pay.
         </p>
       </div>
 
@@ -118,8 +130,8 @@ export default function DriverWalletSettingsPage() {
             </p>
             <p className="mt-2 text-xs leading-5 text-slate-600">
               {paymentsLive
-                ? 'Drivers can top up with Paystack, low balance can block ride requests, and commission is deducted on completed trips.'
-                : 'Drivers work as before: no Paystack top-ups, no wallet balance requirement, and no commission wallet deductions.'}
+                ? `Drivers can top up with ${providerLabel}, low balance can block ride requests, and commission is deducted on completed trips.`
+                : 'Drivers work as before: no wallet top-ups, no wallet balance requirement, and no commission wallet deductions.'}
             </p>
           </div>
 
@@ -141,13 +153,41 @@ export default function DriverWalletSettingsPage() {
             <span>
               <span className="block text-sm font-semibold text-slate-800">Enable payments system</span>
               <span className="mt-0.5 block text-xs text-slate-500">
-                Master switch. Off = legacy ride flow. On = Paystack top-ups, wallet balance checks, and commission deductions.
+                Master switch. Off = legacy ride flow. On = top-ups, wallet balance checks, and commission deductions.
               </span>
             </span>
           </label>
 
           {paymentsLive ? (
             <>
+              <label className="block border border-slate-200 bg-slate-50 px-3 py-3">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Payment provider
+                </span>
+                <select
+                  value={activeProvider}
+                  disabled={!canManage}
+                  onChange={(event) => {
+                    const nextProvider = String(event.target.value || 'paystack').toLowerCase()
+                    setSettings((prev) => ({
+                      ...prev,
+                      paymentProvider: nextProvider,
+                      currency: PROVIDER_DEFAULT_CURRENCY[nextProvider] || prev.currency,
+                    }))
+                  }}
+                  className="w-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"
+                >
+                  {(settings.paymentProviderOptions || []).map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+                <span className="mt-2 block text-xs leading-5 text-slate-500">
+                  {activeProvider === 'smilepay'
+                    ? 'Smile&Pay supports USD (840) and ZWG (924) with Ecocash, Innbucks, cards, and more. Requires SMILEPAY_API_KEY, SMILEPAY_API_SECRET, and PUBLIC_API_BASE_URL.'
+                    : 'Paystack stays available. SA merchants typically use ZAR. Requires PAYSTACK_SECRET_KEY.'}
+                </span>
+              </label>
+
               <label className="flex items-start gap-3 border border-slate-200 bg-slate-50 px-3 py-3">
                 <input
                   type="checkbox"
@@ -247,13 +287,13 @@ export default function DriverWalletSettingsPage() {
                 Example: a {formatMoney(exampleFare, settings.currency)} trip deducts{' '}
                 <strong>{formatMoney(exampleCommission, settings.currency)}</strong> commission (
                 {Number(settings.commissionRatePercent || 0).toFixed(2)}%).
-                Paystack secret keys stay in server environment variables.
+                Active provider: <strong>{providerLabel}</strong>. Provider API keys stay in server environment variables.
               </div>
             </>
           ) : (
             <div className="border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
               Payments are off. Drivers can go online and complete trips without wallet top-ups or commission deductions.
-              Turn the switch on above when you are ready to launch Paystack wallet payments.
+              Turn the switch on above when you are ready to launch wallet payments.
             </div>
           )}
 

@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import * as Speech from 'expo-speech';
@@ -153,13 +152,19 @@ function parseTimestampMs(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isValidCoordinate(value) {
+  return Number.isFinite(Number(value?.latitude)) && Number.isFinite(Number(value?.longitude));
+}
+
 function buildTrackingRegion(driverCoordinate, pickupCoordinate, targetCoordinate, stage) {
   const focusCoordinates = stage === 'on_trip'
     ? [driverCoordinate, targetCoordinate]
     : [driverCoordinate, pickupCoordinate];
-  const coordinates = focusCoordinates.filter(Boolean);
-  const latitudes = coordinates.map((item) => item.latitude);
-  const longitudes = coordinates.map((item) => item.longitude);
+  const coordinates = focusCoordinates.filter(isValidCoordinate);
+  // Math.min(...[]) is Infinity, which would make every field NaN and crash the native map.
+  if (coordinates.length === 0) return null;
+  const latitudes = coordinates.map((item) => Number(item.latitude));
+  const longitudes = coordinates.map((item) => Number(item.longitude));
 
   return {
     latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
@@ -206,7 +211,6 @@ async function fetchTrackingDirections(token, origin, destination, waypoints = [
 
 export default function PassengerRideTrackingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   const mapRef = useRef(null);
@@ -259,11 +263,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
   const windowHeight = Dimensions.get('window').height;
-  const safeTabBarHeight = Number.isFinite(tabBarHeight)
-    ? Math.min(Math.max(tabBarHeight, 48), 72)
-    : 56;
-  const bottomActionInset = Math.min(Math.max(insets.bottom + safeTabBarHeight - 8, 16), 80);
-  const collapsedSheetHeight = Math.min(Math.max(280, bottomActionInset + 200), Math.round(windowHeight * 0.42));
+  // Tab bar is hidden on this screen; only keep safe-area padding for the footer actions.
+  const bottomActionInset = Math.max(insets.bottom + 16, 24);
+  const collapsedSheetHeight = Math.min(Math.max(260, bottomActionInset + 200), Math.round(windowHeight * 0.42));
   const expandedSheetMaxHeight = Math.round(windowHeight * 0.58);
 
   useEffect(() => {
@@ -921,7 +923,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           rotateEnabled={false}
           pitchEnabled={false}
         >
-          {driverCoordinate ? (
+          {isValidCoordinate(driverCoordinate) ? (
             <Marker
               coordinate={driverCoordinate}
               title="Driver"
@@ -944,9 +946,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               </View>
             </Marker>
           ) : null}
-          <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+          {isValidCoordinate(pickupCoordinate) ? (
+            <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+          ) : null}
           {intermediateStops.map((stop, index) => (
-            stop?.coordinate ? (
+            isValidCoordinate(stop?.coordinate) ? (
               <Marker
                 key={`passenger-stop-${index}`}
                 coordinate={stop.coordinate}
@@ -956,7 +960,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               />
             ) : null
           ))}
-          <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
+          {isValidCoordinate(dropoffCoordinate) ? (
+            <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
+          ) : null}
           <Polyline
             coordinates={activeRouteCoordinates}
             strokeColor={PRIMARY_BLUE}

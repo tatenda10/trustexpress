@@ -1,10 +1,17 @@
 import { query } from '../db/connection.js';
+import {
+  getDefaultCurrencyForProvider,
+  normalizePaymentProvider,
+  PAYMENT_PROVIDER_OPTIONS,
+} from './payment-providers/index.js';
 
 export const DEFAULT_MINIMUM_BALANCE_USD = 1;
 export const DEFAULT_COMMISSION_RATE_PERCENT = 9.5;
 export const DEFAULT_TOPUP_MIN_AMOUNT = 1;
 export const DEFAULT_TOPUP_MAX_AMOUNT = 500;
 export const DEFAULT_WALLET_CURRENCY = 'ZAR';
+export const DEFAULT_PAYMENT_PROVIDER = 'paystack';
+export { PAYMENT_PROVIDER_OPTIONS };
 
 const SETTINGS_CACHE_TTL_MS = 15_000;
 
@@ -34,10 +41,15 @@ function normalizeCurrency(value, fallback = DEFAULT_WALLET_CURRENCY) {
 }
 
 function getDefaultSettingsFromEnv() {
+  const paymentProvider = normalizePaymentProvider(
+    process.env.DRIVER_WALLET_PAYMENT_PROVIDER,
+    DEFAULT_PAYMENT_PROVIDER
+  );
   return {
     // Keep legacy ride flow until admin explicitly turns payments on.
     walletEnabled: false,
     paymentsEnabled: coerceBoolean(process.env.DRIVER_WALLET_PAYMENTS_ENABLED, false),
+    paymentProvider,
     minimumBalanceUsd: normalizeMoney(
       process.env.DRIVER_WALLET_MINIMUM_BALANCE_USD,
       DEFAULT_MINIMUM_BALANCE_USD
@@ -54,7 +66,10 @@ function getDefaultSettingsFromEnv() {
       process.env.DRIVER_WALLET_TOPUP_MAX_AMOUNT,
       DEFAULT_TOPUP_MAX_AMOUNT
     ) || DEFAULT_TOPUP_MAX_AMOUNT,
-    currency: normalizeCurrency(process.env.DRIVER_WALLET_CURRENCY, DEFAULT_WALLET_CURRENCY),
+    currency: normalizeCurrency(
+      process.env.DRIVER_WALLET_CURRENCY,
+      getDefaultCurrencyForProvider(paymentProvider) || DEFAULT_WALLET_CURRENCY
+    ),
     updatedByAdminId: null,
     createdAt: null,
     updatedAt: null,
@@ -65,9 +80,15 @@ function shapeDriverWalletSettings(row) {
   const defaults = getDefaultSettingsFromEnv();
   const topupMinAmount = normalizeMoney(row?.topup_min_amount, defaults.topupMinAmount);
   const topupMaxAmount = normalizeMoney(row?.topup_max_amount, defaults.topupMaxAmount);
+  const paymentProvider = normalizePaymentProvider(
+    row?.payment_provider,
+    defaults.paymentProvider
+  );
   return {
     walletEnabled: coerceBoolean(row?.wallet_enabled, defaults.walletEnabled),
     paymentsEnabled: coerceBoolean(row?.payments_enabled, defaults.paymentsEnabled),
+    paymentProvider,
+    paymentProviderOptions: PAYMENT_PROVIDER_OPTIONS,
     minimumBalanceUsd: normalizeMoney(row?.minimum_balance_usd, defaults.minimumBalanceUsd),
     commissionRatePercent: clampCommissionRate(row?.commission_rate_percent, defaults.commissionRatePercent),
     topupMinAmount: topupMinAmount > 0 ? topupMinAmount : defaults.topupMinAmount,
@@ -86,19 +107,21 @@ async function ensureDriverWalletSettingsRow() {
        id,
        wallet_enabled,
        payments_enabled,
+       payment_provider,
        minimum_balance_usd,
        commission_rate_percent,
        topup_min_amount,
        topup_max_amount,
        currency
      )
-     SELECT 1, ?, ?, ?, ?, ?, ?, ?
+     SELECT 1, ?, ?, ?, ?, ?, ?, ?, ?
      WHERE NOT EXISTS (
        SELECT 1 FROM driver_wallet_settings WHERE id = 1
      )`,
     [
       defaults.walletEnabled ? 1 : 0,
       defaults.paymentsEnabled ? 1 : 0,
+      defaults.paymentProvider,
       defaults.minimumBalanceUsd,
       defaults.commissionRatePercent,
       defaults.topupMinAmount,
@@ -150,6 +173,7 @@ export async function getDriverWalletSettings({ force = false } = {}) {
 export async function updateDriverWalletSettings({
   walletEnabled,
   paymentsEnabled,
+  paymentProvider,
   minimumBalanceUsd,
   commissionRatePercent,
   topupMinAmount,
@@ -166,6 +190,9 @@ export async function updateDriverWalletSettings({
   const nextPaymentsEnabled = paymentsEnabled === undefined
     ? current.paymentsEnabled
     : coerceBoolean(paymentsEnabled, current.paymentsEnabled);
+  const nextPaymentProvider = paymentProvider === undefined
+    ? current.paymentProvider
+    : normalizePaymentProvider(paymentProvider, current.paymentProvider);
   const nextMinimumBalance = minimumBalanceUsd === undefined
     ? current.minimumBalanceUsd
     : normalizeMoney(minimumBalanceUsd, NaN);
@@ -179,7 +206,11 @@ export async function updateDriverWalletSettings({
     ? current.topupMaxAmount
     : normalizeMoney(topupMaxAmount, NaN);
   const nextCurrency = currency === undefined
-    ? current.currency
+    ? (
+      paymentProvider !== undefined && nextPaymentProvider !== current.paymentProvider
+        ? getDefaultCurrencyForProvider(nextPaymentProvider)
+        : current.currency
+    )
     : normalizeCurrency(currency, NaN);
 
   if (!Number.isFinite(nextMinimumBalance) || nextMinimumBalance < 0) {
@@ -212,6 +243,7 @@ export async function updateDriverWalletSettings({
     `UPDATE driver_wallet_settings
      SET wallet_enabled = ?,
          payments_enabled = ?,
+         payment_provider = ?,
          minimum_balance_usd = ?,
          commission_rate_percent = ?,
          topup_min_amount = ?,
@@ -223,6 +255,7 @@ export async function updateDriverWalletSettings({
     [
       nextWalletEnabled ? 1 : 0,
       nextPaymentsEnabled ? 1 : 0,
+      nextPaymentProvider,
       nextMinimumBalance,
       nextCommissionRate,
       nextTopupMin,

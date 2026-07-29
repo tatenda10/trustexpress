@@ -56,10 +56,31 @@ async function deleteUploadedFiles(pathsToDelete) {
 }
 
 async function cleanupPassengerData(connection, userId) {
+  const [identityRows] = await connection.execute(
+    `SELECT national_id_front_url, national_id_back_url, selfie_url
+     FROM passenger_identity
+     WHERE passenger_user_id = ?`,
+    [userId]
+  );
+  const identityRow = identityRows[0] || null;
+
   await connection.execute(
     `DELETE FROM ride_requests
      WHERE passenger_user_id = ?`,
     [userId]
+  );
+  // Without this the identity row survives the account and keeps inflating the
+  // pending-verification count with a user that can never be reviewed.
+  await connection.execute(
+    `DELETE FROM passenger_identity
+     WHERE passenger_user_id = ?`,
+    [userId]
+  );
+
+  return collectUploadPaths(
+    identityRow?.national_id_front_url,
+    identityRow?.national_id_back_url,
+    identityRow?.selfie_url
   );
 }
 
@@ -138,7 +159,7 @@ export async function deleteEndUserAccount(userId, role) {
       return;
     }
 
-    await cleanupPassengerData(connection, userId);
+    uploadPaths = await cleanupPassengerData(connection, userId);
   });
 
   const clerkClient = getClerkClient();
