@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DriverHomeStack from './DriverHomeStack';
 import DriverWalletScreen from './DriverWalletScreen';
 import DriverDiscountReimbursementsScreen from './DriverDiscountReimbursementsScreen';
-import DriverActivityScreen from './DriverActivityScreen';
+import DriverActivityStack from './DriverActivityStack';
 import DriverAccountStack from './DriverAccountStack';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
@@ -49,10 +49,10 @@ export default function DriverTabNavigator({ route }) {
       />
       <Tab.Screen
         name="DriverActivity"
-        component={DriverActivityScreen}
+        component={DriverActivityStack}
         options={{
-          title: 'Activity',
-          tabBarIcon: ({ color }) => <Ionicons name="time-outline" size={ICON_SIZE} color={color} />,
+          title: 'Income',
+          tabBarIcon: ({ color }) => <Ionicons name="stats-chart-outline" size={ICON_SIZE} color={color} />,
         }}
       />
       <Tab.Screen

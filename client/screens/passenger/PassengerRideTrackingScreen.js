@@ -1214,7 +1214,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                           <Ionicons name="star" size={16} color="#f59e0b" />
                           <Text className="ml-2 text-sm text-gray-500">{driver?.rating?.toFixed?.(2) || '4.90'} rating</Text>
                         </View>
-                        <Text className="mt-2 text-sm text-gray-500">{driver?.carName} - {driver?.plate}</Text>
+                        <Text className="mt-2 text-sm text-gray-500">
+                          {driver?.carName} - {String(driver?.plate || '').toUpperCase()}
+                        </Text>
                         <Text className="mt-1 text-sm font-medium" style={{ color: PRIMARY_BLUE }}>
                           {driver?.phoneNumber || 'Phone not shared'}
                         </Text>

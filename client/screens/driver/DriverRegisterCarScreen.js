@@ -527,7 +527,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         carPhotoUrls: uploadedCarPhotos,
         carPhotoFrontUrl: uploadedCarPhotos[0] || null,
         carPhotoRearUrl: uploadedCarPhotos[1] || null,
-        numberPlate: numberPlate.trim(),
+        numberPlate: numberPlate.trim().toUpperCase(),
         make: make.trim(),
         model: model.trim(),
         year: yearNum,
@@ -647,7 +647,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         <TouchableOpacity onPress={pickCarPhotos} className="mb-3 border border-gray-200 rounded-xl p-4 items-center">
           <Ionicons name="images-outline" size={32} color="#9ca3af" />
           <Text className="text-gray-900 mt-2 font-medium">Add car photos</Text>
-          <Text className="text-gray-500 mt-1 text-center">Minimum {MIN_CAR_PHOTOS}, maximum {MAX_CAR_PHOTOS}. Make sure the car and plate are clearly visible.</Text>
+          <Text className="text-gray-500 mt-1 text-center">
+            Minimum {MIN_CAR_PHOTOS}, maximum {MAX_CAR_PHOTOS}. Add the front of the car first (this is shown to passengers), then the rear. Plate must be readable.
+          </Text>
         </TouchableOpacity>
 
         <View className="mb-4">
@@ -656,6 +658,11 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
             {carPhotoUris.map((uri, index) => (
               <View key={`${uri}-${index}`} className="relative">
                 <Image source={{ uri }} className="h-24 w-24 rounded-xl bg-gray-100" />
+                <View className="absolute left-1 bottom-1 rounded bg-black/70 px-1.5 py-0.5">
+                  <Text className="text-[10px] font-semibold text-white">
+                    {index === 0 ? 'Front' : index === 1 ? 'Rear' : `Photo ${index + 1}`}
+                  </Text>
+                </View>
                 <TouchableOpacity
                   onPress={() => removeCarPhoto(uri)}
                   className="absolute -right-2 -top-2 h-7 w-7 rounded-full bg-black/75 items-center justify-center"
@@ -706,7 +713,13 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         )}
 
         <Text className="text-sm font-medium text-gray-700 mb-2">Number plate <Text className="text-red-500">*</Text></Text>
-        <TextInput className="border border-gray-200 rounded-xl p-4 text-base mb-4" placeholder="e.g. ABC 1234" value={numberPlate} onChangeText={setNumberPlate} />
+        <TextInput
+          className="border border-gray-200 rounded-xl p-4 text-base mb-4"
+          placeholder="e.g. ABC 1234"
+          value={numberPlate}
+          autoCapitalize="characters"
+          onChangeText={(value) => setNumberPlate(String(value || '').toUpperCase())}
+        />
         <SelectField
           label="Make"
           value={make}

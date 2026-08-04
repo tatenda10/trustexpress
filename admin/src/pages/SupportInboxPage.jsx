@@ -3,6 +3,7 @@ import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 import { Link } from 'react-router-dom'
+import { resolveMediaUrl } from '../utils/media'
 
 function formatTime(value) {
   if (!value) return ''
@@ -344,7 +345,9 @@ export default function SupportInboxPage() {
                         </span>
                       ) : null}
                     </div>
-                    <p className="mt-2 line-clamp-2 text-xs text-slate-500">{thread.latestMessage || 'No messages yet'}</p>
+                    <p className="mt-2 line-clamp-2 text-xs text-slate-500">
+                      {thread.latestMessage || (thread.latestAttachmentUrl ? '[Photo attached]' : 'No messages yet')}
+                    </p>
                   </div>
                 </button>
               )
@@ -440,13 +443,31 @@ export default function SupportInboxPage() {
                       const isAdmin = message.senderType === 'admin'
                       return (
                         <div key={message.id} className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[78%] rounded-lg px-4 py-2 text-sm shadow-sm ${
+                          <div className={`max-w-[78%] overflow-hidden rounded-lg text-sm shadow-sm ${
                             isAdmin
                               ? 'bg-[#d9fdd3] text-slate-900'
                               : 'bg-white text-slate-800'
                           }`}>
-                            <p className="leading-6">{message.message}</p>
-                            <p className="mt-1 text-right text-[11px] text-slate-400">{formatTime(message.createdAt)}</p>
+                            {message.attachmentUrl ? (
+                              <a
+                                href={resolveMediaUrl(message.attachmentUrl)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block"
+                              >
+                                <img
+                                  src={resolveMediaUrl(message.attachmentUrl)}
+                                  alt="Support attachment"
+                                  className="max-h-64 w-full object-cover"
+                                />
+                              </a>
+                            ) : null}
+                            {message.message ? (
+                              <p className="px-4 py-2 leading-6">{message.message}</p>
+                            ) : message.attachmentUrl ? (
+                              <p className="px-4 py-2 text-xs text-slate-500">Photo attachment</p>
+                            ) : null}
+                            <p className="px-4 pb-2 text-right text-[11px] text-slate-400">{formatTime(message.createdAt)}</p>
                           </div>
                         </div>
                       )

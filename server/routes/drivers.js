@@ -31,6 +31,10 @@ import {
   deductCommissionForCompletedRide,
   getDriverWalletStatus,
 } from '../lib/driver-wallet.js';
+import {
+  getDriverIncomeDashboard,
+  setDriverIncomeGoal,
+} from '../lib/driver-income.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -424,7 +428,7 @@ router.post('/availability', requireAuth, async (req, res) => {
         vehicle?.vehicleTierName || null,
         vehicle?.make || null,
         vehicle?.model || null,
-        vehicle?.numberPlate || null,
+        String(vehicle?.numberPlate || '').trim().toUpperCase() || null,
         vehicle?.carPhotoFrontUrl || vehicle?.carPhotoUrls?.[0] || null,
         Number.isFinite(latitude) ? latitude : null,
         Number.isFinite(longitude) ? longitude : null,
@@ -826,11 +830,18 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
        WHERE driver_user_id = ?`,
       [req.userId]
     );
+    const [vehicleRow] = await query(
+      `SELECT car_photo_front_url, number_plate
+       FROM driver_vehicle
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [req.userId]
+    );
     const acceptedDriverPayload = {
       id: req.userId,
       tierName: availability.vehicle_tier_name || 'Ride',
       carName: [availability.vehicle_make, availability.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
-      plate: availability.number_plate || 'Unknown plate',
+      plate: String(vehicleRow?.number_plate || availability.number_plate || 'Unknown plate').trim().toUpperCase() || 'Unknown plate',
       driverName: availability.driver_name || getDriverDisplayName(user),
       etaMinutes: driverEtaMinutes,
       driverDistanceKm,
@@ -846,7 +857,7 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
         tierKey: availability.vehicle_tier_key || null,
         tierName: availability.vehicle_tier_name || 'Ride',
       },
-      carImage: availability.car_photo_url || null,
+      carImage: vehicleRow?.car_photo_front_url || availability.car_photo_url || null,
     };
 
     await query(
@@ -1554,6 +1565,41 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
   }
 });
 
+router.get('/income', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const period = String(req.query?.period || 'day').toLowerCase();
+    const offset = Number.parseInt(String(req.query?.offset ?? '0'), 10);
+    const dashboard = await getDriverIncomeDashboard(req.userId, {
+      period,
+      offset: Number.isFinite(offset) ? offset : 0,
+    });
+    return res.json(dashboard);
+  } catch (err) {
+    console.error('GET /api/drivers/income', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
+  }
+});
+
+router.put('/income/goal', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const goal = await setDriverIncomeGoal(
+      req.userId,
+      req.body?.dailyGoalAmount ?? req.body?.amount,
+      req.body?.currency
+    );
+    return res.json({ goal });
+  } catch (err) {
+    console.error('PUT /api/drivers/income/goal', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
+  }
+});
+
 router.get('/history', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -2066,7 +2112,7 @@ router.post('/vehicle', requireAuth, async (req, res) => {
       ].filter(Boolean))
     );
 
-    const nextNumberPlate = String(numberPlate || existingVehicle?.number_plate || '').trim();
+    const nextNumberPlate = String(numberPlate || existingVehicle?.number_plate || '').trim().toUpperCase();
     const nextMake = String(make || existingVehicle?.make || '').trim();
     const nextModel = String(model || existingVehicle?.model || '').trim();
     const nextRegistrationBookUrl = String(registrationBookUrl || existingVehicle?.vehicle_registration_book_url || existingVehicle?.vehicle_registration_url || '').trim();

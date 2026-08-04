@@ -220,11 +220,12 @@ router.post('/threads/:threadId/messages', requireAdminAuth, requirePermission('
   try {
     const threadId = Number(req.params.threadId);
     const message = String(req.body?.message || '').trim();
+    const attachmentUrl = String(req.body?.attachmentUrl || req.body?.attachment_url || '').trim();
     if (!Number.isFinite(threadId) || threadId <= 0) {
       return res.status(400).json({ error: 'Valid threadId required' });
     }
-    if (!message) {
-      return res.status(400).json({ error: 'message is required' });
+    if (!message && !attachmentUrl) {
+      return res.status(400).json({ error: 'message or photo is required' });
     }
 
     const threadRow = await getSupportThreadById(threadId);
@@ -237,6 +238,7 @@ router.post('/threads/:threadId/messages', requireAdminAuth, requirePermission('
       senderType: 'admin',
       adminUserId: req.admin.id,
       message,
+      attachmentUrl,
     });
     const messageRecord = shapeSupportMessage(created);
 
@@ -249,10 +251,12 @@ router.post('/threads/:threadId/messages', requireAdminAuth, requirePermission('
       const clerkUser = await getClerkUserById(threadRow.user_id);
       const pushToken = String(clerkUser?.privateMetadata?.pushToken || '').trim();
       if (pushToken) {
+        const pushBody = message
+          || (attachmentUrl ? 'Support sent a photo.' : 'Support sent a new message.');
         await sendExpoPushNotifications({
           to: pushToken,
           title: 'Support replied',
-          body: message.length > 100 ? `${message.slice(0, 97)}...` : message,
+          body: pushBody.length > 100 ? `${pushBody.slice(0, 97)}...` : pushBody,
           data: {
             type: 'support_chat',
             threadId,

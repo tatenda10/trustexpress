@@ -199,6 +199,23 @@ export async function getDriverRideHistory(token, options = {}) {
   return apiFetch(`/api/drivers/history${suffix}`, {}, token);
 }
 
+export async function getDriverIncome(token, options = {}) {
+  const params = new URLSearchParams();
+  if (options.period) params.set('period', String(options.period));
+  if (options.offset !== undefined && options.offset !== null) {
+    params.set('offset', String(options.offset));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return apiFetch(`/api/drivers/income${suffix}`, {}, token);
+}
+
+export async function setDriverIncomeGoal(token, payload = {}) {
+  return apiFetch('/api/drivers/income/goal', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
 export async function getDriverWallet(token, options = {}) {
   const params = new URLSearchParams();
   if (options.limit) params.set('limit', String(options.limit));
@@ -443,10 +460,16 @@ export async function getSupportMessages(token) {
   return apiFetch('/api/users/support/messages', {}, token);
 }
 
-export async function sendSupportMessage(token, message) {
+export async function sendSupportMessage(token, payload = {}) {
+  const body = typeof payload === 'string'
+    ? { message: payload }
+    : {
+        message: payload?.message || '',
+        attachmentUrl: payload?.attachmentUrl || null,
+      };
   return apiFetch('/api/users/support/messages', {
     method: 'POST',
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
   }, token);
 }
 

@@ -116,7 +116,7 @@ router.get('/nearby-drivers', requireAuth, async (req, res) => {
       driverName: row.driver_name || 'Driver',
       tierName: row.vehicle_tier_name || null,
       carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
-      plate: row.number_plate || null,
+      plate: row.number_plate ? String(row.number_plate).trim().toUpperCase() : null,
       coordinate: {
         latitude: Number(row.current_lat),
         longitude: Number(row.current_lng),

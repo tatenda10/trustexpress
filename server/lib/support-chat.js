@@ -2,6 +2,21 @@ import { query } from '../db/connection.js';
 
 const SUPPORT_AUTO_CLOSE_HOURS = 24;
 
+function normalizeAttachmentUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  // Accept absolute upload URLs or /uploads/... paths only.
+  if (raw.startsWith('/uploads/')) return raw;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.pathname.startsWith('/uploads/')) return parsed.pathname;
+  } catch {
+    // ignore
+  }
+  if (raw.startsWith('uploads/')) return `/${raw}`;
+  return null;
+}
+
 export function normalizeSupportRole(role) {
   return role === 'driver' ? 'driver' : 'passenger';
 }
@@ -16,8 +31,9 @@ export function shapeSupportThread(row) {
     lastMessageAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
-    latestMessage: row.latest_message || '',
+    latestMessage: row.latest_message || (row.latest_attachment_url ? '[Photo]' : ''),
     latestSenderType: row.latest_sender_type || null,
+    latestAttachmentUrl: row.latest_attachment_url || null,
   };
 }
 
@@ -33,6 +49,7 @@ export function shapeSupportMessage(row) {
     aiProvider: row.ai_provider || null,
     aiModel: row.ai_model || null,
     message: row.message || '',
+    attachmentUrl: row.attachment_url || null,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
   };
@@ -68,11 +85,12 @@ export async function autoCloseInactiveSupportThreads(hours = SUPPORT_AUTO_CLOSE
   };
 }
 
-/** Remove threads that were created without any real user/admin message (e.g. old open-on-load bug). */
+/** Remove threads that have no real content (text or photo). */
 export async function pruneEmptySupportThreads() {
   await query(
     `DELETE FROM support_messages
-     WHERE TRIM(COALESCE(message, '')) = ''`
+     WHERE TRIM(COALESCE(message, '')) = ''
+       AND (attachment_url IS NULL OR TRIM(attachment_url) = '')`
   );
 
   const result = await query(
@@ -117,7 +135,10 @@ export async function listSupportMessages(threadId) {
     `SELECT *
      FROM support_messages
      WHERE thread_id = ?
-       AND TRIM(COALESCE(message, '')) <> ''
+       AND (
+         TRIM(COALESCE(message, '')) <> ''
+         OR (attachment_url IS NOT NULL AND TRIM(attachment_url) <> '')
+       )
      ORDER BY created_at ASC, id ASC`,
     [threadId]
   );
@@ -133,10 +154,14 @@ export async function createSupportMessage({
   aiProvider = null,
   aiModel = null,
   message,
+  attachmentUrl = null,
 }) {
   const trimmedMessage = String(message || '').trim();
-  if (!trimmedMessage) {
-    throw new Error('Message is required');
+  const safeAttachment = normalizeAttachmentUrl(attachmentUrl);
+  if (!trimmedMessage && !safeAttachment) {
+    const error = new Error('Message or photo is required');
+    error.status = 400;
+    throw error;
   }
 
   const result = await query(
@@ -148,9 +173,20 @@ export async function createSupportMessage({
       is_ai_reply,
       ai_provider,
       ai_model,
-      message
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [threadId, senderType, senderUserId, adminUserId, isAiReply ? 1 : 0, aiProvider, aiModel, trimmedMessage]
+      message,
+      attachment_url
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      threadId,
+      senderType,
+      senderUserId,
+      adminUserId,
+      isAiReply ? 1 : 0,
+      aiProvider,
+      aiModel,
+      trimmedMessage || null,
+      safeAttachment,
+    ]
   );
 
   await query(
@@ -177,6 +213,7 @@ export async function listSupportThreads() {
     `SELECT
        t.*,
        m.message AS latest_message,
+       m.attachment_url AS latest_attachment_url,
        m.sender_type AS latest_sender_type
      FROM support_threads t
      INNER JOIN support_messages m
@@ -184,7 +221,10 @@ export async function listSupportThreads() {
          SELECT sm.id
          FROM support_messages sm
          WHERE sm.thread_id = t.id
-           AND TRIM(COALESCE(sm.message, '')) <> ''
+           AND (
+             TRIM(COALESCE(sm.message, '')) <> ''
+             OR (sm.attachment_url IS NOT NULL AND TRIM(sm.attachment_url) <> '')
+           )
          ORDER BY sm.created_at DESC, sm.id DESC
          LIMIT 1
        )

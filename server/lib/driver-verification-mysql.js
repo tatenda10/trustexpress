@@ -92,7 +92,7 @@ function shapeVehicleFromRow(row) {
     vehicleRegistrationBookUrl: normalizeUploadPath(row.vehicle_registration_book_url),
     insuranceUrl: normalizeUploadPath(row.insurance_url),
     zinaraUrl: normalizeUploadPath(row.zinara_url),
-    numberPlate: row.number_plate || null,
+    numberPlate: row.number_plate ? String(row.number_plate).trim().toUpperCase() : null,
     make: row.make || null,
     model: row.model || null,
     year: row.year ?? null,

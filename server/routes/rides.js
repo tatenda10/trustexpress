@@ -142,11 +142,14 @@ function mapDriverAvailability(row, pickupCoordinate) {
       }
     : null;
   const driverDistanceKm = hasCoordinate ? calculateDistanceKm(pickupCoordinate, coordinate) : null;
+  const plate = String(row.number_plate || 'Unknown plate').trim().toUpperCase() || 'Unknown plate';
+  // Prefer the dedicated front photo so passengers never see a rear-only fallback first.
+  const carImage = row.car_photo_front_url || row.car_photo_url || null;
   return {
     id: row.driver_user_id,
     tierName: row.vehicle_tier_name,
     carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
-    plate: row.number_plate || 'Unknown plate',
+    plate,
     driverName: row.driver_name || 'Driver',
     etaMinutes: hasCoordinate ? Math.max(1, Math.round(driverDistanceKm * 4)) : null,
     driverDistanceKm,
@@ -159,7 +162,7 @@ function mapDriverAvailability(row, pickupCoordinate) {
       tierKey: row.vehicle_tier_key,
       tierName: row.vehicle_tier_name,
     },
-    carImage: row.car_photo_url || null,
+    carImage,
   };
 }
 
@@ -179,11 +182,13 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     const expiresMs = new Date(respondedAt).getTime() + (DRIVER_ACCEPT_OFFER_TTL_SECONDS * 1000);
     offerExpiresAt = Number.isFinite(expiresMs) ? new Date(expiresMs).toISOString() : null;
   }
+  const plate = String(row.number_plate || 'Unknown plate').trim().toUpperCase() || 'Unknown plate';
+  const carImage = row.car_photo_front_url || row.car_photo_url || null;
   return {
     id: row.driver_user_id,
     tierName: row.vehicle_tier_name || 'Ride',
     carName: [row.vehicle_make, row.vehicle_model].filter(Boolean).join(' ') || 'Vehicle',
-    plate: row.number_plate || 'Unknown plate',
+    plate,
     driverName: row.driver_name || 'Driver',
     etaMinutes: coordinate ? Math.max(1, Math.round(driverDistanceKm * 4)) : null,
     driverDistanceKm,
@@ -196,7 +201,7 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
       tierKey: row.vehicle_tier_key || null,
       tierName: row.vehicle_tier_name || 'Ride',
     },
-    carImage: row.car_photo_url || null,
+    carImage,
     profileImageUrl: row.profile_image_url || null,
     respondedAt,
     offerExpiresAt,
@@ -1112,14 +1117,16 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
          da.vehicle_tier_name,
          da.vehicle_make,
          da.vehicle_model,
-         da.number_plate,
+         COALESCE(NULLIF(TRIM(dv.number_plate), ''), da.number_plate) AS number_plate,
          da.car_photo_url,
+         NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
          da.current_lat,
          da.current_lng,
          da.is_online,
          rr.driver_user_id AS profile_image_user_id
        FROM ride_request_driver_responses rr
        LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
+       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
        WHERE rr.ride_request_id = ?
          AND rr.status IN ('accepted', 'selected')
        ORDER BY rr.responded_at ASC`,
@@ -1143,19 +1150,21 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
 
     const [driverAvailability] = await query(
       `SELECT
-         driver_user_id,
-         driver_name,
-         phone_number,
-         vehicle_tier_key,
-         vehicle_tier_name,
-         vehicle_make,
-         vehicle_model,
-         number_plate,
-         car_photo_url,
-         current_lat,
-         current_lng
-       FROM driver_availability
-       WHERE driver_user_id = ?
+         da.driver_user_id,
+         da.driver_name,
+         da.phone_number,
+         da.vehicle_tier_key,
+         da.vehicle_tier_name,
+         da.vehicle_make,
+         da.vehicle_model,
+         COALESCE(NULLIF(TRIM(dv.number_plate), ''), da.number_plate) AS number_plate,
+         da.car_photo_url,
+         NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
+         da.current_lat,
+         da.current_lng
+       FROM driver_availability da
+       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = da.driver_user_id
+       WHERE da.driver_user_id = ?
        LIMIT 1`,
       [ride.driver_user_id]
     );
@@ -1278,14 +1287,16 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
          da.vehicle_tier_name,
          da.vehicle_make,
          da.vehicle_model,
-         da.number_plate,
+         COALESCE(NULLIF(TRIM(dv.number_plate), ''), da.number_plate) AS number_plate,
          da.car_photo_url,
+         NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
          da.current_lat,
          da.current_lng,
          da.is_online,
          rr.driver_user_id AS profile_image_user_id
        FROM ride_request_driver_responses rr
        LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
+       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
        WHERE rr.ride_request_id = ?
          AND rr.status IN ('accepted', 'selected')
        ORDER BY rr.responded_at ASC`,

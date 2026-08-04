@@ -500,6 +500,113 @@ export async function handleSmilePayWalletWebhook(body = {}) {
   });
 }
 
+/**
+ * Credits a driver's wallet with a ledger row (manual_credit).
+ * Idempotent when the same sourceType + sourceId already exists for the driver.
+ */
+export async function creditDriverWalletManual({
+  driverUserId,
+  amount,
+  currency = null,
+  description = 'Manual wallet credit',
+  sourceType = 'manual_credit',
+  sourceId = null,
+  paymentMethod = null,
+} = {}) {
+  const settings = await getDriverWalletSettings();
+  const creditedAmount = normalizeMoney(amount);
+  if (!(creditedAmount > 0)) {
+    throw buildWalletError('Credit amount must be greater than zero');
+  }
+  const creditCurrency = String(currency || settings.currency || DRIVER_WALLET_CURRENCY).toUpperCase();
+  const safeSourceType = String(sourceType || 'manual_credit').trim() || 'manual_credit';
+  const safeSourceId = sourceId == null ? null : String(sourceId).trim() || null;
+  const safeDescription = String(description || 'Manual wallet credit').trim() || 'Manual wallet credit';
+
+  return withTransaction(async (connection) => {
+    if (safeSourceId) {
+      const [existingRows] = await connection.execute(
+        `SELECT id, balance_before, balance_after, amount, currency, created_at
+         FROM driver_wallet_transactions
+         WHERE driver_user_id = ?
+           AND transaction_type = 'manual_credit'
+           AND source_type = ?
+           AND source_id = ?
+         LIMIT 1`,
+        [driverUserId, safeSourceType, safeSourceId]
+      );
+      if (existingRows[0]) {
+        const wallet = await ensureDriverWallet(driverUserId, connection);
+        return {
+          credited: false,
+          alreadyCredited: true,
+          amount: normalizeMoney(existingRows[0].amount),
+          currency: existingRows[0].currency || creditCurrency,
+          wallet: mapWalletStatus(wallet, settings),
+          transactionId: existingRows[0].id,
+        };
+      }
+    }
+
+    const wallet = await ensureDriverWallet(driverUserId, connection);
+    const currentBalance = normalizeMoney(wallet?.available_balance || 0);
+    const nextBalance = normalizeMoney(currentBalance + creditedAmount);
+
+    await connection.execute(
+      `UPDATE driver_wallets
+       SET available_balance = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [nextBalance, driverUserId]
+    );
+
+    const [insertResult] = await connection.execute(
+      `INSERT INTO driver_wallet_transactions (
+         driver_user_id,
+         transaction_type,
+         amount,
+         currency,
+         payment_method,
+         source_type,
+         source_id,
+         balance_before,
+         balance_after,
+         provider_reference,
+         external_transaction_id,
+         description
+       ) VALUES (?, 'manual_credit', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+      [
+        driverUserId,
+        creditedAmount,
+        creditCurrency,
+        paymentMethod,
+        safeSourceType,
+        safeSourceId,
+        currentBalance,
+        nextBalance,
+        safeDescription,
+      ]
+    );
+
+    const [walletRows] = await connection.execute(
+      `SELECT driver_user_id, available_balance, created_at, updated_at
+       FROM driver_wallets
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [driverUserId]
+    );
+
+    return {
+      credited: true,
+      alreadyCredited: false,
+      amount: creditedAmount,
+      currency: creditCurrency,
+      wallet: mapWalletStatus(walletRows[0] || { ...wallet, available_balance: nextBalance }, settings),
+      transactionId: insertResult?.insertId || null,
+    };
+  });
+}
+
 export async function deductCommissionForCompletedRide({
   driverUserId,
   rideRequestId,

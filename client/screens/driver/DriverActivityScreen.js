@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, FlatList, ActivityIndicator, RefreshControl, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getDriverRideHistory } from '../../api';
 import { downloadReceiptPdf } from '../../services/receiptPrint';
@@ -39,6 +39,7 @@ function formatDate(value) {
 
 const DriverActivityScreen = () => {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   const isFocused = useIsFocused();
@@ -350,7 +351,18 @@ const DriverActivityScreen = () => {
   return (
     <View className="flex-1 bg-white">
       <View className="border-b border-gray-100 bg-white px-5 pb-3" style={{ paddingTop: insets.top }}>
-        <Text className="text-lg font-bold text-gray-900">Activity</Text>
+        <View className="flex-row items-center">
+          <TouchableOpacity
+            onPress={() => {
+              if (navigation.canGoBack()) navigation.goBack();
+            }}
+            className="mr-2 h-9 w-9 items-center justify-center rounded-full bg-gray-50"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={22} color="#111827" />
+          </TouchableOpacity>
+          <Text className="text-lg font-bold text-gray-900">Trip history</Text>
+        </View>
       </View>
 
       {loading ? (

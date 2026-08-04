@@ -231,7 +231,7 @@ export default function PassengersPage() {
               <option value="createdAt">Joined</option>
               <option value="email">Email</option>
               <option value="status">Status</option>
-              <option value="totalRides">Total rides</option>
+              <option value="totalRides">Completed rides</option>
               <option value="totalSpend">Total spend</option>
             </select>
             <select
@@ -282,9 +282,9 @@ export default function PassengersPage() {
                 <th className="rounded-tl-sm px-4 py-3 font-semibold">Name</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Identity</th>
-                <th className="px-4 py-3 font-semibold">Total Rides</th>
+                <th className="px-4 py-3 font-semibold">Completed Rides</th>
                 <th className="px-4 py-3 font-semibold">Total Spend</th>
-                <th className="px-4 py-3 font-semibold">Last Ride</th>
+                <th className="px-4 py-3 font-semibold">Last Completed</th>
                 <th className="px-4 py-3 font-semibold">Joined</th>
                 <th className="rounded-tr-sm px-4 py-3 font-semibold text-right">Actions</th>
               </tr>

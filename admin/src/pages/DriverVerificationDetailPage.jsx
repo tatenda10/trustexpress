@@ -4,6 +4,7 @@ import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 import { resolveMediaCandidates, resolveMediaUrl } from '../utils/media'
+import { getRejectReasonGroups, isOtherRejectPreset } from '../data/driverRejectReasons'
 
 function Field({ label, value }) {
   return (
@@ -302,19 +303,10 @@ export default function DriverVerificationDetailPage() {
   const profileImageUrl = pendingProfilePhotoUrl || approvedProfilePhotoUrl || resolveMediaUrl(driver?.profileDocs?.selfieUrl)
   const profileImageCandidates = useMemo(() => resolveMediaCandidates(profileImageUrl), [profileImageUrl])
   const activeProfileImageUrl = profileImageCandidates[headerImageUrlIndex] || profileImageUrl
-  const rejectReasonOptions = reviewTarget === 'vehicle'
-    ? [
-        'Wrong vehicle document',
-        'Vehicle details mismatch',
-        'Blurry or unreadable file',
-        'Expired vehicle document',
-      ]
-    : [
-        'Wrong identity document',
-        'Blurry or unreadable file',
-        'Name mismatch',
-        'Expired identity document',
-      ]
+  const rejectReasonGroups = useMemo(
+    () => getRejectReasonGroups(reviewTarget),
+    [reviewTarget]
+  )
 
   useEffect(() => {
     if (!driver) return
@@ -333,6 +325,12 @@ export default function DriverVerificationDetailPage() {
   useEffect(() => {
     setHeaderImageUrlIndex(0)
   }, [profileImageUrl])
+
+  useEffect(() => {
+    // Clear selection when switching between identity / vehicle / profile photo review.
+    setRejectReasonPreset('')
+    setCustomRejectReason('')
+  }, [reviewTarget])
 
   function itemStatusLabel(url, sectionStatus) {
     if (!url) return 'Missing'
@@ -397,7 +395,18 @@ export default function DriverVerificationDetailPage() {
 
   const rejectFor = async (target) => {
     if (!driver || !canReview) return
-    const rejectionReason = (customRejectReason.trim() || rejectReasonPreset.trim()).trim()
+    const preset = rejectReasonPreset.trim()
+    const custom = customRejectReason.trim()
+    if (isOtherRejectPreset(preset) && !custom) {
+      setError('Add a custom note when selecting Other as the rejection reason.')
+      return
+    }
+    let rejectionReason = ''
+    if (custom && preset && !isOtherRejectPreset(preset)) {
+      rejectionReason = `${preset}. ${custom}`
+    } else {
+      rejectionReason = (custom || preset).trim()
+    }
     if (!rejectionReason) {
       setError('Choose a quick reject reason or enter a custom note before rejecting.')
       return
@@ -967,37 +976,73 @@ export default function DriverVerificationDetailPage() {
           <section className="border border-slate-300 bg-white p-4">
             <h2 className="text-sm font-semibold text-slate-800">Quick Reject Reasons</h2>
             <p className="mt-2 text-sm text-slate-700">
-              Select a quick reason for this <span className="font-semibold">{reviewTarget === 'vehicle' ? 'vehicle verification' : 'identity document verification'}</span> review, or add a custom note.
+              Select a quick reason for this{' '}
+              <span className="font-semibold">
+                {reviewTarget === 'vehicle'
+                  ? 'vehicle verification'
+                  : reviewTarget === 'profile_image'
+                    ? 'profile photo verification'
+                    : 'identity document verification'}
+              </span>{' '}
+              review, or add a custom note.
             </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {rejectReasonOptions.map((option) => {
-                const active = rejectReasonPreset === option
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setRejectReasonPreset(option)}
-                    className={`rounded-sm border px-3 py-2 text-xs font-medium transition ${
-                      active
-                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                        : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
-                    }`}
-                  >
-                    {option}
-                  </button>
-                )
-              })}
+
+            <div className="mt-4 space-y-4">
+              {rejectReasonGroups.map((group) => (
+                <div key={group.label}>
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    {group.label}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {group.options.map((option) => {
+                      const active = rejectReasonPreset === option
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => {
+                            setRejectReasonPreset(option)
+                            setError('')
+                          }}
+                          className={`rounded-sm border px-3 py-2 text-xs font-medium transition ${
+                            active
+                              ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                              : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
+
             <label className="mt-4 block">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Custom Note</span>
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Custom Note{isOtherRejectPreset(rejectReasonPreset) ? ' (required for Other)' : ' (optional)'}
+              </span>
               <textarea
                 value={customRejectReason}
                 onChange={(event) => setCustomRejectReason(event.target.value)}
                 rows={3}
-                placeholder="Add extra rejection detail here..."
+                placeholder={
+                  isOtherRejectPreset(rejectReasonPreset)
+                    ? 'Describe the specific rejection reason...'
+                    : 'Add extra rejection detail here (optional)...'
+                }
                 className="w-full rounded-sm border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
               />
             </label>
+            {rejectReasonPreset && !isOtherRejectPreset(rejectReasonPreset) ? (
+              <p className="mt-2 text-xs text-slate-500">
+                Selected: <span className="font-medium text-slate-700">{rejectReasonPreset}</span>
+                {customRejectReason.trim()
+                  ? ' · Driver will see the preset plus your custom note.'
+                  : ' · Driver will see this reason.'}
+              </p>
+            ) : null}
           </section>
 
           <section className="border border-slate-300 bg-white p-4">

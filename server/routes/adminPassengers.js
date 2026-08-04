@@ -67,12 +67,12 @@ async function loadPassengerRideStats(passengerUserIds = []) {
   const rows = await query(
     `SELECT
        passenger_user_id,
-       COUNT(*) AS total_rides,
+       COUNT(CASE WHEN status = 'completed' THEN 1 END) AS total_rides,
        COALESCE(SUM(CASE
          WHEN status = 'completed' THEN COALESCE(final_estimated_amount, estimated_amount, 0) + COALESCE(tip_amount, 0)
          ELSE 0
        END), 0) AS total_spend,
-       MAX(COALESCE(completed_at, cancelled_at, started_at, arrived_at, assigned_at, requested_at)) AS last_ride_at
+       MAX(CASE WHEN status = 'completed' THEN COALESCE(completed_at, started_at, assigned_at, requested_at) END) AS last_ride_at
      FROM ride_requests
      WHERE passenger_user_id IN (${placeholders})
      GROUP BY passenger_user_id`,

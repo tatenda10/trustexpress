@@ -181,7 +181,7 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
               {driver.driverName}
             </Text>
             <Text className="mt-0.5 text-xs text-gray-500" numberOfLines={1}>
-              {driver.carName} · {driver.plate}
+              {driver.carName} · {String(driver.plate || '').toUpperCase()}
             </Text>
             <View className="mt-1.5 flex-row items-center gap-1">
               <Ionicons name="star" size={12} color="#f59e0b" />

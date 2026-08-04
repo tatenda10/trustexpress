@@ -302,8 +302,9 @@ router.get('/support/messages', requireAuth, async (req, res) => {
 router.post('/support/messages', requireAuth, async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
-    if (!message) {
-      return res.status(400).json({ error: 'message is required' });
+    const attachmentUrl = String(req.body?.attachmentUrl || req.body?.attachment_url || '').trim();
+    if (!message && !attachmentUrl) {
+      return res.status(400).json({ error: 'message or photo is required' });
     }
 
     const user = await getClerkUserById(req.userId);
@@ -315,49 +316,53 @@ router.post('/support/messages', requireAuth, async (req, res) => {
       senderType: appUser.role === 'driver' ? 'driver' : 'passenger',
       senderUserId: req.userId,
       message,
+      attachmentUrl,
     });
 
     let aiReplyRecord = null;
-    try {
-      const supportAgentSettings = await getSupportAgentSettings();
-      if (supportAgentSettings.enabled) {
-        const allMessages = await listSupportMessages(thread.id);
-        const aiReply = await generateSupportAgentReply({
-          thread,
-          messages: allMessages,
-          incomingMessage: message,
-        });
-
-        const createdAiReply = await createSupportMessage({
-          threadId: thread.id,
-          senderType: 'admin',
-          isAiReply: true,
-          aiProvider: aiReply.provider,
-          aiModel: aiReply.model,
-          message: String(aiReply?.message || '').trim(),
-        });
-
-        aiReplyRecord = shapeSupportMessage(createdAiReply);
-        emitSupportChatMessageToUser(req.userId, {
-          threadId: thread.id,
-          messageRecord: aiReplyRecord,
-        });
-
-        const pushToken = String(user?.privateMetadata?.pushToken || '').trim();
-        if (pushToken) {
-          await sendExpoPushNotifications({
-            to: pushToken,
-            title: 'Support assistant replied',
-            body: aiReply.message.length > 100 ? `${aiReply.message.slice(0, 97)}...` : aiReply.message,
-            data: {
-              type: 'support_chat',
-              threadId: thread.id,
-            },
+    // Skip AI auto-reply for photo/verification submissions — agents should handle recovery docs.
+    if (message && !attachmentUrl) {
+      try {
+        const supportAgentSettings = await getSupportAgentSettings();
+        if (supportAgentSettings.enabled) {
+          const allMessages = await listSupportMessages(thread.id);
+          const aiReply = await generateSupportAgentReply({
+            thread,
+            messages: allMessages,
+            incomingMessage: message,
           });
+
+          const createdAiReply = await createSupportMessage({
+            threadId: thread.id,
+            senderType: 'admin',
+            isAiReply: true,
+            aiProvider: aiReply.provider,
+            aiModel: aiReply.model,
+            message: String(aiReply?.message || '').trim(),
+          });
+
+          aiReplyRecord = shapeSupportMessage(createdAiReply);
+          emitSupportChatMessageToUser(req.userId, {
+            threadId: thread.id,
+            messageRecord: aiReplyRecord,
+          });
+
+          const pushToken = String(user?.privateMetadata?.pushToken || '').trim();
+          if (pushToken) {
+            await sendExpoPushNotifications({
+              to: pushToken,
+              title: 'Support assistant replied',
+              body: aiReply.message.length > 100 ? `${aiReply.message.slice(0, 97)}...` : aiReply.message,
+              data: {
+                type: 'support_chat',
+                threadId: thread.id,
+              },
+            });
+          }
         }
+      } catch (agentError) {
+        console.error('Support agent auto-reply failed', agentError);
       }
-    } catch (agentError) {
-      console.error('Support agent auto-reply failed', agentError);
     }
 
     return res.status(201).json({
@@ -367,7 +372,7 @@ router.post('/support/messages', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('POST /api/users/support/messages', err);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
   }
 });
 

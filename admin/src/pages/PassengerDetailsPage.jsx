@@ -97,7 +97,7 @@ export default function PassengerDetailsPage() {
       ? {
           title: 'Last ride completed',
           when: passenger.lastRideAt,
-          details: `Total rides: ${passenger.totalRides || 0}`,
+          details: `Completed rides: ${passenger.totalRides || 0}`,
         }
       : null,
   ]
@@ -223,9 +223,9 @@ export default function PassengerDetailsPage() {
 
       {activeTab === 'activity' ? (
         <section className="grid gap-3 rounded-sm border border-slate-300 bg-white p-4 md:grid-cols-2">
-          <Field label="Total Rides" value={passenger.totalRides} />
+          <Field label="Completed Rides" value={passenger.totalRides} />
           <Field label="Total Spend" value={`$${Number(passenger.totalSpend || 0).toFixed(2)}`} />
-          <Field label="Last Ride At" value={passenger.lastRideAt || '-'} />
+          <Field label="Last Completed Ride" value={passenger.lastRideAt || '-'} />
           <Field label="Saved Addresses" value={passenger.savedAddresses?.length || 0} />
         </section>
       ) : null}
