@@ -8,6 +8,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import IncomingRidePreviewMap from '../../components/driver/IncomingRidePreviewMap';
 import * as Location from 'expo-location';
 import { connectRealtime } from '../../realtime';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
@@ -255,10 +256,22 @@ async function fetchRouteCoordinates(token, origin, destination) {
   if (!token || !origin || !destination) {
     return null;
   }
+  const startLat = Number(origin.latitude);
+  const startLng = Number(origin.longitude);
+  const endLat = Number(destination.latitude);
+  const endLng = Number(destination.longitude);
+  if (
+    !Number.isFinite(startLat) ||
+    !Number.isFinite(startLng) ||
+    !Number.isFinite(endLat) ||
+    !Number.isFinite(endLng)
+  ) {
+    return null;
+  }
 
   const data = await getDirectionsRoute(token, {
-    origin,
-    destination,
+    origin: { latitude: startLat, longitude: startLng },
+    destination: { latitude: endLat, longitude: endLng },
     cachePrecision: 3,
     cacheTtlSeconds: 600,
   });
@@ -296,6 +309,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const [pendingSelectionRide, setPendingSelectionRide] = useState(null);
   const pulse = useRef(new Animated.Value(0)).current;
   const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [tripRouteCoordinates, setTripRouteCoordinates] = useState([]);
   const [cancellingCurrentRide, setCancellingCurrentRide] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [showIncomingRideOverlay, setShowIncomingRideOverlay] = useState(false);
@@ -994,6 +1008,27 @@ const DriverHomeScreen = ({ navigation, route }) => {
     [activeRequest, availableRequests],
   );
 
+  const showRideRequestModal = Boolean(
+    showIncomingRideOverlay && !currentRide && availableRequests.length > 0 && primaryIncomingRequest,
+  );
+
+  // Stable routing keys so polling does not re-hit directions every few seconds.
+  const routingPickupKey = [
+    primaryIncomingRequest?.id || '',
+    primaryIncomingRequest?.pickupCoordinate?.latitude,
+    primaryIncomingRequest?.pickupCoordinate?.longitude,
+    Number(driverCoordinate?.latitude)?.toFixed?.(4),
+    Number(driverCoordinate?.longitude)?.toFixed?.(4),
+  ].join(':');
+
+  const routingTripKey = [
+    primaryIncomingRequest?.id || '',
+    primaryIncomingRequest?.pickupCoordinate?.latitude,
+    primaryIncomingRequest?.pickupCoordinate?.longitude,
+    primaryIncomingRequest?.dropoffCoordinate?.latitude,
+    primaryIncomingRequest?.dropoffCoordinate?.longitude,
+  ].join(':');
+
   const activeIncomingRequestIndex = useMemo(() => {
     if (!primaryIncomingRequest) return 0;
     const index = availableRequests.findIndex((request) => request.id === primaryIncomingRequest.id);
@@ -1023,39 +1058,54 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
   // Load a route for the current ride or active request from the backend map provider.
   useEffect(() => {
-    const hasRide = !!currentRide;
-    const hasRequest = !currentRide && !!activeRequest;
+    if (currentRide) {
+      const origin = currentRide.driverCoordinate || driverCoordinate;
+      const destination =
+        currentRide.stage === 'on_trip' ? currentRide.dropoffCoordinate : currentRide.pickupCoordinate;
 
-    const origin = hasRide
-      ? (currentRide.driverCoordinate || driverCoordinate)
-      : hasRequest
-        ? driverCoordinate
-        : null;
+      if (!origin || !destination) {
+        setRouteCoordinates([]);
+        return undefined;
+      }
 
-    const destination = hasRide
-      ? (currentRide.stage === 'on_trip' ? currentRide.dropoffCoordinate : currentRide.pickupCoordinate)
-      : hasRequest
-        ? activeRequest.pickupCoordinate
-        : null;
+      let cancelled = false;
+      const loadRoute = async () => {
+        try {
+          const token = await getTokenRef.current();
+          const coords = await fetchRouteCoordinates(token, origin, destination);
+          if (cancelled) return;
+          setRouteCoordinates(
+            Array.isArray(coords) && coords.length > 1 ? coords : [origin, destination],
+          );
+        } catch {
+          if (cancelled) return;
+          setRouteCoordinates([origin, destination]);
+        }
+      };
+      loadRoute();
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    if (!origin || !destination) {
+    const requestForRoute = primaryIncomingRequest;
+    const origin = driverCoordinate;
+    const destination = requestForRoute?.pickupCoordinate;
+
+    if (!requestForRoute || !origin || !destination) {
       setRouteCoordinates([]);
       return undefined;
     }
 
     let cancelled = false;
-
     const loadRoute = async () => {
       try {
         const token = await getTokenRef.current();
         const coords = await fetchRouteCoordinates(token, origin, destination);
         if (cancelled) return;
-
-        if (Array.isArray(coords) && coords.length > 1) {
-          setRouteCoordinates(coords);
-        } else {
-          setRouteCoordinates([origin, destination]);
-        }
+        setRouteCoordinates(
+          Array.isArray(coords) && coords.length > 1 ? coords : [origin, destination],
+        );
       } catch {
         if (cancelled) return;
         setRouteCoordinates([origin, destination]);
@@ -1063,11 +1113,59 @@ const DriverHomeScreen = ({ navigation, route }) => {
     };
 
     loadRoute();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentRide?.id,
+    currentRide?.stage,
+    currentRide?.driverCoordinate?.latitude,
+    currentRide?.driverCoordinate?.longitude,
+    currentRide?.pickupCoordinate?.latitude,
+    currentRide?.pickupCoordinate?.longitude,
+    currentRide?.dropoffCoordinate?.latitude,
+    currentRide?.dropoffCoordinate?.longitude,
+    routingPickupKey,
+  ]);
+
+  // Pickup → drop-off trip path for the incoming-request map preview.
+  useEffect(() => {
+    if (currentRide) {
+      setTripRouteCoordinates([]);
+      return undefined;
+    }
+
+    const request = primaryIncomingRequest;
+    const origin = request?.pickupCoordinate;
+    const destination = request?.dropoffCoordinate;
+
+    if (!request || !origin || !destination) {
+      setTripRouteCoordinates([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadTripRoute = async () => {
+      try {
+        const token = await getTokenRef.current();
+        const coords = await fetchRouteCoordinates(token, origin, destination);
+        if (cancelled) return;
+        setTripRouteCoordinates(
+          Array.isArray(coords) && coords.length > 1 ? coords : [origin, destination],
+        );
+      } catch {
+        if (cancelled) return;
+        setTripRouteCoordinates([origin, destination]);
+      }
+    };
+
+    loadTripRoute();
 
     return () => {
       cancelled = true;
     };
-  }, [activeRequest, currentRide, driverCoordinate]);
+  }, [currentRide?.id, routingTripKey]);
 
   const syncAvailability = async (nextOnline) => {
     const inFlight = manualAvailabilityRequestRef.current;
@@ -1567,6 +1665,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView className="flex-1 bg-[#efefef]">
       <View className="flex-1">
+        {/* Unmount home map while request modal is open to avoid dual MapViews (Android). */}
+        {!showRideRequestModal ? (
         <MapView
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={INITIAL_REGION}
@@ -1648,6 +1748,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
             </>
           ) : null}
         </MapView>
+        ) : (
+          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#d6dee9' }} />
+        )}
 
         {/* Dark overlay so foreground cards read better */}
         <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.18)' }} />
@@ -1969,155 +2072,203 @@ const DriverHomeScreen = ({ navigation, route }) => {
       </View>
 
       <Modal
-        visible={showIncomingRideOverlay && !currentRide && availableRequests.length > 0}
+        visible={showRideRequestModal}
         transparent
         animationType="slide"
         onRequestClose={() => setShowIncomingRideOverlay(false)}
       >
         <View className="flex-1 bg-black/55">
           <SafeAreaView className="flex-1 bg-transparent">
-            <View className="flex-1 justify-end px-5 pb-6">
-              <View className="rounded-[30px] bg-white px-5 pt-5 pb-6">
-                <View className="items-center">
-                  <View className="h-1.5 w-16 rounded-full bg-gray-300" />
-                </View>
-
-                <View className="mt-5 flex-row items-start justify-between">
-                  <View className="flex-1 pr-4">
-                    <Text className="text-xs font-bold uppercase tracking-[2px] text-[#2f73c9]">
-                      Incoming ride request
-                    </Text>
-                    <Text className="mt-2 text-2xl font-bold text-[#111111]">
-                      {activeRequest?.passengerName || 'Passenger'}
-                    </Text>
-                    <Text className="mt-2 text-sm text-[#5a6474]">
-                      Review the trip details and accept fast before it expires.
+            <View className="flex-1 justify-end px-3 pb-3">
+              <View
+                className="overflow-hidden rounded-[28px] bg-white"
+                style={{ maxHeight: '94%' }}
+              >
+                <View className="relative">
+                  <IncomingRidePreviewMap
+                    driverCoordinate={driverCoordinate}
+                    request={primaryIncomingRequest}
+                    toPickupRoute={routeCoordinates}
+                    tripRoute={tripRouteCoordinates}
+                    height={240}
+                    pickupEtaLabel={`${Math.max(1, Number((primaryIncomingRequest?.pickupRouteMinutes ?? primaryIncomingRequest?.etaMinutes) || 0))} min · ${Number((primaryIncomingRequest?.pickupRouteDistanceKm ?? primaryIncomingRequest?.driverDistanceKm) || 0).toFixed(1)} km`}
+                    tripEtaLabel={`${Math.max(1, Number((primaryIncomingRequest?.tripDurationMinutes ?? primaryIncomingRequest?.estimatedMinutes) || 0))} min · ${Number((primaryIncomingRequest?.tripDistanceKm ?? primaryIncomingRequest?.estimatedDistanceKm) || 0).toFixed(1)} km`}
+                  />
+                  <View
+                    pointerEvents="none"
+                    className="absolute left-0 right-0 top-0 items-center px-4 pt-3"
+                  >
+                    <View className="h-1.5 w-12 rounded-full bg-white/80" />
+                    <Text className="mt-2 text-sm font-bold uppercase tracking-[1.5px] text-white"
+                      style={{
+                        textShadowColor: 'rgba(0,0,0,0.45)',
+                        textShadowOffset: { width: 0, height: 1 },
+                        textShadowRadius: 3,
+                      }}
+                    >
+                      Ride request
                     </Text>
                   </View>
-                  <View className="rounded-[20px] bg-[#111827] px-4 py-3">
-                    <Text className="text-xs font-bold uppercase tracking-[1px] text-white">Expires in</Text>
-                    <Text className="mt-1 text-xl font-extrabold text-white">
-                      {formatCountdown(getRemainingSeconds(activeRequest?.expiresAt, activeRequest?.remainingSeconds, activeRequest?.remainingSecondsCapturedAt))}
+                  <View
+                    className="absolute right-3 top-3 rounded-full px-3 py-2"
+                    style={{ backgroundColor: 'rgba(17,24,39,0.92)' }}
+                  >
+                    <Text className="text-[10px] font-bold uppercase tracking-[1px] text-white/80">
+                      Expires
+                    </Text>
+                    <Text className="text-base font-extrabold text-white">
+                      {formatCountdown(getRemainingSeconds(primaryIncomingRequest?.expiresAt, primaryIncomingRequest?.remainingSeconds, primaryIncomingRequest?.remainingSecondsCapturedAt))}
                     </Text>
                   </View>
                 </View>
 
-                <View className="mt-5 rounded-[24px] bg-[#f8fafc] px-4 py-4">
-                  <View className="flex-row items-center justify-between">
-                    <View>
-                      <Text className="text-xs font-semibold uppercase tracking-[1px] text-[#5a6474]">Fare</Text>
-                      <Text className="mt-1 text-3xl font-extrabold text-[#111111]">
-                        ${Number(activeRequest?.estimatedAmount || 0).toFixed(2)}
+                <ScrollView
+                  showsVerticalScrollIndicator={false}
+                  bounces={false}
+                  contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 18 }}
+                >
+                  <View className="flex-row items-start justify-between">
+                    <View className="flex-1 flex-row items-center pr-3">
+                      {resolveUploadedMediaUrl(primaryIncomingRequest?.passengerProfile?.imageUrl) ? (
+                        <Image
+                          source={{ uri: resolveUploadedMediaUrl(primaryIncomingRequest?.passengerProfile?.imageUrl) }}
+                          style={{ width: 44, height: 44, borderRadius: 22 }}
+                        />
+                      ) : (
+                        <View className="h-11 w-11 items-center justify-center rounded-full bg-[#e0e7ff]">
+                          <Ionicons name="person" size={20} color={PRIMARY_BLUE} />
+                        </View>
+                      )}
+                      <View className="ml-3 flex-1">
+                        <Text className="text-lg font-bold text-[#111111]" numberOfLines={1}>
+                          {primaryIncomingRequest?.passengerName || 'Passenger'}
+                        </Text>
+                        <Text className="mt-0.5 text-sm font-semibold text-[#2f73c9]">
+                          {primaryIncomingRequest?.tierName || 'Trust Express'}
+                        </Text>
+                      </View>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-2xl font-extrabold text-[#111111]">
+                        ${Number(primaryIncomingRequest?.estimatedAmount || 0).toFixed(2)}
                       </Text>
-                      {Number(activeRequest?.discountAmount || 0) > 0 ? (
-                        <View className="mt-2 rounded-full bg-emerald-50 px-3 py-1">
-                          <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#15803d]">
-                            Promo applied
-                          </Text>
+                      {Number(primaryIncomingRequest?.discountAmount || 0) > 0 ? (
+                        <View className="mt-1 rounded-full bg-emerald-50 px-2 py-0.5">
+                          <Text className="text-[10px] font-semibold uppercase text-[#15803d]">Promo</Text>
                         </View>
                       ) : null}
                     </View>
-                    <View className="items-end">
-                      <Text className="text-xs font-semibold uppercase tracking-[1px] text-[#5a6474]">Tier</Text>
-                      <Text className="mt-1 text-base font-bold text-[#2f73c9]">
-                        {activeRequest?.tierName || 'Ride'}
+                  </View>
+
+                  <View className="mt-3 flex-row flex-wrap gap-x-5 gap-y-1.5">
+                    <View className="flex-row items-center">
+                      <Ionicons name="navigate" size={14} color="#2f73c9" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Number((primaryIncomingRequest?.pickupRouteDistanceKm ?? primaryIncomingRequest?.driverDistanceKm) || 0).toFixed(1)} km to pickup
+                      </Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      <Ionicons name="time" size={14} color="#2f73c9" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Math.max(1, Number((primaryIncomingRequest?.pickupRouteMinutes ?? primaryIncomingRequest?.etaMinutes) || 0))} min to pickup
+                      </Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      <Ionicons name="swap-horizontal" size={14} color="#111827" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Number((primaryIncomingRequest?.tripDistanceKm ?? primaryIncomingRequest?.estimatedDistanceKm) || 0).toFixed(1)} km trip
+                      </Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      <Ionicons name="time-outline" size={14} color="#111827" />
+                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
+                        {Math.max(1, Number((primaryIncomingRequest?.tripDurationMinutes ?? primaryIncomingRequest?.estimatedMinutes) || 0))} min trip
                       </Text>
                     </View>
                   </View>
 
-                  <View className="mt-4 flex-row items-center gap-6">
-                    <View className="flex-row items-center">
-                      <Ionicons name="navigate" size={15} color="#2f73c9" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Number((activeRequest?.pickupRouteDistanceKm ?? activeRequest?.driverDistanceKm) || 0).toFixed(1)} km to pickup
-                      </Text>
-                    </View>
-                    <View className="flex-row items-center">
-                      <Ionicons name="time" size={15} color="#2f73c9" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Math.max(1, Number((activeRequest?.pickupRouteMinutes ?? activeRequest?.etaMinutes) || 0))} min to pickup
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View className="mt-2 flex-row items-center gap-6">
-                    <View className="flex-row items-center">
-                      <Ionicons name="swap-horizontal" size={15} color="#111827" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Number((activeRequest?.tripDistanceKm ?? activeRequest?.estimatedDistanceKm) || 0).toFixed(1)} km trip
-                      </Text>
-                    </View>
-                    <View className="flex-row items-center">
-                      <Ionicons name="time-outline" size={15} color="#111827" />
-                      <Text className="ml-1.5 text-sm font-medium text-[#5a6474]">
-                        {Math.max(1, Number((activeRequest?.tripDurationMinutes ?? activeRequest?.estimatedMinutes) || 0))} min trip
-                      </Text>
+                  <View className="mt-4 rounded-[20px] border border-[#d7dfec] bg-[#f8fafc] px-4 py-3">
+                    <View className="flex-row">
+                      <View className="mr-3 items-center pt-1">
+                        <View className="h-3 w-3 rounded-full bg-[#2f73c9]" />
+                        <View className="my-1.5 h-8 w-[2px] rounded-full bg-[#cbd5e1]" />
+                        <View className="h-3 w-3 rounded-full bg-[#111827]" />
+                      </View>
+                      <View className="flex-1">
+                        <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
+                        <Text className="mt-0.5 text-[15px] font-semibold text-[#111111]" numberOfLines={2}>
+                          {primaryIncomingRequest?.pickup}
+                        </Text>
+                        <Text className="mt-3 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
+                        <Text className="mt-0.5 text-[15px] font-semibold text-[#111111]" numberOfLines={2}>
+                          {primaryIncomingRequest?.dropoff}
+                        </Text>
+                      </View>
                     </View>
                   </View>
 
-                  {Number(activeRequest?.discountAmount || 0) > 0 ? (
-                    <View className="mt-4 rounded-[18px] border border-[#dbeafe] bg-white px-4 py-3">
+                  <RequestStopsPreview request={primaryIncomingRequest} />
+
+                  {Number(primaryIncomingRequest?.discountAmount || 0) > 0 ? (
+                    <View className="mt-3 rounded-[18px] border border-[#dbeafe] bg-white px-4 py-3">
                       <View className="flex-row items-center justify-between">
                         <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">
                           Promo ride
                         </Text>
-                        {activeRequest?.discountCode ? (
+                        {primaryIncomingRequest?.discountCode ? (
                           <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#2f73c9]">
-                            {activeRequest.discountCode}
+                            {primaryIncomingRequest.discountCode}
                           </Text>
                         ) : null}
                       </View>
                       <View className="mt-2 flex-row items-center justify-between">
                         <Text className="text-sm text-[#5a6474]">Passenger total</Text>
                         <Text className="text-sm font-semibold text-[#111111]">
-                          ${Number(activeRequest?.finalEstimatedAmount || 0).toFixed(2)}
+                          ${Number(primaryIncomingRequest?.finalEstimatedAmount || 0).toFixed(2)}
                         </Text>
                       </View>
                       <View className="mt-1 flex-row items-center justify-between">
                         <Text className="text-sm text-[#5a6474]">Discount</Text>
                         <Text className="text-sm font-semibold text-[#111111]">
-                          ${Number(activeRequest?.discountAmount || 0).toFixed(2)}
+                          ${Number(primaryIncomingRequest?.discountAmount || 0).toFixed(2)}
                         </Text>
                       </View>
                       <View className="mt-1 flex-row items-center justify-between">
                         <Text className="text-sm text-[#5a6474]">Admin reimbursement</Text>
                         <Text className="text-sm font-semibold text-[#111111]">
-                          ${Number(activeRequest?.driverReimbursementAmount || 0).toFixed(2)}
+                          ${Number(primaryIncomingRequest?.driverReimbursementAmount || 0).toFixed(2)}
                         </Text>
                       </View>
                     </View>
                   ) : null}
-                </View>
 
-                <View className="mt-5 rounded-[24px] border border-[#d7dfec] bg-white px-4 py-4">
-                  <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
-                  <Text className="mt-1 text-base font-semibold text-[#111111]">{activeRequest?.pickup}</Text>
-                  <Text className="mt-4 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
-                  <Text className="mt-1 text-base font-semibold text-[#111111]">{activeRequest?.dropoff}</Text>
-                </View>
-
-                <RequestStopsPreview request={activeRequest} />
-
-                <TouchableOpacity
-                  onPress={() => handleAcceptRequest(activeRequest)}
-                  disabled={acceptingRideId === activeRequest?.id}
-                  className="mt-6 h-14 items-center justify-center rounded-[20px] bg-[#2f73c9]"
-                >
-                  {acceptingRideId === activeRequest?.id ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text className="text-base font-bold uppercase text-white">Accept ride</Text>
-                  )}
-                </TouchableOpacity>
-
-                <View className="mt-3 flex-row items-center gap-3">
                   <TouchableOpacity
-                    onPress={() => handleDeclineRequest(activeRequest)}
-                    className="h-14 flex-1 items-center justify-center rounded-[18px] border border-[#d7d9df] bg-white"
+                    onPress={() => {
+                      if (!primaryIncomingRequest?.id || acceptingRideId) return;
+                      handleAcceptRequest(primaryIncomingRequest);
+                    }}
+                    disabled={!primaryIncomingRequest?.id || acceptingRideId === primaryIncomingRequest?.id}
+                    className="mt-5 h-14 items-center justify-center rounded-[20px] bg-[#2f73c9]"
+                  >
+                    {acceptingRideId === primaryIncomingRequest?.id ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text className="text-base font-bold uppercase text-white">
+                        Accept for ${Number(primaryIncomingRequest?.estimatedAmount || 0).toFixed(2)}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => {
+                      if (!primaryIncomingRequest?.id) return;
+                      handleDeclineRequest(primaryIncomingRequest);
+                    }}
+                    className="mt-2.5 h-12 items-center justify-center rounded-[18px] border border-[#d7d9df] bg-white"
                   >
                     <Text className="text-sm font-bold uppercase text-[#5d6470]">Decline</Text>
                   </TouchableOpacity>
-                </View>
+                </ScrollView>
               </View>
             </View>
           </SafeAreaView>

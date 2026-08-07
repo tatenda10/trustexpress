@@ -38,7 +38,10 @@ export const PERMISSION_CATALOG = [
 ]
 
 export const DEFAULT_ROLE_MAPPINGS = {
+  // Full access — assign only to trusted owners/leads.
   super_admin: PERMISSION_CATALOG.map((item) => item.key),
+
+  // Normal staff: day-to-day ops without user/role admin, finance config, or agent recruitment.
   admin: [
     'overview.read',
     'drivers.read',
@@ -47,10 +50,50 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'ride_ops.read',
     'live_map.read',
     'reports.read',
+    'support.read',
   ],
-  verification_admin: ['overview.read', 'verification.read', 'verification.review', 'drivers.read'],
-  operations_admin: ['overview.read', 'ride_ops.read', 'ride_ops.manage', 'live_map.read', 'drivers.read', 'passengers.read'],
-  support_admin: ['overview.read', 'support.read', 'support.manage', 'passengers.read', 'passengers.manage'],
-  finance_admin: ['overview.read', 'pricing.read', 'pricing.manage', 'payouts.read', 'payouts.manage', 'reports.read'],
-  recruitment_admin: ['overview.read', 'agents.read', 'agents.manage', 'verification.read', 'drivers.read'],
+
+  verification_admin: [
+    'overview.read',
+    'verification.read',
+    'verification.review',
+    'drivers.read',
+  ],
+
+  operations_admin: [
+    'overview.read',
+    'ride_ops.read',
+    'ride_ops.manage',
+    'live_map.read',
+    'drivers.read',
+    'passengers.read',
+  ],
+
+  // Support team: tickets + read-only user/ride context. No admin users, pricing, wallet config, or AI settings.
+  support_admin: [
+    'overview.read',
+    'support.read',
+    'ride_ops.read',
+    'live_map.read',
+    'drivers.read',
+    'passengers.read',
+    'passengers.manage',
+  ],
+
+  finance_admin: [
+    'overview.read',
+    'pricing.read',
+    'pricing.manage',
+    'payouts.read',
+    'payouts.manage',
+    'reports.read',
+  ],
+
+  recruitment_admin: [
+    'overview.read',
+    'agents.read',
+    'agents.manage',
+    'verification.read',
+    'drivers.read',
+  ],
 }

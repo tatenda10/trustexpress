@@ -22,7 +22,7 @@ const navSections = [
       { id: 'passenger-referrals', label: 'Passenger Referrals', icon: UsersIcon, to: '/dashboard/passenger-referrals', permission: 'passengers.read' },
       { id: 'agents', label: 'Agents', icon: UsersIcon, to: '/dashboard/agents', permission: 'agents.read' },
       { id: 'support', label: 'Support Tickets', icon: LockIcon, to: '/dashboard/support', permission: 'support.read' },
-      { id: 'support-agent', label: 'Support Agent', icon: LockIcon, to: '/dashboard/support-agent', permission: 'support.read' },
+      { id: 'support-agent', label: 'Support Agent (AI)', icon: LockIcon, to: '/dashboard/support-agent', permission: 'support.manage' },
     ],
   },
   {

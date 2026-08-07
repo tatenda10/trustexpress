@@ -182,7 +182,7 @@ function AppRoutes() {
         />
         <Route
           path="support-agent"
-          element={<PermissionRoute permission="support.read"><SupportAgentPage /></PermissionRoute>}
+          element={<PermissionRoute permission="support.manage"><SupportAgentPage /></PermissionRoute>}
         />
       </Route>
 

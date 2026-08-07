@@ -60,6 +60,7 @@ async function enrichThread(row) {
   }
 }
 
+// Read-only agent status for inbox badge; mutating routes stay on support.manage.
 router.get('/agent/settings', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
   try {
     const settings = await getSupportAgentSettings();
@@ -76,7 +77,7 @@ router.get('/agent/settings', requireAdminAuth, requirePermission('support.read'
   }
 });
 
-router.put('/agent/settings', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
+router.put('/agent/settings', requireAdminAuth, requirePermission('support.manage'), async (req, res) => {
   try {
     const settings = await updateSupportAgentSettings({
       enabled: req.body?.enabled,
@@ -93,7 +94,7 @@ router.put('/agent/settings', requireAdminAuth, requirePermission('support.read'
   }
 });
 
-router.post('/agent/test', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
+router.post('/agent/test', requireAdminAuth, requirePermission('support.manage'), async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
     if (!message) {
@@ -299,7 +300,7 @@ router.patch('/threads/:threadId/status', requireAdminAuth, requirePermission('s
   }
 });
 
-router.delete('/threads/:threadId', requireAdminAuth, requirePermission('support.read'), async (req, res) => {
+router.delete('/threads/:threadId', requireAdminAuth, requirePermission('support.manage'), async (req, res) => {
   try {
     const threadId = Number(req.params.threadId);
     if (!Number.isFinite(threadId) || threadId <= 0) {

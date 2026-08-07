@@ -19,11 +19,11 @@ async function ensurePermissions() {
 
 async function ensureRoles() {
   const defs = [
-    { slug: 'super_admin', name: 'Super Admin', isSystem: 1, description: 'Full platform access' },
-    { slug: 'admin', name: 'Admin', isSystem: 1, description: 'General admin access' },
+    { slug: 'super_admin', name: 'Super Admin', isSystem: 1, description: 'Full platform access (owners only)' },
+    { slug: 'admin', name: 'Admin (Normal Staff)', isSystem: 1, description: 'General admin staff: overview, users, rides, tickets, reports — no system config' },
     { slug: 'verification_admin', name: 'Verification Admin', isSystem: 1, description: 'Driver verification workflows' },
     { slug: 'operations_admin', name: 'Operations Admin', isSystem: 1, description: 'Live operations and rides' },
-    { slug: 'support_admin', name: 'Support Admin', isSystem: 1, description: 'Support and passenger operations' },
+    { slug: 'support_admin', name: 'Support', isSystem: 1, description: 'Support tickets, ride context, passenger/driver lookups — no finance or system settings' },
     { slug: 'finance_admin', name: 'Finance Admin', isSystem: 1, description: 'Pricing, payouts, finance reporting' },
     { slug: 'recruitment_admin', name: 'Recruitment Admin', isSystem: 1, description: 'Agent recruitment and onboarding' },
   ];
