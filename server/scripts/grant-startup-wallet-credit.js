@@ -1,15 +1,12 @@
 import 'dotenv/config';
-import { query } from '../db/connection.js';
-import { getClerkClient } from '../lib/clerk-client.js';
-import { toAppUser } from '../lib/clerk-user.js';
-import { getDriverWalletSettings } from '../lib/driver-wallet-settings.js';
-import { creditDriverWalletManual } from '../lib/driver-wallet.js';
+import {
+  DEFAULT_STARTUP_GRANT_AMOUNT,
+  DEFAULT_STARTUP_GRANT_ID,
+  runStartupWalletGrant,
+} from '../lib/startup-wallet-grant.js';
 
 /**
  * Startup wallet grant: credit every Clerk driver a fixed amount once.
- *
- * Re-running with the same --grant-id only credits drivers who joined since the
- * last run, so it doubles as the "top up the new drivers" job.
  *
  * Dry-run by default. Pass --apply=true to write balances.
  *
@@ -29,123 +26,41 @@ function hasFlag(name) {
   return process.argv.includes(`--${name}`) || getArg(name).toLowerCase() === 'true';
 }
 
-async function loadAllClerkDrivers() {
-  const clerk = getClerkClient();
-  const limit = 100;
-  let offset = 0;
-  const drivers = [];
-
-  while (true) {
-    const page = await clerk.users.getUserList({
-      limit,
-      offset,
-      orderBy: '-created_at',
-    });
-    const users = page.data || [];
-    if (!users.length) break;
-
-    for (const user of users) {
-      const appUser = toAppUser(user);
-      if (appUser.role !== 'driver') continue;
-      drivers.push({
-        id: appUser.clerk_user_id,
-        email: appUser.email || null,
-        fullName: [appUser.first_name, appUser.last_name].filter(Boolean).join(' ').trim() || null,
-      });
-    }
-
-    offset += users.length;
-    if (users.length < limit) break;
-  }
-
-  return drivers;
-}
-
-async function loadAlreadyGrantedDriverIds(grantId) {
-  const rows = await query(
-    `SELECT DISTINCT driver_user_id
-     FROM driver_wallet_transactions
-     WHERE transaction_type = 'manual_credit'
-       AND source_type = 'startup_grant'
-       AND source_id = ?`,
-    [grantId]
-  );
-  return new Set(rows.map((row) => row.driver_user_id));
-}
-
 async function main() {
-  const amount = Number(getArg('amount', '5'));
+  const amount = Number(getArg('amount', String(DEFAULT_STARTUP_GRANT_AMOUNT)));
   const apply = hasFlag('apply');
-  const grantId = String(getArg('grant-id', 'startup_grant_v1')).trim() || 'startup_grant_v1';
-  const settings = await getDriverWalletSettings();
-  const currency = String(getArg('currency', settings.currency || 'USD')).toUpperCase();
-
-  if (!(amount > 0)) {
-    throw new Error(`Invalid --amount=${amount}. Must be greater than zero.`);
-  }
+  const grantId = String(getArg('grant-id', DEFAULT_STARTUP_GRANT_ID)).trim() || DEFAULT_STARTUP_GRANT_ID;
+  const currency = getArg('currency', '') || null;
 
   console.log(`\nStartup wallet grant`);
-  console.log(`  amount:     ${currency} ${amount.toFixed(2)}`);
+  console.log(`  amount:     ${amount}`);
   console.log(`  grant id:   ${grantId}`);
-  console.log(`  mode:       ${apply ? 'APPLY (will credit wallets)' : 'DRY RUN (no writes)'}`);
-  console.log(`  source:     all Clerk users with role=driver\n`);
+  console.log(`  mode:       ${apply ? 'APPLY (will credit wallets)' : 'DRY RUN (no writes)'}\n`);
 
-  const [drivers, alreadyGranted] = await Promise.all([
-    loadAllClerkDrivers(),
-    loadAlreadyGrantedDriverIds(grantId),
-  ]);
-  const pending = drivers.filter((driver) => !alreadyGranted.has(driver.id));
+  const summary = await runStartupWalletGrant({
+    amount,
+    grantId,
+    currency,
+    apply,
+  });
 
-  console.log(`Found ${drivers.length} driver(s).`);
-  console.log(`  already granted "${grantId}": ${drivers.length - pending.length}`);
-  console.log(`  pending this grant:          ${pending.length}`);
-  console.log(`  total to credit:             ${currency} ${(pending.length * amount).toFixed(2)}\n`);
+  console.log(`Found ${summary.totalDrivers} driver(s).`);
+  console.log(`  already granted "${summary.grantId}": ${summary.alreadyGranted}`);
+  console.log(`  pending this grant:          ${summary.pending}`);
+  console.log(`  total to credit:             ${summary.currency} ${Number(summary.totalToCredit).toFixed(2)}\n`);
 
-  if (pending.length === 0) {
+  if (summary.pending === 0) {
     console.log('Every driver already received this grant. Nothing to do.');
     return;
   }
 
-  const summary = {
-    credited: 0,
-    skipped: 0,
-    failed: 0,
-  };
-
-  for (const driver of pending) {
-    const label = driver.fullName || driver.email || driver.id;
-    try {
-      if (!apply) {
-        console.log(`[dry-run] would credit ${currency} ${amount.toFixed(2)} → ${label} (${driver.id})`);
-        summary.credited += 1;
-        continue;
-      }
-
-      const result = await creditDriverWalletManual({
-        driverUserId: driver.id,
-        amount,
-        currency,
-        description: `Startup wallet grant (${grantId})`,
-        sourceType: 'startup_grant',
-        sourceId: grantId,
-        paymentMethod: 'admin_grant',
-      });
-
-      if (result.alreadyCredited) {
-        summary.skipped += 1;
-        console.log(
-          `[skip] already credited ${currency} ${Number(result.amount).toFixed(2)} → ${label} (balance ${result.wallet.availableBalance})`
-        );
-        continue;
-      }
-
-      summary.credited += 1;
-      console.log(
-        `[ok] credited ${currency} ${Number(result.amount).toFixed(2)} → ${label} (new balance ${result.wallet.availableBalance})`
-      );
-    } catch (error) {
-      summary.failed += 1;
-      console.error(`[fail] ${label} (${driver.id}): ${error?.message || error}`);
+  if (!apply) {
+    for (const driver of summary.samplePending) {
+      const label = driver.fullName || driver.email || driver.id;
+      console.log(`[dry-run] would credit ${summary.currency} ${Number(summary.amount).toFixed(2)} → ${label} (${driver.id})`);
+    }
+    if (summary.pending > summary.samplePending.length) {
+      console.log(`... and ${summary.pending - summary.samplePending.length} more`);
     }
   }
 
@@ -153,6 +68,11 @@ async function main() {
   console.log(`  credited: ${summary.credited}`);
   console.log(`  skipped:  ${summary.skipped}`);
   console.log(`  failed:   ${summary.failed}`);
+  if (summary.failures?.length) {
+    for (const failure of summary.failures.slice(0, 20)) {
+      console.error(`[fail] ${failure.label}: ${failure.error}`);
+    }
+  }
   if (!apply) {
     console.log(`\nRe-run with --apply=true to actually credit wallets.`);
   }

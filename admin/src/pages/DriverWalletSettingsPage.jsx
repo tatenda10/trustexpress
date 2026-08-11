@@ -8,6 +8,7 @@ const PROVIDER_DEFAULT_CURRENCY = {
   paystack: 'ZAR',
   smilepay: 'USD',
 };
+const DEFAULT_GRANT_ID = 'startup_grant_v1';
 
 function formatMoney(value, currency = 'USD') {
   const amount = Number(value || 0)
@@ -40,9 +41,25 @@ export default function DriverWalletSettingsPage() {
     updatedAt: null,
   })
 
+  const [grantAmount, setGrantAmount] = useState(5)
+  const [grantId, setGrantId] = useState(DEFAULT_GRANT_ID)
+  const [grantLoading, setGrantLoading] = useState(false)
+  const [grantApplying, setGrantApplying] = useState(false)
+  const [grantSummary, setGrantSummary] = useState(null)
+  const [grantError, setGrantError] = useState('')
+  const [grantSuccess, setGrantSuccess] = useState('')
+
+  const [manualDriverId, setManualDriverId] = useState('')
+  const [manualAmount, setManualAmount] = useState(5)
+  const [manualDescription, setManualDescription] = useState('Admin wallet top-up')
+  const [manualLoading, setManualLoading] = useState(false)
+  const [manualError, setManualError] = useState('')
+  const [manualSuccess, setManualSuccess] = useState('')
+
   const paymentsLive = !!settings.paymentsEnabled
   const activeProvider = String(settings.paymentProvider || 'paystack').toLowerCase()
   const providerLabel = activeProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack'
+  const walletCurrency = String(settings.currency || 'USD').toUpperCase()
 
   const loadSettings = async () => {
     setLoading(true)
@@ -100,6 +117,114 @@ export default function DriverWalletSettingsPage() {
     }
   }
 
+  const previewStartupGrant = async () => {
+    if (!canManage) return
+    setGrantLoading(true)
+    setGrantError('')
+    setGrantSuccess('')
+    try {
+      const { data } = await axios.get(`${BASE_URL}/api/admin/driver-wallet/startup-grant/preview`, {
+        headers,
+        params: {
+          amount: Number(grantAmount),
+          grantId: String(grantId || DEFAULT_GRANT_ID).trim() || DEFAULT_GRANT_ID,
+          currency: walletCurrency,
+        },
+        timeout: 120000,
+      })
+      setGrantSummary(data?.summary || null)
+      setGrantSuccess(
+        data?.summary?.pending === 0
+          ? 'Every driver already has this grant — nothing pending.'
+          : `Preview ready: ${data.summary.pending} driver(s) would get ${formatMoney(data.summary.amount, data.summary.currency)}.`
+      )
+    } catch (err) {
+      setGrantSummary(null)
+      setGrantError(err?.response?.data?.error || err?.message || 'Failed to preview grant')
+    } finally {
+      setGrantLoading(false)
+    }
+  }
+
+  const applyStartupGrant = async () => {
+    if (!canManage) return
+    const pendingCount = Number(grantSummary?.pending || 0)
+    const amountLabel = formatMoney(grantAmount, walletCurrency)
+    const confirmed = window.confirm(
+      pendingCount > 0
+        ? `Credit ${pendingCount} pending driver(s) ${amountLabel} each (grant ${grantId})?\n\nDrivers who already received this grant id will be skipped.`
+        : `Run apply for grant ${grantId} at ${amountLabel} each?\n\nOnly drivers who have not received this grant will be credited.`
+    )
+    if (!confirmed) return
+
+    setGrantApplying(true)
+    setGrantError('')
+    setGrantSuccess('')
+    try {
+      const { data } = await axios.post(
+        `${BASE_URL}/api/admin/driver-wallet/startup-grant`,
+        {
+          apply: true,
+          amount: Number(grantAmount),
+          grantId: String(grantId || DEFAULT_GRANT_ID).trim() || DEFAULT_GRANT_ID,
+          currency: walletCurrency,
+        },
+        { headers, timeout: 300000 }
+      )
+      setGrantSummary(data?.summary || null)
+      const s = data?.summary || {}
+      setGrantSuccess(
+        `Applied. Credited ${s.credited || 0}, skipped ${s.skipped || 0}, failed ${s.failed || 0}.`
+      )
+    } catch (err) {
+      setGrantError(err?.response?.data?.error || err?.message || 'Failed to apply grant')
+    } finally {
+      setGrantApplying(false)
+    }
+  }
+
+  const creditOneDriver = async (event) => {
+    event.preventDefault()
+    if (!canManage) return
+    const driverUserId = String(manualDriverId || '').trim()
+    if (!driverUserId) {
+      setManualError('Paste the driver Clerk user id (user_…).')
+      return
+    }
+    if (!(Number(manualAmount) > 0)) {
+      setManualError('Amount must be greater than zero.')
+      return
+    }
+
+    setManualLoading(true)
+    setManualError('')
+    setManualSuccess('')
+    try {
+      const { data } = await axios.post(
+        `${BASE_URL}/api/admin/driver-wallet/manual-credit`,
+        {
+          driverUserId,
+          amount: Number(manualAmount),
+          currency: walletCurrency,
+          description: String(manualDescription || 'Admin wallet top-up').trim() || 'Admin wallet top-up',
+        },
+        { headers }
+      )
+      const result = data?.result || {}
+      if (result.alreadyCredited) {
+        setManualSuccess(`Already credited (same source). Balance: ${formatMoney(result.wallet?.availableBalance, result.currency || walletCurrency)}.`)
+      } else {
+        setManualSuccess(
+          `Credited ${formatMoney(result.amount, result.currency || walletCurrency)}. New balance: ${formatMoney(result.wallet?.availableBalance, result.currency || walletCurrency)}.`
+        )
+      }
+    } catch (err) {
+      setManualError(err?.response?.data?.error || err?.message || 'Failed to credit driver')
+    } finally {
+      setManualLoading(false)
+    }
+  }
+
   const exampleFare = 10
   const exampleCommission = (exampleFare * Number(settings.commissionRatePercent || 0)) / 100
 
@@ -108,7 +233,7 @@ export default function DriverWalletSettingsPage() {
       <div>
         <h1 className="text-xl font-semibold text-slate-900">Driver wallet settings</h1>
         <p className="mt-1 text-xs text-slate-500">
-          Master payments switch and provider. Off = default ride flow. On = wallet top-ups via Paystack or Smile&Pay.
+          Master payments switch, provider, and admin wallet top-ups for new drivers.
         </p>
       </div>
 
@@ -314,6 +439,180 @@ export default function DriverWalletSettingsPage() {
           </div>
         </form>
       )}
+
+      <section className="space-y-4 border border-slate-200 bg-white p-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Startup grant (new drivers)</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Same as the CLI job: credit every driver who has not yet received this grant id.
+            Keep grant id as <code className="text-[11px]">{DEFAULT_GRANT_ID}</code> to only top up newcomers.
+          </p>
+        </div>
+
+        {grantError ? (
+          <div className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{grantError}</div>
+        ) : null}
+        {grantSuccess ? (
+          <div className="border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{grantSuccess}</div>
+        ) : null}
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Amount ({walletCurrency})
+            </span>
+            <input
+              type="number"
+              min={0.01}
+              step="0.01"
+              value={Number(grantAmount)}
+              disabled={!canManage || grantLoading || grantApplying}
+              onChange={(event) => setGrantAmount(event.target.value)}
+              className="w-full border border-slate-200 px-3 py-2 text-sm text-slate-800"
+            />
+          </label>
+          <label className="block md:col-span-2">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Grant id (idempotency key)
+            </span>
+            <input
+              type="text"
+              value={grantId}
+              disabled={!canManage || grantLoading || grantApplying}
+              onChange={(event) => setGrantId(event.target.value)}
+              className="w-full border border-slate-200 px-3 py-2 text-sm text-slate-800"
+              placeholder={DEFAULT_GRANT_ID}
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={!canManage || grantLoading || grantApplying}
+            onClick={previewStartupGrant}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 disabled:opacity-50"
+          >
+            {grantLoading ? 'Checking…' : 'Preview pending'}
+          </button>
+          <button
+            type="button"
+            disabled={!canManage || grantLoading || grantApplying}
+            onClick={applyStartupGrant}
+            className="border border-emerald-600 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {grantApplying ? 'Crediting drivers…' : 'Apply grant'}
+          </button>
+          {!canManage ? (
+            <p className="text-xs text-amber-700">Needs payouts manage permission.</p>
+          ) : null}
+        </div>
+
+        {grantSummary ? (
+          <div className="border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-700">
+            <p>
+              Drivers: <strong>{grantSummary.totalDrivers}</strong>
+              {' · '}
+              Already granted: <strong>{grantSummary.alreadyGranted}</strong>
+              {' · '}
+              Pending: <strong>{grantSummary.pending}</strong>
+              {' · '}
+              Total: <strong>{formatMoney(grantSummary.totalToCredit, grantSummary.currency)}</strong>
+            </p>
+            {Array.isArray(grantSummary.samplePending) && grantSummary.samplePending.length > 0 ? (
+              <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                {grantSummary.samplePending.map((driver) => (
+                  <li key={driver.id} className="font-mono text-[11px] text-slate-600">
+                    {(driver.fullName || driver.email || 'Driver')} — {driver.id}
+                  </li>
+                ))}
+                {grantSummary.pending > grantSummary.samplePending.length ? (
+                  <li className="text-slate-500">…and {grantSummary.pending - grantSummary.samplePending.length} more</li>
+                ) : null}
+              </ul>
+            ) : null}
+            {Array.isArray(grantSummary.failures) && grantSummary.failures.length > 0 ? (
+              <div className="mt-2 text-rose-700">
+                Failures ({grantSummary.failures.length}):
+                <ul className="mt-1 space-y-0.5">
+                  {grantSummary.failures.slice(0, 10).map((failure) => (
+                    <li key={`${failure.driverUserId}-${failure.error}`}>
+                      {failure.label}: {failure.error}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-4 border border-slate-200 bg-white p-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Single driver top-up</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Credit one driver by Clerk user id (from Drivers list / driver profile URL).
+          </p>
+        </div>
+
+        {manualError ? (
+          <div className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{manualError}</div>
+        ) : null}
+        {manualSuccess ? (
+          <div className="border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{manualSuccess}</div>
+        ) : null}
+
+        <form onSubmit={creditOneDriver} className="grid gap-4 md:grid-cols-2">
+          <label className="block md:col-span-2">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Driver user id
+            </span>
+            <input
+              type="text"
+              value={manualDriverId}
+              disabled={!canManage || manualLoading}
+              onChange={(event) => setManualDriverId(event.target.value)}
+              placeholder="user_2abc..."
+              className="w-full border border-slate-200 px-3 py-2 font-mono text-sm text-slate-800"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Amount ({walletCurrency})
+            </span>
+            <input
+              type="number"
+              min={0.01}
+              step="0.01"
+              value={Number(manualAmount)}
+              disabled={!canManage || manualLoading}
+              onChange={(event) => setManualAmount(event.target.value)}
+              className="w-full border border-slate-200 px-3 py-2 text-sm text-slate-800"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Note
+            </span>
+            <input
+              type="text"
+              value={manualDescription}
+              disabled={!canManage || manualLoading}
+              onChange={(event) => setManualDescription(event.target.value)}
+              className="w-full border border-slate-200 px-3 py-2 text-sm text-slate-800"
+            />
+          </label>
+          <div className="md:col-span-2">
+            <button
+              type="submit"
+              disabled={!canManage || manualLoading}
+              className="border border-indigo-600 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {manualLoading ? 'Crediting…' : 'Credit driver'}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   )
 }

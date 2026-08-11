@@ -372,14 +372,14 @@ export default function DriverTripScreen({ navigation, route }) {
   const [passengerRating, setPassengerRating] = useState(0);
   const [passengerReview, setPassengerReview] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
-
-  useEffect(() => {
-    routeCoordinatesRef.current = routeCoordinates;
-  }, [routeCoordinates]);
   const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [verifyingPin, setVerifyingPin] = useState(false);
+
+  useEffect(() => {
+    routeCoordinatesRef.current = routeCoordinates;
+  }, [routeCoordinates]);
 
   const exitPassengerRatingFlow = useCallback(() => {
     setShowPassengerRating(false);
@@ -786,6 +786,14 @@ export default function DriverTripScreen({ navigation, route }) {
   const targetCoordinate = useMemo(
     () => (ride?.stage === 'on_trip' ? currentTargetCoordinate || dropoffCoordinate : pickupCoordinate),
     [currentTargetCoordinate, dropoffCoordinate, pickupCoordinate, ride?.stage],
+  );
+  const safeRouteCoordinates = useMemo(
+    () => normalizeCoordinates(routeCoordinates),
+    [routeCoordinates],
+  );
+  const vehicleHeadingDegrees = useMemo(
+    () => getHeadingAlongRoute(safeRouteCoordinates, driverCoordinate, targetCoordinate),
+    [driverCoordinate, safeRouteCoordinates, targetCoordinate],
   );
 
   useEffect(() => {
@@ -1295,11 +1303,6 @@ export default function DriverTripScreen({ navigation, route }) {
     return <DriverTripEmptyState onBack={() => navigation.goBack()} />;
   }
 
-  const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
-  const vehicleHeadingDegrees = useMemo(
-    () => getHeadingAlongRoute(safeRouteCoordinates, driverCoordinate, targetCoordinate),
-    [driverCoordinate, safeRouteCoordinates, targetCoordinate],
-  );
   const destinationForMaps = ride.stage === 'on_trip'
     ? (currentTargetCoordinate || dropoffCoordinate)
     : pickupCoordinate;
