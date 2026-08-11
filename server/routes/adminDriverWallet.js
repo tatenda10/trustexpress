@@ -98,12 +98,13 @@ router.post('/startup-grant', requireAdminAuth, requirePermission('payouts.manag
 
 /**
  * One-off manual credit for a single driver.
- * Body: { driverUserId, amount, currency?, description? }
+ * Body: { email, amount, currency?, description? }
  */
 router.post('/manual-credit', requireAdminAuth, requirePermission('payouts.manage'), async (req, res) => {
   try {
     const result = await creditSingleDriverWallet({
-      driverUserId: req.body?.driverUserId,
+      email: req.body?.email,
+      driverUserId: req.body?.driverUserId || null,
       amount: req.body?.amount,
       currency: req.body?.currency || null,
       description: req.body?.description || 'Admin wallet top-up',

@@ -49,7 +49,7 @@ export default function DriverWalletSettingsPage() {
   const [grantError, setGrantError] = useState('')
   const [grantSuccess, setGrantSuccess] = useState('')
 
-  const [manualDriverId, setManualDriverId] = useState('')
+  const [manualEmail, setManualEmail] = useState('')
   const [manualAmount, setManualAmount] = useState(5)
   const [manualDescription, setManualDescription] = useState('Admin wallet top-up')
   const [manualLoading, setManualLoading] = useState(false)
@@ -186,9 +186,9 @@ export default function DriverWalletSettingsPage() {
   const creditOneDriver = async (event) => {
     event.preventDefault()
     if (!canManage) return
-    const driverUserId = String(manualDriverId || '').trim()
-    if (!driverUserId) {
-      setManualError('Paste the driver Clerk user id (user_…).')
+    const email = String(manualEmail || '').trim().toLowerCase()
+    if (!email || !email.includes('@')) {
+      setManualError('Enter a valid driver email.')
       return
     }
     if (!(Number(manualAmount) > 0)) {
@@ -203,7 +203,7 @@ export default function DriverWalletSettingsPage() {
       const { data } = await axios.post(
         `${BASE_URL}/api/admin/driver-wallet/manual-credit`,
         {
-          driverUserId,
+          email,
           amount: Number(manualAmount),
           currency: walletCurrency,
           description: String(manualDescription || 'Admin wallet top-up').trim() || 'Admin wallet top-up',
@@ -211,11 +211,12 @@ export default function DriverWalletSettingsPage() {
         { headers }
       )
       const result = data?.result || {}
+      const who = result.fullName || result.email || email
       if (result.alreadyCredited) {
-        setManualSuccess(`Already credited (same source). Balance: ${formatMoney(result.wallet?.availableBalance, result.currency || walletCurrency)}.`)
+        setManualSuccess(`Already credited (same source) for ${who}. Balance: ${formatMoney(result.wallet?.availableBalance, result.currency || walletCurrency)}.`)
       } else {
         setManualSuccess(
-          `Credited ${formatMoney(result.amount, result.currency || walletCurrency)}. New balance: ${formatMoney(result.wallet?.availableBalance, result.currency || walletCurrency)}.`
+          `Credited ${formatMoney(result.amount, result.currency || walletCurrency)} to ${who}. New balance: ${formatMoney(result.wallet?.availableBalance, result.currency || walletCurrency)}.`
         )
       }
     } catch (err) {
@@ -551,7 +552,7 @@ export default function DriverWalletSettingsPage() {
         <div>
           <h2 className="text-base font-semibold text-slate-900">Single driver top-up</h2>
           <p className="mt-1 text-xs text-slate-500">
-            Credit one driver by Clerk user id (from Drivers list / driver profile URL).
+            Credit one driver by their account email. Must be a driver role in Clerk.
           </p>
         </div>
 
@@ -565,15 +566,16 @@ export default function DriverWalletSettingsPage() {
         <form onSubmit={creditOneDriver} className="grid gap-4 md:grid-cols-2">
           <label className="block md:col-span-2">
             <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-              Driver user id
+              Driver email
             </span>
             <input
-              type="text"
-              value={manualDriverId}
+              type="email"
+              value={manualEmail}
               disabled={!canManage || manualLoading}
-              onChange={(event) => setManualDriverId(event.target.value)}
-              placeholder="user_2abc..."
-              className="w-full border border-slate-200 px-3 py-2 font-mono text-sm text-slate-800"
+              onChange={(event) => setManualEmail(event.target.value)}
+              placeholder="driver@example.com"
+              autoComplete="email"
+              className="w-full border border-slate-200 px-3 py-2 text-sm text-slate-800"
             />
           </label>
           <label className="block">

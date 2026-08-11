@@ -151,22 +151,67 @@ export async function runStartupWalletGrant({
 }
 
 /**
+ * Resolve a Clerk driver from email. Throws if not found or not a driver.
+ */
+export async function resolveDriverUserIdByEmail(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    throw buildWalletError('Valid driver email is required');
+  }
+
+  const clerk = getClerkClient();
+  const list = await clerk.users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
+  const users = Array.isArray(list?.data) ? list.data : [];
+
+  if (!users.length) {
+    throw buildWalletError('No account found for that email', 404);
+  }
+
+  const drivers = users
+    .map((user) => ({ user, appUser: toAppUser(user) }))
+    .filter((entry) => entry.appUser.role === 'driver');
+
+  if (!drivers.length) {
+    throw buildWalletError('That email is not a driver account', 404);
+  }
+
+  const match = drivers[0];
+  return {
+    driverUserId: match.appUser.clerk_user_id,
+    email: match.appUser.email || normalizedEmail,
+    fullName: [match.appUser.first_name, match.appUser.last_name].filter(Boolean).join(' ').trim() || null,
+  };
+}
+
+/**
  * Manual one-off credit for a single driver (admin UI).
+ * Accepts either email or driverUserId.
  */
 export async function creditSingleDriverWallet({
-  driverUserId,
+  email = null,
+  driverUserId = null,
   amount,
   currency = null,
   description = 'Admin wallet top-up',
   sourceType = 'admin_manual_credit',
   sourceId = null,
 } = {}) {
-  const safeDriverUserId = String(driverUserId || '').trim();
-  if (!safeDriverUserId) {
-    throw buildWalletError('Driver user id is required');
+  let safeDriverUserId = String(driverUserId || '').trim();
+  let resolvedEmail = null;
+  let resolvedName = null;
+
+  if (!safeDriverUserId && email) {
+    const resolved = await resolveDriverUserIdByEmail(email);
+    safeDriverUserId = resolved.driverUserId;
+    resolvedEmail = resolved.email;
+    resolvedName = resolved.fullName;
   }
 
-  return creditDriverWalletManual({
+  if (!safeDriverUserId) {
+    throw buildWalletError('Driver email is required');
+  }
+
+  const result = await creditDriverWalletManual({
     driverUserId: safeDriverUserId,
     amount,
     currency,
@@ -175,4 +220,11 @@ export async function creditSingleDriverWallet({
     sourceId: sourceId || `admin_${Date.now()}_${safeDriverUserId.slice(-8)}`,
     paymentMethod: 'admin_manual',
   });
+
+  return {
+    ...result,
+    driverUserId: safeDriverUserId,
+    email: resolvedEmail,
+    fullName: resolvedName,
+  };
 }
