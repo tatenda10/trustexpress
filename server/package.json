@@ -42,6 +42,8 @@
     "db:migrate:topup-provider-transaction-id": "node scripts/run-migration.js sql/migrations/056_generalize_topup_transaction_id.sql",
     "db:migrate:driver-income-goals": "node scripts/run-migration.js sql/migrations/057_add_driver_income_goals.sql",
     "db:migrate:support-attachments": "node scripts/run-migration.js sql/migrations/058_add_support_message_attachments.sql",
+    "db:migrate:driver-wallet-preserve-on-delete": "node scripts/run-migration.js sql/migrations/059_preserve_driver_wallet_on_account_delete.sql",
+    "db:migrate:rating-performance": "node scripts/run-migration.js sql/migrations/060_rating_performance_events.sql",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
     "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",
     "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",

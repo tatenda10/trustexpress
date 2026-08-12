@@ -44,6 +44,13 @@ function formatDateTime(value) {
   })
 }
 
+function formatWalletMoney(wallet) {
+  if (!wallet) return '-'
+  const currency = String(wallet.currency || 'USD').toUpperCase()
+  const amount = Number(wallet.availableBalance || 0)
+  return `${currency} ${amount.toFixed(2)}`
+}
+
 function getDriverDisplayName(driver) {
   const fullName = driver?.fullName || [driver?.firstName, driver?.lastName].filter(Boolean).join(' ').trim()
   return fullName || driver?.email || driver?.id || 'Driver'
@@ -138,11 +145,20 @@ export default function DriverDetailsPage() {
   }, [driver])
   const trips = useMemo(() => (Array.isArray(driver?.trips) ? driver.trips : []), [driver])
   const reviews = useMemo(() => (Array.isArray(driver?.reviews) ? driver.reviews : []), [driver])
+  const walletTransactions = useMemo(
+    () => (Array.isArray(driver?.walletTransactions) ? driver.walletTransactions : []),
+    [driver]
+  )
   const averageRating = useMemo(() => {
     const rated = reviews.filter((review) => review.rating !== null)
     if (!rated.length) return null
     return rated.reduce((sum, review) => sum + Number(review.rating || 0), 0) / rated.length
   }, [reviews])
+  const ratingPerformance = driver?.ratingPerformance || null
+  const ratingEvents = useMemo(
+    () => (Array.isArray(ratingPerformance?.events) ? ratingPerformance.events : []),
+    [ratingPerformance]
+  )
 
   useEffect(() => {
     setCarPhotoIndex(0)
@@ -158,12 +174,18 @@ export default function DriverDetailsPage() {
 
   const sectionTabs = [
     { key: 'profile', label: 'Profile' },
+    { key: 'wallet', label: 'Wallet' },
     { key: 'vehicle', label: 'Vehicle' },
     { key: 'documents', label: 'Documents' },
     { key: 'trips', label: 'Trips' },
     { key: 'reviews', label: 'Reviews' },
     { key: 'verification', label: 'Verification' },
   ]
+
+  const lastAutomation = ratingPerformance?.lastEvent || null
+  const lastAutomationLabel = lastAutomation
+    ? `${String(lastAutomation.action || '').replace(/_/g, ' ')}${lastAutomation.avgRating != null ? ` · avg ${Number(lastAutomation.avgRating).toFixed(2)}` : ''}`
+    : 'None yet'
 
   return (
     <section className="space-y-4">
@@ -186,8 +208,20 @@ export default function DriverDetailsPage() {
             <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
               <HeaderField label="Phone" value={driver.phoneNumber || '-'} />
               <HeaderField label="Joined" value={formatDateTime(driver.createdAt)} />
+              <HeaderField label="Account status" value={driver.accountStatus || 'active'} />
+              <HeaderField label="Approved tier" value={driver.vehicle?.vehicleTierName || '-'} />
+              <HeaderField label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
               <HeaderField label="Completed Trips" value={trips.filter((trip) => trip.status === 'completed').length} />
               <HeaderField label="Average Rating" value={averageRating ? `${averageRating.toFixed(1)} / 5` : 'No ratings yet'} />
+              <HeaderField
+                label={`Rolling avg (last ${ratingPerformance?.windowSize || 20})`}
+                value={
+                  ratingPerformance?.rollingAverage != null
+                    ? `${Number(ratingPerformance.rollingAverage).toFixed(2)} · ${ratingPerformance.sampleSize || 0} ratings`
+                    : 'Not enough ratings'
+                }
+              />
+              <HeaderField label="Last automation" value={lastAutomationLabel} />
             </div>
           </div>
 
@@ -239,6 +273,38 @@ export default function DriverDetailsPage() {
           <Field label="Email" value={driver.email} />
           <Field label="Phone" value={driver.phoneNumber} />
           <Field label="Phone Verified" value={driver.phoneVerified ? 'Yes' : 'No'} />
+          <Field label="Account status" value={driver.accountStatus || 'active'} />
+          <Field label="Approved tier" value={driver.vehicle?.vehicleTierName || '-'} />
+          <Field
+            label="Rolling rating avg"
+            value={
+              ratingPerformance?.rollingAverage != null
+                ? `${Number(ratingPerformance.rollingAverage).toFixed(2)} / 5 (${ratingPerformance.sampleSize || 0} of last ${ratingPerformance.windowSize || 20})`
+                : 'Not enough ratings yet'
+            }
+          />
+          <Field label="Rating restriction reason" value={driver.ratingRestrictionReason || '-'} />
+          <Field label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
+          <Field
+            label="Wallet status"
+            value={
+              !driver.wallet
+                ? '-'
+                : !driver.wallet.paymentsEnabled
+                  ? 'Payments off'
+                  : driver.wallet.sufficientBalance
+                    ? 'OK for ride requests'
+                    : 'Below minimum'
+            }
+          />
+          <Field
+            label="Minimum required"
+            value={
+              driver.wallet
+                ? `${String(driver.wallet.currency || 'USD').toUpperCase()} ${Number(driver.wallet.minimumRequiredBalance || 0).toFixed(2)}`
+                : '-'
+            }
+          />
           <Field label="EcoCash Number" value={driver.profile?.ecocashNumber || '-'} />
           <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
@@ -253,6 +319,88 @@ export default function DriverDetailsPage() {
             }
           />
           <Field label="Referral Source" value={driver?.referral?.source || '-'} />
+          {ratingEvents.length ? (
+            <div className="md:col-span-2 border border-slate-200 bg-white">
+              <div className="border-b border-slate-200 px-3 py-2">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Rating automation events</p>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {ratingEvents.slice(0, 8).map((event) => (
+                  <div key={event.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm text-slate-700">
+                    <span className="font-medium capitalize">{String(event.action || '').replace(/_/g, ' ')}</span>
+                    <span className="text-xs text-slate-500">
+                      {event.avgRating != null ? `avg ${Number(event.avgRating).toFixed(2)} · ` : ''}
+                      {event.fromTier || event.toTier
+                        ? `${event.fromTier || '-'} → ${event.toTier || '-'}`
+                        : event.fromStatus || event.toStatus
+                          ? `${event.fromStatus || '-'} → ${event.toStatus || '-'}`
+                          : ''}
+                      {event.createdAt ? ` · ${formatDateTime(event.createdAt)}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {activeTab === 'wallet' ? (
+        <section className="space-y-4 border border-slate-300 bg-white p-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <Field label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
+            <Field
+              label="Total credits"
+              value={
+                driver.walletSummary
+                  ? `${String(driver.wallet?.currency || 'USD').toUpperCase()} ${Number(driver.walletSummary.totalCredits || 0).toFixed(2)}`
+                  : '-'
+              }
+            />
+            <Field
+              label="Total debits"
+              value={
+                driver.walletSummary
+                  ? `${String(driver.wallet?.currency || 'USD').toUpperCase()} ${Number(driver.walletSummary.totalDebits || 0).toFixed(2)}`
+                  : '-'
+              }
+            />
+          </div>
+
+          <div className="overflow-x-auto border border-slate-200">
+            <table className="min-w-full border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-900 text-left text-[11px] uppercase tracking-wide text-slate-200">
+                  <th className="px-3 py-2 font-semibold">When</th>
+                  <th className="px-3 py-2 font-semibold">Type</th>
+                  <th className="px-3 py-2 font-semibold">Amount</th>
+                  <th className="px-3 py-2 font-semibold">Balance after</th>
+                  <th className="px-3 py-2 font-semibold">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {walletTransactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-slate-500">No wallet transactions yet.</td>
+                  </tr>
+                ) : (
+                  walletTransactions.map((tx) => (
+                    <tr key={tx.id} className="border-t border-slate-200">
+                      <td className="px-3 py-2 text-slate-600">{formatDateTime(tx.createdAt)}</td>
+                      <td className="px-3 py-2 font-medium text-slate-800">{tx.transactionType || '-'}</td>
+                      <td className={`px-3 py-2 font-semibold ${Number(tx.amount || 0) < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {String(tx.currency || driver.wallet?.currency || 'USD').toUpperCase()} {Number(tx.amount || 0).toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {String(tx.currency || driver.wallet?.currency || 'USD').toUpperCase()} {Number(tx.balanceAfter || 0).toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{tx.description || tx.sourceType || '-'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       ) : null}
 

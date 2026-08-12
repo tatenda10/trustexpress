@@ -31,27 +31,40 @@ import SupportAgentPage from './pages/SupportAgentPage'
 import DiscountCodesPage from './pages/DiscountCodesPage'
 import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursementsPage'
 import DriverWalletSettingsPage from './pages/DriverWalletSettingsPage'
+import { getDefaultDashboardPath } from './utils/dashboardHome'
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated } = useAuth()
   return isAuthenticated ? children : <Navigate to="/login" replace />
 }
 
+function HomeRedirect() {
+  const { admin, permissions, can, loadingPermissions } = useAuth()
+  if (loadingPermissions) {
+    return <div className="rounded border border-slate-300 bg-white p-4 text-sm text-slate-600">Loading permissions...</div>
+  }
+  return <Navigate to={getDefaultDashboardPath({ admin, permissions, can })} replace />
+}
+
 function PermissionRoute({ permission, children }) {
-  const { loadingPermissions } = useAuth()
+  const { admin, permissions, can, loadingPermissions } = useAuth()
   if (loadingPermissions) {
     return <div className="rounded border border-slate-300 bg-white p-4 text-sm text-slate-600">Loading permissions...</div>
   }
   return (
-    <Can permission={permission} fallback={<Navigate to="/dashboard/overview" replace />}>
+    <Can permission={permission} fallback={<Navigate to={getDefaultDashboardPath({ admin, permissions, can })} replace />}>
       {children}
     </Can>
   )
 }
 
 function PublicOnlyRoute({ children }) {
-  const { isAuthenticated } = useAuth()
-  return isAuthenticated ? <Navigate to="/dashboard/overview" replace /> : children
+  const { isAuthenticated, admin, permissions, can, loadingPermissions } = useAuth()
+  if (!isAuthenticated) return children
+  if (loadingPermissions) {
+    return <div className="rounded border border-slate-300 bg-white p-4 text-sm text-slate-600">Loading permissions...</div>
+  }
+  return <Navigate to={getDefaultDashboardPath({ admin, permissions, can })} replace />
 }
 
 function AppRoutes() {
@@ -74,8 +87,11 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="overview" replace />} />
-        <Route path="overview" element={<OverviewPage />} />
+        <Route index element={<HomeRedirect />} />
+        <Route
+          path="overview"
+          element={<PermissionRoute permission="overview.read"><OverviewPage /></PermissionRoute>}
+        />
         <Route
           path="driver-verification"
           element={<PermissionRoute permission="verification.read"><DriverVerificationPage /></PermissionRoute>}
@@ -186,7 +202,7 @@ function AppRoutes() {
         />
       </Route>
 
-      <Route path="*" element={<Navigate to="/dashboard/overview" replace />} />
+      <Route path="*" element={<HomeRedirect />} />
     </Routes>
   )
 }

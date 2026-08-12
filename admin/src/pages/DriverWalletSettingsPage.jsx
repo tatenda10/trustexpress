@@ -56,6 +56,11 @@ export default function DriverWalletSettingsPage() {
   const [manualError, setManualError] = useState('')
   const [manualSuccess, setManualSuccess] = useState('')
 
+  const [ledgerEmail, setLedgerEmail] = useState('')
+  const [ledgerLoading, setLedgerLoading] = useState(false)
+  const [ledgerError, setLedgerError] = useState('')
+  const [ledger, setLedger] = useState(null)
+
   const paymentsLive = !!settings.paymentsEnabled
   const activeProvider = String(settings.paymentProvider || 'paystack').toLowerCase()
   const providerLabel = activeProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack'
@@ -226,6 +231,30 @@ export default function DriverWalletSettingsPage() {
     }
   }
 
+  const loadLedger = async (event) => {
+    event.preventDefault()
+    const email = String(ledgerEmail || '').trim().toLowerCase()
+    if (!email || !email.includes('@')) {
+      setLedgerError('Enter a valid driver email.')
+      return
+    }
+
+    setLedgerLoading(true)
+    setLedgerError('')
+    setLedger(null)
+    try {
+      const { data } = await axios.get(`${BASE_URL}/api/admin/driver-wallet/ledger`, {
+        headers,
+        params: { email, limit: 100 },
+      })
+      setLedger(data?.ledger || null)
+    } catch (err) {
+      setLedgerError(err?.response?.data?.error || err?.message || 'Failed to load ledger')
+    } finally {
+      setLedgerLoading(false)
+    }
+  }
+
   const exampleFare = 10
   const exampleCommission = (exampleFare * Number(settings.commissionRatePercent || 0)) / 100
 
@@ -256,8 +285,8 @@ export default function DriverWalletSettingsPage() {
             </p>
             <p className="mt-2 text-xs leading-5 text-slate-600">
               {paymentsLive
-                ? `Drivers can top up with ${providerLabel}, low balance can block ride requests, and commission is deducted on completed trips.`
-                : 'Drivers work as before: no wallet top-ups, no wallet balance requirement, and no commission wallet deductions.'}
+                ? `Drivers can top up with ${providerLabel}, low balance can block ride requests, and a service fee is deducted on completed trips.`
+                : 'Drivers work as before: no wallet top-ups, no wallet balance requirement, and no service fee wallet deductions.'}
             </p>
           </div>
 
@@ -279,7 +308,7 @@ export default function DriverWalletSettingsPage() {
             <span>
               <span className="block text-sm font-semibold text-slate-800">Enable payments system</span>
               <span className="mt-0.5 block text-xs text-slate-500">
-                Master switch. Off = legacy ride flow. On = top-ups, wallet balance checks, and commission deductions.
+                Master switch. Off = legacy ride flow. On = top-ups, wallet balance checks, and service fee deductions.
               </span>
             </span>
           </label>
@@ -348,7 +377,7 @@ export default function DriverWalletSettingsPage() {
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    Commission rate (%)
+                    Service fee rate (%)
                   </span>
                   <input
                     type="number"
@@ -411,14 +440,14 @@ export default function DriverWalletSettingsPage() {
 
               <div className="border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
                 Example: a {formatMoney(exampleFare, settings.currency)} trip deducts{' '}
-                <strong>{formatMoney(exampleCommission, settings.currency)}</strong> commission (
+                <strong>{formatMoney(exampleCommission, settings.currency)}</strong> service fee (
                 {Number(settings.commissionRatePercent || 0).toFixed(2)}%).
                 Active provider: <strong>{providerLabel}</strong>. Provider API keys stay in server environment variables.
               </div>
             </>
           ) : (
             <div className="border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
-              Payments are off. Drivers can go online and complete trips without wallet top-ups or commission deductions.
+              Payments are off. Drivers can go online and complete trips without wallet top-ups or service fee deductions.
               Turn the switch on above when you are ready to launch wallet payments.
             </div>
           )}
@@ -614,6 +643,101 @@ export default function DriverWalletSettingsPage() {
             </button>
           </div>
         </form>
+      </section>
+
+      <section className="space-y-4 border border-slate-200 bg-white p-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Wallet ledger lookup</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            View transactions for live or deleted drivers by email. Wallet history is kept after account deletion.
+          </p>
+        </div>
+
+        {ledgerError ? (
+          <div className="border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{ledgerError}</div>
+        ) : null}
+
+        <form onSubmit={loadLedger} className="flex flex-wrap items-end gap-3">
+          <label className="min-w-[240px] flex-1">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Driver email
+            </span>
+            <input
+              type="email"
+              value={ledgerEmail}
+              disabled={ledgerLoading}
+              onChange={(event) => setLedgerEmail(event.target.value)}
+              placeholder="driver@example.com"
+              className="w-full border border-slate-200 px-3 py-2 text-sm text-slate-800"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={ledgerLoading}
+            className="border border-slate-800 bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {ledgerLoading ? 'Loading…' : 'Load ledger'}
+          </button>
+        </form>
+
+        {ledger ? (
+          <div className="space-y-3">
+            <div className="border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-700">
+              <p>
+                {ledger.wallet?.ownerFullName || ledger.wallet?.ownerEmail || ledger.driverUserId}
+                {ledger.wallet?.accountDeletedAt ? (
+                  <span className="ml-2 font-semibold text-amber-700">Account deleted</span>
+                ) : null}
+              </p>
+              <p className="mt-1">
+                Balance: <strong>{formatMoney(ledger.wallet?.availableBalance, ledger.wallet?.currency || walletCurrency)}</strong>
+                {' · '}
+                Credits: <strong>{formatMoney(ledger.summary?.totalCredits, ledger.wallet?.currency || walletCurrency)}</strong>
+                {' · '}
+                Debits: <strong>{formatMoney(ledger.summary?.totalDebits, ledger.wallet?.currency || walletCurrency)}</strong>
+                {' · '}
+                Rows: <strong>{ledger.summary?.transactionCount || 0}</strong>
+              </p>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200">
+              <table className="min-w-full border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-900 text-left text-[11px] uppercase tracking-wide text-slate-200">
+                    <th className="px-3 py-2 font-semibold">When</th>
+                    <th className="px-3 py-2 font-semibold">Type</th>
+                    <th className="px-3 py-2 font-semibold">Amount</th>
+                    <th className="px-3 py-2 font-semibold">Balance after</th>
+                    <th className="px-3 py-2 font-semibold">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(ledger.transactions || []).length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-3 py-6 text-center text-slate-500">No transactions found.</td>
+                    </tr>
+                  ) : (
+                    ledger.transactions.map((tx) => (
+                      <tr key={tx.id} className="border-t border-slate-200">
+                        <td className="px-3 py-2 text-slate-600">
+                          {tx.createdAt ? new Date(tx.createdAt).toLocaleString('en-ZW') : '-'}
+                        </td>
+                        <td className="px-3 py-2 font-medium text-slate-800">{tx.transactionType || '-'}</td>
+                        <td className={`px-3 py-2 font-semibold ${Number(tx.amount || 0) < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                          {formatMoney(tx.amount, tx.currency || walletCurrency)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700">
+                          {formatMoney(tx.balanceAfter, tx.currency || walletCurrency)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{tx.description || tx.sourceType || '-'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   )

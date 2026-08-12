@@ -238,7 +238,7 @@ const DriverActivityScreen = () => {
             <Text className="mt-1 text-lg font-bold text-gray-900">{formatCurrency(summary.todayEarnings)}</Text>
           </View>
           <View className="flex-1 rounded-sm bg-[#f8fafc] px-3 py-3">
-            <Text className="text-[11px] font-semibold uppercase text-[#5d6470]">Completed</Text>
+            <Text className="text-[11px] font-semibold uppercase text-[#5d6470]">Completed rides</Text>
             <Text className="mt-1 text-lg font-bold text-gray-900">{summary.completedRides}</Text>
           </View>
           <View className="flex-1 rounded-sm bg-[#fff7ed] px-3 py-3">

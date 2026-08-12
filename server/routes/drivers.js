@@ -35,6 +35,10 @@ import {
   getDriverIncomeDashboard,
   setDriverIncomeGoal,
 } from '../lib/driver-income.js';
+import {
+  applyRatingAutomationAfterPassengerRated,
+  assertAccountNotRestricted,
+} from '../lib/rating-performance.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -368,6 +372,17 @@ router.post('/availability', requireAuth, async (req, res) => {
     const isOnline = req.body?.isOnline === true;
     const latitude = req.body?.latitude === null || req.body?.latitude === undefined ? null : Number(req.body.latitude);
     const longitude = req.body?.longitude === null || req.body?.longitude === undefined ? null : Number(req.body.longitude);
+
+    if (isOnline) {
+      try {
+        assertAccountNotRestricted(user, 'driver');
+      } catch (restrictionError) {
+        return res.status(restrictionError?.status || 403).json({
+          error: restrictionError?.message || 'Account is restricted.',
+          code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
+        });
+      }
+    }
 
     if (isOnline && (!profileApproved || !vehicleApproved || !phoneVerified)) {
       return res.status(403).json({
@@ -729,6 +744,15 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
   try {
     const user = await requireDriver(req, res);
     if (!user) return;
+
+    try {
+      assertAccountNotRestricted(user, 'driver');
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json({
+        error: restrictionError?.message || 'Account is restricted.',
+        code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
+      });
+    }
 
     await assertDriverWalletSufficient(req.userId);
 
@@ -1495,6 +1519,12 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
       rating,
       review,
       from: 'driver',
+    });
+
+    setImmediate(() => {
+      applyRatingAutomationAfterPassengerRated(ride.passenger_user_id).catch((automationError) => {
+        console.error('[drivers.rate-passenger] rating automation failed', automationError);
+      });
     });
 
     return res.json({ ok: true, rating, review });

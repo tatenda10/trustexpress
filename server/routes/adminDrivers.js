@@ -7,6 +7,8 @@ import { getDriverProfileImageReview, getPrimaryEmail, getPrimaryPhone, mergePri
 import { evaluateVehicleAgainstTiers, loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { query } from '../db/connection.js';
 import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib/driver-verification-mysql.js';
+import { getDriverWalletStatus, getDriverWalletSummariesByUserIds, getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
+import { getAccountStatusFromUser, getDriverRatingPerformanceSummary } from '../lib/rating-performance.js';
 
 const router = Router();
 
@@ -112,6 +114,8 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
     createdAt: user.createdAt || null,
     phoneVerified: !!identityRow?.phone_verified_at,
     phoneVerifiedAt: identityRow?.phone_verified_at || null,
+    accountStatus: getAccountStatusFromUser(user, 'driver').status,
+    ratingRestrictionReason: privateMeta.ratingRestrictionReason || null,
     profile,
     profileImageReview: getDriverProfileImageReview(privateMeta, 'driver'),
     vehicle,
@@ -373,7 +377,11 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
     const start = (safePage - 1) * pageSize;
     const pagedDrivers = drivers.slice(start, start + pageSize);
 
-    const payload = pagedDrivers.map(({ _role, ...rest }) => rest);
+    const walletByUserId = await getDriverWalletSummariesByUserIds(pagedDrivers.map((item) => item.id));
+    const payload = pagedDrivers.map(({ _role, ...rest }) => ({
+      ...rest,
+      wallet: walletByUserId.get(rest.id) || null,
+    }));
 
     return res.json({
       drivers: payload,
@@ -594,9 +602,27 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
       }));
 
     const referral = mapReferralRow(referralRows?.[0] || null);
+    const [wallet, walletLedger, ratingPerformance] = await Promise.all([
+      getDriverWalletStatus(user.id),
+      getAdminDriverWalletLedger({ driverUserId: user.id, limit: 30 }).catch(() => null),
+      getDriverRatingPerformanceSummary(user.id).catch(() => null),
+    ]);
 
     const { _role, ...driver } = mapped;
-    const responseDriver = { ...driver, profileDocs, vehicleDocs, vehicleSpecs, tierAssessment, trips, reviews, referral };
+    const responseDriver = {
+      ...driver,
+      profileDocs,
+      vehicleDocs,
+      vehicleSpecs,
+      tierAssessment,
+      trips,
+      reviews,
+      referral,
+      wallet,
+      walletTransactions: walletLedger?.transactions || [],
+      walletSummary: walletLedger?.summary || null,
+      ratingPerformance,
+    };
 
     console.log('[GET /api/admin/drivers/:driverId] document payload', {
       driverId: user.id,
@@ -779,11 +805,19 @@ router.delete('/:driverId', requireAdminAuth, requirePermission('drivers.delete'
       return res.status(404).json({ error: 'Driver not found' });
     }
 
-    await deleteEndUserAccount(driverId, 'driver');
+    await deleteEndUserAccount(driverId, 'driver', {
+      email: getPrimaryEmail(user),
+      fullName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null,
+    });
     return res.json({ ok: true });
   } catch (err) {
+    const status = Number(err?.status) || 500;
     console.error('DELETE /api/admin/drivers/:driverId', err);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(status).json({
+      error: err?.message || 'Server error',
+      code: err?.code || undefined,
+      availableBalance: err?.availableBalance,
+    });
   }
 });
 

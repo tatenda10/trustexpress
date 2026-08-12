@@ -381,11 +381,19 @@ router.delete('/me', requireAuth, async (req, res) => {
     const user = await getClerkUserById(req.userId, { skipCache: true });
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
-    await deleteEndUserAccount(req.userId, appUser.role);
+    await deleteEndUserAccount(req.userId, appUser.role, {
+      email: appUser.email || null,
+      fullName: [appUser.first_name, appUser.last_name].filter(Boolean).join(' ').trim() || null,
+    });
     return res.json({ ok: true, role: appUser.role });
   } catch (err) {
+    const status = Number(err?.status) || 500;
     console.error('DELETE /api/users/me', err);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(status).json({
+      error: err?.message || 'Server error',
+      code: err?.code || undefined,
+      availableBalance: err?.availableBalance,
+    });
   }
 });
 

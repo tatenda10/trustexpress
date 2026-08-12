@@ -33,10 +33,13 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
     );
   };
 
+  const approvedTierName = String(vehicle?.vehicleTierName || '').trim();
   const statusLabel = notSubmitted
     ? 'Not yet registered'
     : isApproved
-      ? 'Verified'
+      ? approvedTierName
+        ? `Verified · ${approvedTierName}`
+        : 'Verified'
       : isPending
         ? 'Under review'
         : 'Rejected';
@@ -67,10 +70,19 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
           <Text className="text-sm text-gray-500 text-center px-4">
             {notSubmitted && (profileApproved ? 'Register your vehicle with photos, plate and documents.' : 'Complete document verification first, then register your vehicle.')}
             {isPending && 'Your vehicle is being reviewed. We\'ll notify you once approved.'}
-            {isApproved && vehicle?.numberPlate && `Your vehicle ${vehicle.numberPlate} has been verified. You can submit a different car for review.`}
+            {isApproved && vehicle?.numberPlate && (
+              approvedTierName
+                ? `Your vehicle ${vehicle.numberPlate} is verified for ${approvedTierName}. You can submit a different car for review.`
+                : `Your vehicle ${vehicle.numberPlate} has been verified. You can submit a different car for review.`
+            )}
             {isRejected && !canResubmit && 'You are not allowed to resubmit. Contact support if you believe this is an error.'}
             {isRejected && canResubmit && (vehicle?.rejectionReason || 'Your vehicle was not approved. You can resubmit below.')}
           </Text>
+          {isApproved && approvedTierName ? (
+            <View className="mt-4 rounded-full bg-blue-50 px-4 py-2">
+              <Text className="text-sm font-semibold text-[#2f73c9]">Approved for {approvedTierName}</Text>
+            </View>
+          ) : null}
         </View>
         {isRejected && !canResubmit && profileApproved && (
           <View className="rounded-xl p-4 bg-gray-100 items-center">

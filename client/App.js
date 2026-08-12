@@ -1126,6 +1126,8 @@ function AppStack({ currentRouteName }) {
   const effectiveLastName = String(userProfile?.last_name || user?.lastName || '').trim();
   const needsProfileCompletion = !effectiveFirstName || !effectiveLastName;
   const isBlockedAccount = userProfile?.isBlocked === true || userProfile?.status === 'blocked' || userProfile?.accountStatus === 'blocked';
+  const isFlaggedAccount = userProfile?.isFlagged === true || userProfile?.status === 'flagged' || userProfile?.accountStatus === 'flagged';
+  const isRestrictedAccount = isBlockedAccount || isFlaggedAccount || userProfile?.isRestricted === true;
 
   useEffect(() => {
     if (isDriver) {
@@ -1167,10 +1169,16 @@ function AppStack({ currentRouteName }) {
     return <SplashScreen />;
   }
 
-  if (isBlockedAccount) {
+  if (isRestrictedAccount) {
     return (
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="BlockedAccount" component={BlockedAccountScreen} />
+        <Stack.Screen
+          name="BlockedAccount"
+          component={BlockedAccountScreen}
+          initialParams={{
+            reason: isFlaggedAccount && !isBlockedAccount ? 'flagged' : 'blocked',
+          }}
+        />
       </Stack.Navigator>
     );
   }

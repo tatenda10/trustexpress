@@ -1,9 +1,47 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getClerkClient } from './clerk-client.js';
-import { withTransaction } from '../db/connection.js';
+import { query, withTransaction } from '../db/connection.js';
 
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
+
+function normalizeMoney(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100) / 100;
+}
+
+function buildDeletionError(message, status = 400, extra = {}) {
+  const error = new Error(message);
+  error.status = status;
+  Object.assign(error, extra);
+  return error;
+}
+
+/**
+ * Drivers with remaining wallet funds must not be deleted.
+ */
+export async function assertDriverHasNoWalletFunds(userId) {
+  const rows = await query(
+    `SELECT available_balance
+     FROM driver_wallets
+     WHERE driver_user_id = ?
+     LIMIT 1`,
+    [userId]
+  );
+  const balance = normalizeMoney(rows?.[0]?.available_balance || 0);
+  if (balance > 0) {
+    throw buildDeletionError(
+      `This driver still has a wallet balance of ${balance.toFixed(2)}. Clear or withdraw the funds before deleting the account.`,
+      409,
+      {
+        code: 'DRIVER_WALLET_HAS_FUNDS',
+        availableBalance: balance,
+      }
+    );
+  }
+  return balance;
+}
 
 function collectUploadPaths(...values) {
   const results = [];
@@ -123,6 +161,7 @@ async function cleanupDriverData(connection, userId) {
      WHERE driver_user_id = ?`,
     [userId]
   );
+  // Keep driver_wallets + driver_wallet_transactions (+ topups) for admin audit after deletion.
   await connection.execute(
     `DELETE FROM driver_identity
      WHERE driver_user_id = ?`,
@@ -149,12 +188,63 @@ async function cleanupDriverData(connection, userId) {
   );
 }
 
-export async function deleteEndUserAccount(userId, role) {
+export async function deleteEndUserAccount(userId, role, { email = null, fullName = null } = {}) {
   const normalizedRole = role === 'driver' ? 'driver' : 'passenger';
   let uploadPaths = [];
+  const snapshotEmail = email ? String(email).trim().toLowerCase() : null;
+  const snapshotName = fullName ? String(fullName).trim() : null;
+
+  if (normalizedRole === 'driver') {
+    await assertDriverHasNoWalletFunds(userId);
+  }
 
   await withTransaction(async (connection) => {
     if (normalizedRole === 'driver') {
+      // Re-check inside the transaction so a concurrent credit cannot race past the gate.
+      const [walletRows] = await connection.execute(
+        `SELECT available_balance, account_deleted_at
+         FROM driver_wallets
+         WHERE driver_user_id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [userId]
+      );
+      const balance = normalizeMoney(walletRows?.[0]?.available_balance || 0);
+      if (balance > 0) {
+        throw buildDeletionError(
+          `This driver still has a wallet balance of ${balance.toFixed(2)}. Clear or withdraw the funds before deleting the account.`,
+          409,
+          {
+            code: 'DRIVER_WALLET_HAS_FUNDS',
+            availableBalance: balance,
+          }
+        );
+      }
+
+      // Preserve ledger forever; mark wallet closed and keep email for admin lookups.
+      if (walletRows?.[0]) {
+        await connection.execute(
+          `UPDATE driver_wallets
+           SET account_deleted_at = COALESCE(account_deleted_at, CURRENT_TIMESTAMP),
+               owner_email = COALESCE(?, owner_email),
+               owner_full_name = COALESCE(?, owner_full_name),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE driver_user_id = ?`,
+          [snapshotEmail, snapshotName, userId]
+        );
+      } else if (snapshotEmail) {
+        await connection.execute(
+          `INSERT INTO driver_wallets (
+             driver_user_id, available_balance, owner_email, owner_full_name, account_deleted_at
+           ) VALUES (?, 0.00, ?, ?, CURRENT_TIMESTAMP)
+           ON DUPLICATE KEY UPDATE
+             account_deleted_at = COALESCE(account_deleted_at, CURRENT_TIMESTAMP),
+             owner_email = COALESCE(VALUES(owner_email), owner_email),
+             owner_full_name = COALESCE(VALUES(owner_full_name), owner_full_name)`,
+          [userId, snapshotEmail, snapshotName]
+        );
+      }
+
       uploadPaths = await cleanupDriverData(connection, userId);
       return;
     }

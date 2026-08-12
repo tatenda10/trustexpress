@@ -28,6 +28,10 @@ import {
   assignSafetyPinIfNeeded,
   buildPassengerSafetyPinPayload,
 } from '../lib/ride-safety-pin.js';
+import {
+  applyRatingAutomationAfterDriverRated,
+  assertAccountNotRestricted,
+} from '../lib/rating-performance.js';
 
 const router = Router();
 
@@ -766,6 +770,15 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
   try {
     const user = await requirePassenger(req, res);
     if (!user) return;
+
+    try {
+      assertAccountNotRestricted(user, 'passenger');
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json({
+        error: restrictionError?.message || 'Account is restricted.',
+        code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
+      });
+    }
 
     const [existingOpenRide] = await query(
       `SELECT id, public_id, status
@@ -1795,6 +1808,12 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
       review,
       feedbackTags,
       from: 'passenger',
+    });
+
+    setImmediate(() => {
+      applyRatingAutomationAfterDriverRated(ride.driver_user_id).catch((automationError) => {
+        console.error('[rides.rate-driver] rating automation failed', automationError);
+      });
     });
 
     return res.json({

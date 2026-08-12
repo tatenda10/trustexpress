@@ -44,8 +44,14 @@ function getTransactionMeta(transaction) {
     iconBg: '#FEE2E2',
     amountColor: 'text-red-600',
     amountPrefix: '-',
-    title: transaction.tripId ? `Trip #${transaction.tripId} commission` : 'Commission debit',
+    title: transaction.tripId ? `Trip #${transaction.tripId} service fee` : 'Service fee debit',
   };
+}
+
+function formatTransactionTypeLabel(transactionType) {
+  const type = String(transactionType || '').trim().toLowerCase();
+  if (type === 'commission_debit') return 'SERVICE FEE';
+  return String(transactionType || '').replace(/_/g, ' ').toUpperCase();
 }
 
 const DriverWalletScreen = () => {
@@ -242,7 +248,7 @@ const DriverWalletScreen = () => {
               </Text>
               <View className="mt-4 flex-row items-center justify-between border-t border-white/20 pt-3">
                 <Text className="text-xs text-white/80">Top-ups: {formatCurrency(summary.totalTopups, wallet.currency)}</Text>
-                <Text className="text-xs text-white/80">Commission paid: {formatCurrency(summary.totalCommissionPaid, wallet.currency)}</Text>
+                <Text className="text-xs text-white/80">Service fee paid: {formatCurrency(summary.totalCommissionPaid, wallet.currency)}</Text>
               </View>
             </View>
           </View>
@@ -269,7 +275,7 @@ const DriverWalletScreen = () => {
               <Text className="text-base font-bold text-gray-900">Top up wallet</Text>
               <Text className="mt-1 text-sm text-gray-500">
                 {wallet.paymentsEnabled
-                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount, wallet.currency)} – ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}). Commission on completed trips is ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}%.`
+                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount, wallet.currency)} – ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}). Service fee on completed trips is ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}%.`
                   : 'Wallet top-ups are not available yet. You can still view your balance and transaction history here.'}
               </Text>
               {wallet.paymentsEnabled ? (
@@ -320,7 +326,7 @@ const DriverWalletScreen = () => {
               {[
                 { key: 'balance', label: 'Balance', value: formatCurrency(wallet.availableBalance, wallet.currency), icon: 'wallet-outline' },
                 { key: 'topups', label: 'Top-ups', value: formatCurrency(summary.totalTopups, wallet.currency), icon: 'add-circle-outline' },
-                { key: 'commission', label: 'Commission', value: formatCurrency(summary.totalCommissionPaid, wallet.currency), icon: 'remove-circle-outline' },
+                { key: 'commission', label: 'Service fee', value: formatCurrency(summary.totalCommissionPaid, wallet.currency), icon: 'remove-circle-outline' },
               ].map(({ key, label, value, icon }) => (
                 <View key={key} className="items-center">
                   <View className="mb-2 h-14 w-14 items-center justify-center rounded-full" style={{ backgroundColor: '#EFF6FF' }}>
@@ -388,7 +394,7 @@ const DriverWalletScreen = () => {
                         </Text>
                         {transaction.commissionRatePercent ? (
                           <Text className="mt-1 text-xs font-semibold text-amber-600">
-                            Commission: {Number(transaction.commissionRatePercent).toFixed(1)}%
+                            Service fee: {Number(transaction.commissionRatePercent).toFixed(1)}%
                           </Text>
                         ) : null}
                       </View>
@@ -397,7 +403,7 @@ const DriverWalletScreen = () => {
                           {meta.amountPrefix}{formatCurrency(Math.abs(Number(transaction.amount || 0)), transaction.currency || wallet.currency)}
                         </Text>
                         <Text className="text-xs text-gray-400">
-                          {String(transaction.transactionType || '').replace(/_/g, ' ').toUpperCase()}
+                          {formatTransactionTypeLabel(transaction.transactionType)}
                         </Text>
                       </View>
                     </View>

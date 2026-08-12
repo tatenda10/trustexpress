@@ -90,7 +90,6 @@ export const DEFAULT_ROLE_MAPPINGS = {
   ],
 
   recruitment_admin: [
-    'overview.read',
     'agents.read',
     'agents.manage',
     'verification.read',

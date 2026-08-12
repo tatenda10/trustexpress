@@ -28,29 +28,43 @@ function makeReference(driverUserId) {
 
 async function ensureDriverWallet(driverUserId, connection = null) {
   const conn = connection || null;
-  const sql = `INSERT INTO driver_wallets (driver_user_id, available_balance)
-               VALUES (?, 0.00)
-               ON DUPLICATE KEY UPDATE driver_user_id = VALUES(driver_user_id)`;
+  const selectSql = `SELECT driver_user_id, available_balance, owner_email, owner_full_name, account_deleted_at, created_at, updated_at
+                     FROM driver_wallets
+                     WHERE driver_user_id = ?
+                     LIMIT 1`;
+
+  const assertActive = (row) => {
+    if (row?.account_deleted_at) {
+      throw buildWalletError('This driver wallet belongs to a deleted account and can no longer be used', 409);
+    }
+    return row || null;
+  };
+
   if (conn) {
-    await conn.execute(sql, [driverUserId]);
-    const [rows] = await conn.execute(
-      `SELECT driver_user_id, available_balance, created_at, updated_at
-       FROM driver_wallets
-       WHERE driver_user_id = ?
-       LIMIT 1`,
+    const [existing] = await conn.execute(selectSql, [driverUserId]);
+    if (existing[0]) return assertActive(existing[0]);
+
+    await conn.execute(
+      `INSERT INTO driver_wallets (driver_user_id, available_balance)
+       VALUES (?, 0.00)
+       ON DUPLICATE KEY UPDATE driver_user_id = VALUES(driver_user_id)`,
       [driverUserId]
     );
-    return rows[0] || null;
+    const [rows] = await conn.execute(selectSql, [driverUserId]);
+    return assertActive(rows[0]);
   }
-  await query(sql, [driverUserId]);
-  const [row] = await query(
-    `SELECT driver_user_id, available_balance, created_at, updated_at
-     FROM driver_wallets
-     WHERE driver_user_id = ?
-     LIMIT 1`,
+
+  const existingRows = await query(selectSql, [driverUserId]);
+  if (existingRows[0]) return assertActive(existingRows[0]);
+
+  await query(
+    `INSERT INTO driver_wallets (driver_user_id, available_balance)
+     VALUES (?, 0.00)
+     ON DUPLICATE KEY UPDATE driver_user_id = VALUES(driver_user_id)`,
     [driverUserId]
   );
-  return row || null;
+  const rows = await query(selectSql, [driverUserId]);
+  return assertActive(rows[0]);
 }
 
 function mapWalletStatus(walletRow, settings) {
@@ -73,6 +87,9 @@ function mapWalletStatus(walletRow, settings) {
     paymentsUnavailableMessage: paymentsEnabled ? '' : PAYMENTS_UNAVAILABLE_MESSAGE,
     sufficientBalance,
     lowBalanceMessage: sufficientBalance ? '' : LOW_BALANCE_MESSAGE,
+    ownerEmail: walletRow?.owner_email || null,
+    ownerFullName: walletRow?.owner_full_name || null,
+    accountDeletedAt: walletRow?.account_deleted_at ? new Date(walletRow.account_deleted_at).toISOString() : null,
     createdAt: walletRow?.created_at ? new Date(walletRow.created_at).toISOString() : null,
     updatedAt: walletRow?.updated_at ? new Date(walletRow.updated_at).toISOString() : null,
   };
@@ -84,6 +101,41 @@ export async function getDriverWalletStatus(driverUserId) {
     getDriverWalletSettings(),
   ]);
   return mapWalletStatus(wallet, settings);
+}
+
+/**
+ * Batch wallet summaries for admin lists. Does not create missing wallet rows.
+ * Drivers without a wallet row are treated as 0 balance.
+ */
+export async function getDriverWalletSummariesByUserIds(driverUserIds = []) {
+  const ids = [...new Set(
+    (Array.isArray(driverUserIds) ? driverUserIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  )];
+
+  const settings = await getDriverWalletSettings();
+  const summaryById = new Map();
+
+  for (const id of ids) {
+    summaryById.set(id, mapWalletStatus({ available_balance: 0 }, settings));
+  }
+
+  if (!ids.length) return summaryById;
+
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await query(
+    `SELECT driver_user_id, available_balance, created_at, updated_at
+     FROM driver_wallets
+     WHERE driver_user_id IN (${placeholders})`,
+    ids
+  );
+
+  for (const row of rows || []) {
+    summaryById.set(row.driver_user_id, mapWalletStatus(row, settings));
+  }
+
+  return summaryById;
 }
 
 export async function assertDriverWalletSufficient(driverUserId) {
@@ -702,7 +754,7 @@ export async function deductCommissionForCompletedRide({
         commissionRatePercent,
         balanceBefore,
         balanceAfter,
-        `Trust Express commission for trip #${rideRequestId}`,
+        `Trust Express service fee for trip #${rideRequestId}`,
       ]
     );
 
@@ -715,4 +767,101 @@ export async function deductCommissionForCompletedRide({
       balanceAfter,
     };
   });
+}
+
+/**
+ * Admin ledger lookup for live or deleted drivers (by email or clerk user id).
+ * Wallet rows and transactions are preserved after account deletion.
+ */
+export async function getAdminDriverWalletLedger({
+  email = null,
+  driverUserId = null,
+  limit = 100,
+} = {}) {
+  const settings = await getDriverWalletSettings();
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 250);
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  let resolvedDriverUserId = String(driverUserId || '').trim() || null;
+
+  if (!resolvedDriverUserId && normalizedEmail) {
+    const [byOwnerEmail] = await query(
+      `SELECT driver_user_id
+       FROM driver_wallets
+       WHERE LOWER(owner_email) = ?
+       ORDER BY account_deleted_at IS NULL DESC, updated_at DESC
+       LIMIT 1`,
+      [normalizedEmail]
+    );
+    if (byOwnerEmail?.driver_user_id) {
+      resolvedDriverUserId = byOwnerEmail.driver_user_id;
+    } else {
+      // Fall back to Clerk for live accounts that have not been snapshotted yet.
+      try {
+        const { getClerkClient } = await import('./clerk-client.js');
+        const { toAppUser } = await import('./clerk-user.js');
+        const clerk = getClerkClient();
+        const list = await clerk.users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
+        const users = Array.isArray(list?.data) ? list.data : [];
+        const driver = users
+          .map((user) => toAppUser(user))
+          .find((appUser) => appUser.role === 'driver');
+        if (driver?.clerk_user_id) {
+          resolvedDriverUserId = driver.clerk_user_id;
+        }
+      } catch {
+        // Ignore Clerk lookup failures; ledger may still exist under email snapshot.
+      }
+    }
+  }
+
+  if (!resolvedDriverUserId) {
+    throw buildWalletError('No driver wallet found for that email or user id', 404);
+  }
+
+  const walletRows = await query(
+    `SELECT driver_user_id, available_balance, owner_email, owner_full_name, account_deleted_at, created_at, updated_at
+     FROM driver_wallets
+     WHERE driver_user_id = ?
+     LIMIT 1`,
+    [resolvedDriverUserId]
+  );
+  const walletRow = walletRows[0] || {
+    driver_user_id: resolvedDriverUserId,
+    available_balance: 0,
+    owner_email: normalizedEmail || null,
+    owner_full_name: null,
+    account_deleted_at: null,
+    created_at: null,
+    updated_at: null,
+  };
+
+  const [summaryRow] = await query(
+    `SELECT
+       COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit') THEN amount ELSE 0 END), 0) AS total_credits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
+       COUNT(*) AS transaction_count
+     FROM driver_wallet_transactions
+     WHERE driver_user_id = ?`,
+    [resolvedDriverUserId]
+  );
+
+  const transactions = await query(
+    `SELECT *
+     FROM driver_wallet_transactions
+     WHERE driver_user_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT ${safeLimit}`,
+    [resolvedDriverUserId]
+  );
+
+  return {
+    driverUserId: resolvedDriverUserId,
+    wallet: mapWalletStatus(walletRow, settings),
+    summary: {
+      totalCredits: normalizeMoney(summaryRow?.total_credits || 0),
+      totalDebits: normalizeMoney(summaryRow?.total_debits || 0),
+      transactionCount: Number(summaryRow?.transaction_count || 0),
+    },
+    transactions: (transactions || []).map((row) => mapTransactionRow(row, settings)),
+  };
 }

@@ -58,6 +58,7 @@ export function toAppUser(user) {
   const accountStatus = role === 'driver'
     ? (privateMeta.driverStatus || 'active')
     : (privateMeta.passengerStatus || 'active');
+  const normalizedStatus = String(accountStatus || 'active').trim().toLowerCase() || 'active';
 
   return {
     id: user.id,
@@ -71,9 +72,12 @@ export function toAppUser(user) {
     phone_verified_at: privateMeta.phoneVerifiedAt || null,
     created_at: user.createdAt || null,
     phoneVerified: !!privateMeta.phoneVerifiedAt,
-    status: accountStatus,
-    accountStatus,
-    isBlocked: accountStatus === 'blocked',
+    status: normalizedStatus,
+    accountStatus: normalizedStatus,
+    isBlocked: normalizedStatus === 'blocked',
+    isFlagged: normalizedStatus === 'flagged',
+    isRestricted: normalizedStatus === 'blocked' || normalizedStatus === 'flagged',
+    ratingRestrictionReason: privateMeta.ratingRestrictionReason || null,
     settings: {
       phoneVisibleToDrivers: privateMeta.phoneVisibleToDrivers === true,
     },

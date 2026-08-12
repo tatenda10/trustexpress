@@ -11,6 +11,7 @@ import {
   DEFAULT_STARTUP_GRANT_ID,
   runStartupWalletGrant,
 } from '../lib/startup-wallet-grant.js';
+import { getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
 
 const router = Router();
 
@@ -116,6 +117,25 @@ router.post('/manual-credit', requireAdminAuth, requirePermission('payouts.manag
   } catch (err) {
     const status = Number(err?.status) || 500;
     console.error('POST /api/admin/driver-wallet/manual-credit', err);
+    return res.status(status).json({ error: err?.message || 'Server error' });
+  }
+});
+
+/**
+ * Wallet ledger for live or deleted drivers.
+ * Query: ?email= or ?driverUserId=
+ */
+router.get('/ledger', requireAdminAuth, requirePermission('payouts.read'), async (req, res) => {
+  try {
+    const ledger = await getAdminDriverWalletLedger({
+      email: req.query?.email || null,
+      driverUserId: req.query?.driverUserId || null,
+      limit: req.query?.limit,
+    });
+    return res.json({ ledger });
+  } catch (err) {
+    const status = Number(err?.status) || 500;
+    console.error('GET /api/admin/driver-wallet/ledger', err);
     return res.status(status).json({ error: err?.message || 'Server error' });
   }
 });

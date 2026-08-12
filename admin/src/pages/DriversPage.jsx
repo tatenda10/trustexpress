@@ -74,6 +74,13 @@ function formatJoined(value) {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+function formatWalletBalance(wallet) {
+  if (!wallet) return '-'
+  const currency = String(wallet.currency || 'USD').toUpperCase()
+  const amount = Number(wallet.availableBalance || 0)
+  return `${currency} ${amount.toFixed(2)}`
+}
+
 function getDriverName(driver) {
   const fullName = [driver?.firstName, driver?.lastName].filter(Boolean).join(' ').trim()
   if (fullName) return fullName
@@ -141,7 +148,9 @@ export default function DriversPage() {
   const verifiedPhoneCount = useMemo(() => rows.filter((driver) => driver.phoneVerified).length, [rows])
 
   const handleDelete = async (driverId) => {
-    const confirmed = window.confirm('Delete this driver account permanently?')
+    const confirmed = window.confirm(
+      'Delete this driver account permanently?\n\nDrivers with a wallet balance cannot be deleted.'
+    )
     if (!confirmed) return
 
     try {
@@ -300,6 +309,7 @@ export default function DriversPage() {
                 <th className="rounded-tl-sm px-4 py-3 font-semibold">Name</th>
                 <th className="px-4 py-3 font-semibold">Profile Status</th>
                 <th className="px-4 py-3 font-semibold">Vehicle Status</th>
+                <th className="px-4 py-3 font-semibold">Wallet</th>
                 <th className="px-4 py-3 font-semibold">Vehicle</th>
                 <th className="px-4 py-3 font-semibold">Joined</th>
                 <th className="rounded-tr-sm px-4 py-3 font-semibold text-right">Actions</th>
@@ -308,11 +318,11 @@ export default function DriversPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-xs text-slate-500">Loading drivers...</td>
+                  <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">Loading drivers...</td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-xs text-slate-500">No drivers found.</td>
+                  <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">No drivers found.</td>
                 </tr>
               ) : (
                 rows.map((driver) => (
@@ -320,7 +330,7 @@ export default function DriversPage() {
                     <td className="px-4 py-3">
                       <div className="space-y-1">
                         <p className="font-medium text-slate-800">{getDriverName(driver)}</p>
-                        <p className="text-[11px] text-slate-400">{driver.id || '-'}</p>
+                        <p className="text-[11px] text-slate-400">{driver.email || driver.id || '-'}</p>
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -340,6 +350,16 @@ export default function DriversPage() {
                       ) : (
                         <span className="text-slate-400">Not submitted</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <p className={`font-medium ${driver.wallet && driver.wallet.sufficientBalance === false ? 'text-amber-700' : 'text-slate-800'}`}>
+                          {formatWalletBalance(driver.wallet)}
+                        </p>
+                        {driver.wallet?.paymentsEnabled && driver.wallet?.sufficientBalance === false ? (
+                          <p className="text-[11px] text-amber-600">Below minimum</p>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {driver.vehicle ? `${driver.vehicle.make || ''} ${driver.vehicle.model || ''} ${driver.vehicle.numberPlate ? `(${driver.vehicle.numberPlate})` : ''}`.trim() : '-'}

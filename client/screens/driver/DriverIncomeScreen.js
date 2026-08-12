@@ -239,7 +239,7 @@ const DriverIncomeScreen = () => {
 
           <View className="mb-5 flex-row gap-3">
             <View className="flex-1 rounded-2xl border border-gray-100 bg-white px-4 py-3">
-              <Text className="text-xs font-semibold uppercase text-gray-500">Trips</Text>
+              <Text className="text-xs font-semibold uppercase text-gray-500">Completed rides</Text>
               <Text className="mt-1 text-xl font-bold text-gray-900">{completedRides}</Text>
             </View>
             <View className="flex-1 rounded-2xl border border-gray-100 bg-white px-4 py-3">

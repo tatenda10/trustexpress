@@ -20,6 +20,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [loading, setLoading] = useState(contextDriverStatus == null);
   const [averageRating, setAverageRating] = useState(null);
   const [ratingCount, setRatingCount] = useState(0);
+  const [completedRides, setCompletedRides] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [profileData, setProfileData] = useState(null);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
@@ -103,10 +104,12 @@ const DriverAccountScreen = ({ navigation, route }) => {
             : Number(summary.averageRating)
         );
         setRatingCount(Number(summary.ratingCount || 0));
+        setCompletedRides(Number(summary.completedRides || 0));
       } catch {
         if (cancelled) return;
         setAverageRating(null);
         setRatingCount(0);
+        setCompletedRides(0);
       }
     };
 
@@ -120,7 +123,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete account',
-      'This permanently deletes your driver account. This action cannot be undone.',
+      'This permanently deletes your driver account. If your wallet still has funds, deletion will be blocked until the balance is cleared.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -207,6 +210,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
           : 'Uploaded';
   const profileApproved = ['approved', 'verified'].includes(String(profile?.status || '').trim().toLowerCase());
   const vehicleApproved = ['approved', 'verified'].includes(String(vehicle?.status || '').trim().toLowerCase());
+  const approvedTierName = String(vehicle?.vehicleTierName || '').trim();
 
   const allVerified = phoneVerified && profileApproved && vehicleApproved;
   const driverName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.firstName || 'Driver';
@@ -311,7 +315,15 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'car',
       title: 'Car registration',
-      subtitle: !vehicle ? 'Not registered' : vehicle.status === 'approved' ? 'Verified · Tap to change car' : vehicle.status === 'pending' ? 'Under review' : 'Rejected',
+      subtitle: !vehicle
+        ? 'Not registered'
+        : vehicle.status === 'approved'
+          ? approvedTierName
+            ? `Verified · ${approvedTierName}`
+            : 'Verified · Tap to change car'
+          : vehicle.status === 'pending'
+            ? 'Under review'
+            : 'Rejected',
       verified: vehicle?.status === 'approved',
       icon: 'car-outline',
       changeableWhenVerified: vehicle?.status === 'approved',
@@ -538,12 +550,26 @@ const DriverAccountScreen = ({ navigation, route }) => {
             </View>
           ) : null}
           <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{driverName}</Text>
-          {averageRating !== null ? (
-            <View className="mt-2 flex-row items-center rounded-full bg-white px-3 py-1.5">
-              <Ionicons name="star" size={14} color="#f59e0b" />
-              <Text className="ml-1 text-sm font-semibold text-gray-700">{averageRating.toFixed(1)}</Text>
-              <Text className="ml-1 text-sm text-gray-400">({ratingCount})</Text>
+          <View className="mt-2 flex-row flex-wrap items-center justify-center gap-2">
+            {averageRating !== null ? (
+              <View className="flex-row items-center rounded-full bg-white px-3 py-1.5">
+                <Ionicons name="star" size={14} color="#f59e0b" />
+                <Text className="ml-1 text-sm font-semibold text-gray-700">{averageRating.toFixed(1)}</Text>
+                <Text className="ml-1 text-sm text-gray-400">({ratingCount})</Text>
+              </View>
+            ) : null}
+            <View className="flex-row items-center rounded-full bg-white px-3 py-1.5">
+              <Ionicons name="checkmark-done-outline" size={14} color={PRIMARY_BLUE} />
+              <Text className="ml-1 text-sm font-semibold text-gray-700">{completedRides}</Text>
+              <Text className="ml-1 text-sm text-gray-400">
+                completed ride{completedRides === 1 ? '' : 's'}
+              </Text>
             </View>
+          </View>
+          {vehicleApproved && approvedTierName ? (
+            <Text className="mt-2 text-center text-sm font-medium text-gray-500">
+              Approved for {approvedTierName}
+            </Text>
           ) : null}
           <View className="mt-3 rounded-full bg-white px-4 py-2">
             <Text className="text-sm font-medium text-gray-500">{driverEmail}</Text>
