@@ -9,6 +9,12 @@ import { query } from '../db/connection.js';
 import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib/driver-verification-mysql.js';
 import { getDriverWalletStatus, getDriverWalletSummariesByUserIds, getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
 import { getAccountStatusFromUser, getDriverRatingPerformanceSummary } from '../lib/rating-performance.js';
+import {
+  formatCompliantStatus,
+  formatExportName,
+  formatPhoneAsText,
+  sendXlsx,
+} from '../lib/xlsx-export.js';
 
 const router = Router();
 
@@ -239,49 +245,18 @@ function deriveVerificationType(item) {
   return 'identity';
 }
 
-function toCsv(rows) {
-  const headers = [
-    'id',
-    'email',
-    'phoneNumber',
-    'phoneVerified',
-    'profileStatus',
-    'vehicleStatus',
-    'vehicleMake',
-    'vehicleModel',
-    'numberPlate',
-    'createdAt',
-  ];
+function isDriverCompliant(driver) {
+  const profileApproved = ['approved', 'verified'].includes(String(driver?.profile?.status || '').trim().toLowerCase());
+  const vehicleApproved = ['approved', 'verified'].includes(String(driver?.vehicle?.status || '').trim().toLowerCase());
+  return driver?.phoneVerified === true && profileApproved && vehicleApproved;
+}
 
-  const escape = (value) => {
-    if (value === null || value === undefined) return '';
-    const raw = String(value);
-    if (raw.includes('"') || raw.includes(',') || raw.includes('\n')) {
-      return `"${raw.replace(/"/g, '""')}"`;
-    }
-    return raw;
-  };
-
-  const lines = [headers.join(',')];
-  for (const row of rows) {
-    lines.push(
-      [
-        row.id,
-        row.email,
-        row.phoneNumber,
-        row.phoneVerified ? 'true' : 'false',
-        row.profile?.status || '',
-        row.vehicle?.status || '',
-        row.vehicle?.make || '',
-        row.vehicle?.model || '',
-        row.vehicle?.numberPlate || '',
-        row.createdAt || '',
-      ]
-        .map(escape)
-        .join(',')
-    );
-  }
-  return lines.join('\n');
+function toDriverExportRows(drivers) {
+  return drivers.map((driver) => ({
+    name: formatExportName(driver),
+    phoneNumber: formatPhoneAsText(driver.phoneNumber),
+    compliantStatus: formatCompliantStatus(isDriverCompliant(driver)),
+  }));
 }
 
 router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
@@ -397,7 +372,7 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
   }
 });
 
-router.get('/export.csv', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
+async function exportDriversWorkbook(req, res) {
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const verificationStatus = String(req.query.verificationStatus || 'all').toLowerCase();
@@ -447,16 +422,24 @@ router.get('/export.csv', requireAdminAuth, requirePermission('drivers.read'), a
     }
 
     const payload = drivers.map(({ _role, ...rest }) => rest);
-    const csv = toCsv(payload);
-
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="drivers_export_${Date.now()}.csv"`);
-    return res.status(200).send(csv);
+    return sendXlsx(res, {
+      filename: `drivers_export_${Date.now()}.xlsx`,
+      sheetName: 'Drivers',
+      columns: [
+        { key: 'name', header: 'Name', width: 28 },
+        { key: 'phoneNumber', header: 'Phone Number', width: 22, text: true },
+        { key: 'compliantStatus', header: 'Compliant Status', width: 20 },
+      ],
+      rows: toDriverExportRows(payload),
+    });
   } catch (err) {
-    console.error('GET /api/admin/drivers/export.csv', err);
+    console.error('GET /api/admin/drivers/export', err);
     return res.status(500).json({ error: 'Server error' });
   }
-});
+}
+
+router.get('/export.xlsx', requireAdminAuth, requirePermission('drivers.read'), exportDriversWorkbook);
+router.get('/export.csv', requireAdminAuth, requirePermission('drivers.read'), exportDriversWorkbook);
 
 router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
   try {

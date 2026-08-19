@@ -8,7 +8,7 @@ import {
 
 const router = Router();
 
-router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+router.get('/', requireAdminAuth, requirePermission('ride_ops.manage'), async (req, res) => {
   try {
     const settings = await getSafetyPinSettings({ force: true });
     return res.json({ settings });

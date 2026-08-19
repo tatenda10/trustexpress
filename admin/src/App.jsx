@@ -118,7 +118,7 @@ function AppRoutes() {
         />
         <Route
           path="ride-safety-pin"
-          element={<PermissionRoute permission="ride_ops.read"><RideSafetyPinSettingsPage /></PermissionRoute>}
+          element={<PermissionRoute permission="ride_ops.manage"><RideSafetyPinSettingsPage /></PermissionRoute>}
         />
         <Route
           path="live-map"

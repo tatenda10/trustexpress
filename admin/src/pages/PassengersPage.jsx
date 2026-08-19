@@ -119,9 +119,9 @@ export default function PassengersPage() {
     }
   }
 
-  const exportCsv = async () => {
+  const exportXlsx = async () => {
     try {
-      const response = await axios.get(`${BASE_URL}/api/admin/passengers/export.csv`, {
+      const response = await axios.get(`${BASE_URL}/api/admin/passengers/export.xlsx`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -133,17 +133,21 @@ export default function PassengersPage() {
         responseType: 'blob',
       })
 
-      const blobUrl = window.URL.createObjectURL(new Blob([response.data], { type: 'text/csv' }))
+      const blobUrl = window.URL.createObjectURL(
+        new Blob([response.data], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })
+      )
       const anchor = document.createElement('a')
       anchor.href = blobUrl
-      anchor.download = `passengers_export_${Date.now()}.csv`
+      anchor.download = `passengers_export_${Date.now()}.xlsx`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
       window.URL.revokeObjectURL(blobUrl)
     } catch (err) {
       const apiError = err?.response?.data?.error
-      setError(apiError || err?.message || 'Failed to export passengers CSV')
+      setError(apiError || err?.message || 'Failed to export passengers Excel file')
     }
   }
 
@@ -260,13 +264,13 @@ export default function PassengersPage() {
             </div>
             <button
               type="button"
-              onClick={exportCsv}
+              onClick={exportXlsx}
               className="inline-flex h-10 items-center gap-2 bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800"
             >
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
                 <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2h14v-2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Export CSV
+              Export Excel
             </button>
           </div>
         </div>

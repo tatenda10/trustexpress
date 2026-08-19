@@ -1,6 +1,6 @@
 /**
  * First dashboard path the signed-in admin is allowed to open.
- * Avoids sending recruitment/agent staff to Overview (company revenue).
+ * Avoids sending support/recruitment staff to Overview (company revenue).
  */
 const HOME_CANDIDATES = [
   { permission: 'overview.read', path: '/dashboard/overview' },

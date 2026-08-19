@@ -69,9 +69,8 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'passengers.read',
   ],
 
-  // Support team: tickets + read-only user/ride context. No admin users, pricing, wallet config, or AI settings.
+  // Support team: tickets + read-only user/ride context. No overview/revenue, admin users, pricing, wallet config, or AI settings.
   support_admin: [
-    'overview.read',
     'support.read',
     'ride_ops.read',
     'live_map.read',

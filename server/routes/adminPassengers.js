@@ -6,6 +6,12 @@ import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getPrimaryEmail, getPrimaryPhone, normalizeRole } from '../lib/clerk-user.js';
 import { listPassengerIdentities, shapePassengerIdentityFromRow } from '../lib/passenger-verification-mysql.js';
 import { query } from '../db/connection.js';
+import {
+  formatCompliantStatus,
+  formatExportName,
+  formatPhoneAsText,
+  sendXlsx,
+} from '../lib/xlsx-export.js';
 
 const router = Router();
 
@@ -110,49 +116,19 @@ function toDateValue(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function toCsv(rows) {
-  const headers = [
-    'id',
-    'email',
-    'phoneNumber',
-    'phoneVerified',
-    'status',
-    'identityStatus',
-    'totalRides',
-    'totalSpend',
-    'lastRideAt',
-    'createdAt',
-  ];
+function isPassengerCompliant(passenger) {
+  const identityApproved = ['approved', 'verified'].includes(
+    String(passenger?.passengerIdentity?.status || '').trim().toLowerCase()
+  );
+  return passenger?.phoneVerified === true && identityApproved;
+}
 
-  const escape = (value) => {
-    if (value === null || value === undefined) return '';
-    const raw = String(value);
-    if (raw.includes('"') || raw.includes(',') || raw.includes('\n')) {
-      return `"${raw.replace(/"/g, '""')}"`;
-    }
-    return raw;
-  };
-
-  const lines = [headers.join(',')];
-  for (const row of rows) {
-    lines.push(
-      [
-        row.id,
-        row.email,
-        row.phoneNumber,
-        row.phoneVerified ? 'true' : 'false',
-        row.status,
-        row.passengerIdentity?.status || 'not_submitted',
-        row.totalRides,
-        row.totalSpend,
-        row.lastRideAt || '',
-        row.createdAt || '',
-      ]
-        .map(escape)
-        .join(',')
-    );
-  }
-  return lines.join('\n');
+function toPassengerExportRows(passengers) {
+  return passengers.map((passenger) => ({
+    name: formatExportName(passenger),
+    phoneNumber: formatPhoneAsText(passenger.phoneNumber),
+    compliantStatus: formatCompliantStatus(isPassengerCompliant(passenger)),
+  }));
 }
 
 router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (req, res) => {
@@ -248,7 +224,7 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
   }
 });
 
-router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read'), async (req, res) => {
+async function exportPassengersWorkbook(req, res) {
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const status = String(req.query.status || 'all').toLowerCase();
@@ -291,16 +267,24 @@ router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read')
     }
 
     const payload = passengers.map(({ _role, ...rest }) => rest);
-    const csv = toCsv(payload);
-
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="passengers_export_${Date.now()}.csv"`);
-    return res.status(200).send(csv);
+    return sendXlsx(res, {
+      filename: `passengers_export_${Date.now()}.xlsx`,
+      sheetName: 'Passengers',
+      columns: [
+        { key: 'name', header: 'Name', width: 28 },
+        { key: 'phoneNumber', header: 'Phone Number', width: 22, text: true },
+        { key: 'compliantStatus', header: 'Compliant Status', width: 20 },
+      ],
+      rows: toPassengerExportRows(payload),
+    });
   } catch (err) {
-    console.error('GET /api/admin/passengers/export.csv', err);
+    console.error('GET /api/admin/passengers/export', err);
     return res.status(500).json({ error: 'Server error' });
   }
-});
+}
+
+router.get('/export.xlsx', requireAdminAuth, requirePermission('passengers.read'), exportPassengersWorkbook);
+router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read'), exportPassengersWorkbook);
 
 router.get('/:passengerId', requireAdminAuth, requirePermission('passengers.read'), async (req, res) => {
   try {
