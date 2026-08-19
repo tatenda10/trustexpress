@@ -243,3 +243,76 @@ export function formatPhoneAsText(value) {
 export function formatCompliantStatus(isCompliant) {
   return isCompliant ? 'Compliant' : 'Not compliant';
 }
+
+function normalizeStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isApprovedStatus(value) {
+  return ['approved', 'verified'].includes(normalizeStatus(value));
+}
+
+function formatCheckStatus(status, { submitted = false } = {}) {
+  const normalized = normalizeStatus(status);
+  if (isApprovedStatus(normalized)) return 'approved';
+  if (normalized === 'rejected') return 'rejected';
+  if (normalized === 'pending' || submitted) return 'pending review';
+  return 'not submitted';
+}
+
+export function describeDriverVerification(driver) {
+  const phoneVerified = driver?.phoneVerified === true;
+  const identityStatus = formatCheckStatus(driver?.profile?.status, {
+    submitted: !!driver?.profile?.hasDocuments || !!driver?.profile?.submittedAt,
+  });
+  const vehicleStatus = formatCheckStatus(driver?.vehicle?.status, {
+    submitted: !!driver?.vehicle?.hasDocuments || !!driver?.vehicle?.submittedAt,
+  });
+
+  const identityApproved = identityStatus === 'approved';
+  const vehicleApproved = vehicleStatus === 'approved';
+  const identityStarted = identityStatus !== 'not submitted';
+  const vehicleStarted = vehicleStatus !== 'not submitted';
+  const fullyVerified = phoneVerified && identityApproved && vehicleApproved;
+  const noDocuments = !identityStarted && !vehicleStarted;
+
+  let verificationStatus = 'Partially verified';
+  if (fullyVerified) verificationStatus = 'Fully verified';
+  else if (noDocuments) verificationStatus = 'Account only — no documents';
+
+  return {
+    verificationStatus,
+    identityStatus,
+    vehicleStatus,
+    details: [
+      phoneVerified ? 'Phone verified' : 'Phone not verified',
+      `Identity ${identityStatus}`,
+      `Vehicle ${vehicleStatus}`,
+    ].join(' · '),
+  };
+}
+
+export function describePassengerVerification(passenger) {
+  const phoneVerified = passenger?.phoneVerified === true;
+  const identityStatus = formatCheckStatus(passenger?.passengerIdentity?.status, {
+    submitted: !!passenger?.passengerIdentity?.submittedAt
+      || !!passenger?.passengerIdentity?.nationalIdFrontUrl
+      || !!passenger?.passengerIdentity?.selfieUrl,
+  });
+  const identityApproved = identityStatus === 'approved';
+  const identityStarted = identityStatus !== 'not submitted';
+  const fullyVerified = phoneVerified && identityApproved;
+
+  let verificationStatus = 'Partially verified';
+  if (fullyVerified) verificationStatus = 'Fully verified';
+  else if (!identityStarted) verificationStatus = 'Account only — no documents';
+
+  return {
+    verificationStatus,
+    identityStatus,
+    details: [
+      phoneVerified ? 'Phone verified' : 'Phone not verified',
+      `Identity ${identityStatus}`,
+    ].join(' · '),
+  };
+}

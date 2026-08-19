@@ -7,7 +7,7 @@ import { getPrimaryEmail, getPrimaryPhone, normalizeRole } from '../lib/clerk-us
 import { listPassengerIdentities, shapePassengerIdentityFromRow } from '../lib/passenger-verification-mysql.js';
 import { query } from '../db/connection.js';
 import {
-  formatCompliantStatus,
+  describePassengerVerification,
   formatExportName,
   formatPhoneAsText,
   sendXlsx,
@@ -116,19 +116,17 @@ function toDateValue(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function isPassengerCompliant(passenger) {
-  const identityApproved = ['approved', 'verified'].includes(
-    String(passenger?.passengerIdentity?.status || '').trim().toLowerCase()
-  );
-  return passenger?.phoneVerified === true && identityApproved;
-}
-
 function toPassengerExportRows(passengers) {
-  return passengers.map((passenger) => ({
-    name: formatExportName(passenger),
-    phoneNumber: formatPhoneAsText(passenger.phoneNumber),
-    compliantStatus: formatCompliantStatus(isPassengerCompliant(passenger)),
-  }));
+  return passengers.map((passenger) => {
+    const verification = describePassengerVerification(passenger);
+    return {
+      name: formatExportName(passenger),
+      phoneNumber: formatPhoneAsText(passenger.phoneNumber),
+      verificationStatus: verification.verificationStatus,
+      identityStatus: verification.identityStatus,
+      details: verification.details,
+    };
+  });
 }
 
 router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (req, res) => {
@@ -273,7 +271,9 @@ async function exportPassengersWorkbook(req, res) {
       columns: [
         { key: 'name', header: 'Name', width: 28 },
         { key: 'phoneNumber', header: 'Phone Number', width: 22, text: true },
-        { key: 'compliantStatus', header: 'Compliant Status', width: 20 },
+        { key: 'verificationStatus', header: 'Verification Status', width: 32 },
+        { key: 'identityStatus', header: 'Identity', width: 18 },
+        { key: 'details', header: 'Details', width: 42 },
       ],
       rows: toPassengerExportRows(payload),
     });

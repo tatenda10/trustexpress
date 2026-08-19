@@ -10,7 +10,7 @@ import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib
 import { getDriverWalletStatus, getDriverWalletSummariesByUserIds, getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
 import { getAccountStatusFromUser, getDriverRatingPerformanceSummary } from '../lib/rating-performance.js';
 import {
-  formatCompliantStatus,
+  describeDriverVerification,
   formatExportName,
   formatPhoneAsText,
   sendXlsx,
@@ -245,18 +245,18 @@ function deriveVerificationType(item) {
   return 'identity';
 }
 
-function isDriverCompliant(driver) {
-  const profileApproved = ['approved', 'verified'].includes(String(driver?.profile?.status || '').trim().toLowerCase());
-  const vehicleApproved = ['approved', 'verified'].includes(String(driver?.vehicle?.status || '').trim().toLowerCase());
-  return driver?.phoneVerified === true && profileApproved && vehicleApproved;
-}
-
 function toDriverExportRows(drivers) {
-  return drivers.map((driver) => ({
-    name: formatExportName(driver),
-    phoneNumber: formatPhoneAsText(driver.phoneNumber),
-    compliantStatus: formatCompliantStatus(isDriverCompliant(driver)),
-  }));
+  return drivers.map((driver) => {
+    const verification = describeDriverVerification(driver);
+    return {
+      name: formatExportName(driver),
+      phoneNumber: formatPhoneAsText(driver.phoneNumber),
+      verificationStatus: verification.verificationStatus,
+      identityStatus: verification.identityStatus,
+      vehicleStatus: verification.vehicleStatus,
+      details: verification.details,
+    };
+  });
 }
 
 router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
@@ -428,7 +428,10 @@ async function exportDriversWorkbook(req, res) {
       columns: [
         { key: 'name', header: 'Name', width: 28 },
         { key: 'phoneNumber', header: 'Phone Number', width: 22, text: true },
-        { key: 'compliantStatus', header: 'Compliant Status', width: 20 },
+        { key: 'verificationStatus', header: 'Verification Status', width: 32 },
+        { key: 'identityStatus', header: 'Identity', width: 18 },
+        { key: 'vehicleStatus', header: 'Vehicle', width: 18 },
+        { key: 'details', header: 'Details', width: 48 },
       ],
       rows: toDriverExportRows(payload),
     });
