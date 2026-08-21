@@ -25,7 +25,7 @@ export function normalizeCancelledBy(value) {
   const key = String(value || '')
     .trim()
     .toLowerCase();
-  if (key === 'driver' || key === 'passenger' || key === 'system') return key;
+  if (key === 'driver' || key === 'passenger' || key === 'system' || key === 'admin') return key;
   return null;
 }
 
@@ -44,6 +44,7 @@ export function inferCancelledBy({ cancelledBy, status, cancellationReason } = {
   if (!reason) return null;
 
   if (reason.includes('no driver accepted') || reason.includes('expired')) return 'system';
+  if (reason.includes('admin cancelled') || reason.startsWith('admin ')) return 'admin';
   if (reason.includes('passenger cancelled') || reason.startsWith('passenger ')) return 'passenger';
   if (reason.includes('driver cancelled') || reason.startsWith('driver ')) return 'driver';
 
@@ -59,5 +60,6 @@ export function formatCancelledByLabel(cancelledBy) {
   if (key === 'driver') return 'Driver';
   if (key === 'passenger') return 'Passenger';
   if (key === 'system') return 'System / timeout';
+  if (key === 'admin') return 'Admin';
   return 'Unknown';
 }

@@ -4,6 +4,14 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { buildRideStopsPayload } from '../lib/ride-stops.js';
 import { formatCancelledByLabel, inferCancelledBy } from '../lib/ride-cancellation.js';
+import { buildAdminSafetyPinPayload } from '../lib/ride-safety-pin.js';
+import { getClerkUserById } from '../lib/clerk-user.js';
+import { sendExpoPushNotifications } from '../lib/push.js';
+import {
+  emitRideRequestRemovedFromDriver,
+  emitRideStatusToDriver,
+  emitRideStatusToPassenger,
+} from '../lib/realtime.js';
 import {
   createOrRefreshAdminShareLink,
   getActiveAdminShareLink,
@@ -15,6 +23,27 @@ import { expireAbandonedOpenRideRequests } from '../lib/ride-offer-expiry.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
+const ADMIN_CANCELLABLE_STATUSES = ['requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress'];
+
+async function notifyUserPush(userId, { title, body, data = {} }) {
+  if (!userId) return;
+  try {
+    const user = await getClerkUserById(userId);
+    const pushToken = user?.privateMetadata?.pushToken;
+    if (!pushToken) return;
+    await sendExpoPushNotifications({
+      to: pushToken,
+      title,
+      body,
+      data,
+    });
+  } catch (error) {
+    console.warn('[admin.rides] push notify failed', {
+      userId,
+      message: error?.message || String(error),
+    });
+  }
+}
 
 function resolveCancelledBy(row) {
   return inferCancelledBy({
@@ -938,6 +967,10 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         ride_requests.cancelled_at,
         ride_requests.cancellation_reason,
         ride_requests.cancelled_by,
+        ride_requests.safety_pin_required,
+        ride_requests.safety_pin_encrypted,
+        ride_requests.safety_pin_verified_at,
+        ride_requests.safety_pin_attempts,
         da.current_lat AS driver_current_lat,
         da.current_lng AS driver_current_lng,
         da.last_seen_at AS driver_last_seen_at,
@@ -1078,6 +1111,8 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         cancellationReason: row.cancellation_reason || null,
         cancelledBy: resolveCancelledBy(row),
         cancelledByLabel: formatCancelledByLabel(resolveCancelledBy(row)),
+        canCancel: ADMIN_CANCELLABLE_STATUSES.includes(String(row.status || '').trim().toLowerCase()),
+        ...buildAdminSafetyPinPayload(row),
         driverCurrentLat: row.driver_current_lat === null ? null : Number(row.driver_current_lat),
         driverCurrentLng: row.driver_current_lng === null ? null : Number(row.driver_current_lng),
         driverLastSeenAt: row.driver_last_seen_at || null,
@@ -1159,6 +1194,159 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
     });
   } catch (err) {
     console.error('GET /api/admin/rides/:rideId', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/:rideId/cancel', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const rideId = String(req.params.rideId || '').trim();
+    if (!rideId) {
+      return res.status(400).json({ error: 'Invalid ride id' });
+    }
+
+    const reasonInput = String(req.body?.reason || '').trim();
+    const reason = reasonInput || 'Admin cancelled';
+    const adminLabel = String(req.admin?.full_name || req.admin?.email || 'Admin').trim() || 'Admin';
+
+    const [existing] = await query(
+      `SELECT
+         id,
+         public_id,
+         status,
+         passenger_user_id,
+         driver_user_id
+       FROM ride_requests
+       WHERE public_id = ? OR id = ?
+       LIMIT 1`,
+      [rideId, Number(rideId) || -1]
+    );
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const status = String(existing.status || '').trim().toLowerCase();
+    if (!ADMIN_CANCELLABLE_STATUSES.includes(status)) {
+      return res.status(409).json({
+        error: `This ride cannot be cancelled while it is ${status || 'closed'}.`,
+      });
+    }
+
+    const result = await query(
+      `UPDATE ride_requests
+       SET status = 'cancelled',
+           cancellation_reason = ?,
+           cancelled_by = 'admin',
+           cancelled_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND status IN ('requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress')`,
+      [`${reason} (by ${adminLabel})`, existing.id]
+    );
+
+    if (!Number(result?.affectedRows || 0)) {
+      return res.status(409).json({ error: 'Ride could not be cancelled. It may have already closed.' });
+    }
+
+    const affectedDrivers = await query(
+      `SELECT driver_user_id
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?`,
+      [existing.id]
+    );
+
+    const notifiedDriverIds = new Set();
+    for (const row of affectedDrivers || []) {
+      const driverUserId = row?.driver_user_id;
+      if (!driverUserId || notifiedDriverIds.has(driverUserId)) continue;
+      notifiedDriverIds.add(driverUserId);
+      emitRideRequestRemovedFromDriver(driverUserId, {
+        rideRequestId: existing.id,
+        reason: 'admin_cancelled',
+      });
+      emitRideStatusToDriver(driverUserId, {
+        rideRequestId: existing.id,
+        status: 'cancelled',
+        cancelledBy: 'admin',
+      });
+      await notifyUserPush(driverUserId, {
+        title: 'Ride cancelled',
+        body: 'An admin cancelled this trip.',
+        data: {
+          type: 'ride_status',
+          status: 'cancelled',
+          rideRequestId: existing.id,
+          cancelledBy: 'admin',
+        },
+      });
+    }
+
+    if (existing.driver_user_id && !notifiedDriverIds.has(existing.driver_user_id)) {
+      emitRideRequestRemovedFromDriver(existing.driver_user_id, {
+        rideRequestId: existing.id,
+        reason: 'admin_cancelled',
+      });
+      emitRideStatusToDriver(existing.driver_user_id, {
+        rideRequestId: existing.id,
+        status: 'cancelled',
+        cancelledBy: 'admin',
+      });
+      await notifyUserPush(existing.driver_user_id, {
+        title: 'Ride cancelled',
+        body: 'An admin cancelled this trip.',
+        data: {
+          type: 'ride_status',
+          status: 'cancelled',
+          rideRequestId: existing.id,
+          cancelledBy: 'admin',
+        },
+      });
+    }
+
+    if (existing.passenger_user_id) {
+      emitRideStatusToPassenger(existing.passenger_user_id, {
+        rideRequestId: existing.id,
+        status: 'cancelled',
+        cancelledBy: 'admin',
+      });
+      await notifyUserPush(existing.passenger_user_id, {
+        title: 'Ride cancelled',
+        body: 'Support cancelled your trip. Open the app for details.',
+        data: {
+          type: 'ride_status',
+          status: 'cancelled',
+          rideRequestId: existing.id,
+          cancelledBy: 'admin',
+        },
+      });
+    }
+
+    const [updated] = await query(
+      `SELECT id, public_id, status, cancellation_reason, cancelled_by, cancelled_at
+       FROM ride_requests
+       WHERE id = ?
+       LIMIT 1`,
+      [existing.id]
+    );
+
+    return res.json({
+      ok: true,
+      ride: {
+        id: updated?.id || existing.id,
+        publicId: updated?.public_id || existing.public_id,
+        status: mapRideStatus(updated?.status || 'cancelled'),
+        rawStatus: updated?.status || 'cancelled',
+        cancellationReason: updated?.cancellation_reason || null,
+        cancelledBy: resolveCancelledBy(updated || { cancelled_by: 'admin', status: 'cancelled' }),
+        cancelledByLabel: formatCancelledByLabel(
+          resolveCancelledBy(updated || { cancelled_by: 'admin', status: 'cancelled' })
+        ),
+        cancelledAt: updated?.cancelled_at || null,
+        canCancel: false,
+      },
+    });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/:rideId/cancel', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

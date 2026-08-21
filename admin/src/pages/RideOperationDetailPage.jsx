@@ -135,7 +135,7 @@ export default function RideOperationDetailPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { rideId } = useParams()
-  const { token } = useAuth()
+  const { token, can, admin } = useAuth()
   const [ride, setRide] = useState(null)
   const [lostItems, setLostItems] = useState([])
   const [panicAlerts, setPanicAlerts] = useState([])
@@ -145,8 +145,12 @@ export default function RideOperationDetailPage() {
   const [shareLink, setShareLink] = useState(null)
   const [shareBusy, setShareBusy] = useState(false)
   const [shareMessage, setShareMessage] = useState('')
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelling, setCancelling] = useState(false)
+  const [actionMessage, setActionMessage] = useState('')
   const fromDriverId = location.state?.fromDriverId || ''
   const fromDriverName = location.state?.fromDriverName || 'driver'
+  const canCancelRide = admin?.role === 'super_admin' || can('ride_ops.read')
 
   const refreshRideDetails = async () => {
     const { data } = await axios.get(`${BASE_URL}/api/admin/rides/${rideId}`, {
@@ -266,6 +270,30 @@ export default function RideOperationDetailPage() {
       setShareMessage('Share link copied.')
     } catch {
       window.prompt('Copy this authority share link', shareLink.url)
+    }
+  }
+
+  const cancelRide = async () => {
+    if (!token || !rideId || !ride?.canCancel) return
+    const confirmed = window.confirm('Cancel this ride for the passenger and driver?')
+    if (!confirmed) return
+
+    setCancelling(true)
+    setError('')
+    setActionMessage('')
+    try {
+      await axios.patch(
+        `${BASE_URL}/api/admin/rides/${rideId}/cancel`,
+        { reason: cancelReason.trim() || undefined },
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      setCancelReason('')
+      setActionMessage('Ride cancelled.')
+      await refreshRideDetails()
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to cancel ride')
+    } finally {
+      setCancelling(false)
     }
   }
 
@@ -584,6 +612,23 @@ export default function RideOperationDetailPage() {
               <DetailField label="Driver" value={ride.driver} />
               <DetailField label="Status" value={ride.status} />
               <DetailField label="Tier" value={ride.tierName || ride.tierKey} />
+              {ride.safetyPinRequired ? (
+                <div className="border border-emerald-200 bg-emerald-50 px-3 py-3 md:col-span-2 xl:col-span-1">
+                  <p className="text-[11px] uppercase tracking-wide text-emerald-700">Night Safety PIN</p>
+                  <p className="mt-1 font-mono text-2xl font-semibold tracking-[0.35em] text-emerald-900">
+                    {ride.safetyPin || '----'}
+                  </p>
+                  <p className="mt-2 text-xs text-emerald-800/80">
+                    {ride.safetyPinVerified
+                      ? `Verified${ride.safetyPinVerifiedAt ? ` · ${formatDateTime(ride.safetyPinVerifiedAt)}` : ''}`
+                      : ride.safetyPinLocked
+                        ? `Locked · ${Number(ride.safetyPinAttempts || 0)}/${Number(ride.safetyPinMaxAttempts || 0)} attempts`
+                        : `Waiting · ${Number(ride.safetyPinAttempts || 0)}/${Number(ride.safetyPinMaxAttempts || 0)} attempts`}
+                  </p>
+                </div>
+              ) : (
+                <DetailField label="Night Safety PIN" value="Not required" />
+              )}
               <DetailField label="Fare" value={`$${Number(ride.estimatedAmount || 0).toFixed(2)}`} />
               <DetailField label="Original Fare" value={`$${Number(ride.originalEstimatedAmount || ride.estimatedAmount || 0).toFixed(2)}`} />
               <DetailField label="Discount Code" value={ride.discountCode || '-'} />
@@ -626,6 +671,31 @@ export default function RideOperationDetailPage() {
               <div className="border border-slate-200 bg-slate-50 px-4 py-3">
                 <p className="text-[11px] uppercase tracking-wide text-slate-500">Cancellation Reason</p>
                 <p className="mt-1 text-sm text-slate-700">{ride.cancellationReason}</p>
+              </div>
+            ) : null}
+
+            {canCancelRide && ride.canCancel ? (
+              <div className="border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Cancel ride</p>
+                <p className="mt-1 text-xs text-amber-900/80">
+                  Cancels for both passenger and driver and notifies them in the app.
+                </p>
+                <textarea
+                  value={cancelReason}
+                  onChange={(event) => setCancelReason(event.target.value)}
+                  rows={3}
+                  placeholder="Optional reason (shown on the ride record)"
+                  className="mt-3 w-full border border-amber-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-amber-400"
+                />
+                <button
+                  type="button"
+                  disabled={cancelling}
+                  onClick={cancelRide}
+                  className="mt-3 rounded-md bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                >
+                  {cancelling ? 'Cancelling...' : 'Cancel this ride'}
+                </button>
+                {actionMessage ? <p className="mt-2 text-xs font-medium text-emerald-700">{actionMessage}</p> : null}
               </div>
             ) : null}
 

@@ -14,6 +14,7 @@ function statusClass(status) {
 function cancelledByClass(cancelledBy) {
   if (cancelledBy === 'driver') return 'bg-orange-50 text-orange-700 ring-1 ring-orange-200'
   if (cancelledBy === 'passenger') return 'bg-violet-50 text-violet-700 ring-1 ring-violet-200'
+  if (cancelledBy === 'admin') return 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
   if (cancelledBy === 'system') return 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
   return 'bg-slate-50 text-slate-500 ring-1 ring-slate-200'
 }

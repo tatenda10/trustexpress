@@ -345,6 +345,37 @@ export function buildDriverSafetyPinPayload(ride) {
   };
 }
 
+/** Admin/support view: always reveal the generated PIN when one exists. */
+export function buildAdminSafetyPinPayload(ride) {
+  const required = Number(ride?.safety_pin_required || 0) === 1;
+  const verifiedAt = ride?.safety_pin_verified_at || null;
+  const verified = Boolean(verifiedAt);
+  const attempts = Number(ride?.safety_pin_attempts || 0);
+  const maxAttempts = resolveMaxAttempts();
+
+  if (!required) {
+    return {
+      safetyPinRequired: false,
+      safetyPinVerified: false,
+      safetyPinVerifiedAt: null,
+      safetyPin: null,
+      safetyPinAttempts: 0,
+      safetyPinMaxAttempts: maxAttempts,
+      safetyPinLocked: false,
+    };
+  }
+
+  return {
+    safetyPinRequired: true,
+    safetyPinVerified: verified,
+    safetyPinVerifiedAt: verifiedAt ? new Date(verifiedAt).toISOString() : null,
+    safetyPin: decryptSafetyPin(ride?.safety_pin_encrypted, ride?.id),
+    safetyPinAttempts: attempts,
+    safetyPinMaxAttempts: maxAttempts,
+    safetyPinLocked: attempts >= maxAttempts && !verified,
+  };
+}
+
 export async function assertSafetyPinVerifiedForStart(ride) {
   const settings = await getSafetyPinSettings();
   const maxAttempts = resolveMaxAttempts(settings);
