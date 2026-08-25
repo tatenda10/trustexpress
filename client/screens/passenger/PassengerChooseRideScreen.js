@@ -19,19 +19,17 @@ import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 import { connectRealtime } from '../../realtime';
 import RideTierCarIcon from '../../components/RideTierCarIcon';
 
-function getTierCapacityLabel(tier) {
+function getTierMaxPassengerCount(tier) {
   const tierKey = String(tier?.tierKey || '').toLowerCase();
   const tierName = String(tier?.tierName || '').toLowerCase();
   if (tierKey.includes('xl') || tierName.includes('xl') || tierName.includes('extra large')) {
-    return 'Fits up to 7 people';
+    return 7;
   }
-  if (tierKey.includes('lux') || tierName.includes('lux')) {
-    return 'Fits up to 4 people';
-  }
-  if (tierKey.includes('express') || tierName.includes('express')) {
-    return 'Fits up to 4 people';
-  }
-  return 'Fits up to 4 people';
+  return 4;
+}
+
+function getTierCapacityLabel(tier) {
+  return `Fits up to ${getTierMaxPassengerCount(tier)} people`;
 }
 
 function encodePolyline(coordinates) {
@@ -191,6 +189,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [tiersError, setTiersError] = useState('');
   const [tiers, setTiers] = useState([]);
   const [selectedTierKey, setSelectedTierKey] = useState('');
+  const [passengerCount, setPassengerCount] = useState(null);
   const [isSubmittingRide, setIsSubmittingRide] = useState(false);
   const [appliedDiscount, setAppliedDiscount] = useState(null);
 
@@ -246,6 +245,17 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     () => tiers.find((t) => t.tierKey === selectedTierKey) || null,
     [selectedTierKey, tiers],
   );
+  const maxPassengerCount = getTierMaxPassengerCount(selectedTier);
+  const passengerCountOptions = useMemo(
+    () => Array.from({ length: maxPassengerCount }, (_, index) => index + 1),
+    [maxPassengerCount],
+  );
+
+  useEffect(() => {
+    if (passengerCount && passengerCount > maxPassengerCount) {
+      setPassengerCount(null);
+    }
+  }, [maxPassengerCount, passengerCount]);
 
   const estimatedAmount = useMemo(
     () => getTierAmount(selectedTier, distanceKm),
@@ -385,6 +395,17 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       Alert.alert('Missing route', 'Set your pickup, destination, and ride tier first.');
       return;
     }
+    if (!passengerCount) {
+      Alert.alert('How many people?', 'Confirm how many people are riding before requesting a driver.');
+      return;
+    }
+    if (passengerCount > maxPassengerCount) {
+      Alert.alert(
+        'Too many people',
+        `This ${selectedTier.tierName} fits up to ${maxPassengerCount} people. Choose a larger tier or reduce the group size.`,
+      );
+      return;
+    }
     if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
       Alert.alert('Outside Bulawayo', 'Trust Express currently supports rides within Bulawayo only.');
       return;
@@ -413,6 +434,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         estimatedMinutes,
         estimatedAmount: finalEstimatedAmount,
         selectedTier,
+        passengerCount,
       });
       const serverRide = data?.rideRequest || null;
       const nextDistanceKm = Number(serverRide?.estimatedDistanceKm || distanceKm || 0);
@@ -449,7 +471,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     }
   };
 
-  const isDisabled = loadingTiers || isSubmittingRide || tiers.length === 0;
+  const isDisabled = loadingTiers || isSubmittingRide || tiers.length === 0 || !passengerCount;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -502,6 +524,28 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
 
       {/* ── Tiers ── */}
       <View style={styles.tiersSection}>
+        <Text style={styles.sectionLabel}>How many people?</Text>
+        <View style={styles.peopleRow}>
+          {passengerCountOptions.map((count) => {
+            const selected = passengerCount === count;
+            return (
+              <TouchableOpacity
+                key={count}
+                onPress={() => setPassengerCount(count)}
+                style={[styles.peopleChip, selected && styles.peopleChipSelected]}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.peopleChipText, selected && styles.peopleChipTextSelected]}>{count}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={styles.peopleHint}>
+          {passengerCount
+            ? (passengerCount === 1 ? '1 person confirmed. Required before requesting.' : `We are ${passengerCount} people. Required before requesting.`)
+            : 'Tap the number of people riding. This is required.'}
+        </Text>
+
         <Text style={styles.sectionLabel}>Available options</Text>
 
         {loadingTiers ? (
@@ -717,6 +761,41 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
     marginBottom: 12,
+    marginLeft: 4,
+  },
+  peopleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  peopleChip: {
+    minWidth: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  peopleChipSelected: {
+    borderColor: PRIMARY_BLUE,
+    backgroundColor: '#eff6ff',
+  },
+  peopleChipText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  peopleChipTextSelected: {
+    color: PRIMARY_BLUE,
+  },
+  peopleHint: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginBottom: 16,
     marginLeft: 4,
   },
   tierList: {

@@ -76,8 +76,14 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.media.AudioAttributes;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.Gravity;
@@ -118,6 +124,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
   private String currentDropoffLabel = "";
   private String currentFareLabel = "";
   private String currentTitle = "New ride request";
+  private MediaPlayer requestSoundPlayer;
   private String currentBody = "A new ride request has arrived.";
 
   private int initialX;
@@ -371,6 +378,89 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     currentVariant = variant;
     renderBubble((FrameLayout) overlayView, variant);
     applyLayoutForVariant(variant);
+    if ("request".equals(variant)) {
+      boolean alreadyPlaying = false;
+      try {
+        alreadyPlaying = requestSoundPlayer != null && requestSoundPlayer.isPlaying();
+      } catch (Exception ignored) {
+        alreadyPlaying = false;
+      }
+      if (!alreadyPlaying) startRequestAlert();
+    } else {
+      stopRequestAlert();
+    }
+  }
+
+  private void startRequestAlert() {
+    stopRequestAlert();
+    try {
+      int soundResId = reactContext.getResources().getIdentifier(
+        "notificationaudio",
+        "raw",
+        reactContext.getPackageName()
+      );
+      if (soundResId != 0) {
+        requestSoundPlayer = MediaPlayer.create(reactContext, soundResId);
+      }
+      if (requestSoundPlayer != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+          requestSoundPlayer.setAudioAttributes(
+            new AudioAttributes.Builder()
+              .setUsage(AudioAttributes.USAGE_ALARM)
+              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+              .build()
+          );
+        } else {
+          requestSoundPlayer.setAudioStreamType(AudioManager.STREAM_ALARM);
+        }
+        requestSoundPlayer.setLooping(true);
+        requestSoundPlayer.setVolume(1f, 1f);
+        requestSoundPlayer.start();
+      }
+    } catch (Exception error) {
+      Log.e(TAG, "startRequestAlert failed", error);
+    }
+
+    try {
+      Vibrator vibrator = null;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        VibratorManager manager = (VibratorManager) reactContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+        if (manager != null) vibrator = manager.getDefaultVibrator();
+      } else {
+        vibrator = (Vibrator) reactContext.getSystemService(Context.VIBRATOR_SERVICE);
+      }
+      if (vibrator != null) {
+        long[] pattern = new long[]{0, 500, 180, 500, 180, 500, 900};
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0));
+        } else {
+          vibrator.vibrate(pattern, 0);
+        }
+      }
+    } catch (Exception ignored) {
+    }
+  }
+
+  private void stopRequestAlert() {
+    try {
+      if (requestSoundPlayer != null) {
+        if (requestSoundPlayer.isPlaying()) requestSoundPlayer.stop();
+        requestSoundPlayer.release();
+      }
+    } catch (Exception ignored) {
+    }
+    requestSoundPlayer = null;
+    try {
+      Vibrator vibrator = null;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        VibratorManager manager = (VibratorManager) reactContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+        if (manager != null) vibrator = manager.getDefaultVibrator();
+      } else {
+        vibrator = (Vibrator) reactContext.getSystemService(Context.VIBRATOR_SERVICE);
+      }
+      if (vibrator != null) vibrator.cancel();
+    } catch (Exception ignored) {
+    }
   }
 
   private void openApp() {
@@ -378,6 +468,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
   }
 
   private void hideOverlay() {
+    stopRequestAlert();
     if (windowManager != null && overlayView != null) {
       try {
         windowManager.removeView(overlayView);
@@ -677,9 +768,15 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.media.AudioAttributes;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -689,6 +786,7 @@ import android.widget.TextView;
 
 public class RideRequestFullScreenActivity extends Activity {
   private String rideRequestId = "";
+  private MediaPlayer requestSoundPlayer;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -812,6 +910,80 @@ public class RideRequestFullScreenActivity extends Activity {
     root.addView(openButton);
 
     setContentView(root);
+    startRequestAlert();
+  }
+
+  @Override
+  protected void onDestroy() {
+    stopRequestAlert();
+    super.onDestroy();
+  }
+
+  private void startRequestAlert() {
+    stopRequestAlert();
+    try {
+      int soundResId = getResources().getIdentifier("notificationaudio", "raw", getPackageName());
+      if (soundResId != 0) {
+        requestSoundPlayer = MediaPlayer.create(this, soundResId);
+      }
+      if (requestSoundPlayer != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+          requestSoundPlayer.setAudioAttributes(
+            new AudioAttributes.Builder()
+              .setUsage(AudioAttributes.USAGE_ALARM)
+              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+              .build()
+          );
+        } else {
+          requestSoundPlayer.setAudioStreamType(AudioManager.STREAM_ALARM);
+        }
+        requestSoundPlayer.setLooping(true);
+        requestSoundPlayer.setVolume(1f, 1f);
+        requestSoundPlayer.start();
+      }
+    } catch (Exception ignored) {
+    }
+
+    try {
+      Vibrator vibrator = null;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+        if (manager != null) vibrator = manager.getDefaultVibrator();
+      } else {
+        vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+      }
+      if (vibrator != null) {
+        long[] pattern = new long[]{0, 500, 180, 500, 180, 500, 900};
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0));
+        } else {
+          vibrator.vibrate(pattern, 0);
+        }
+      }
+    } catch (Exception ignored) {
+    }
+  }
+
+  private void stopRequestAlert() {
+    try {
+      if (requestSoundPlayer != null) {
+        if (requestSoundPlayer.isPlaying()) requestSoundPlayer.stop();
+        requestSoundPlayer.release();
+      }
+    } catch (Exception ignored) {
+    }
+    requestSoundPlayer = null;
+    try {
+      Vibrator vibrator = null;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+        if (manager != null) vibrator = manager.getDefaultVibrator();
+      } else {
+        vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+      }
+      if (vibrator != null) vibrator.cancel();
+    } catch (Exception ignored) {
+    }
   }
 
   private Button createButton(String label, String fillColor) {
@@ -827,6 +999,7 @@ public class RideRequestFullScreenActivity extends Activity {
   }
 
   private void openApp(String action) {
+    stopRequestAlert();
     Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
     if (launchIntent != null) {
       launchIntent.addFlags(

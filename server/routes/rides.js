@@ -11,6 +11,11 @@ import { findBestAutoDiscountForRide, syncDiscountRedemptionForRide, validateDis
 import { normalizeRatingTags } from '../lib/ride-rating-tags.js';
 import { buildRideStopsPayload, sanitizeIntermediateStops, stringifyIntermediateStops } from '../lib/ride-stops.js';
 import {
+  formatPassengerCountLabel,
+  getTierMaxPassengerCount,
+  parseRequiredPassengerCount,
+} from '../lib/ride-passenger-count.js';
+import {
   emitRideRequestRemovedFromDriver,
   emitRideChatMessageToUser,
   emitRideRequestToDriver,
@@ -447,18 +452,25 @@ async function createPendingDriverOffers(rideRequestId, drivers) {
   );
 }
 
-function buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops = [] }) {
+function buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops = [], passengerCount } = {}) {
   const stopCount = Array.isArray(intermediateStops) ? intermediateStops.length : 0;
+  const peopleLabel = formatPassengerCountLabel(passengerCount);
+  const peoplePrefix = peopleLabel ? `${peopleLabel} · ` : '';
   if (stopCount > 0) {
-    return `${pickupLabel} via ${stopCount} stop${stopCount === 1 ? '' : 's'} to ${dropoffLabel}`;
+    return `${peoplePrefix}${pickupLabel} via ${stopCount} stop${stopCount === 1 ? '' : 's'} to ${dropoffLabel}`;
   }
-  return `${pickupLabel} to ${dropoffLabel}`;
+  return `${peoplePrefix}${pickupLabel} to ${dropoffLabel}`;
 }
 
-async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, intermediateStops = [], rideRequestId, publicId, tierName }) {
+async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, intermediateStops = [], rideRequestId, publicId, tierName, passengerCount }) {
   if (!Array.isArray(drivers) || !drivers.length) return;
   const stopCount = Array.isArray(intermediateStops) ? intermediateStops.length : 0;
-  const notificationBody = buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, intermediateStops });
+  const notificationBody = buildDriverRideRequestNotificationBody({
+    pickupLabel,
+    dropoffLabel,
+    intermediateStops,
+    passengerCount,
+  });
   const prioritizedDriverIds = new Set(
     drivers
       .filter((driver) => Number(driver?.driverDistanceKm || 0) <= 1.5)
@@ -511,7 +523,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         sound: 'notificationaudio.mpeg',
-        channelId: 'ride-requests-nearby-v2',
+        channelId: 'ride-requests-nearby-v3',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -520,6 +532,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           pickupLabel,
           dropoffLabel,
           tierName,
+          passengerCount: passengerCount ? String(passengerCount) : '',
           priorityType: 'priority',
         },
       }))
@@ -533,7 +546,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         sound: 'sound2.mpeg',
-        channelId: 'ride-requests-distant-v2',
+        channelId: 'ride-requests-distant-v3',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -542,6 +555,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           pickupLabel,
           dropoffLabel,
           tierName,
+          passengerCount: passengerCount ? String(passengerCount) : '',
           priorityType: 'standard',
         },
       }))
@@ -555,10 +569,10 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests-nearby-v2',
+          channelId: 'ride-requests-nearby-v3',
           collapseKey: 'driver-ride-request',
           notification: {
-            sound: 'notificationaudio.mpeg',
+            sound: 'notificationaudio',
             tag: 'driver-ride-request',
             clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
@@ -572,6 +586,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           dropoffLabel: String(dropoffLabel || ''),
           intermediateStopCount: String(stopCount || 0),
           tierName: String(tierName || ''),
+          passengerCount: String(passengerCount || ''),
           priorityType: 'priority',
         },
       }))
@@ -585,10 +600,10 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests-distant-v2',
+          channelId: 'ride-requests-distant-v3',
           collapseKey: 'driver-ride-request',
           notification: {
-            sound: 'sound2.mpeg',
+            sound: 'sound2',
             tag: 'driver-ride-request',
             clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
@@ -602,6 +617,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
           dropoffLabel: String(dropoffLabel || ''),
           intermediateStopCount: String(stopCount || 0),
           tierName: String(tierName || ''),
+          passengerCount: String(passengerCount || ''),
           priorityType: 'standard',
         },
       }))
@@ -809,6 +825,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       routePolyline,
       selectedTier,
       discountCode = '',
+      passengerCount,
     } = req.body || {};
 
     const pickupLat = Number(pickupCoordinate?.latitude);
@@ -820,6 +837,13 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
 
     if (!pickupLabel || !dropoffLabel || !tier) {
       return res.status(400).json({ error: 'pickup, drop-off, and pricing configuration are required' });
+    }
+    const maxPassengerCount = getTierMaxPassengerCount(tier.tier_key, tier.tier_name);
+    const partySize = parseRequiredPassengerCount(passengerCount, maxPassengerCount);
+    if (!partySize) {
+      return res.status(400).json({
+        error: `Confirm how many people are riding. This ${tier.tier_name} fits up to ${maxPassengerCount}.`,
+      });
     }
     if (![pickupLat, pickupLng, dropoffLat, dropoffLng].every(Number.isFinite)) {
       return res.status(400).json({ error: 'Valid pickup and drop-off coordinates are required' });
@@ -894,6 +918,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         passenger_user_id,
         passenger_name,
         passenger_phone,
+        passenger_count,
         requested_tier_key,
         requested_tier_name,
         pickup_label,
@@ -920,12 +945,13 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         discount_value,
         discount_applied_at,
         status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
       [
         publicId,
         req.userId,
         passengerName,
         passengerPhoneForDrivers,
+        partySize,
         tier.tier_key,
         tier.tier_name,
         String(pickupLabel).trim(),
@@ -1005,6 +1031,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       rideRequestId,
       publicId,
       tierName: tier.tier_name,
+      passengerCount: partySize,
     });
 
     nearbyDrivers.forEach((driver) => {
@@ -1017,6 +1044,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         dropoffLabel: String(dropoffLabel).trim(),
         requestedTierKey: tier.tier_key,
         requestedTierName: tier.tier_name,
+        passengerCount: partySize,
       });
     });
 
@@ -1062,6 +1090,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         }),
         requestedTierKey: tier.tier_key,
         requestedTierName: tier.tier_name,
+        passengerCount: partySize,
         visibleDriversPreview: nearbyDrivers.slice(0, 4).map((driver) => ({
           id: driver.id,
           driverName: driver.driverName,
@@ -1225,6 +1254,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
+        passengerCount: Number(ride.passenger_count || 1),
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
@@ -1371,6 +1401,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
+        passengerCount: Number(ride.passenger_count || 1),
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),

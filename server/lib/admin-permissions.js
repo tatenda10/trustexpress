@@ -35,6 +35,8 @@ export const PERMISSION_CATALOG = [
   { key: 'admin.users.manage', module: 'admin', name: 'Manage Admin Users' },
   { key: 'admin.roles.read', module: 'admin', name: 'Read Roles' },
   { key: 'admin.roles.manage', module: 'admin', name: 'Manage Roles' },
+
+  { key: 'notifications.manage', module: 'notifications', name: 'Send Push Notifications' },
 ]
 
 export const DEFAULT_ROLE_MAPPINGS = {
@@ -51,6 +53,7 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'live_map.read',
     'reports.read',
     'support.read',
+    'notifications.manage',
   ],
 
   verification_admin: [
@@ -67,6 +70,7 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'live_map.read',
     'drivers.read',
     'passengers.read',
+    'notifications.manage',
   ],
 
   // Support team: tickets + read-only user/ride context. No overview/revenue, admin users, pricing, wallet config, or AI settings.
@@ -77,6 +81,7 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'drivers.read',
     'passengers.read',
     'passengers.manage',
+    'notifications.manage',
   ],
 
   finance_admin: [

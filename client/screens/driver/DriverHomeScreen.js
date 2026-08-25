@@ -880,19 +880,31 @@ const DriverHomeScreen = ({ navigation, route }) => {
       if (incomingAlertInFlightRef.current) return;
       incomingAlertInFlightRef.current = true;
       try {
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: true,
+            shouldDuckAndroid: false,
+            playThroughEarpieceAndroid: false,
+          });
+        } catch {
+          // Continue even if audio mode cannot be changed.
+        }
         if (!incomingRideSoundRef.current) {
           const { sound } = await Audio.Sound.createAsync(
             require('../../assets/notificationaudio.mpeg'),
-            { shouldPlay: false, volume: 1.0 },
+            { shouldPlay: false, volume: 1.0, isLooping: false },
           );
           incomingRideSoundRef.current = sound;
         }
 
         const sound = incomingRideSoundRef.current;
         if (sound) {
+          await sound.setVolumeAsync(1.0);
           await sound.replayAsync();
         }
-        Vibration.vibrate([0, 250, 160, 250]);
+        Vibration.vibrate([0, 500, 180, 500, 180, 500]);
       } catch {
         // Keep request flow working even if audio playback fails.
       } finally {
@@ -1949,8 +1961,17 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       {primaryIncomingRequest.passengerName || 'Passenger'}
                     </Text>
                   </View>
-                  <View className="mt-2 self-start rounded-full bg-[#e3e9f2] px-3 py-1">
-                    <Text className="text-xs font-bold uppercase text-[#2f73c9]">{primaryIncomingRequest.tierName || 'Ride'}</Text>
+                  <View className="mt-2 flex-row flex-wrap items-center gap-2">
+                    <View className="self-start rounded-full bg-[#e3e9f2] px-3 py-1">
+                      <Text className="text-xs font-bold uppercase text-[#2f73c9]">{primaryIncomingRequest.tierName || 'Ride'}</Text>
+                    </View>
+                    <View className="self-start rounded-full bg-[#ecfdf3] px-3 py-1">
+                      <Text className="text-xs font-bold uppercase text-[#15803d]">
+                        {Number(primaryIncomingRequest.passengerCount || 1) === 1
+                          ? '1 person'
+                          : `${Number(primaryIncomingRequest.passengerCount || 1)} people`}
+                      </Text>
+                    </View>
                   </View>
                 </View>
                 <View className="items-end">
@@ -2145,6 +2166,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                         </Text>
                         <Text className="mt-0.5 text-sm font-semibold text-[#2f73c9]">
                           {primaryIncomingRequest?.tierName || 'Trust Express'}
+                          {` · ${Number(primaryIncomingRequest?.passengerCount || 1) === 1 ? '1 person' : `${Number(primaryIncomingRequest?.passengerCount || 1)} people`}`}
                         </Text>
                       </View>
                     </View>

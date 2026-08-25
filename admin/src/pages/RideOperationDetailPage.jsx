@@ -609,6 +609,14 @@ export default function RideOperationDetailPage() {
           <div className="space-y-3">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
               <DetailField label="Rider" value={ride.rider} />
+              <DetailField
+                label="People on trip"
+                value={
+                  Number(ride.passengerCount || 0) === 1
+                    ? '1 person'
+                    : `${Number(ride.passengerCount || 0) || '-'} people`
+                }
+              />
               <DetailField label="Driver" value={ride.driver} />
               <DetailField label="Status" value={ride.status} />
               <DetailField label="Tier" value={ride.tierName || ride.tierKey} />

@@ -599,6 +599,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.passenger_user_id,
          r.passenger_name,
          r.passenger_phone,
+         r.passenger_count,
          r.requested_tier_key,
          r.requested_tier_name,
          r.pickup_label,
@@ -657,6 +658,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         publicId: row.public_id,
         passengerName: getPassengerDisplayName(row.passenger_name),
         passengerPhone: row.passenger_phone || null,
+        passengerCount: Number(row.passenger_count || 1),
         passengerProfile: {
           firstName: null,
           lastName: null,
@@ -987,6 +989,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
          passenger_user_id,
          passenger_name,
          passenger_phone,
+         passenger_count,
          pickup_label,
          pickup_lat,
          pickup_lng,
@@ -1047,6 +1050,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         publicId: ride.public_id,
         passengerName: getPassengerDisplayName(ride.passenger_name),
         passengerPhone: ride.passenger_phone || null,
+        passengerCount: Number(ride.passenger_count || 1),
         pickupLabel: ride.pickup_label,
         pickupCoordinate: {
           latitude: Number(ride.pickup_lat),

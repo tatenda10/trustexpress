@@ -10,6 +10,7 @@ import RideOperationDetailPage from './pages/RideOperationDetailPage'
 import PanicAlertsPage from './pages/PanicAlertsPage'
 import LostItemsPage from './pages/LostItemsPage'
 import RideSafetyPinSettingsPage from './pages/RideSafetyPinSettingsPage'
+import PushNotificationsPage from './pages/PushNotificationsPage'
 import LiveMapPage from './pages/LiveMapRealtimePage'
 import DriversPage from './pages/DriversPage'
 import DriverDetailsPage from './pages/DriverDetailsPage'
@@ -119,6 +120,10 @@ function AppRoutes() {
         <Route
           path="ride-safety-pin"
           element={<PermissionRoute permission="ride_ops.manage"><RideSafetyPinSettingsPage /></PermissionRoute>}
+        />
+        <Route
+          path="push-notifications"
+          element={<PermissionRoute permission="notifications.manage"><PushNotificationsPage /></PermissionRoute>}
         />
         <Route
           path="live-map"

@@ -12,8 +12,8 @@ import {
 const NEARBY_RIDE_SOUND_FILE = 'notificationaudio.mpeg';
 const DISTANT_RIDE_SOUND_FILE = 'sound2.mpeg';
 // Android channel sounds cannot be changed after channel creation, so use new IDs.
-const DISTANT_RIDE_CHANNEL_ID = 'ride-requests-distant-v2';
-const NEARBY_RIDE_CHANNEL_ID = 'ride-requests-nearby-v2';
+const DISTANT_RIDE_CHANNEL_ID = 'ride-requests-distant-v3';
+const NEARBY_RIDE_CHANNEL_ID = 'ride-requests-nearby-v3';
 const RIDE_REQUEST_NOTIFICATION_TYPE = 'driver_new_ride_request';
 
 const rideRequestNotificationIdsByRide = new Map();

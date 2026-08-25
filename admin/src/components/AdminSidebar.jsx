@@ -11,6 +11,7 @@ const navSections = [
       { id: 'overview', label: 'Overview', icon: GridIcon, to: '/dashboard/overview', permission: 'overview.read' },
       { id: 'verification', label: 'Driver Verification', icon: FolderIcon, to: '/dashboard/driver-verification', permission: 'verification.read' },
       { id: 'rides', label: 'Ride Operations', icon: BriefcaseIcon, to: '/dashboard/ride-operations', permission: 'ride_ops.read' },
+      { id: 'push-notifications', label: 'Push Notifications', icon: BriefcaseIcon, to: '/dashboard/push-notifications', permission: 'notifications.manage' },
       { id: 'live-map', label: 'Live Map', icon: CatalogIcon, to: '/dashboard/live-map', permission: 'live_map.read' },
     ],
   },

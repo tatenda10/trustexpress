@@ -4,6 +4,22 @@ import path from 'path';
 
 const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 
+function androidSoundName(sound) {
+  const raw = String(sound || 'default').trim();
+  if (!raw || raw === 'default') return 'default';
+  return raw.replace(/\.(mpeg|mp3|wav|ogg|m4a)$/i, '');
+}
+
+function stringifyPushData(data) {
+  if (!data || typeof data !== 'object') return {};
+  const next = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined || value === null) continue;
+    next[key] = typeof value === 'string' ? value : String(value);
+  }
+  return next;
+}
+
 const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS
   ? path.isAbsolute(process.env.GOOGLE_APPLICATION_CREDENTIALS)
     ? process.env.GOOGLE_APPLICATION_CREDENTIALS
@@ -50,6 +66,15 @@ export async function sendFcmNotifications(messages) {
     payload.map(async (message) => {
       if (!message.to) return null;
 
+      const isRideRequest = String(message.data?.type || '') === 'driver_new_ride_request';
+      const soundName = androidSoundName(
+        message.android?.notification?.sound
+        || message.sound
+        || (isRideRequest ? 'notificationaudio' : 'default')
+      );
+      const clickAction = message.android?.notification?.clickAction
+        || (isRideRequest ? 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST' : null);
+
       const fcmMessage = {
         token: message.to,
         notification: {
@@ -62,18 +87,17 @@ export async function sendFcmNotifications(messages) {
             ? { collapseKey: message.android.collapseKey }
             : {}),
           notification: {
-            channelId: message.android?.channelId || 'ride-requests',
-            sound: message.android?.notification?.sound || 'default',
+            channelId: message.android?.channelId || (isRideRequest ? 'ride-requests-nearby-v3' : 'default'),
+            sound: soundName,
+            defaultSound: soundName === 'default',
             ...(message.android?.notification?.tag
               ? { tag: message.android.notification.tag }
               : {}),
-            clickAction:
-              message.android?.notification?.clickAction
-              || 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
+            ...(clickAction ? { clickAction } : {}),
             defaultVibrateTimings: true,
           },
         },
-        data: message.data || {},
+        data: stringifyPushData(message.data),
       };
 
       try {

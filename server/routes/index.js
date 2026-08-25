@@ -25,6 +25,7 @@ import adminDriverDiscountReimbursementsRouter from './adminDriverDiscountReimbu
 import adminDriverWalletRouter from './adminDriverWallet.js';
 import adminPassengerReferralsRouter from './adminPassengerReferrals.js';
 import adminRideSafetyPinRouter from './adminRideSafetyPin.js';
+import adminNotificationsRouter from './adminNotifications.js';
 import agentAuthRouter from './agentAuth.js';
 import agentInvitesRouter from './agentInvites.js';
 import agentRecruitmentRouter from './agentRecruitment.js';
@@ -63,6 +64,7 @@ router.use('/admin/overview', adminOverviewRouter);
 router.use('/admin/reports', adminReportsRouter);
 router.use('/admin/rides', adminRidesRouter);
 router.use('/admin/ride-safety-pin', adminRideSafetyPinRouter);
+router.use('/admin/notifications', adminNotificationsRouter);
 router.use('/admin/support', adminSupportRouter);
 router.use('/agent/auth', agentAuthRouter);
 router.use('/agent', agentInvitesRouter);
