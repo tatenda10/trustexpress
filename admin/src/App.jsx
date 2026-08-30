@@ -27,6 +27,7 @@ import ReportsPage from './pages/ReportsPage'
 import VehicleTiersPage from './pages/VehicleTiersPage'
 import VehicleCatalogPage from './pages/VehicleCatalogPage'
 import AgentRewardsPage from './pages/AgentRewardsPage'
+import CaptainRewardsPage from './pages/CaptainRewardsPage'
 import SupportInboxPage from './pages/SupportInboxPage'
 import SupportAgentPage from './pages/SupportAgentPage'
 import DiscountCodesPage from './pages/DiscountCodesPage'
@@ -176,6 +177,10 @@ function AppRoutes() {
         <Route
           path="vehicle-tiers"
           element={<PermissionRoute permission="pricing.read"><VehicleTiersPage /></PermissionRoute>}
+        />
+        <Route
+          path="captain-rewards"
+          element={<PermissionRoute permission="payouts.read"><CaptainRewardsPage /></PermissionRoute>}
         />
         <Route
           path="agent-rewards"

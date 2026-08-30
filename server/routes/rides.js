@@ -522,8 +522,8 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         to: token,
         title: 'New ride request',
         body: notificationBody,
-        sound: 'notificationaudio.mpeg',
-        channelId: 'ride-requests-nearby-v3',
+        sound: 'near_rides.mpeg',
+        channelId: 'ride-requests-nearby-v4',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -546,7 +546,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         sound: 'sound2.mpeg',
-        channelId: 'ride-requests-distant-v3',
+        channelId: 'ride-requests-distant-v4',
         data: {
           type: 'driver_new_ride_request',
           rideRequestId,
@@ -569,10 +569,10 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests-nearby-v3',
+          channelId: 'ride-requests-nearby-v4',
           collapseKey: 'driver-ride-request',
           notification: {
-            sound: 'notificationaudio',
+            sound: 'near_rides',
             tag: 'driver-ride-request',
             clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
           },
@@ -600,7 +600,7 @@ async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLab
         title: 'New ride request',
         body: notificationBody,
         android: {
-          channelId: 'ride-requests-distant-v3',
+          channelId: 'ride-requests-distant-v4',
           collapseKey: 'driver-ride-request',
           notification: {
             sound: 'sound2',

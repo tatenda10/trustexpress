@@ -4,6 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
+import { calculateDistanceKm, getHeadingAlongRoute } from '../../lib/mapVehicleHeading';
 import * as Speech from 'expo-speech';
 import * as Location from 'expo-location';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup } from '../../api';
@@ -40,52 +42,6 @@ function toRadians(value) {
 
 function toDegrees(value) {
   return (value * 180) / Math.PI;
-}
-
-function calculateDistanceKm(start, end) {
-  if (!start || !end) return 0;
-  const earthRadiusKm = 6371;
-  const dLat = toRadians(end.latitude - start.latitude);
-  const dLng = toRadians(end.longitude - start.longitude);
-  const lat1 = toRadians(start.latitude);
-  const lat2 = toRadians(end.latitude);
-  const a = (
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
-  );
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadiusKm * c;
-}
-
-/** Bearing in degrees (0 = north, 90 = east) from `from` toward `to`. */
-function calculateBearingDegrees(from, to) {
-  const start = normalizeCoordinate(from);
-  const end = normalizeCoordinate(to);
-  if (!start || !end) return 0;
-  const lat1 = toRadians(start.latitude);
-  const lat2 = toRadians(end.latitude);
-  const dLng = toRadians(end.longitude - start.longitude);
-  const y = Math.sin(dLng) * Math.cos(lat2);
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
-  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
-}
-
-function getHeadingAlongRoute(routeCoordinates, currentCoordinate, fallbackTarget) {
-  const current = normalizeCoordinate(currentCoordinate);
-  const route = normalizeCoordinates(routeCoordinates);
-  if (!current) return 0;
-
-  if (route.length >= 2) {
-    const nearestIndex = findNearestRouteIndex(route, current);
-    const lookAhead = route[Math.min(nearestIndex + 2, route.length - 1)];
-    if (lookAhead && calculateDistanceKm(current, lookAhead) > 0.005) {
-      return calculateBearingDegrees(current, lookAhead);
-    }
-  }
-
-  const target = normalizeCoordinate(fallbackTarget);
-  if (target) return calculateBearingDegrees(current, target);
-  return 0;
 }
 
 function normalizeCoordinate(value) {
@@ -307,8 +263,24 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         if (!token) throw new Error('Not signed in');
         const data = await getPassengerRideRequestStatus(token, rideRequestId);
         if (!active) return;
-        setRideStatus(data?.rideRequest || null);
-        setDriver(data?.assignedDriver || initialDriver || null);
+        setRideStatus((current) => {
+          const next = data?.rideRequest || null;
+          if (!next) return current;
+          if (!current) return next;
+          return {
+            ...next,
+            driverCoordinate: next.driverCoordinate || current.driverCoordinate,
+          };
+        });
+        setDriver((current) => {
+          const next = data?.assignedDriver || initialDriver || null;
+          if (!next) return current;
+          if (!current) return next;
+          return {
+            ...next,
+            coordinate: next.coordinate || current.coordinate,
+          };
+        });
         const savedRating = Number(data?.rideRequest?.passengerDriverRating || 0);
         const savedReview = String(data?.rideRequest?.passengerDriverReview || '');
         if (!ratingDraftTouchedRef.current || savedRating > 0) {
@@ -364,21 +336,33 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             || payload?.safetyPinAttempts !== undefined
             || payload?.safetyPinLocked !== undefined;
           if ((nextStatus && !isPickupConfirmation) || nextDriverCoordinate || hasConfirmationUpdate || hasSafetyPinUpdate) {
-            setRideStatus((current) => (current ? {
-              ...current,
-              ...(nextStatus && !isPickupConfirmation ? { status: nextStatus } : null),
-              stage: nextStage || current.stage,
-              ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
-              ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
-              ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
-              ...(payload?.safetyPinVerified ? {
-                safetyPinVerified: true,
-                safetyPinVerifiedAt: payload.safetyPinVerifiedAt || current.safetyPinVerifiedAt,
-                safetyPin: null,
-              } : {}),
-              ...(payload?.safetyPinAttempts !== undefined ? { safetyPinAttempts: Number(payload.safetyPinAttempts || 0) } : {}),
-              ...(payload?.safetyPinLocked !== undefined ? { safetyPinLocked: Boolean(payload.safetyPinLocked) } : {}),
-            } : current));
+            setRideStatus((current) => {
+              const base = current || {
+                id: rideRequestId,
+                stage: 'driver_on_the_way',
+              };
+              return {
+                ...base,
+                ...(nextStatus && !isPickupConfirmation ? { status: nextStatus } : null),
+                stage: nextStage || base.stage || 'driver_on_the_way',
+                ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
+                ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
+                ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
+                ...(payload?.safetyPinVerified ? {
+                  safetyPinVerified: true,
+                  safetyPinVerifiedAt: payload.safetyPinVerifiedAt || base.safetyPinVerifiedAt,
+                  safetyPin: null,
+                } : {}),
+                ...(payload?.safetyPinAttempts !== undefined ? { safetyPinAttempts: Number(payload.safetyPinAttempts || 0) } : {}),
+                ...(payload?.safetyPinLocked !== undefined ? { safetyPinLocked: Boolean(payload.safetyPinLocked) } : {}),
+              };
+            });
+            if (nextDriverCoordinate) {
+              setDriver((current) => (current ? {
+                ...current,
+                coordinate: nextDriverCoordinate,
+              } : current));
+            }
           }
           setRealtimeSignal((current) => current + 1);
         };
@@ -649,7 +633,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       activeRouteCoordinates,
       driverCoordinate,
       stage === 'on_trip' ? activeTarget : pickupCoordinate,
-    ),
+    ) ?? 0,
     [activeRouteCoordinates, activeTarget, driverCoordinate, pickupCoordinate, stage],
   );
 
@@ -924,27 +908,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           pitchEnabled={false}
         >
           {isValidCoordinate(driverCoordinate) ? (
-            <Marker
+            <DriverVehicleMapMarker
               coordinate={driverCoordinate}
-              title="Driver"
-              anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={false}
-            >
-              <View className="items-center justify-center">
-                <View
-                  className="h-12 w-12 items-center justify-center rounded-full border-4 border-white"
-                  style={{
-                    backgroundColor: PRIMARY_BLUE,
-                    transform: [{ rotate: `${vehicleHeadingDegrees}deg` }],
-                  }}
-                >
-                  <Ionicons name="airplane" size={22} color="#fff" />
-                </View>
-                <View className="mt-1 rounded-full bg-white px-2 py-1">
-                  <Text className="text-xs font-bold text-gray-900">{liveEtaText}</Text>
-                </View>
-              </View>
-            </Marker>
+              headingDegrees={vehicleHeadingDegrees}
+              etaLabel={liveEtaText}
+            />
           ) : null}
           {isValidCoordinate(pickupCoordinate) ? (
             <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />

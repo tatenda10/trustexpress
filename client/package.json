@@ -1,6 +1,6 @@
 {
   "name": "client",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "main": "index.js",
   "scripts": {
     "start": "expo start",
@@ -22,7 +22,6 @@
     "@babel/core": "^7.29.0",
     "@clerk/clerk-expo": "^2.19.25",
     "@expo/vector-icons": "^15.0.3",
-    "@maplibre/maplibre-react-native": "^11.1.1",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-firebase/analytics": "^23.8.6",
     "@react-native-firebase/app": "^23.8.6",

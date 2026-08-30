@@ -9,11 +9,11 @@ import {
   requestPermission,
 } from '@react-native-firebase/messaging';
 
-const NEARBY_RIDE_SOUND_FILE = 'notificationaudio.mpeg';
+export const NEARBY_RIDE_SOUND_FILE = 'near_rides.mpeg';
 const DISTANT_RIDE_SOUND_FILE = 'sound2.mpeg';
 // Android channel sounds cannot be changed after channel creation, so use new IDs.
-const DISTANT_RIDE_CHANNEL_ID = 'ride-requests-distant-v3';
-const NEARBY_RIDE_CHANNEL_ID = 'ride-requests-nearby-v3';
+const DISTANT_RIDE_CHANNEL_ID = 'ride-requests-distant-v4';
+const NEARBY_RIDE_CHANNEL_ID = 'ride-requests-nearby-v4';
 const RIDE_REQUEST_NOTIFICATION_TYPE = 'driver_new_ride_request';
 
 const rideRequestNotificationIdsByRide = new Map();
@@ -89,13 +89,18 @@ export async function clearRideRequestNotifications({ rideRequestId } = {}) {
 }
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    // Keep only the normal OS foreground banner behavior.
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    const data = notification?.request?.content?.data || {};
+    const isDriverRideRequest = String(data?.type || '') === 'driver_new_ride_request';
+    return {
+      // Keep only the normal OS foreground banner behavior.
+      shouldShowBanner: true,
+      shouldShowList: true,
+      // Ride-request audio is handled by expo-av (foreground) or overlay/fullscreen (background).
+      shouldPlaySound: !isDriverRideRequest,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 export async function registerForPushNotificationsAsync() {
@@ -140,7 +145,7 @@ export async function registerForPushNotificationsAsync() {
       await Notifications.setNotificationChannelAsync(NEARBY_RIDE_CHANNEL_ID, {
         name: 'Nearby ride requests',
         importance: Notifications.AndroidImportance.MAX,
-        sound: NEARBY_RIDE_SOUND_FILE,
+        // Sound is played by overlay/fullscreen/foreground alert — avoid doubling with push/local notifications.
         vibrationPattern: [0, 500, 180, 500, 180, 500],
         bypassDnd: true,
         lightColor: '#2f73c9',
@@ -149,7 +154,6 @@ export async function registerForPushNotificationsAsync() {
       await Notifications.setNotificationChannelAsync(DISTANT_RIDE_CHANNEL_ID, {
         name: 'Distant ride requests',
         importance: Notifications.AndroidImportance.HIGH,
-        sound: DISTANT_RIDE_SOUND_FILE,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2f73c9',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
@@ -208,6 +212,7 @@ export async function showLocalRideNotification({
   body = 'A new ride request is waiting for you.',
   data = {},
   priorityType = 'standard',
+  playSound = true,
 } = {}) {
   try {
     const rideRequestId = data?.rideRequestId;
@@ -215,11 +220,19 @@ export async function showLocalRideNotification({
     await clearRideRequestNotifications();
 
     const usePriorityChannel = String(priorityType || '').toLowerCase() === 'priority';
+    const isDriverRideRequest = String(data?.type || '') === 'driver_new_ride_request';
+    const shouldPlaySound = playSound && (
+      Platform.OS === 'ios'
+        ? true
+        : !isDriverRideRequest
+    );
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
         title,
         body,
-        sound: usePriorityChannel ? NEARBY_RIDE_SOUND_FILE : DISTANT_RIDE_SOUND_FILE,
+        ...(shouldPlaySound
+          ? { sound: usePriorityChannel ? NEARBY_RIDE_SOUND_FILE : DISTANT_RIDE_SOUND_FILE }
+          : { sound: false }),
         priority: Notifications.AndroidNotificationPriority.MAX,
         channelId: usePriorityChannel ? NEARBY_RIDE_CHANNEL_ID : DISTANT_RIDE_CHANNEL_ID,
         data,

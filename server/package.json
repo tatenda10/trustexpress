@@ -46,6 +46,7 @@
     "db:migrate:rating-performance": "node scripts/run-migration.js sql/migrations/060_rating_performance_events.sql",
     "db:migrate:admin-push-broadcasts": "node scripts/run-migration.js sql/migrations/061_add_admin_push_broadcasts.sql",
     "db:migrate:ride-passenger-count": "node scripts/run-migration.js sql/migrations/062_add_ride_passenger_count.sql",
+    "db:migrate:captain-rewards": "node scripts/run-migration.js sql/migrations/063_add_captain_rewards.sql",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
     "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",
     "db:migrate:agent-auth": "node scripts/run-migration.js sql/migrations/022_add_agent_auth_tables.sql",

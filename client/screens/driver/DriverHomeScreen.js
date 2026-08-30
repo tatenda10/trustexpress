@@ -47,7 +47,9 @@ const REQUEST_REFRESH_INTERVAL_MS = 2500;
 const CURRENT_RIDE_REFRESH_INTERVAL_MS = 15000;
 const AVAILABILITY_TOGGLE_DEBOUNCE_MS = 2500;
 const DB_UPDATE_INTERVAL_MS = 90000;
+const DB_UPDATE_INTERVAL_ACTIVE_RIDE_MS = 5000;
 const DB_UPDATE_MIN_DISTANCE_KM = 0.3;
+const DB_UPDATE_MIN_DISTANCE_ACTIVE_RIDE_KM = 0.05;
 const FALLBACK_DRIVER_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 const INITIAL_REGION = {
   latitude: -20.1535,
@@ -335,6 +337,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const lastAvailabilityAttemptRef = useRef({ target: null, at: 0 });
   const forwardedRideIdRef = useRef(null);
   const lastDbLocationRef = useRef({ coordinate: null, at: 0 });
+  const currentRideRef = useRef(null);
   const lastLabelFetchRef = useRef({ coordinate: null, at: 0 });
   const LABEL_UPDATE_INTERVAL_MS = 120000; // at most every 2 minutes
   const LABEL_UPDATE_MIN_DISTANCE_KM = 0.3; // or every ~300m
@@ -451,6 +454,10 @@ const DriverHomeScreen = ({ navigation, route }) => {
       localSocket?.__driverHomeCleanup?.();
     };
   }, [isFocused, loadCurrentRide, pendingSelectionRide?.id]);
+
+  useEffect(() => {
+    currentRideRef.current = currentRide;
+  }, [currentRide]);
 
   useEffect(() => {
     const shouldKeepAwake = isOnline || !!currentRide || !!pendingSelectionRide;
@@ -760,6 +767,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
               title: 'New ride request',
               body: notificationBody,
               priorityType: Number(newestRequest?.driverDistanceKm || 0) <= PRIORITY_DRIVER_DISTANCE_KM ? 'priority' : 'standard',
+              playSound: Platform.OS === 'ios' && AppState.currentState !== 'active',
               data: {
                 type: 'driver_new_ride_request',
                 rideRequestId: newestRequest?.id || null,
@@ -893,7 +901,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
         }
         if (!incomingRideSoundRef.current) {
           const { sound } = await Audio.Sound.createAsync(
-            require('../../assets/notificationaudio.mpeg'),
+            require('../../assets/near_rides.mpeg'),
             { shouldPlay: false, volume: 1.0, isLooping: false },
           );
           incomingRideSoundRef.current = sound;
@@ -1371,13 +1379,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
             longitude: nextCoordinate.longitude,
           }));
 
-          // Throttle DB writes: only update backend at most every N seconds or every M km
+          // Throttle DB writes: sync faster while heading to pickup / on trip.
           const now = Date.now();
           const last = lastDbLocationRef.current;
-          const timeOk = now - last.at >= DB_UPDATE_INTERVAL_MS;
+          const hasActiveRide = Boolean(currentRideRef.current?.id);
+          const dbIntervalMs = hasActiveRide ? DB_UPDATE_INTERVAL_ACTIVE_RIDE_MS : DB_UPDATE_INTERVAL_MS;
+          const dbDistanceKm = hasActiveRide ? DB_UPDATE_MIN_DISTANCE_ACTIVE_RIDE_KM : DB_UPDATE_MIN_DISTANCE_KM;
+          const timeOk = now - last.at >= dbIntervalMs;
           const distanceOk =
             !last.coordinate ||
-            calculateDistanceKm(last.coordinate, nextCoordinate) >= DB_UPDATE_MIN_DISTANCE_KM;
+            calculateDistanceKm(last.coordinate, nextCoordinate) >= dbDistanceKm;
           if (!timeOk && !distanceOk) return;
 
           if (locationSyncInFlightRef.current) return;

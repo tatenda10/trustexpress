@@ -21,6 +21,8 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [averageRating, setAverageRating] = useState(null);
   const [ratingCount, setRatingCount] = useState(0);
   const [completedRides, setCompletedRides] = useState(0);
+  const [captainStatus, setCaptainStatus] = useState(null);
+  const [loadingCaptainStatus, setLoadingCaptainStatus] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [profileData, setProfileData] = useState(null);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
@@ -114,6 +116,26 @@ const DriverAccountScreen = ({ navigation, route }) => {
     };
 
     loadRatingSummary();
+
+    const loadCaptainStatus = async () => {
+      try {
+        setLoadingCaptainStatus(true);
+        const token = await getToken();
+        if (!token || cancelled) return;
+        const res = await fetch(getApiUrl('/api/drivers/captain-status'), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        setCaptainStatus(data);
+      } catch {
+        if (!cancelled) setCaptainStatus(null);
+      } finally {
+        if (!cancelled) setLoadingCaptainStatus(false);
+      }
+    };
+
+    loadCaptainStatus();
 
     return () => {
       cancelled = true;
@@ -582,6 +604,73 @@ const DriverAccountScreen = ({ navigation, route }) => {
               {verificationHeadline}
             </Text>
           </View>
+        </View>
+
+        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Captain rewards</Text>
+        <View className="mb-5 overflow-hidden rounded-[28px] bg-white px-5 py-5">
+          {loadingCaptainStatus ? (
+            <View className="items-center py-4">
+              <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+            </View>
+          ) : captainStatus?.enabled === false ? (
+            <Text className="text-sm text-gray-500">Captain rewards are not active right now.</Text>
+          ) : (
+            <>
+              <View className="flex-row items-center justify-between">
+                <View>
+                  <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-gray-500">Current tier</Text>
+                  <Text className="mt-1 text-lg font-bold text-gray-900">{captainStatus?.tierName || 'No tier yet'}</Text>
+                </View>
+                <View
+                  className="rounded-full px-3 py-1.5"
+                  style={{ backgroundColor: `${captainStatus?.badgeColor || PRIMARY_BLUE}22` }}
+                >
+                  <Text className="text-xs font-semibold" style={{ color: captainStatus?.badgeColor || PRIMARY_BLUE }}>
+                    {captainStatus?.rewardStatusLabel || 'In Progress'}
+                  </Text>
+                </View>
+              </View>
+              <View className="mt-4">
+                <View className="mb-2 flex-row items-center justify-between">
+                  <Text className="text-sm text-gray-600">
+                    {captainStatus?.qualifyingRides || 0} qualifying ride{(captainStatus?.qualifyingRides || 0) === 1 ? '' : 's'} this cycle
+                  </Text>
+                  <Text className="text-sm font-semibold text-gray-800">
+                    {captainStatus?.cycle?.daysRemaining ?? '—'} day{(captainStatus?.cycle?.daysRemaining || 0) === 1 ? '' : 's'} left
+                  </Text>
+                </View>
+                <View className="h-2 overflow-hidden rounded-full bg-gray-100">
+                  <View
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${Math.min(100, Number(captainStatus?.progressPercent || 0))}%`,
+                      backgroundColor: captainStatus?.badgeColor || PRIMARY_BLUE,
+                    }}
+                  />
+                </View>
+                {captainStatus?.nextTierName ? (
+                  <Text className="mt-2 text-xs text-gray-500">
+                    {captainStatus.ridesToNextTier} more ride{(captainStatus.ridesToNextTier || 0) === 1 ? '' : 's'} to reach {captainStatus.nextTierName}
+                  </Text>
+                ) : null}
+              </View>
+              <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-[#f8fafc] px-4 py-3">
+                <Text className="text-sm text-gray-600">Cycle reward (USD promo float)</Text>
+                <Text className="text-base font-bold text-gray-900">
+                  ${Number(captainStatus?.currentRewardUsd || 0).toFixed(2)}
+                </Text>
+              </View>
+              {captainStatus?.eligible === false ? (
+                <Text className="mt-3 text-xs text-amber-700">
+                  Complete verification and stay in good standing to earn Captain rewards.
+                </Text>
+              ) : (
+                <Text className="mt-3 text-xs text-gray-500">
+                  Rewards credit as promotional USD float at cycle end and apply to service fees first.
+                </Text>
+              )}
+            </>
+          )}
         </View>
 
         <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Verification</Text>

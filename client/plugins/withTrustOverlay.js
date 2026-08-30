@@ -395,7 +395,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     stopRequestAlert();
     try {
       int soundResId = reactContext.getResources().getIdentifier(
-        "notificationaudio",
+        "near_rides",
         "raw",
         reactContext.getPackageName()
       );
@@ -922,7 +922,7 @@ public class RideRequestFullScreenActivity extends Activity {
   private void startRequestAlert() {
     stopRequestAlert();
     try {
-      int soundResId = getResources().getIdentifier("notificationaudio", "raw", getPackageName());
+      int soundResId = getResources().getIdentifier("near_rides", "raw", getPackageName());
       if (soundResId != 0) {
         requestSoundPlayer = MediaPlayer.create(this, soundResId);
       }
@@ -1029,6 +1029,17 @@ public class RideRequestFullScreenActivity extends Activity {
 `;
 }
 
+function copyOverlaySoundAssets(projectRoot, platformProjectRoot) {
+  const rawDir = path.join(platformProjectRoot, 'app', 'src', 'main', 'res', 'raw');
+  fs.mkdirSync(rawDir, { recursive: true });
+  const candidates = [
+    path.join(projectRoot, 'assets', 'near_rides.mpeg'),
+  ];
+  const sourcePath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!sourcePath) return;
+  fs.copyFileSync(sourcePath, path.join(rawDir, 'near_rides.mpeg'));
+}
+
 function withTrustOverlay(config) {
   config = AndroidConfig.Permissions.withPermissions(config, [
     'android.permission.SYSTEM_ALERT_WINDOW',
@@ -1050,6 +1061,7 @@ function withTrustOverlay(config) {
     fs.writeFileSync(path.join(packagePath, 'TrustOverlayModule.java'), overlayModuleSource(androidPackage));
     fs.writeFileSync(path.join(packagePath, 'TrustOverlayPackage.java'), overlayPackageSource(androidPackage));
     fs.writeFileSync(path.join(packagePath, 'RideRequestFullScreenActivity.java'), fullScreenActivitySource(androidPackage));
+    copyOverlaySoundAssets(config.modRequest.projectRoot, config.modRequest.platformProjectRoot);
 
     const manifestPath = path.join(
       config.modRequest.platformProjectRoot,

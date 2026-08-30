@@ -6,7 +6,7 @@
         "expo-notifications",
         {
           "sounds": [
-            "./assets/notificationaudio.mpeg",
+            "./assets/near_rides.mpeg",
             "./assets/sound2.mpeg"
           ]
         }
@@ -24,7 +24,7 @@
     ],
     "name": "Trust Express",
     "slug": "trust-express",
-    "version": "2.0.0",
+    "version": "3.0.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },

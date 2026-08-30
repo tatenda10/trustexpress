@@ -31,6 +31,7 @@ import {
   deductCommissionForCompletedRide,
   getDriverWalletStatus,
 } from '../lib/driver-wallet.js';
+import { recordCaptainQualifyingRide, buildCaptainStatusForDriver } from '../lib/captain-rewards.js';
 import {
   getDriverIncomeDashboard,
   setDriverIncomeGoal,
@@ -1420,6 +1421,14 @@ router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, r
       passengerName: getPassengerDisplayName(rideBeforeComplete.passenger_name),
     });
 
+    recordCaptainQualifyingRide({
+      driverUserId: req.userId,
+      rideRequestId,
+      completedAt: new Date(),
+    }).catch((captainErr) => {
+      console.error('recordCaptainQualifyingRide', captainErr);
+    });
+
     const [ride] = await query(
       'SELECT passenger_user_id FROM ride_requests WHERE id = ? AND driver_user_id = ? LIMIT 1',
       [rideRequestId, req.userId]
@@ -1595,6 +1604,19 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
     return res.json({ ok: true });
   } catch (err) {
     console.error('PATCH /api/drivers/current-ride/:rideRequestId/cancel', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/captain-status', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const status = await buildCaptainStatusForDriver(req.userId);
+    return res.json(status);
+  } catch (err) {
+    console.error('GET /api/drivers/captain-status', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });

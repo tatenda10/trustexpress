@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, TextInput, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline } from '../../../components/maps/MapViewCompat';
+import DriverVehicleMapMarker from '../../../components/maps/DriverVehicleMapMarker';
 
 export function DriverTripLoadingState({ color }) {
   return (
@@ -219,22 +220,10 @@ export function DriverTripMapPanel({
         showsTraffic={true}
       >
         {driverCoordinate ? (
-          <Marker
+          <DriverVehicleMapMarker
             coordinate={driverCoordinate}
-            title="Driver"
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
-          >
-            <View
-              className="h-12 w-12 items-center justify-center rounded-full border-4 border-white"
-              style={{
-                backgroundColor: primaryBlue,
-                transform: [{ rotate: `${Number(vehicleHeadingDegrees) || 0}deg` }],
-              }}
-            >
-              <Ionicons name="airplane" size={22} color="#fff" />
-            </View>
-          </Marker>
+            headingDegrees={vehicleHeadingDegrees}
+          />
         ) : null}
         {pickupCoordinate ? (
           <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />

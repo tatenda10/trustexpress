@@ -70,7 +70,7 @@ export async function sendFcmNotifications(messages) {
       const soundName = androidSoundName(
         message.android?.notification?.sound
         || message.sound
-        || (isRideRequest ? 'notificationaudio' : 'default')
+        || (isRideRequest ? 'near_rides' : 'default')
       );
       const clickAction = message.android?.notification?.clickAction
         || (isRideRequest ? 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST' : null);
@@ -87,7 +87,7 @@ export async function sendFcmNotifications(messages) {
             ? { collapseKey: message.android.collapseKey }
             : {}),
           notification: {
-            channelId: message.android?.channelId || (isRideRequest ? 'ride-requests-nearby-v3' : 'default'),
+            channelId: message.android?.channelId || (isRideRequest ? 'ride-requests-nearby-v4' : 'default'),
             sound: soundName,
             defaultSound: soundName === 'default',
             ...(message.android?.notification?.tag

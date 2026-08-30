@@ -8,6 +8,7 @@ export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
 export const DRIVER_WALLET_CURRENCY = 'ZAR';
 const LOW_BALANCE_MESSAGE = 'Your Trust Express Wallet balance is too low. Please top up your wallet to continue receiving ride requests.';
 const PAYMENTS_UNAVAILABLE_MESSAGE = 'Wallet top-ups are not available yet. Please check back soon.';
+const CAPTAIN_PROMO_CURRENCY = 'USD';
 
 function normalizeMoney(value) {
   const amount = Number(value || 0);
@@ -28,7 +29,7 @@ function makeReference(driverUserId) {
 
 async function ensureDriverWallet(driverUserId, connection = null) {
   const conn = connection || null;
-  const selectSql = `SELECT driver_user_id, available_balance, owner_email, owner_full_name, account_deleted_at, created_at, updated_at
+  const selectSql = `SELECT driver_user_id, available_balance, promotional_balance, owner_email, owner_full_name, account_deleted_at, created_at, updated_at
                      FROM driver_wallets
                      WHERE driver_user_id = ?
                      LIMIT 1`;
@@ -69,13 +70,15 @@ async function ensureDriverWallet(driverUserId, connection = null) {
 
 function mapWalletStatus(walletRow, settings) {
   const availableBalance = normalizeMoney(walletRow?.available_balance || 0);
+  const promotionalBalance = normalizeMoney(walletRow?.promotional_balance || 0);
   const minimumRequiredBalance = normalizeMoney(settings?.minimumBalanceUsd || 0);
   const paymentsEnabled = settings?.paymentsEnabled === true;
   // Balance gating only applies when the payments system is live.
   const walletEnabled = paymentsEnabled && settings?.walletEnabled !== false;
-  const sufficientBalance = !walletEnabled || availableBalance >= minimumRequiredBalance;
+  const sufficientBalance = !walletEnabled || (availableBalance + promotionalBalance) >= minimumRequiredBalance;
   return {
     availableBalance,
+    promotionalBalance,
     currency: settings?.currency || DRIVER_WALLET_CURRENCY,
     minimumRequiredBalance,
     topupMinAmount: normalizeMoney(settings?.topupMinAmount || 1),
@@ -125,7 +128,7 @@ export async function getDriverWalletSummariesByUserIds(driverUserIds = []) {
 
   const placeholders = ids.map(() => '?').join(',');
   const rows = await query(
-    `SELECT driver_user_id, available_balance, created_at, updated_at
+    `SELECT driver_user_id, available_balance, promotional_balance, created_at, updated_at
      FROM driver_wallets
      WHERE driver_user_id IN (${placeholders})`,
     ids
@@ -207,7 +210,7 @@ export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}
   const [summaryRow] = await query(
     `SELECT
        COALESCE(SUM(CASE WHEN transaction_type = 'top_up_credit' THEN amount ELSE 0 END), 0) AS total_topups,
-       COALESCE(SUM(CASE WHEN transaction_type = 'commission_debit' THEN ABS(amount) ELSE 0 END), 0) AS total_commission_paid
+       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'promo_commission_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_commission_paid
      FROM driver_wallet_transactions
      WHERE driver_user_id = ?`,
     [driverUserId]
@@ -659,6 +662,105 @@ export async function creditDriverWalletManual({
   });
 }
 
+/**
+ * Credits non-withdrawable promotional float from Captain rewards.
+ * Idempotent per driver + cycle via source_type/source_id.
+ */
+export async function creditCaptainPromotionalFloat({
+  driverUserId,
+  amount,
+  cycleId,
+  description = 'Captain reward promotional credit',
+} = {}) {
+  const settings = await getDriverWalletSettings();
+  const creditedAmount = normalizeMoney(amount);
+  if (!(creditedAmount > 0)) {
+    throw buildWalletError('Captain reward amount must be greater than zero');
+  }
+  const currency = CAPTAIN_PROMO_CURRENCY;
+  const safeSourceId = String(cycleId || '').trim();
+  if (!safeSourceId) {
+    throw buildWalletError('Captain reward cycle id is required');
+  }
+
+  return withTransaction(async (connection) => {
+    const [existingRows] = await connection.execute(
+      `SELECT id, amount
+       FROM driver_wallet_transactions
+       WHERE driver_user_id = ?
+         AND transaction_type = 'captain_promo_credit'
+         AND source_type = 'captain_reward'
+         AND source_id = ?
+       LIMIT 1`,
+      [driverUserId, safeSourceId]
+    );
+    if (existingRows[0]) {
+      const wallet = await ensureDriverWallet(driverUserId, connection);
+      return {
+        credited: false,
+        alreadyCredited: true,
+        amount: normalizeMoney(existingRows[0].amount),
+        currency,
+        wallet: mapWalletStatus(wallet, settings),
+        transactionId: existingRows[0].id,
+      };
+    }
+
+    const wallet = await ensureDriverWallet(driverUserId, connection);
+    const promoBefore = normalizeMoney(wallet?.promotional_balance || 0);
+    const promoAfter = normalizeMoney(promoBefore + creditedAmount);
+
+    await connection.execute(
+      `UPDATE driver_wallets
+       SET promotional_balance = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [promoAfter, driverUserId]
+    );
+
+    const [insertResult] = await connection.execute(
+      `INSERT INTO driver_wallet_transactions (
+         driver_user_id,
+         transaction_type,
+         amount,
+         currency,
+         payment_method,
+         source_type,
+         source_id,
+         balance_before,
+         balance_after,
+         description
+       ) VALUES (?, 'captain_promo_credit', ?, ?, NULL, 'captain_reward', ?, ?, ?, ?)`,
+      [
+        driverUserId,
+        creditedAmount,
+        currency,
+        safeSourceId,
+        promoBefore,
+        promoAfter,
+        String(description || 'Captain reward promotional credit').trim(),
+      ]
+    );
+
+    const [walletRows] = await connection.execute(
+      `SELECT driver_user_id, available_balance, promotional_balance, created_at, updated_at
+       FROM driver_wallets
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [driverUserId]
+    );
+
+    return {
+      credited: true,
+      alreadyCredited: false,
+      amount: creditedAmount,
+      currency,
+      wallet: mapWalletStatus(walletRows[0] || { ...wallet, promotional_balance: promoAfter }, settings),
+      transactionId: insertResult?.insertId || null,
+    };
+  });
+}
+
 export async function deductCommissionForCompletedRide({
   driverUserId,
   rideRequestId,
@@ -694,77 +796,128 @@ export async function deductCommissionForCompletedRide({
   return withTransaction(async (connection) => {
     const wallet = await ensureDriverWallet(driverUserId, connection);
     const [existingRows] = await connection.execute(
-      `SELECT id, amount, balance_after
+      `SELECT id, transaction_type, amount, balance_after
        FROM driver_wallet_transactions
        WHERE driver_user_id = ?
          AND source_type = 'trip_commission'
          AND source_id = ?
-       LIMIT 1`,
+       ORDER BY id ASC`,
       [driverUserId, String(rideRequestId)]
     );
-    if (existingRows[0]) {
+    if (existingRows.length > 0) {
+      const commissionAmount = existingRows.reduce(
+        (sum, row) => sum + Math.abs(normalizeMoney(row.amount)),
+        0
+      );
+      const cashRow = existingRows.find((row) => row.transaction_type === 'commission_debit') || existingRows[existingRows.length - 1];
       return {
         charged: false,
         alreadyCharged: true,
-        commissionAmount: Math.abs(normalizeMoney(existingRows[0].amount)),
+        commissionAmount: normalizeMoney(commissionAmount),
         commissionRatePercent,
-        balanceAfter: normalizeMoney(existingRows[0].balance_after),
+        balanceAfter: normalizeMoney(cashRow.balance_after),
       };
     }
 
     const balanceBefore = normalizeMoney(wallet?.available_balance || 0);
+    const promoBefore = normalizeMoney(wallet?.promotional_balance || 0);
     const commissionAmount = normalizeMoney(fareAmount * commissionRate);
-    const balanceAfter = normalizeMoney(balanceBefore - commissionAmount);
+    const promoUsed = normalizeMoney(Math.min(promoBefore, commissionAmount));
+    const cashUsed = normalizeMoney(commissionAmount - promoUsed);
+    const promoAfter = normalizeMoney(promoBefore - promoUsed);
+    const balanceAfter = normalizeMoney(balanceBefore - cashUsed);
 
     await connection.execute(
       `UPDATE driver_wallets
        SET available_balance = ?,
+           promotional_balance = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE driver_user_id = ?`,
-      [balanceAfter, driverUserId]
+      [balanceAfter, promoAfter, driverUserId]
     );
 
-    await connection.execute(
-      `INSERT INTO driver_wallet_transactions (
-         driver_user_id,
-         transaction_type,
-         amount,
-         currency,
-         payment_method,
-         source_type,
-         source_id,
-         trip_id,
-         passenger_user_id,
-         passenger_name,
-         trip_fare_amount,
-         commission_rate_percent,
-         balance_before,
-         balance_after,
-         description
-       ) VALUES (?, 'commission_debit', ?, ?, NULL, 'trip_commission', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        driverUserId,
-        normalizeMoney(-commissionAmount),
-        currency,
-        String(rideRequestId),
-        Number(rideRequestId),
-        passengerUserId,
-        passengerName,
-        fareAmount,
-        commissionRatePercent,
-        balanceBefore,
-        balanceAfter,
-        `Trust Express service fee for trip #${rideRequestId}`,
-      ]
-    );
+    if (promoUsed > 0) {
+      await connection.execute(
+        `INSERT INTO driver_wallet_transactions (
+           driver_user_id,
+           transaction_type,
+           amount,
+           currency,
+           payment_method,
+           source_type,
+           source_id,
+           trip_id,
+           passenger_user_id,
+           passenger_name,
+           trip_fare_amount,
+           commission_rate_percent,
+           balance_before,
+           balance_after,
+           description
+         ) VALUES (?, 'promo_commission_debit', ?, ?, NULL, 'trip_commission', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          driverUserId,
+          normalizeMoney(-promoUsed),
+          currency,
+          String(rideRequestId),
+          Number(rideRequestId),
+          passengerUserId,
+          passengerName,
+          fareAmount,
+          commissionRatePercent,
+          promoBefore,
+          promoAfter,
+          `Promotional float applied to service fee for trip #${rideRequestId}`,
+        ]
+      );
+    }
+
+    if (cashUsed > 0) {
+      await connection.execute(
+        `INSERT INTO driver_wallet_transactions (
+           driver_user_id,
+           transaction_type,
+           amount,
+           currency,
+           payment_method,
+           source_type,
+           source_id,
+           trip_id,
+           passenger_user_id,
+           passenger_name,
+           trip_fare_amount,
+           commission_rate_percent,
+           balance_before,
+           balance_after,
+           description
+         ) VALUES (?, 'commission_debit', ?, ?, NULL, 'trip_commission', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          driverUserId,
+          normalizeMoney(-cashUsed),
+          currency,
+          String(rideRequestId),
+          Number(rideRequestId),
+          passengerUserId,
+          passengerName,
+          fareAmount,
+          commissionRatePercent,
+          balanceBefore,
+          balanceAfter,
+          `Trust Express service fee for trip #${rideRequestId}`,
+        ]
+      );
+    }
 
     return {
       charged: true,
       alreadyCharged: false,
       commissionAmount,
+      promoUsed,
+      cashUsed,
       commissionRatePercent,
       balanceBefore,
       balanceAfter,
+      promotionalBalanceAfter: promoAfter,
     };
   });
 }
@@ -838,7 +991,7 @@ export async function getAdminDriverWalletLedger({
   const [summaryRow] = await query(
     `SELECT
        COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit') THEN amount ELSE 0 END), 0) AS total_credits,
-       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit', 'promo_commission_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
        COUNT(*) AS transaction_count
      FROM driver_wallet_transactions
      WHERE driver_user_id = ?`,

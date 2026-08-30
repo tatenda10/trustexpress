@@ -33,6 +33,7 @@ const navSections = [
       { id: 'vehicle-catalog', label: 'Vehicle Catalog', icon: CatalogIcon, to: '/dashboard/vehicle-catalog', permission: 'pricing.read' },
       { id: 'vehicle-tiers', label: 'Vehicle Tiers', icon: ComponentsIcon, to: '/dashboard/vehicle-tiers', permission: 'pricing.read' },
       { id: 'agent-rewards', label: 'Agent Rewards', icon: ComponentsIcon, to: '/dashboard/agent-rewards', permission: 'payouts.read' },
+      { id: 'captain-rewards', label: 'Captain Rewards', icon: ComponentsIcon, to: '/dashboard/captain-rewards', permission: 'payouts.read' },
       { id: 'payouts', label: 'Driver Payouts', icon: ComponentsIcon, to: '/dashboard/driver-payouts', permission: 'payouts.read' },
       { id: 'driver-wallet-settings', label: 'Driver Wallet', icon: ComponentsIcon, to: '/dashboard/driver-wallet-settings', permission: 'payouts.read' },
       { id: 'promotions', label: 'Promotions', icon: NetworkIcon, to: '/dashboard/promotions', permission: 'pricing.read' },
