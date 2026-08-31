@@ -59,7 +59,39 @@ const tabs = [
       )
     },
   },
+  {
+    key: 'online',
+    label: 'Online',
+    icon: function OnlineTabIcon({ active = false }) {
+      const color = active ? '#4f46e5' : '#64748b'
+      return (
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" stroke={color} strokeWidth="1.7" />
+          <circle cx="12" cy="12" r="3" fill={active ? '#10b981' : '#94a3b8'} />
+        </svg>
+      )
+    },
+  },
 ]
+
+function formatLastSeen(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function onlineStatusClass(status) {
+  if (status === 'Available') return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+  if (status === 'On Trip') return 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200'
+  if (status === 'Pickup') return 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+  return 'bg-slate-50 text-slate-700 ring-1 ring-slate-200'
+}
 
 function badgeClass(status) {
   if (status === 'approved') return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
@@ -103,12 +135,35 @@ export default function DriversPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [drivers, setDrivers] = useState([])
+  const [onlineSummary, setOnlineSummary] = useState(null)
+  const [onlineRefreshedAt, setOnlineRefreshedAt] = useState(null)
+  const isOnlineTab = activeTab === 'online'
 
-  const loadDrivers = async () => {
-    setLoading(true)
+  const loadDrivers = async ({ silent = false } = {}) => {
+    if (!silent) {
+      setLoading(true)
+    }
     setError('')
 
     try {
+      if (isOnlineTab) {
+        const { data } = await axios.get(`${BASE_URL}/api/admin/drivers/online`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          params: {
+            search: search || undefined,
+          },
+        })
+
+        setDrivers(data.drivers || [])
+        setOnlineSummary(data.summary || null)
+        setOnlineRefreshedAt(data.refreshedAt || null)
+        setTotalPages(1)
+        setTotal(data.drivers?.length || 0)
+        return
+      }
+
       const { data } = await axios.get(`${BASE_URL}/api/admin/drivers`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -124,13 +179,17 @@ export default function DriversPage() {
       })
 
       setDrivers(data.drivers || [])
+      setOnlineSummary(null)
+      setOnlineRefreshedAt(null)
       setTotalPages(data.totalPages || 1)
       setTotal(data.total || 0)
     } catch (err) {
       const apiError = err?.response?.data?.error
       setError(apiError || err?.message || 'Failed to load drivers')
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }
 
@@ -138,6 +197,17 @@ export default function DriversPage() {
     loadDrivers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, activeTab, search, sortBy, sortOrder, page, pageSize])
+
+  useEffect(() => {
+    if (!isOnlineTab || !token) return undefined
+
+    const interval = window.setInterval(() => {
+      loadDrivers({ silent: true })
+    }, 15000)
+
+    return () => window.clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnlineTab, token, search])
 
   const rows = useMemo(() => drivers, [drivers])
   const approvedCount = useMemo(() => rows.filter((driver) => driver.profile?.status === 'approved').length, [rows])
@@ -208,8 +278,12 @@ export default function DriversPage() {
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Loaded</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{rows.length}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                {isOnlineTab ? 'Online Now' : 'Loaded'}
+              </p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">
+                {isOnlineTab ? Number(onlineSummary?.total || rows.length) : rows.length}
+              </p>
             </div>
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Approved</p>
@@ -259,6 +333,7 @@ export default function DriversPage() {
               value={sortBy}
               onChange={(event) => setSortBy(event.target.value)}
               className="h-10 border border-slate-300 bg-white px-2 text-xs"
+              disabled={isOnlineTab}
             >
               <option value="createdAt">Joined</option>
               <option value="email">Email</option>
@@ -269,6 +344,7 @@ export default function DriversPage() {
               value={sortOrder}
               onChange={(event) => setSortOrder(event.target.value)}
               className="h-10 border border-slate-300 bg-white px-2 text-xs"
+              disabled={isOnlineTab}
             >
               <option value="desc">Desc</option>
               <option value="asc">Asc</option>
@@ -287,12 +363,24 @@ export default function DriversPage() {
 
           <div className="flex h-10 items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 xl:min-w-[220px] xl:justify-end">
             <div className="whitespace-nowrap text-[11px] text-slate-500">
-              <span className="font-semibold text-slate-700">{total}</span> total drivers
+              {isOnlineTab ? (
+                <>
+                  <span className="font-semibold text-emerald-700">{Number(onlineSummary?.available || 0)}</span> available
+                  {onlineRefreshedAt ? (
+                    <span className="ml-2 text-slate-400">Updated {formatLastSeen(onlineRefreshedAt)}</span>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-slate-700">{total}</span> total drivers
+                </>
+              )}
             </div>
             <button
               type="button"
               onClick={exportXlsx}
-              className="inline-flex h-10 items-center gap-2 bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800"
+              disabled={isOnlineTab}
+              className="inline-flex h-10 items-center gap-2 bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
                 <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2h14v-2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -310,24 +398,79 @@ export default function DriversPage() {
           <table className="min-w-full border-collapse text-xs">
             <thead>
               <tr className="bg-[#0f172a] text-left text-[11px] uppercase tracking-wide text-slate-200">
-                <th className="rounded-tl-sm px-4 py-3 font-semibold">Name</th>
-                <th className="px-4 py-3 font-semibold">Profile Status</th>
-                <th className="px-4 py-3 font-semibold">Vehicle Status</th>
-                <th className="px-4 py-3 font-semibold">Wallet</th>
-                <th className="px-4 py-3 font-semibold">Vehicle</th>
-                <th className="px-4 py-3 font-semibold">Joined</th>
-                <th className="rounded-tr-sm px-4 py-3 font-semibold text-right">Actions</th>
+                {isOnlineTab ? (
+                  <>
+                    <th className="rounded-tl-sm px-4 py-3 font-semibold">Name</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold">Phone</th>
+                    <th className="px-4 py-3 font-semibold">Vehicle</th>
+                    <th className="px-4 py-3 font-semibold">Current Ride</th>
+                    <th className="rounded-tr-sm px-4 py-3 font-semibold">Last Seen</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="rounded-tl-sm px-4 py-3 font-semibold">Name</th>
+                    <th className="px-4 py-3 font-semibold">Profile Status</th>
+                    <th className="px-4 py-3 font-semibold">Vehicle Status</th>
+                    <th className="px-4 py-3 font-semibold">Wallet</th>
+                    <th className="px-4 py-3 font-semibold">Vehicle</th>
+                    <th className="px-4 py-3 font-semibold">Joined</th>
+                    <th className="rounded-tr-sm px-4 py-3 font-semibold text-right">Actions</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">Loading drivers...</td>
+                  <td colSpan={isOnlineTab ? 6 : 7} className="px-4 py-8 text-center text-xs text-slate-500">
+                    {isOnlineTab ? 'Loading online drivers...' : 'Loading drivers...'}
+                  </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">No drivers found.</td>
+                  <td colSpan={isOnlineTab ? 6 : 7} className="px-4 py-8 text-center text-xs text-slate-500">
+                    {isOnlineTab ? 'No drivers are online right now.' : 'No drivers found.'}
+                  </td>
                 </tr>
+              ) : isOnlineTab ? (
+                rows.map((driver) => (
+                  <tr key={driver.id} className="border-b border-slate-200 hover:bg-slate-50">
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <p className="font-medium text-slate-800">{driver.name || 'Driver'}</p>
+                        <p className="text-[11px] text-slate-400">{driver.id || '-'}</p>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${onlineStatusClass(driver.status)}`}>
+                        {driver.status || 'Available'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">{driver.phoneNumber || '-'}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div className="space-y-1">
+                        <p>{driver.vehicleLabel || '-'}</p>
+                        {driver.vehicleTierName ? (
+                          <p className="text-[11px] text-slate-400">{driver.vehicleTierName}</p>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {driver.route ? (
+                        <div className="space-y-1">
+                          <p>{driver.route}</p>
+                          {driver.passengerName ? (
+                            <p className="text-[11px] text-slate-400">Passenger: {driver.passengerName}</p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">Waiting for requests</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">{formatLastSeen(driver.lastSeenAt)}</td>
+                  </tr>
+                ))
               ) : (
                 rows.map((driver) => (
                   <tr key={driver.id} className="border-b border-slate-200 hover:bg-slate-50">
@@ -418,7 +561,12 @@ export default function DriversPage() {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 text-xs text-slate-600">
-          <p>Showing {rows.length} of {total} drivers</p>
+          <p>
+            {isOnlineTab
+              ? `Showing ${rows.length} online driver${rows.length === 1 ? '' : 's'}`
+              : `Showing ${rows.length} of ${total} drivers`}
+          </p>
+          {isOnlineTab ? null : (
           <div className="flex items-center gap-2">
             <label className="text-xs">Page size</label>
             <select
@@ -451,6 +599,7 @@ export default function DriversPage() {
               Next
             </button>
           </div>
+          )}
         </div>
       </div>
     </section>

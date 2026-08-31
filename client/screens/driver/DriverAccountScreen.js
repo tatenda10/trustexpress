@@ -22,7 +22,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [ratingCount, setRatingCount] = useState(0);
   const [completedRides, setCompletedRides] = useState(0);
   const [captainStatus, setCaptainStatus] = useState(null);
-  const [loadingCaptainStatus, setLoadingCaptainStatus] = useState(false);
+  const [loadingCaptainStatus, setLoadingCaptainStatus] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [profileData, setProfileData] = useState(null);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
@@ -31,6 +31,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   refetchRef.current = refetchDriverStatus;
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
+  const captainHasLoadedRef = useRef(false);
 
   useEffect(() => {
     if (contextDriverStatus !== undefined) {
@@ -77,6 +78,30 @@ const DriverAccountScreen = ({ navigation, route }) => {
           setProfileData(null);
         });
 
+      const refreshCaptainStatus = async () => {
+        try {
+          if (!captainHasLoadedRef.current) {
+            setLoadingCaptainStatus(true);
+          }
+          const token = await getTokenRef.current();
+          if (!token || !active) return;
+          const res = await fetch(getApiUrl('/api/drivers/captain-status'), {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !active) return;
+          setCaptainStatus(data);
+          captainHasLoadedRef.current = true;
+        } catch {
+          if (!active) return;
+          setCaptainStatus(null);
+        } finally {
+          if (active) setLoadingCaptainStatus(false);
+        }
+      };
+
+      refreshCaptainStatus();
+
       return () => {
         active = false;
         clearTimeout(timeoutId);
@@ -89,9 +114,8 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
     const loadRatingSummary = async () => {
       try {
-        const token = await getToken();
+        const token = await getTokenRef.current();
         if (!token) return;
-        const { getApiUrl } = require('../../api');
         const res = await fetch(getApiUrl('/api/drivers/history?page=1&limit=1'), {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -117,30 +141,10 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
     loadRatingSummary();
 
-    const loadCaptainStatus = async () => {
-      try {
-        setLoadingCaptainStatus(true);
-        const token = await getToken();
-        if (!token || cancelled) return;
-        const res = await fetch(getApiUrl('/api/drivers/captain-status'), {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) return;
-        setCaptainStatus(data);
-      } catch {
-        if (!cancelled) setCaptainStatus(null);
-      } finally {
-        if (!cancelled) setLoadingCaptainStatus(false);
-      }
-    };
-
-    loadCaptainStatus();
-
     return () => {
       cancelled = true;
     };
-  }, [getToken]);
+  }, []);
 
   const handleDeleteAccount = () => {
     Alert.alert(
@@ -608,7 +612,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
         <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Captain rewards</Text>
         <View className="mb-5 overflow-hidden rounded-[28px] bg-white px-5 py-5">
-          {loadingCaptainStatus ? (
+          {loadingCaptainStatus && !captainStatus ? (
             <View className="items-center py-4">
               <ActivityIndicator size="small" color={PRIMARY_BLUE} />
             </View>

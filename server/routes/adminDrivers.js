@@ -17,6 +17,37 @@ import {
 } from '../lib/xlsx-export.js';
 
 const router = Router();
+const DRIVER_ONLINE_STALE_DAYS = 1;
+
+function mapOnlineDriverRow(row) {
+  const rideStatus = String(row.ride_status || '');
+  const status = rideStatus === 'in_progress'
+    ? 'On Trip'
+    : ['driver_assigned', 'driver_arrived'].includes(rideStatus)
+      ? 'Pickup'
+      : 'Available';
+
+  return {
+    id: row.driver_user_id,
+    name: row.driver_name || 'Driver',
+    phoneNumber: row.phone_number || null,
+    vehicleTierName: row.vehicle_tier_name || null,
+    vehicleLabel: [row.vehicle_make, row.vehicle_model, row.number_plate ? `(${row.number_plate})` : '']
+      .filter(Boolean)
+      .join(' ')
+      .trim() || null,
+    status,
+    lastSeenAt: row.last_seen_at || null,
+    lat: row.current_lat === null ? null : Number(row.current_lat),
+    lng: row.current_lng === null ? null : Number(row.current_lng),
+    rideRequestId: row.ride_request_id || null,
+    ridePublicId: row.public_id || null,
+    passengerName: row.passenger_name || null,
+    route: row.pickup_label && row.dropoff_label
+      ? `${row.pickup_label} -> ${row.dropoff_label}`
+      : null,
+  };
+}
 
 async function loadAllClerkUsers(orderBy = '-created_at') {
   const clerkClient = getClerkClient();
@@ -443,6 +474,76 @@ async function exportDriversWorkbook(req, res) {
 
 router.get('/export.xlsx', requireAdminAuth, requirePermission('drivers.read'), exportDriversWorkbook);
 router.get('/export.csv', requireAdminAuth, requirePermission('drivers.read'), exportDriversWorkbook);
+
+router.get('/online', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const rows = await query(
+      `SELECT
+         da.driver_user_id,
+         da.driver_name,
+         da.phone_number,
+         da.vehicle_tier_name,
+         da.vehicle_make,
+         da.vehicle_model,
+         da.number_plate,
+         da.current_lat,
+         da.current_lng,
+         da.last_seen_at,
+         da.is_online,
+         rr.id AS ride_request_id,
+         rr.public_id,
+         rr.passenger_name,
+         rr.pickup_label,
+         rr.dropoff_label,
+         rr.status AS ride_status
+       FROM driver_availability da
+       LEFT JOIN ride_requests rr
+         ON rr.driver_user_id = da.driver_user_id
+        AND rr.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+       WHERE da.is_online = 1
+         AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+       ORDER BY da.driver_name ASC, da.updated_at DESC`
+    );
+
+    let drivers = rows.map(mapOnlineDriverRow);
+    if (search) {
+      drivers = drivers.filter((driver) => {
+        const haystack = [
+          driver.id,
+          driver.name,
+          driver.phoneNumber,
+          driver.vehicleTierName,
+          driver.vehicleLabel,
+          driver.status,
+          driver.passengerName,
+          driver.route,
+          driver.ridePublicId,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(search);
+      });
+    }
+
+    const summary = {
+      total: drivers.length,
+      available: drivers.filter((driver) => driver.status === 'Available').length,
+      pickup: drivers.filter((driver) => driver.status === 'Pickup').length,
+      onTrip: drivers.filter((driver) => driver.status === 'On Trip').length,
+    };
+
+    return res.json({
+      drivers,
+      summary,
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('GET /api/admin/drivers/online', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
 
 router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
   try {
