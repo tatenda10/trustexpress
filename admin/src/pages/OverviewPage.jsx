@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 
-function MetricCard({ label, value, change, accent = 'slate' }) {
+function MetricCard({ label, value, change, accent = 'slate', to = null }) {
   const accentMap = {
     slate: 'border-slate-200 text-slate-900',
     blue: 'border-blue-200 text-slate-900',
@@ -12,12 +12,20 @@ function MetricCard({ label, value, change, accent = 'slate' }) {
     amber: 'border-amber-200 text-slate-900',
   }
 
-  return (
-    <article className={`border bg-white px-3.5 py-3.5 ${accentMap[accent] || accentMap.slate}`}>
+  const card = (
+    <article className={`border bg-white px-3.5 py-3.5 ${accentMap[accent] || accentMap.slate} ${to ? 'transition hover:border-indigo-300 hover:bg-indigo-50/40' : ''}`}>
       <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">{label}</p>
       <p className="mt-1.5 text-[28px] font-semibold leading-none text-slate-950">{value}</p>
-      <p className="mt-1 text-[10px] font-medium text-indigo-700">{change}</p>
+      <p className="mt-1 text-[10px] font-medium text-indigo-700">{to ? 'View full list' : change}</p>
     </article>
+  )
+
+  if (!to) return card
+
+  return (
+    <Link to={to} className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+      {card}
+    </Link>
   )
 }
 
@@ -132,6 +140,7 @@ export default function OverviewPage() {
         value: formatNumber(payload.onlineDrivers?.value || 0),
         change: payload.onlineDrivers?.change || '0.0% vs yesterday',
         accent: 'blue',
+        to: '/dashboard/drivers?tab=online',
       },
       {
         label: 'Pending Verifications',
@@ -216,7 +225,9 @@ export default function OverviewPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="border border-slate-100 bg-slate-50 px-4 py-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Drivers Live</p>
-                    <p className="mt-2 text-xl font-semibold text-slate-950">{cards[1]?.value || '0'}</p>
+                    <Link to="/dashboard/drivers?tab=online" className="mt-2 block text-xl font-semibold text-slate-950 transition hover:text-indigo-700">
+                      {cards[1]?.value || '0'}
+                    </Link>
                   </div>
                   <div className="border border-slate-100 bg-slate-50 px-4 py-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Support Load</p>

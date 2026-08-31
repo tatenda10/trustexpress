@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Can from '../components/Can'
 import BASE_URL from '../context/Api'
 import AdminTabs from '../components/AdminTabs'
@@ -120,10 +120,16 @@ function getDriverName(driver) {
   return 'Unknown driver'
 }
 
+function resolveDriversTab(value) {
+  const tab = String(value || 'all').toLowerCase()
+  return tabs.some((item) => item.key === tab) ? tab : 'all'
+}
+
 export default function DriversPage() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { token } = useAuth()
-  const [activeTab, setActiveTab] = useState('all')
+  const [activeTab, setActiveTab] = useState(() => resolveDriversTab(searchParams.get('tab')))
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState('createdAt')
@@ -138,6 +144,24 @@ export default function DriversPage() {
   const [onlineSummary, setOnlineSummary] = useState(null)
   const [onlineRefreshedAt, setOnlineRefreshedAt] = useState(null)
   const isOnlineTab = activeTab === 'online'
+
+  useEffect(() => {
+    const nextTab = resolveDriversTab(searchParams.get('tab'))
+    setActiveTab((current) => (current === nextTab ? current : nextTab))
+  }, [searchParams])
+
+  const handleTabChange = (key) => {
+    const nextTab = resolveDriversTab(key)
+    setActiveTab(nextTab)
+    setPage(1)
+    const nextParams = new URLSearchParams(searchParams)
+    if (nextTab === 'all') {
+      nextParams.delete('tab')
+    } else {
+      nextParams.set('tab', nextTab)
+    }
+    setSearchParams(nextParams, { replace: true })
+  }
 
   const loadDrivers = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -305,10 +329,7 @@ export default function DriversPage() {
         label="Views"
         tabs={tabs}
         activeTab={activeTab}
-        onChange={(key) => {
-          setActiveTab(key)
-          setPage(1)
-        }}
+        onChange={handleTabChange}
       />
 
       <div className="border border-slate-300 bg-white px-4 py-3">
