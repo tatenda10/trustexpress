@@ -251,6 +251,40 @@ export function resolveNextTier(rideCount, tiers = []) {
   return activeTiers.find((tier) => count < Number(tier.minRides || 0)) || null;
 }
 
+export function buildDisabledCaptainStatus(message = 'Captain rewards are not available right now.') {
+  return {
+    enabled: false,
+    eligible: false,
+    ineligibleReason: 'unavailable',
+    unavailableMessage: message,
+    currency: CAPTAIN_REWARD_CURRENCY,
+    cycle: {
+      id: null,
+      cycleKey: null,
+      startsAt: null,
+      endsAt: null,
+      daysRemaining: 0,
+      weekdayLabel: getWeekdayLabel(1),
+    },
+    tierKey: null,
+    tierName: 'No tier yet',
+    badgeColor: '#2563EB',
+    qualifyingRides: 0,
+    nextTierKey: null,
+    nextTierName: null,
+    ridesToNextTier: 0,
+    progressPercent: 0,
+    currentRewardUsd: 0,
+    rewardStatus: 'disabled',
+    rewardStatusLabel: 'Unavailable',
+  };
+}
+
+function isMissingCaptainSchemaError(err) {
+  const message = String(err?.message || '');
+  return err?.code === 'ER_NO_SUCH_TABLE' || /captain_reward_/i.test(message);
+}
+
 export async function isDriverCaptainEligible(driverUserId, user = null) {
   const clerkUser = user || await getClerkUserById(driverUserId).catch(() => null);
   if (!clerkUser) return { eligible: false, reason: 'missing_user' };
@@ -434,67 +468,74 @@ export async function recordCaptainQualifyingRide({
 }
 
 export async function buildCaptainStatusForDriver(driverUserId) {
-  const settings = await getCaptainRewardSettings();
-  const tiers = await listCaptainRewardTiers();
-  const eligibility = await isDriverCaptainEligible(driverUserId);
-  const { cycle, window } = await ensureCaptainCycleForNow();
+  try {
+    const settings = await getCaptainRewardSettings();
+    const tiers = await listCaptainRewardTiers();
+    const eligibility = await isDriverCaptainEligible(driverUserId);
+    const { cycle, window } = await ensureCaptainCycleForNow();
 
-  let driverRow = null;
-  if (eligibility.eligible) {
-    driverRow = await ensureCycleDriverRow(cycle.id, driverUserId);
-    if (Number(driverRow.qualifyingRidesCount || 0) > 0) {
-      driverRow = await refreshCycleDriverSummary(cycle.id, driverUserId, tiers);
+    let driverRow = null;
+    if (eligibility.eligible) {
+      driverRow = await ensureCycleDriverRow(cycle.id, driverUserId);
+      if (Number(driverRow.qualifyingRidesCount || 0) > 0) {
+        driverRow = await refreshCycleDriverSummary(cycle.id, driverUserId, tiers);
+      }
     }
+
+    const rideCount = Number(driverRow?.qualifyingRidesCount || 0);
+    const currentTier = resolveTierForRideCount(rideCount, tiers);
+    const nextTier = resolveNextTier(rideCount, tiers);
+    const ridesToNextTier = nextTier ? Math.max(0, Number(nextTier.minRides) - rideCount) : 0;
+    const progressPercent = nextTier
+      ? Math.min(100, Math.round((rideCount / Number(nextTier.minRides || 1)) * 100))
+      : (currentTier ? 100 : 0);
+
+    let rewardStatus = 'in_progress';
+    if (!settings.enabled) rewardStatus = 'disabled';
+    else if (!eligibility.eligible) rewardStatus = 'ineligible';
+    else if (driverRow?.rewardStatus === 'credited') rewardStatus = 'credited';
+    else if (normalizeMoney(driverRow?.rewardAmountUsd) > 0) rewardStatus = 'qualified';
+    else if (rideCount > 0) rewardStatus = 'in_progress';
+
+    return {
+      enabled: settings.enabled,
+      eligible: eligibility.eligible,
+      ineligibleReason: eligibility.reason,
+      currency: settings.currency || CAPTAIN_REWARD_CURRENCY,
+      cycle: {
+        id: cycle.id,
+        cycleKey: cycle.cycleKey,
+        startsAt: cycle.startsAt,
+        endsAt: cycle.endsAt,
+        daysRemaining: window.daysRemaining,
+        weekdayLabel: settings.cycleWeekdayLabel,
+      },
+      tierKey: currentTier?.tierKey || null,
+      tierName: currentTier?.tierName || (rideCount > 0 ? 'Blue Captain' : 'No tier yet'),
+      badgeColor: currentTier?.badgeColor || '#2563EB',
+      qualifyingRides: rideCount,
+      nextTierKey: nextTier?.tierKey || null,
+      nextTierName: nextTier?.tierName || null,
+      ridesToNextTier,
+      progressPercent,
+      currentRewardUsd: normalizeMoney(driverRow?.rewardAmountUsd || currentTier?.rewardAmountUsd || 0),
+      rewardStatus,
+      rewardStatusLabel: rewardStatus === 'credited'
+        ? 'Credited'
+        : rewardStatus === 'qualified'
+          ? 'Qualified'
+          : rewardStatus === 'ineligible'
+            ? 'Ineligible'
+            : rewardStatus === 'disabled'
+              ? 'Disabled'
+              : 'In Progress',
+    };
+  } catch (err) {
+    if (isMissingCaptainSchemaError(err)) {
+      return buildDisabledCaptainStatus('Captain rewards are still being set up. Please check again soon.');
+    }
+    throw err;
   }
-
-  const rideCount = Number(driverRow?.qualifyingRidesCount || 0);
-  const currentTier = resolveTierForRideCount(rideCount, tiers);
-  const nextTier = resolveNextTier(rideCount, tiers);
-  const ridesToNextTier = nextTier ? Math.max(0, Number(nextTier.minRides) - rideCount) : 0;
-  const progressPercent = nextTier
-    ? Math.min(100, Math.round((rideCount / Number(nextTier.minRides || 1)) * 100))
-    : (currentTier ? 100 : 0);
-
-  let rewardStatus = 'in_progress';
-  if (!settings.enabled) rewardStatus = 'disabled';
-  else if (!eligibility.eligible) rewardStatus = 'ineligible';
-  else if (driverRow?.rewardStatus === 'credited') rewardStatus = 'credited';
-  else if (normalizeMoney(driverRow?.rewardAmountUsd) > 0) rewardStatus = 'qualified';
-  else if (rideCount > 0) rewardStatus = 'in_progress';
-
-  return {
-    enabled: settings.enabled,
-    eligible: eligibility.eligible,
-    ineligibleReason: eligibility.reason,
-    currency: settings.currency || CAPTAIN_REWARD_CURRENCY,
-    cycle: {
-      id: cycle.id,
-      cycleKey: cycle.cycleKey,
-      startsAt: cycle.startsAt,
-      endsAt: cycle.endsAt,
-      daysRemaining: window.daysRemaining,
-      weekdayLabel: settings.cycleWeekdayLabel,
-    },
-    tierKey: currentTier?.tierKey || null,
-    tierName: currentTier?.tierName || (rideCount > 0 ? 'Blue Captain' : 'No tier yet'),
-    badgeColor: currentTier?.badgeColor || '#2563EB',
-    qualifyingRides: rideCount,
-    nextTierKey: nextTier?.tierKey || null,
-    nextTierName: nextTier?.tierName || null,
-    ridesToNextTier,
-    progressPercent,
-    currentRewardUsd: normalizeMoney(driverRow?.rewardAmountUsd || currentTier?.rewardAmountUsd || 0),
-    rewardStatus,
-    rewardStatusLabel: rewardStatus === 'credited'
-      ? 'Credited'
-      : rewardStatus === 'qualified'
-        ? 'Qualified'
-        : rewardStatus === 'ineligible'
-          ? 'Ineligible'
-          : rewardStatus === 'disabled'
-            ? 'Disabled'
-            : 'In Progress',
-  };
 }
 
 export async function creditCaptainRewardsForCycle(cycleId, { force = false } = {}) {

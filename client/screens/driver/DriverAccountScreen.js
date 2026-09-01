@@ -22,6 +22,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [ratingCount, setRatingCount] = useState(0);
   const [completedRides, setCompletedRides] = useState(0);
   const [captainStatus, setCaptainStatus] = useState(null);
+  const [captainStatusError, setCaptainStatusError] = useState('');
   const [loadingCaptainStatus, setLoadingCaptainStatus] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [profileData, setProfileData] = useState(null);
@@ -32,13 +33,53 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
   const captainHasLoadedRef = useRef(false);
+  const captainRequestIdRef = useRef(0);
 
-  useEffect(() => {
-    if (contextDriverStatus !== undefined) {
-      setDriverStatus(contextDriverStatus ?? null);
-      setLoading(false);
+  const refreshCaptainStatus = useCallback(async ({ silent = false } = {}) => {
+    const requestId = ++captainRequestIdRef.current;
+    if (!silent) {
+      setLoadingCaptainStatus(true);
     }
-  }, [contextDriverStatus]);
+
+    try {
+      const token = await getTokenRef.current();
+      if (!token) {
+        if (requestId !== captainRequestIdRef.current) return;
+        setCaptainStatusError('Sign in to view Captain rewards.');
+        return;
+      }
+
+      const res = await fetch(getApiUrl('/api/drivers/captain-status'), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (requestId !== captainRequestIdRef.current) return;
+
+      if (!res.ok) {
+        setCaptainStatusError(data?.error || 'Could not load Captain rewards.');
+        return;
+      }
+
+      setCaptainStatusError('');
+      setCaptainStatus(data);
+      captainHasLoadedRef.current = true;
+    } catch {
+      if (requestId !== captainRequestIdRef.current) return;
+      if (!captainHasLoadedRef.current) {
+        setCaptainStatusError('Could not load Captain rewards.');
+      }
+    } finally {
+      if (requestId === captainRequestIdRef.current) {
+        setLoadingCaptainStatus(false);
+      }
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshCaptainStatus({ silent: captainHasLoadedRef.current });
+    }, [refreshCaptainStatus])
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -78,36 +119,19 @@ const DriverAccountScreen = ({ navigation, route }) => {
           setProfileData(null);
         });
 
-      const refreshCaptainStatus = async () => {
-        try {
-          if (!captainHasLoadedRef.current) {
-            setLoadingCaptainStatus(true);
-          }
-          const token = await getTokenRef.current();
-          if (!token || !active) return;
-          const res = await fetch(getApiUrl('/api/drivers/captain-status'), {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok || !active) return;
-          setCaptainStatus(data);
-          captainHasLoadedRef.current = true;
-        } catch {
-          if (!active) return;
-          setCaptainStatus(null);
-        } finally {
-          if (active) setLoadingCaptainStatus(false);
-        }
-      };
-
-      refreshCaptainStatus();
-
       return () => {
         active = false;
         clearTimeout(timeoutId);
       };
     }, [])
   );
+
+  useEffect(() => {
+    if (contextDriverStatus !== undefined) {
+      setDriverStatus(contextDriverStatus ?? null);
+      setLoading(false);
+    }
+  }, [contextDriverStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -616,8 +640,12 @@ const DriverAccountScreen = ({ navigation, route }) => {
             <View className="items-center py-4">
               <ActivityIndicator size="small" color={PRIMARY_BLUE} />
             </View>
+          ) : captainStatusError && !captainStatus ? (
+            <Text className="text-sm text-gray-500">{captainStatusError}</Text>
           ) : captainStatus?.enabled === false ? (
-            <Text className="text-sm text-gray-500">Captain rewards are not active right now.</Text>
+            <Text className="text-sm text-gray-500">
+              {captainStatus?.unavailableMessage || 'Captain rewards are not active right now.'}
+            </Text>
           ) : (
             <>
               <View className="flex-row items-center justify-between">
@@ -654,7 +682,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
                 </View>
                 {captainStatus?.nextTierName ? (
                   <Text className="mt-2 text-xs text-gray-500">
-                    {captainStatus.ridesToNextTier} more ride{(captainStatus.ridesToNextTier || 0) === 1 ? '' : 's'} to reach {captainStatus.nextTierName}
+                    {Number(captainStatus?.ridesToNextTier || 0)} more ride{(Number(captainStatus?.ridesToNextTier || 0) === 1) ? '' : 's'} to reach {captainStatus.nextTierName}
                   </Text>
                 ) : null}
               </View>
