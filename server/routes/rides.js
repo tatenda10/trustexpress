@@ -172,6 +172,7 @@ function mapDriverAvailability(row, pickupCoordinate) {
       tierName: row.vehicle_tier_name,
     },
     carImage,
+    lastSeenAt: row.last_seen_at || null,
   };
 }
 
@@ -206,6 +207,7 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     trips: Number(row.completed_rides || row.total_rides || 0),
     phoneNumber: row.phone_number || null,
     coordinate,
+    lastSeenAt: row.last_seen_at || null,
     tier: {
       tierKey: row.vehicle_tier_key || null,
       tierName: row.vehicle_tier_name || 'Ride',
@@ -1335,6 +1337,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
          NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
          da.current_lat,
          da.current_lng,
+         da.last_seen_at,
          da.is_online,
          rr.driver_user_id AS profile_image_user_id
        FROM ride_request_driver_responses rr

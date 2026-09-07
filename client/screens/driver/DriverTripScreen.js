@@ -312,6 +312,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const routeRequestIdRef = useRef(0);
   const mapReadyRef = useRef(false);
   const availabilitySyncInFlightRef = useRef(false);
+  const pendingAvailabilityCoordinateRef = useRef(null);
   const rideLoadInFlightRef = useRef(false);
   const hasAutoFocusedRef = useRef(false);
   const lastAutoFocusStageRef = useRef('');
@@ -607,6 +608,38 @@ export default function DriverTripScreen({ navigation, route }) {
     if (!ride) return undefined;
     let active = true;
 
+    const flushAvailabilityCoordinate = async () => {
+      if (!active || availabilitySyncInFlightRef.current) return;
+      const coordinate = pendingAvailabilityCoordinateRef.current;
+      if (!coordinate) return;
+
+      availabilitySyncInFlightRef.current = true;
+      pendingAvailabilityCoordinateRef.current = null;
+      try {
+        const token = await getTokenRef.current();
+        if (!token || !active) return;
+        await updateDriverAvailability(token, {
+          isOnline: true,
+          latitude: coordinate.latitude,
+          longitude: coordinate.longitude,
+        });
+        console.log(TRIP_DEBUG_PREFIX, 'availability sync success', coordinate);
+      } catch (error) {
+        console.log(TRIP_DEBUG_PREFIX, 'availability sync failed', {
+          message: error?.message || 'unknown error',
+        });
+        // Keep the newest pending point so we retry after the in-flight request finishes.
+        if (!pendingAvailabilityCoordinateRef.current) {
+          pendingAvailabilityCoordinateRef.current = coordinate;
+        }
+      } finally {
+        availabilitySyncInFlightRef.current = false;
+        if (active && pendingAvailabilityCoordinateRef.current) {
+          flushAvailabilityCoordinate();
+        }
+      }
+    };
+
     const startLocationTracking = async () => {
       try {
         if (locationSubscriptionRef.current && activeLocationRideIdRef.current === ride?.id) {
@@ -640,25 +673,8 @@ export default function DriverTripScreen({ navigation, route }) {
           if (!currentCoordinate) return;
           lastLocalLocationAtRef.current = Date.now();
           setLiveDriverCoordinate(currentCoordinate);
-          try {
-            const token = await getTokenRef.current();
-            if (token && !availabilitySyncInFlightRef.current) {
-              availabilitySyncInFlightRef.current = true;
-              await updateDriverAvailability(token, {
-                isOnline: true,
-                latitude: currentCoordinate.latitude,
-                longitude: currentCoordinate.longitude,
-              });
-            }
-            console.log(TRIP_DEBUG_PREFIX, 'availability bootstrap sync success', currentCoordinate);
-          } catch (error) {
-            console.log(TRIP_DEBUG_PREFIX, 'availability bootstrap sync failed', {
-              message: error?.message || 'unknown error',
-            });
-            // Ignore bootstrap location sync errors and continue with live routing.
-          } finally {
-            availabilitySyncInFlightRef.current = false;
-          }
+          pendingAvailabilityCoordinateRef.current = currentCoordinate;
+          await flushAvailabilityCoordinate();
         }
 
         locationSubscriptionRef.current = await Location.watchPositionAsync(
@@ -679,25 +695,8 @@ export default function DriverTripScreen({ navigation, route }) {
             console.log(TRIP_DEBUG_PREFIX, 'location watcher update', nextCoordinate);
             lastLocalLocationAtRef.current = Date.now();
             setLiveDriverCoordinate(nextCoordinate);
-
-            try {
-              const token = await getTokenRef.current();
-              if (!token || availabilitySyncInFlightRef.current) return;
-              availabilitySyncInFlightRef.current = true;
-              await updateDriverAvailability(token, {
-                isOnline: true,
-                latitude: nextCoordinate.latitude,
-                longitude: nextCoordinate.longitude,
-              });
-              console.log(TRIP_DEBUG_PREFIX, 'availability watcher sync success', nextCoordinate);
-            } catch (error) {
-              console.log(TRIP_DEBUG_PREFIX, 'availability watcher sync failed', {
-                message: error?.message || 'unknown error',
-              });
-              // Keep the route screen responsive even if the backend write fails.
-            } finally {
-              availabilitySyncInFlightRef.current = false;
-            }
+            pendingAvailabilityCoordinateRef.current = nextCoordinate;
+            await flushAvailabilityCoordinate();
           }
         );
         activeLocationRideIdRef.current = ride?.id || null;
@@ -720,6 +719,7 @@ export default function DriverTripScreen({ navigation, route }) {
       }
       activeLocationRideIdRef.current = null;
       availabilitySyncInFlightRef.current = false;
+      pendingAvailabilityCoordinateRef.current = null;
     };
   }, [ride?.id]);
 

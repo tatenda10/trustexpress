@@ -218,6 +218,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [confirmingPickup, setConfirmingPickup] = useState(false);
   const ratingDraftTouchedRef = useRef(false);
   const lastRatingModalStateRef = useRef(false);
+  const lastDriverLocationAtRef = useRef(0);
   const windowHeight = Dimensions.get('window').height;
   // Tab bar is hidden on this screen; only keep safe-area padding for the footer actions.
   const bottomActionInset = Math.max(insets.bottom + 16, 24);
@@ -256,29 +257,56 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   useEffect(() => {
     if (!rideRequestId) return undefined;
     let active = true;
+    let requestId = 0;
+
+    const preferFresherCoordinate = (currentCoordinate, nextCoordinate, nextSeenAt = null) => {
+      if (!nextCoordinate) return currentCoordinate || null;
+      if (!currentCoordinate) return nextCoordinate;
+
+      const socketUpdatedAt = Number(lastDriverLocationAtRef.current || 0);
+      const pollSeenAt = nextSeenAt ? new Date(nextSeenAt).getTime() : 0;
+      // Keep a recent live socket fix unless the poll clearly has a newer timestamp.
+      if (socketUpdatedAt > 0 && Date.now() - socketUpdatedAt < 10000) {
+        if (!Number.isFinite(pollSeenAt) || pollSeenAt <= socketUpdatedAt) {
+          return currentCoordinate;
+        }
+      }
+      return nextCoordinate;
+    };
 
     const loadStatus = async () => {
+      const currentRequestId = ++requestId;
       try {
         const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await getPassengerRideRequestStatus(token, rideRequestId);
-        if (!active) return;
+        if (!active || currentRequestId !== requestId) return;
         setRideStatus((current) => {
           const next = data?.rideRequest || null;
           if (!next) return current;
           if (!current) return next;
+          const mergedCoordinate = preferFresherCoordinate(
+            current.driverCoordinate,
+            next.driverCoordinate,
+            data?.assignedDriver?.lastSeenAt || next.driverLocationUpdatedAt
+          );
           return {
             ...next,
-            driverCoordinate: next.driverCoordinate || current.driverCoordinate,
+            driverCoordinate: mergedCoordinate,
           };
         });
         setDriver((current) => {
           const next = data?.assignedDriver || initialDriver || null;
           if (!next) return current;
           if (!current) return next;
+          const mergedCoordinate = preferFresherCoordinate(
+            current.coordinate,
+            next.coordinate,
+            next.lastSeenAt
+          );
           return {
             ...next,
-            coordinate: next.coordinate || current.coordinate,
+            coordinate: mergedCoordinate,
           };
         });
         const savedRating = Number(data?.rideRequest?.passengerDriverRating || 0);
@@ -293,7 +321,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       } catch (error) {
         if (!active) return;
       } finally {
-        if (active) setLoading(false);
+        if (active && currentRequestId === requestId) setLoading(false);
       }
     };
 
@@ -304,7 +332,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       active = false;
       clearInterval(interval);
     };
-  }, [initialDriver, rideRequestId, realtimeSignal]);
+  }, [initialDriver, rideRequestId]);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -335,7 +363,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           const hasSafetyPinUpdate = payload?.safetyPinVerified !== undefined
             || payload?.safetyPinAttempts !== undefined
             || payload?.safetyPinLocked !== undefined;
-          if ((nextStatus && !isPickupConfirmation) || nextDriverCoordinate || hasConfirmationUpdate || hasSafetyPinUpdate) {
+          const hasStatusUpdate = Boolean(nextStatus && !isPickupConfirmation);
+          if (hasStatusUpdate || nextDriverCoordinate || hasConfirmationUpdate || hasSafetyPinUpdate) {
+            if (nextDriverCoordinate) {
+              const payloadUpdatedAt = payload?.driverLocationUpdatedAt
+                ? new Date(payload.driverLocationUpdatedAt).getTime()
+                : Date.now();
+              lastDriverLocationAtRef.current = Number.isFinite(payloadUpdatedAt)
+                ? payloadUpdatedAt
+                : Date.now();
+            }
             setRideStatus((current) => {
               const base = current || {
                 id: rideRequestId,
@@ -343,7 +380,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               };
               return {
                 ...base,
-                ...(nextStatus && !isPickupConfirmation ? { status: nextStatus } : null),
+                ...(hasStatusUpdate ? { status: nextStatus } : null),
                 stage: nextStage || base.stage || 'driver_on_the_way',
                 ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
                 ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
@@ -364,7 +401,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               } : current));
             }
           }
-          setRealtimeSignal((current) => current + 1);
+          // Only bump poll signal for meaningful ride-state changes, not location ticks.
+          if (hasStatusUpdate || hasConfirmationUpdate || hasSafetyPinUpdate) {
+            setRealtimeSignal((current) => current + 1);
+          }
         };
 
         localSocket.on('ride_status:updated', handleRideUpdate);
@@ -911,7 +951,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             <DriverVehicleMapMarker
               coordinate={driverCoordinate}
               headingDegrees={vehicleHeadingDegrees}
-              etaLabel={liveEtaText}
             />
           ) : null}
           {isValidCoordinate(pickupCoordinate) ? (

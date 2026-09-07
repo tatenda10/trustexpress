@@ -1379,16 +1379,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
             longitude: nextCoordinate.longitude,
           }));
 
-          // Throttle DB writes: sync faster while heading to pickup / on trip.
+          // Trip screen owns live publishing while a ride is active.
+          if (currentRideRef.current?.id) return;
+
+          // Throttle DB writes while waiting for requests.
           const now = Date.now();
           const last = lastDbLocationRef.current;
-          const hasActiveRide = Boolean(currentRideRef.current?.id);
-          const dbIntervalMs = hasActiveRide ? DB_UPDATE_INTERVAL_ACTIVE_RIDE_MS : DB_UPDATE_INTERVAL_MS;
-          const dbDistanceKm = hasActiveRide ? DB_UPDATE_MIN_DISTANCE_ACTIVE_RIDE_KM : DB_UPDATE_MIN_DISTANCE_KM;
-          const timeOk = now - last.at >= dbIntervalMs;
+          const timeOk = now - last.at >= DB_UPDATE_INTERVAL_MS;
           const distanceOk =
             !last.coordinate ||
-            calculateDistanceKm(last.coordinate, nextCoordinate) >= dbDistanceKm;
+            calculateDistanceKm(last.coordinate, nextCoordinate) >= DB_UPDATE_MIN_DISTANCE_KM;
           if (!timeOk && !distanceOk) return;
 
           if (locationSyncInFlightRef.current) return;

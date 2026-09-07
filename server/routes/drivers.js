@@ -374,7 +374,19 @@ router.post('/availability', requireAuth, async (req, res) => {
     const latitude = req.body?.latitude === null || req.body?.latitude === undefined ? null : Number(req.body.latitude);
     const longitude = req.body?.longitude === null || req.body?.longitude === undefined ? null : Number(req.body.longitude);
 
-    if (isOnline) {
+    const [existingAvailability] = await query(
+      `SELECT is_online
+       FROM driver_availability
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [req.userId]
+    );
+    const wasOnline = Number(existingAvailability?.is_online || 0) === 1;
+    const isLocationHeartbeat = isOnline && wasOnline;
+
+    // Mid-ride / heartbeat location updates should not re-run go-online gates.
+    // Wallet/verification checks only apply when transitioning offline -> online.
+    if (isOnline && !isLocationHeartbeat) {
       try {
         assertAccountNotRestricted(user, 'driver');
       } catch (restrictionError) {
@@ -383,15 +395,13 @@ router.post('/availability', requireAuth, async (req, res) => {
           code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
         });
       }
-    }
 
-    if (isOnline && (!profileApproved || !vehicleApproved || !phoneVerified)) {
-      return res.status(403).json({
-        error: 'Complete profile approval, vehicle approval, and phone verification before going online.',
-      });
-    }
+      if (!profileApproved || !vehicleApproved || !phoneVerified) {
+        return res.status(403).json({
+          error: 'Complete profile approval, vehicle approval, and phone verification before going online.',
+        });
+      }
 
-    if (isOnline) {
       try {
         await assertDriverWalletSufficient(req.userId);
       } catch (walletError) {
@@ -469,6 +479,7 @@ router.post('/availability', requireAuth, async (req, res) => {
           status: activeRide.status,
           driverUserId: req.userId,
           driverCoordinate: { latitude, longitude },
+          driverLocationUpdatedAt: new Date().toISOString(),
         });
       }
     }

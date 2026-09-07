@@ -23,7 +23,8 @@ function isValidCoordinate(value) {
 
 /**
  * Rotating car marker for live driver tracking on react-native-maps.
- * Android custom marker views need a short tracksViewChanges=true pass after mount/updates.
+ * Android custom marker views need tracksViewChanges while the bitmap is being
+ * rebuilt (mount / heading / label), but not on every tiny coordinate tick.
  */
 export default function DriverVehicleMapMarker({
   coordinate,
@@ -33,6 +34,7 @@ export default function DriverVehicleMapMarker({
 }) {
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
   const previousCoordinateRef = useRef(null);
+  const lastRenderedHeadingRef = useRef(null);
   const [renderHeading, setRenderHeading] = useState(() => normalizeHeading(headingDegrees));
 
   useEffect(() => {
@@ -50,10 +52,17 @@ export default function DriverVehicleMapMarker({
 
   useEffect(() => {
     if (!isValidCoordinate(coordinate)) return undefined;
+
+    const headingChanged = lastRenderedHeadingRef.current === null
+      || Math.abs(Number(lastRenderedHeadingRef.current) - Number(renderHeading)) >= 8;
+    lastRenderedHeadingRef.current = renderHeading;
+
+    // Rebuild the marker bitmap on mount and meaningful visual changes only.
+    // Continuous lat/lng updates keep working while tracksViewChanges is false.
     setTracksViewChanges(true);
-    const timer = setTimeout(() => setTracksViewChanges(false), 800);
+    const timer = setTimeout(() => setTracksViewChanges(false), headingChanged || etaLabel ? 700 : 350);
     return () => clearTimeout(timer);
-  }, [coordinate?.latitude, coordinate?.longitude, etaLabel, renderHeading]);
+  }, [etaLabel, renderHeading]);
 
   if (!isValidCoordinate(coordinate)) return null;
 
@@ -64,10 +73,12 @@ export default function DriverVehicleMapMarker({
       coordinate={coordinate}
       title="Driver"
       anchor={{ x: 0.5, y: 0.5 }}
+      flat
+      rotation={Platform.OS === 'android' ? 0 : undefined}
       tracksViewChanges={tracksViewChanges}
       zIndex={20}
     >
-      <View className="items-center justify-center">
+      <View className="items-center justify-center" pointerEvents="none">
         <View
           style={{
             width: size,
