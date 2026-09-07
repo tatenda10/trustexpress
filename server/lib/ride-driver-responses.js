@@ -13,7 +13,7 @@ async function getUserProfileImageUrl(userId) {
   }
 }
 
-function buildViewingEligibilitySql(rideRequestId) {
+function buildViewingEligibilitySql(rideRequestId, { includeVehicle = false } = {}) {
   return {
     sql: `
       FROM ride_request_driver_responses rr
@@ -23,6 +23,7 @@ function buildViewingEligibilitySql(rideRequestId) {
        AND da.current_lat IS NOT NULL
        AND da.current_lng IS NOT NULL
        AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+      ${includeVehicle ? 'LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id' : ''}
       LEFT JOIN ride_requests active_ride
         ON active_ride.driver_user_id = rr.driver_user_id
        AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
@@ -60,6 +61,7 @@ export async function loadDriversViewingSnapshot(rideRequestId) {
   }
 
   const eligibility = buildViewingEligibilitySql(Number(rideRequestId));
+  const previewEligibility = buildViewingEligibilitySql(Number(rideRequestId), { includeVehicle: true });
 
   const [countRow] = await query(
     `SELECT COUNT(*) AS total ${eligibility.sql}`,
@@ -70,11 +72,11 @@ export async function loadDriversViewingSnapshot(rideRequestId) {
     `SELECT
        rr.driver_user_id,
        da.driver_name,
-       da.car_photo_url
-     ${eligibility.sql}
+       COALESCE(NULLIF(TRIM(dv.car_photo_front_url), ''), da.car_photo_url) AS car_photo_url
+     ${previewEligibility.sql}
      ORDER BY COALESCE(rr.viewed_at, rr.responded_at) ASC, rr.id ASC
      LIMIT 4`,
-    eligibility.params
+    previewEligibility.params
   );
 
   const visibleDriversPreview = await Promise.all(

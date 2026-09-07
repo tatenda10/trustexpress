@@ -107,42 +107,97 @@ function StarRating({ value }) {
 
 export default function DriverDetailsPage() {
   const navigate = useNavigate()
-  const { token } = useAuth()
+  const { token, can } = useAuth()
   const { driverId } = useParams()
   const location = useLocation()
   const [activeTab, setActiveTab] = useState('profile')
   const [loading, setLoading] = useState(false)
+  const [settingDisplayPhoto, setSettingDisplayPhoto] = useState(false)
   const [warning, setWarning] = useState('')
   const [driver, setDriver] = useState(location.state?.driver || null)
   const [carPhotoIndex, setCarPhotoIndex] = useState(0)
 
-  useEffect(() => {
-    const run = async () => {
-      setLoading(true)
-      setWarning('')
-      try {
-        const { data } = await axios.get(`${BASE_URL}/api/admin/drivers/${driverId}`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        })
-        setDriver(data.driver || null)
-      } catch (err) {
-        const apiError = err?.response?.data?.error
-        setWarning(apiError || err?.message || 'Unable to refresh latest details')
-      } finally {
-        setLoading(false)
-      }
+  const loadDriver = async () => {
+    setLoading(true)
+    setWarning('')
+    try {
+      const { data } = await axios.get(`${BASE_URL}/api/admin/drivers/${driverId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      setDriver(data.driver || null)
+    } catch (err) {
+      const apiError = err?.response?.data?.error
+      setWarning(apiError || err?.message || 'Unable to refresh latest details')
+    } finally {
+      setLoading(false)
     }
+  }
 
-    run()
+  useEffect(() => {
+    loadDriver()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driverId, token])
 
   const documents = useMemo(() => docItems(driver), [driver])
-  const carPhotoUrls = useMemo(() => {
+  const carPhotoEntries = useMemo(() => {
     const vehicleDocs = driver?.vehicleDocs || {}
-    return Array.isArray(vehicleDocs.carPhotoUrls) ? vehicleDocs.carPhotoUrls.map((url) => resolveMediaUrl(url)).filter(Boolean) : []
+    const raw = [
+      vehicleDocs.carPhotoFrontUrl,
+      vehicleDocs.carPhotoRearUrl,
+      ...(Array.isArray(vehicleDocs.carPhotoUrls) ? vehicleDocs.carPhotoUrls : []),
+    ]
+      .map((url) => String(url || '').trim())
+      .filter(Boolean)
+    const unique = []
+    raw.forEach((url) => {
+      if (!unique.some((item) => item === url)) unique.push(url)
+    })
+    return unique.map((url) => ({
+      rawUrl: url,
+      displayUrl: resolveMediaUrl(url),
+    }))
   }, [driver])
+  const carPhotoUrls = useMemo(
+    () => carPhotoEntries.map((item) => item.displayUrl).filter(Boolean),
+    [carPhotoEntries]
+  )
+  const displayPhotoRawUrl = String(driver?.vehicleDocs?.carPhotoFrontUrl || '').trim()
+  const currentCarPhoto = carPhotoEntries[carPhotoIndex] || null
+  const isCurrentDisplayPhoto = Boolean(
+    currentCarPhoto?.rawUrl && displayPhotoRawUrl && currentCarPhoto.rawUrl === displayPhotoRawUrl
+  )
+  const canSetDisplayPhoto = typeof can === 'function' ? can('verification.review') : false
+
+  const setAsDisplayPhoto = async () => {
+    if (!currentCarPhoto?.rawUrl || isCurrentDisplayPhoto) return
+    setSettingDisplayPhoto(true)
+    setWarning('')
+    try {
+      const { data } = await axios.patch(
+        `${BASE_URL}/api/admin/drivers/${driverId}/vehicle-display-photo`,
+        { photoUrl: currentCarPhoto.rawUrl },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      )
+      setDriver((current) => ({
+        ...(current || {}),
+        vehicleDocs: {
+          ...(current?.vehicleDocs || {}),
+          ...(data.vehicleDocs || {}),
+        },
+      }))
+      setCarPhotoIndex(0)
+    } catch (err) {
+      setWarning(err?.response?.data?.error || err?.message || 'Failed to set display photo')
+    } finally {
+      setSettingDisplayPhoto(false)
+    }
+  }
   const trips = useMemo(() => (Array.isArray(driver?.trips) ? driver.trips : []), [driver])
   const reviews = useMemo(() => (Array.isArray(driver?.reviews) ? driver.reviews : []), [driver])
   const walletTransactions = useMemo(
@@ -413,29 +468,51 @@ export default function DriverDetailsPage() {
                   <h2 className="text-sm font-semibold text-slate-800">Car Photos</h2>
                   <p className="text-[11px] text-slate-500">
                     {carPhotoIndex + 1} / {carPhotoUrls.length}
+                    {isCurrentDisplayPhoto ? ' · Current display photo' : ''}
                   </p>
                 </div>
-                {carPhotoUrls.length > 1 ? (
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  {canSetDisplayPhoto ? (
                     <button
                       type="button"
-                      onClick={() => setCarPhotoIndex((value) => (value === 0 ? carPhotoUrls.length - 1 : value - 1))}
-                      className="border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                      onClick={setAsDisplayPhoto}
+                      disabled={settingDisplayPhoto || isCurrentDisplayPhoto}
+                      className="border border-indigo-600 bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
                     >
-                      Prev
+                      {isCurrentDisplayPhoto
+                        ? 'Display photo'
+                        : settingDisplayPhoto
+                          ? 'Saving…'
+                          : 'Make this photo a profile picture'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setCarPhotoIndex((value) => (value === carPhotoUrls.length - 1 ? 0 : value + 1))}
-                      className="border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
-                    >
-                      Next
-                    </button>
-                  </div>
-                ) : null}
+                  ) : null}
+                  {carPhotoUrls.length > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setCarPhotoIndex((value) => (value === 0 ? carPhotoUrls.length - 1 : value - 1))}
+                        className="border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCarPhotoIndex((value) => (value === carPhotoUrls.length - 1 ? 0 : value + 1))}
+                        className="border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                      >
+                        Next
+                      </button>
+                    </>
+                  ) : null}
+                </div>
               </div>
 
-              <a href={carPhotoUrls[carPhotoIndex]} target="_blank" rel="noreferrer" className="block bg-slate-100">
+              <a href={carPhotoUrls[carPhotoIndex]} target="_blank" rel="noreferrer" className="relative block bg-slate-100">
+                {isCurrentDisplayPhoto ? (
+                  <span className="absolute left-3 top-3 z-10 rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                    Display photo
+                  </span>
+                ) : null}
                 <img
                   src={carPhotoUrls[carPhotoIndex]}
                   alt={`Car photo ${carPhotoIndex + 1}`}

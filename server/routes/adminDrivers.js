@@ -726,6 +726,119 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
   }
 });
 
+function collectVehiclePhotoCandidates(vehicleRow) {
+  const candidates = [];
+  const pushUnique = (value) => {
+    const normalized = normalizeUploadPath(value);
+    if (!normalized) return;
+    if (candidates.some((item) => item === normalized)) return;
+    candidates.push(normalized);
+  };
+
+  pushUnique(vehicleRow?.car_photo_front_url);
+  pushUnique(vehicleRow?.car_photo_rear_url);
+  try {
+    const parsed = vehicleRow?.car_photo_urls ? JSON.parse(vehicleRow.car_photo_urls) : [];
+    if (Array.isArray(parsed)) {
+      parsed.forEach((item) => pushUnique(item));
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return candidates;
+}
+
+router.patch(
+  '/:driverId/vehicle-display-photo',
+  requireAdminAuth,
+  requirePermission('verification.review'),
+  async (req, res) => {
+    try {
+      const driverId = String(req.params.driverId || '').trim();
+      const photoUrl = normalizeUploadPath(req.body?.photoUrl);
+      if (!driverId) {
+        return res.status(400).json({ error: 'Invalid driver id' });
+      }
+      if (!photoUrl) {
+        return res.status(400).json({ error: 'photoUrl is required' });
+      }
+
+      const clerkClient = getClerkClient();
+      const user = await clerkClient.users.getUser(driverId);
+      if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
+        return res.status(404).json({ error: 'Driver not found' });
+      }
+
+      const vehicleRow = await getDriverVehicle(driverId);
+      if (!vehicleRow) {
+        return res.status(404).json({ error: 'Vehicle documents not found for this driver' });
+      }
+
+      const candidates = collectVehiclePhotoCandidates(vehicleRow);
+      if (!candidates.includes(photoUrl)) {
+        return res.status(400).json({
+          error: 'Selected photo is not one of this driver\'s uploaded vehicle photos',
+        });
+      }
+
+      const remaining = candidates.filter((item) => item !== photoUrl);
+      const nextFrontUrl = photoUrl;
+      const nextRearUrl = remaining[0] || vehicleRow.car_photo_rear_url || null;
+      const nextPhotoUrls = [nextFrontUrl, ...remaining];
+
+      await query(
+        `UPDATE driver_vehicle
+         SET car_photo_front_url = ?,
+             car_photo_rear_url = ?,
+             car_photo_urls = ?
+         WHERE driver_user_id = ?`,
+        [
+          nextFrontUrl,
+          nextRearUrl,
+          JSON.stringify(nextPhotoUrls),
+          driverId,
+        ]
+      );
+
+      await query(
+        `UPDATE driver_availability
+         SET car_photo_url = ?
+         WHERE driver_user_id = ?`,
+        [nextFrontUrl, driverId]
+      );
+
+      const refreshedVehicle = await getDriverVehicle(driverId);
+      return res.json({
+        ok: true,
+        vehicleDocs: refreshedVehicle
+          ? {
+              carPhotoFrontUrl: normalizeUploadPath(refreshedVehicle.car_photo_front_url),
+              carPhotoRearUrl: normalizeUploadPath(refreshedVehicle.car_photo_rear_url),
+              carPhotoUrls: (() => {
+                try {
+                  return refreshedVehicle.car_photo_urls
+                    ? JSON.parse(refreshedVehicle.car_photo_urls)
+                        .map((value) => normalizeUploadPath(value))
+                        .filter(Boolean)
+                    : nextPhotoUrls;
+                } catch {
+                  return nextPhotoUrls;
+                }
+              })(),
+            }
+          : {
+              carPhotoFrontUrl: nextFrontUrl,
+              carPhotoRearUrl: nextRearUrl,
+              carPhotoUrls: nextPhotoUrls,
+            },
+      });
+    } catch (err) {
+      console.error('PATCH /api/admin/drivers/:driverId/vehicle-display-photo', err);
+      return res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
 router.patch('/:driverId/review', requireAdminAuth, requirePermission('verification.review'), async (req, res) => {
   try {
     const driverId = String(req.params.driverId || '').trim();
