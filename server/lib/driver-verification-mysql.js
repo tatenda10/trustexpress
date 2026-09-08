@@ -68,6 +68,16 @@ function shapeProfileFromRow(row) {
     driverLicenceNumber: row.driver_licence_number || null,
     ecocashNumber: row.ecocash_number || null,
     ecocashRegisteredName: row.ecocash_registered_name || null,
+    dateOfBirth: row.date_of_birth
+      ? String(row.date_of_birth).slice(0, 10)
+      : null,
+    gender: row.gender || null,
+    smileCashMobile: row.smile_cash_mobile || null,
+    smileCashStatus: row.smile_cash_status || null,
+    smileCashOpenedAt: row.smile_cash_opened_at
+      ? new Date(row.smile_cash_opened_at).toISOString()
+      : null,
+    smileCashLastError: row.smile_cash_last_error || null,
   };
 }
 

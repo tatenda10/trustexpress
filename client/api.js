@@ -165,6 +165,82 @@ export async function updateDriverPayoutDetails(token, payload) {
   }, token);
 }
 
+export async function openDriverSmileCash(token, payload) {
+  return apiFetch('/api/drivers/me/smile-cash/open', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
+export async function listHireVehicles(token) {
+  return apiFetch('/api/hire/vehicles', {}, token);
+}
+
+export async function createHireVehicle(token, payload) {
+  return apiFetch('/api/hire/vehicles', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function updateHireVehicle(token, vehicleId, payload) {
+  return apiFetch(`/api/hire/vehicles/${encodeURIComponent(vehicleId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function listHireRequests(token) {
+  return apiFetch('/api/hire/requests', {}, token);
+}
+
+export async function createHireRequest(token, payload) {
+  return apiFetch('/api/hire/requests', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function getHireRequest(token, requestId) {
+  return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}`, {}, token);
+}
+
+export async function cancelHireRequest(token, requestId) {
+  return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}/cancel`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  }, token);
+}
+
+export async function listOpenHireRequests(token) {
+  return apiFetch('/api/hire/open-requests', {}, token);
+}
+
+export async function createHireQuote(token, requestId, payload) {
+  return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}/quotes`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function acceptHireQuote(token, quoteId) {
+  return apiFetch(`/api/hire/quotes/${encodeURIComponent(quoteId)}/accept`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  }, token);
+}
+
+export async function listHireBookings(token) {
+  return apiFetch('/api/hire/bookings', {}, token);
+}
+
+export async function updateHireBookingStatus(token, bookingId, status) {
+  return apiFetch(`/api/hire/bookings/${encodeURIComponent(bookingId)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  }, token);
+}
+
 export async function saveDriverPushToken(token, pushToken) {
   return apiFetch(
     '/api/drivers/push-token',
@@ -234,6 +310,13 @@ export async function verifyDriverWalletTopup(token, reference) {
   return apiFetch('/api/drivers/wallet/top-ups/verify', {
     method: 'POST',
     body: JSON.stringify({ reference }),
+  }, token);
+}
+
+export async function cashOutDriverWallet(token, payload = {}) {
+  return apiFetch('/api/drivers/wallet/cash-outs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   }, token);
 }
 
@@ -312,6 +395,13 @@ export async function submitPassengerIdentity(token, payload) {
   }, token);
 }
 
+export async function openPassengerSmileCash(token, payload) {
+  return apiFetch('/api/passengers/payments/smile-cash/open', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
 export async function getNearbyPassengerDrivers(token, { latitude, longitude, radiusKm = 8 }) {
   const params = new URLSearchParams({
     latitude: String(latitude),
@@ -377,6 +467,20 @@ export async function tipDriver(token, rideRequestId, amount) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/tip-driver`, {
     method: 'POST',
     body: JSON.stringify({ amount }),
+  }, token);
+}
+
+export async function initiatePassengerRideSmilePay(token, rideRequestId, payload = {}) {
+  return apiFetch(`/api/passengers/payments/rides/${rideRequestId}/smilepay/initiate`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function verifyPassengerRideSmilePay(token, rideRequestId, reference) {
+  return apiFetch(`/api/passengers/payments/rides/${rideRequestId}/smilepay/verify`, {
+    method: 'POST',
+    body: JSON.stringify({ reference }),
   }, token);
 }
 

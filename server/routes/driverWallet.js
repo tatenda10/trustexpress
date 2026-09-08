@@ -6,6 +6,7 @@ import {
   initializeDriverWalletTopup,
   verifyDriverWalletTopup,
   handleSmilePayWalletWebhook,
+  cashOutDriverWallet,
 } from '../lib/driver-wallet.js';
 
 const router = Router();
@@ -63,6 +64,25 @@ router.post('/top-ups/verify', requireAuth, async (req, res) => {
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('POST /api/drivers/wallet/top-ups/verify', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
+  }
+});
+
+router.post('/cash-outs', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+    const amount = req.body?.amount === undefined || req.body?.amount === null || req.body?.amount === ''
+      ? null
+      : Number(req.body.amount);
+    const result = await cashOutDriverWallet({
+      driverUserId: req.userId,
+      amount,
+      narration: req.body?.narration || 'Trust Express wallet cash out',
+    });
+    return res.status(201).json({ ok: true, cashout: result });
+  } catch (err) {
+    console.error('POST /api/drivers/wallet/cash-outs', err);
     return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
   }
 });

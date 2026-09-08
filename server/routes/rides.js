@@ -83,6 +83,18 @@ function parseJsonArray(value) {
   }
 }
 
+function buildRidePaymentPayload(ride) {
+  const paymentStatus = String(ride?.payment_status || 'unpaid').trim().toLowerCase() || 'unpaid';
+  return {
+    paymentStatus,
+    paymentProvider: ride?.payment_provider || null,
+    paymentReference: ride?.payment_reference || null,
+    paymentMethod: ride?.payment_method || null,
+    paidAt: toIsoOrNull(ride?.paid_at),
+    canPayWithSmilePay: ride?.status === 'completed' && paymentStatus !== 'paid',
+  };
+}
+
 function createCaseReference(prefix, rideRequestId) {
   return `${prefix}-${String(rideRequestId || '').padStart(6, '0')}-${crypto.randomInt(100, 999)}`;
 }
@@ -669,6 +681,11 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
          discount_type,
          discount_value,
          tip_amount,
+         payment_status,
+         payment_provider,
+         payment_reference,
+         payment_method,
+         paid_at,
          requested_tier_name,
          driver_user_id,
          driver_name,
@@ -695,6 +712,7 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
       rides: rows.map((row) => ({
         ...buildRideDiscountPayload(row),
         ...buildRideStopsPayload(row),
+        ...buildRidePaymentPayload(row),
         id: row.id,
         publicId: row.public_id,
         pickupLabel: row.pickup_label,
@@ -723,7 +741,7 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         driverPassengerFeedbackTags: parseJsonArray(row.driver_passenger_feedback_tags),
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
         canRateDriver: row.status === 'completed' && !!row.driver_user_id && row.passenger_driver_rating === null,
-        canTipDriver: row.status === 'completed' && !!row.driver_user_id && Number(row.tip_amount || 0) <= 0,
+        canTipDriver: row.status === 'completed' && !!row.driver_user_id && Number(row.tip_amount || 0) <= 0 && String(row.payment_status || '').toLowerCase() !== 'paid',
         requestedAt: row.requested_at,
         completedAt: row.completed_at,
         cancelledAt: row.cancelled_at,
@@ -1238,6 +1256,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
       rideRequest: {
         ...buildRideDiscountPayload(ride),
         ...buildRideStopsPayload(ride),
+        ...buildRidePaymentPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         status: ride.status,
@@ -1386,6 +1405,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     return res.json({
       rideRequest: {
         ...buildRideStopsPayload(ride),
+        ...buildRidePaymentPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         status: ride.status,
@@ -1458,6 +1478,7 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
       ride: {
         ...buildRideDiscountPayload(ride),
         ...buildRideStopsPayload(ride),
+        ...buildRidePaymentPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
         pickupLabel: ride.pickup_label,
@@ -1482,7 +1503,7 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
         driverPassengerFeedbackTags: parseJsonArray(ride.driver_passenger_feedback_tags),
         driverPassengerRatedAt: ride.driver_passenger_rated_at || null,
         canRateDriver: ride.status === 'completed' && !!ride.driver_user_id && ride.passenger_driver_rating === null,
-        canTipDriver: ride.status === 'completed' && !!ride.driver_user_id && Number(ride.tip_amount || 0) <= 0,
+        canTipDriver: ride.status === 'completed' && !!ride.driver_user_id && Number(ride.tip_amount || 0) <= 0 && String(ride.payment_status || '').toLowerCase() !== 'paid',
       },
     });
   } catch (err) {
@@ -1881,7 +1902,7 @@ router.post('/passenger/:rideRequestId/tip-driver', requireAuth, async (req, res
 
     const normalizedAmount = Number(amount.toFixed(2));
     const [ride] = await query(
-      `SELECT id, public_id, driver_user_id, status, tip_amount
+      `SELECT id, public_id, driver_user_id, status, tip_amount, payment_status
        FROM ride_requests
        WHERE id = ? AND passenger_user_id = ?
        LIMIT 1`,
@@ -1895,6 +1916,9 @@ router.post('/passenger/:rideRequestId/tip-driver', requireAuth, async (req, res
     }
     if (Number(ride.tip_amount || 0) > 0) {
       return res.status(409).json({ error: 'A tip has already been added to this ride' });
+    }
+    if (String(ride.payment_status || '').toLowerCase() === 'paid') {
+      return res.status(409).json({ error: 'This ride has already been paid. Add tips before payment.' });
     }
 
     await query(

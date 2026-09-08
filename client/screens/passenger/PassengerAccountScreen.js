@@ -204,6 +204,15 @@ const PassengerAccountScreen = ({ navigation }) => {
       onPress: () => navigation.navigate('PassengerProfileDetails'),
     },
     {
+      key: 'smile-cash',
+      title: 'Smile Cash wallet',
+      subtitle: profile?.passengerIdentity?.smileCashStatus === 'active'
+        ? `Active: ${profile.passengerIdentity.smileCashMobile}`
+        : 'Open a Smile Cash account for wallet payments',
+      icon: 'wallet-outline',
+      onPress: () => navigation.navigate('PassengerSmileCash'),
+    },
+    {
       key: 'reviews',
       title: 'Reviews',
       subtitle: 'See what drivers said about you',

@@ -116,6 +116,9 @@ export default function DriverDetailsPage() {
   const [warning, setWarning] = useState('')
   const [driver, setDriver] = useState(location.state?.driver || null)
   const [carPhotoIndex, setCarPhotoIndex] = useState(0)
+  const [manualDocsSubmitting, setManualDocsSubmitting] = useState(false)
+  const [manualDocsMessage, setManualDocsMessage] = useState('')
+  const [manualDocsFormKey, setManualDocsFormKey] = useState(0)
 
   const loadDriver = async () => {
     setLoading(true)
@@ -169,6 +172,7 @@ export default function DriverDetailsPage() {
     currentCarPhoto?.rawUrl && displayPhotoRawUrl && currentCarPhoto.rawUrl === displayPhotoRawUrl
   )
   const canSetDisplayPhoto = typeof can === 'function' ? can('verification.review') : false
+  const canUploadProfileDocuments = typeof can === 'function' ? can('verification.review') : false
 
   const setAsDisplayPhoto = async () => {
     if (!currentCarPhoto?.rawUrl || isCurrentDisplayPhoto) return
@@ -198,6 +202,55 @@ export default function DriverDetailsPage() {
       setSettingDisplayPhoto(false)
     }
   }
+
+  const submitManualProfileDocuments = async (event) => {
+    event.preventDefault()
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    const hasFile = ['nationalIdFront', 'nationalIdBack', 'driverLicence', 'selfie', 'selfieWithIdCard'].some((key) => {
+      const file = formData.get(key)
+      return file instanceof File && file.size > 0
+    })
+    const hasText = ['nationalIdNumber', 'driverLicenceNumber'].some((key) => String(formData.get(key) || '').trim())
+
+    if (!hasFile && !hasText) {
+      setManualDocsMessage('Choose at least one file or enter an ID/licence number.')
+      return
+    }
+
+    setManualDocsSubmitting(true)
+    setManualDocsMessage('')
+    setWarning('')
+    try {
+      const { data } = await axios.post(`${BASE_URL}/api/admin/drivers/${driverId}/documents`, formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      setDriver((current) => ({
+        ...(current || {}),
+        profileDocs: data.profileDocs || current?.profileDocs || null,
+        profile: {
+          ...(current?.profile || {}),
+          status: data.profileStatus || current?.profile?.status || 'pending',
+          hasDocuments: true,
+          missingRequiredCount: data.complete ? 0 : current?.profile?.missingRequiredCount,
+        },
+      }))
+      setManualDocsFormKey((value) => value + 1)
+      setManualDocsMessage(
+        data.complete
+          ? 'Documents uploaded. Profile is ready for review.'
+          : 'Saved partial documents. Upload the remaining required items before approval.'
+      )
+      await loadDriver()
+    } catch (err) {
+      setManualDocsMessage(err?.response?.data?.error || err?.message || 'Failed to upload documents')
+    } finally {
+      setManualDocsSubmitting(false)
+    }
+  }
+
   const trips = useMemo(() => (Array.isArray(driver?.trips) ? driver.trips : []), [driver])
   const reviews = useMemo(() => (Array.isArray(driver?.reviews) ? driver.reviews : []), [driver])
   const walletTransactions = useMemo(
@@ -362,6 +415,10 @@ export default function DriverDetailsPage() {
           />
           <Field label="EcoCash Number" value={driver.profile?.ecocashNumber || '-'} />
           <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
+          <Field label="Smile Cash Mobile" value={driver.profile?.smileCashMobile || '-'} />
+          <Field label="Smile Cash Status" value={driver.profile?.smileCashStatus || '-'} />
+          <Field label="Date of Birth" value={driver.profile?.dateOfBirth || '-'} />
+          <Field label="Gender" value={driver.profile?.gender || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
           <Field label="National ID Number" value={driver?.profileDocs?.nationalIdNumber || '-'} />
           <Field label="Driver Licence Number" value={driver?.profileDocs?.driverLicenceNumber || '-'} />
@@ -606,36 +663,103 @@ export default function DriverDetailsPage() {
       ) : null}
 
       {activeTab === 'documents' ? (
-        <section className="overflow-hidden border border-slate-300 bg-white">
-          <div className="border-b border-slate-200 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-800">Documents</h2>
-          </div>
-          <div className="p-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              {documents.length === 0 ? (
-                <p className="text-sm text-slate-500">No documents submitted.</p>
-              ) : (
-                documents.map((doc) => (
-                  <article key={`${doc.label}-${doc.url}`} className="overflow-hidden border border-slate-200 bg-slate-50">
-                    <a href={doc.url} target="_blank" rel="noreferrer" className="block bg-slate-100">
-                      <img src={doc.url} alt={doc.label} className="h-64 w-full object-contain bg-slate-100" />
-                    </a>
-                    <div className="border-t border-slate-200 px-3 py-2">
-                      <p className="text-xs font-semibold text-slate-700">{doc.label}</p>
-                      <a
-                        href={doc.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1 inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
-                      >
-                        Open full image
-                      </a>
-                    </div>
-                  </article>
-                ))
-              )}
+        <section className="space-y-4">
+          {canUploadProfileDocuments ? (
+            <form
+              key={manualDocsFormKey}
+              onSubmit={submitManualProfileDocuments}
+              className="border border-indigo-200 bg-indigo-50 p-4"
+            >
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">Assist Profile Document Upload</h2>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Upload missing driver profile documents when the driver app/camera flow fails.
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  disabled={manualDocsSubmitting}
+                  className="border border-indigo-700 bg-indigo-700 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
+                >
+                  {manualDocsSubmitting ? 'Uploading…' : 'Save Documents'}
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="block text-xs font-semibold text-slate-700">
+                  National ID Number
+                  <input
+                    name="nationalIdNumber"
+                    defaultValue={driver?.profileDocs?.nationalIdNumber || ''}
+                    className="mt-1 w-full border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800"
+                    placeholder="Existing value is kept if blank"
+                  />
+                </label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Driver Licence Number
+                  <input
+                    name="driverLicenceNumber"
+                    defaultValue={driver?.profileDocs?.driverLicenceNumber || ''}
+                    className="mt-1 w-full border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800"
+                    placeholder="Existing value is kept if blank"
+                  />
+                </label>
+                {[
+                  ['nationalIdFront', 'National ID Front'],
+                  ['nationalIdBack', 'National ID Back'],
+                  ['driverLicence', 'Driver Licence'],
+                  ['selfie', 'Selfie'],
+                  ['selfieWithIdCard', 'Selfie With ID'],
+                ].map(([name, label]) => (
+                  <label key={name} className="block border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                    {label}
+                    <input
+                      type="file"
+                      name={name}
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      className="mt-2 block w-full text-xs font-normal text-slate-600 file:mr-3 file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                    />
+                  </label>
+                ))}
+              </div>
+              {manualDocsMessage ? (
+                <p className="mt-3 border border-indigo-200 bg-white px-3 py-2 text-xs text-indigo-800">{manualDocsMessage}</p>
+              ) : null}
+            </form>
+          ) : null}
+
+          <section className="overflow-hidden border border-slate-300 bg-white">
+            <div className="border-b border-slate-200 px-4 py-3">
+              <h2 className="text-sm font-semibold text-slate-800">Documents</h2>
             </div>
-          </div>
+            <div className="p-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                {documents.length === 0 ? (
+                  <p className="text-sm text-slate-500">No documents submitted.</p>
+                ) : (
+                  documents.map((doc) => (
+                    <article key={`${doc.label}-${doc.url}`} className="overflow-hidden border border-slate-200 bg-slate-50">
+                      <a href={doc.url} target="_blank" rel="noreferrer" className="block bg-slate-100">
+                        <img src={doc.url} alt={doc.label} className="h-64 w-full object-contain bg-slate-100" />
+                      </a>
+                      <div className="border-t border-slate-200 px-3 py-2">
+                        <p className="text-xs font-semibold text-slate-700">{doc.label}</p>
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 inline-block text-[11px] font-semibold text-indigo-700 hover:text-indigo-500"
+                        >
+                          Open full image
+                        </a>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
         </section>
       ) : null}
 

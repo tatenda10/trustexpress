@@ -121,13 +121,16 @@ export const smilePayProvider = {
     currency,
     email,
     callbackUrl,
+    resultUrl: customResultUrl,
     driverUserId,
     firstName = '',
     lastName = '',
     mobilePhoneNumber = '',
+    itemName = 'Trust Express Wallet Top-up',
+    itemDescription = '',
   }) {
     const currencyCode = toSmilePayCurrencyCode(currency);
-    const resultUrl = getSmilePayWebhookUrl();
+    const resultUrl = String(customResultUrl || '').trim() || getSmilePayWebhookUrl();
     const returnUrl = String(callbackUrl || '').trim() || resultUrl;
 
     const payload = await smilePayRequest('/payments/initiate-transaction', {
@@ -136,8 +139,8 @@ export const smilePayProvider = {
         orderReference: reference,
         amount: normalizeMoney(amount),
         currencyCode,
-        itemName: 'Trust Express Wallet Top-up',
-        itemDescription: `Driver wallet top-up for ${driverUserId}`,
+        itemName: String(itemName || 'Trust Express Wallet Top-up').trim() || 'Trust Express Wallet Top-up',
+        itemDescription: String(itemDescription || `Driver wallet top-up for ${driverUserId}`).trim() || `Driver wallet top-up for ${driverUserId}`,
         returnUrl,
         resultUrl,
         paymentMethod: 'WALLETPLUS',

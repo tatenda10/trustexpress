@@ -28,6 +28,8 @@ import VehicleTiersPage from './pages/VehicleTiersPage'
 import VehicleCatalogPage from './pages/VehicleCatalogPage'
 import AgentRewardsPage from './pages/AgentRewardsPage'
 import CaptainRewardsPage from './pages/CaptainRewardsPage'
+import HireVehiclesPage from './pages/HireVehiclesPage'
+import SmileCashPayoutsPage from './pages/SmileCashPayoutsPage'
 import SupportInboxPage from './pages/SupportInboxPage'
 import SupportAgentPage from './pages/SupportAgentPage'
 import DiscountCodesPage from './pages/DiscountCodesPage'
@@ -189,6 +191,14 @@ function AppRoutes() {
         <Route
           path="driver-payouts"
           element={<PermissionRoute permission="payouts.read"><DriverDiscountReimbursementsPage /></PermissionRoute>}
+        />
+        <Route
+          path="smile-cash-payouts"
+          element={<PermissionRoute permission="payouts.read"><SmileCashPayoutsPage /></PermissionRoute>}
+        />
+        <Route
+          path="hire-vehicles"
+          element={<PermissionRoute permission="verification.read"><HireVehiclesPage /></PermissionRoute>}
         />
         <Route
           path="driver-wallet-settings"

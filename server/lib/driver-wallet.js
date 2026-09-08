@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db/connection.js';
 import { getDriverWalletSettings } from './driver-wallet-settings.js';
 import { getPaymentProvider, normalizePaymentProvider } from './payment-providers/index.js';
+import { createSmileCashPayoutPublicId, executeSmileCashExternalCashout, normalizeZimMobile } from './smile-cash.js';
 
 /** @deprecated Use getDriverWalletSettings().commissionRatePercent */
 export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
@@ -96,6 +97,28 @@ function mapWalletStatus(walletRow, settings) {
     createdAt: walletRow?.created_at ? new Date(walletRow.created_at).toISOString() : null,
     updatedAt: walletRow?.updated_at ? new Date(walletRow.updated_at).toISOString() : null,
   };
+}
+
+async function getDriverWithdrawableBalance(driverUserId, connection = null) {
+  const executor = connection
+    ? (sql, params) => connection.execute(sql, params).then(([rows]) => rows)
+    : query;
+  const [row] = await executor(
+    `SELECT
+       COALESCE(SUM(CASE
+         WHEN transaction_type = 'manual_credit'
+          AND source_type IN ('passenger_ride_payment', 'driver_wallet_cashout_refund')
+         THEN amount
+         WHEN transaction_type = 'manual_debit'
+          AND source_type = 'driver_wallet_cashout'
+         THEN -amount
+         ELSE 0
+       END), 0) AS withdrawable_balance
+     FROM driver_wallet_transactions
+     WHERE driver_user_id = ?`,
+    [driverUserId]
+  );
+  return normalizeMoney(row?.withdrawable_balance || 0);
 }
 
 export async function getDriverWalletStatus(driverUserId) {
@@ -233,8 +256,15 @@ export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}
     [driverUserId]
   );
 
+  const withdrawableBalance = Math.min(
+    normalizeMoney(wallet?.available_balance || 0),
+    await getDriverWithdrawableBalance(driverUserId)
+  );
   return {
-    wallet: mapWalletStatus(wallet, settings),
+    wallet: {
+      ...mapWalletStatus(wallet, settings),
+      withdrawableBalance,
+    },
     settings: {
       commissionRatePercent: Number(settings.commissionRatePercent || 9.5),
       topupMinAmount: normalizeMoney(settings.topupMinAmount || 1),
@@ -660,6 +690,168 @@ export async function creditDriverWalletManual({
       transactionId: insertResult?.insertId || null,
     };
   });
+}
+
+export async function cashOutDriverWallet({
+  driverUserId,
+  amount = null,
+  narration = 'Trust Express wallet cash out',
+} = {}) {
+  const requestedAmount = amount == null ? null : normalizeMoney(amount);
+  if (requestedAmount !== null && !(requestedAmount > 0)) {
+    throw buildWalletError('Cash-out amount must be greater than zero');
+  }
+
+  const [identity] = await query(
+    `SELECT smile_cash_mobile, smile_cash_status
+     FROM driver_identity
+     WHERE driver_user_id = ?
+     LIMIT 1`,
+    [driverUserId]
+  );
+  const receiverMobile = normalizeZimMobile(identity?.smile_cash_mobile || '');
+  if (!receiverMobile || String(identity?.smile_cash_status || '').toLowerCase() !== 'active') {
+    throw buildWalletError('Open an active Smile Cash wallet before cashing out', 409);
+  }
+
+  const settings = await getDriverWalletSettings();
+  const currency = String(settings.currency || DRIVER_WALLET_CURRENCY || 'USD').toUpperCase();
+  const publicId = createSmileCashPayoutPublicId();
+
+  const cashout = await withTransaction(async (connection) => {
+    await connection.execute(
+      `INSERT INTO driver_wallets (driver_user_id, available_balance)
+       VALUES (?, 0.00)
+       ON DUPLICATE KEY UPDATE driver_user_id = VALUES(driver_user_id)`,
+      [driverUserId]
+    );
+
+    const [walletRows] = await connection.execute(
+      `SELECT available_balance
+       FROM driver_wallets
+       WHERE driver_user_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [driverUserId]
+    );
+    const balanceBefore = normalizeMoney(walletRows[0]?.available_balance || 0);
+    const withdrawableBalance = Math.min(balanceBefore, await getDriverWithdrawableBalance(driverUserId, connection));
+    const debitAmount = requestedAmount == null ? withdrawableBalance : requestedAmount;
+    if (!(debitAmount > 0)) {
+      throw buildWalletError('No passenger-payment earnings are available to cash out', 409);
+    }
+    if (debitAmount > withdrawableBalance) {
+      throw buildWalletError('Cash-out amount exceeds withdrawable passenger-payment earnings', 409);
+    }
+
+    const balanceAfter = normalizeMoney(balanceBefore - debitAmount);
+    await connection.execute(
+      `UPDATE driver_wallets
+       SET available_balance = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [balanceAfter, driverUserId]
+    );
+
+    const [transactionResult] = await connection.execute(
+      `INSERT INTO driver_wallet_transactions (
+         driver_user_id,
+         transaction_type,
+         amount,
+         currency,
+         payment_method,
+         source_type,
+         source_id,
+         balance_before,
+         balance_after,
+         provider_reference,
+         description
+       ) VALUES (?, 'manual_debit', ?, ?, 'smile_cash', 'driver_wallet_cashout', ?, ?, ?, ?, ?)`,
+      [
+        driverUserId,
+        debitAmount,
+        currency,
+        publicId,
+        balanceBefore,
+        balanceAfter,
+        publicId,
+        'Driver wallet cash out to Smile Cash',
+      ]
+    );
+
+    const [cashoutResult] = await connection.execute(
+      `INSERT INTO driver_wallet_cashouts (
+         public_id,
+         driver_user_id,
+         amount,
+         currency,
+         receiver_mobile,
+         status,
+         wallet_debit_transaction_id
+       ) VALUES (?, ?, ?, ?, ?, 'processing', ?)`,
+      [publicId, driverUserId, debitAmount, currency, receiverMobile, transactionResult?.insertId || null]
+    );
+
+    return {
+      id: cashoutResult?.insertId,
+      publicId,
+      amount: debitAmount,
+      currency,
+      receiverMobile,
+      balanceAfter,
+    };
+  });
+
+  try {
+    const result = await executeSmileCashExternalCashout({
+      receiverMobile,
+      amount: cashout.amount,
+      currency,
+      narration,
+    });
+
+    await query(
+      `UPDATE driver_wallet_cashouts
+       SET status = 'success',
+           auth_transaction_id = ?,
+           payment_transaction_id = ?,
+           provider_payload = ?,
+           completed_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [
+        result.authTransactionId,
+        result.paymentTransactionId,
+        JSON.stringify({ auth: result.authPayload, payment: result.paymentPayload }),
+        cashout.id,
+      ]
+    );
+    return { ...cashout, status: 'success' };
+  } catch (err) {
+    const refund = await creditDriverWalletManual({
+      driverUserId,
+      amount: cashout.amount,
+      currency,
+      description: `Refund failed cash out ${cashout.publicId}`,
+      sourceType: 'driver_wallet_cashout_refund',
+      sourceId: cashout.publicId,
+      paymentMethod: 'smile_cash_refund',
+    });
+    await query(
+      `UPDATE driver_wallet_cashouts
+       SET status = 'failed',
+           refund_transaction_id = ?,
+           error_message = ?,
+           provider_payload = ?
+       WHERE id = ?`,
+      [
+        refund.transactionId || null,
+        String(err.message || 'Cash out failed').slice(0, 1000),
+        JSON.stringify(err.providerPayload || {}),
+        cashout.id,
+      ]
+    );
+    throw err;
+  }
 }
 
 /**

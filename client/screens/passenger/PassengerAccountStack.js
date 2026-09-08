@@ -6,6 +6,7 @@ import PassengerPhoneVerificationScreen from './PassengerPhoneVerificationScreen
 import PassengerReviewsScreen from './PassengerReviewsScreen';
 import PassengerReferralsScreen from './PassengerReferralsScreen';
 import PassengerIdentityVerificationScreen from './PassengerIdentityVerificationScreen';
+import PassengerSmileCashScreen from './PassengerSmileCashScreen';
 import SupportChatScreen from '../shared/SupportChatScreen';
 import LegalDocumentScreen from '../shared/LegalDocumentScreen';
 
@@ -18,6 +19,7 @@ export default function PassengerAccountStack() {
       <Stack.Screen name="PassengerProfileDetails" component={PassengerProfileDetailsScreen} />
       <Stack.Screen name="PassengerPhoneVerificationDetails" component={PassengerPhoneVerificationScreen} />
       <Stack.Screen name="PassengerIdentityVerification" component={PassengerIdentityVerificationScreen} />
+      <Stack.Screen name="PassengerSmileCash" component={PassengerSmileCashScreen} />
       <Stack.Screen name="PassengerReviews" component={PassengerReviewsScreen} />
       <Stack.Screen name="PassengerReferrals" component={PassengerReferralsScreen} />
       <Stack.Screen name="PassengerSupportChat" component={SupportChatScreen} initialParams={{ role: 'passenger' }} />

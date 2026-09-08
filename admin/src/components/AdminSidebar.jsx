@@ -10,6 +10,7 @@ const navSections = [
     items: [
       { id: 'overview', label: 'Overview', icon: GridIcon, to: '/dashboard/overview', permission: 'overview.read' },
       { id: 'verification', label: 'Driver Verification', icon: FolderIcon, to: '/dashboard/driver-verification', permission: 'verification.read' },
+      { id: 'hire-vehicles', label: 'Hire Vehicles', icon: FolderIcon, to: '/dashboard/hire-vehicles', permission: 'verification.read' },
       { id: 'rides', label: 'Ride Operations', icon: BriefcaseIcon, to: '/dashboard/ride-operations', permission: 'ride_ops.read' },
       { id: 'push-notifications', label: 'Push Notifications', icon: BriefcaseIcon, to: '/dashboard/push-notifications', permission: 'notifications.manage' },
       { id: 'live-map', label: 'Live Map', icon: CatalogIcon, to: '/dashboard/live-map', permission: 'live_map.read' },
@@ -35,6 +36,7 @@ const navSections = [
       { id: 'agent-rewards', label: 'Agent Rewards', icon: ComponentsIcon, to: '/dashboard/agent-rewards', permission: 'payouts.read' },
       { id: 'captain-rewards', label: 'Captain Rewards', icon: ComponentsIcon, to: '/dashboard/captain-rewards', permission: 'payouts.read' },
       { id: 'payouts', label: 'Driver Payouts', icon: ComponentsIcon, to: '/dashboard/driver-payouts', permission: 'payouts.read' },
+      { id: 'smile-cash-payouts', label: 'Smile Cash Payouts', icon: ComponentsIcon, to: '/dashboard/smile-cash-payouts', permission: 'payouts.read' },
       { id: 'driver-wallet-settings', label: 'Driver Wallet', icon: ComponentsIcon, to: '/dashboard/driver-wallet-settings', permission: 'payouts.read' },
       { id: 'promotions', label: 'Promotions', icon: NetworkIcon, to: '/dashboard/promotions', permission: 'pricing.read' },
       { id: 'reports', label: 'Reports', icon: ClusterIcon, to: '/dashboard/reports', permission: 'reports.read' },

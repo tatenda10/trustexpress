@@ -38,6 +38,15 @@ export function shapePassengerIdentityFromRow(row) {
     nationalIdFrontUrl: normalizeUploadPath(row.national_id_front_url),
     nationalIdBackUrl: normalizeUploadPath(row.national_id_back_url),
     selfieUrl: normalizeUploadPath(row.selfie_url),
+    dateOfBirth: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
+    gender: row.gender || null,
+    nationalIdNumber: row.national_id_number || null,
+    smileCashMobile: row.smile_cash_mobile || null,
+    smileCashStatus: row.smile_cash_status || null,
+    smileCashOpenedAt: row.smile_cash_opened_at
+      ? new Date(row.smile_cash_opened_at).toISOString()
+      : null,
+    smileCashLastError: row.smile_cash_last_error || null,
   };
 }
 

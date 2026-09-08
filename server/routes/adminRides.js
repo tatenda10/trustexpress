@@ -210,6 +210,9 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
           rr.driver_reimbursement_amount,
           rr.discount_code,
           rr.tip_amount,
+          rr.payment_status,
+          rr.payment_provider,
+          rr.payment_method,
           rr.status,
           rr.requested_tier_name,
           rr.requested_at,
@@ -299,7 +302,12 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
         discountCode: row.discount_code || null,
         tipAmount: Number(row.tip_amount || 0),
         totalAmount: Number(row.final_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0),
-        payment: 'Cash',
+        payment: row.payment_status === 'paid'
+          ? (row.payment_method || row.payment_provider || 'Paid')
+          : 'Unpaid',
+        paymentStatus: row.payment_status || 'unpaid',
+        paymentProvider: row.payment_provider || null,
+        paymentMethod: row.payment_method || null,
         status: mapRideStatus(row.status),
         rawStatus: row.status,
         tierName: row.requested_tier_name,

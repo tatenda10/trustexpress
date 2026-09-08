@@ -403,6 +403,32 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
   const supportRows = [
     {
+      key: 'smile-cash',
+      title: 'Smile Cash wallet',
+      subtitle: driverStatus?.driverProfile?.smileCashStatus === 'active'
+        ? `Active: ${driverStatus.driverProfile.smileCashMobile}`
+        : 'Open a Smile Cash account for Trust Express payouts',
+      icon: 'wallet-outline',
+      onPress: () => navigation.navigate('DriverSmileCash'),
+      danger: false,
+    },
+    {
+      key: 'hire-vehicles',
+      title: 'Hire vehicles',
+      subtitle: 'List vehicles passengers can hire from you',
+      icon: 'bus-outline',
+      onPress: () => navigation.navigate('DriverHireVehicles'),
+      danger: false,
+    },
+    {
+      key: 'hire-jobs',
+      title: 'Hire jobs',
+      subtitle: 'Browse open hire requests and send quotes',
+      icon: 'briefcase-outline',
+      onPress: () => navigation.navigate('DriverHireOpenRequests'),
+      danger: false,
+    },
+    {
       key: 'payout',
       title: 'EcoCash payout details',
       subtitle: driverStatus?.driverProfile?.ecocashNumber

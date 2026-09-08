@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import usersRouter from './users.js';
 import passengersRouter from './passengers.js';
+import passengerPaymentsRouter from './passengerPayments.js';
 import driverWalletRouter from './driverWallet.js';
 import driversRouter from './drivers.js';
 import ridesRouter from './rides.js';
@@ -27,11 +28,14 @@ import adminDriverWalletRouter from './adminDriverWallet.js';
 import adminPassengerReferralsRouter from './adminPassengerReferrals.js';
 import adminRideSafetyPinRouter from './adminRideSafetyPin.js';
 import adminNotificationsRouter from './adminNotifications.js';
+import adminHireRouter from './adminHire.js';
+import adminSmileCashRouter from './adminSmileCash.js';
 import agentAuthRouter from './agentAuth.js';
 import agentInvitesRouter from './agentInvites.js';
 import agentRecruitmentRouter from './agentRecruitment.js';
 import agentRewardsRouter from './agentRewards.js';
 import publicShareRouter from './publicShare.js';
+import hireRouter from './hire.js';
 
 const router = Router();
 
@@ -42,8 +46,10 @@ router.get('/health', (req, res) => {
 router.use('/public', publicShareRouter);
 router.use('/users', usersRouter);
 router.use('/passengers', passengersRouter);
+router.use('/passengers/payments', passengerPaymentsRouter);
 router.use('/drivers/wallet', driverWalletRouter);
 router.use('/drivers', driversRouter);
+router.use('/hire', hireRouter);
 router.use('/rides', ridesRouter);
 router.use('/maps', mapsRouter);
 router.use('/upload', uploadRouter);
@@ -68,6 +74,8 @@ router.use('/admin/rides', adminRidesRouter);
 router.use('/admin/ride-safety-pin', adminRideSafetyPinRouter);
 router.use('/admin/notifications', adminNotificationsRouter);
 router.use('/admin/support', adminSupportRouter);
+router.use('/admin/hire', adminHireRouter);
+router.use('/admin/smile-cash', adminSmileCashRouter);
 router.use('/agent/auth', agentAuthRouter);
 router.use('/agent', agentInvitesRouter);
 router.use('/agent', agentRecruitmentRouter);

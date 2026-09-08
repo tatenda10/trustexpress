@@ -40,6 +40,12 @@ import {
   applyRatingAutomationAfterPassengerRated,
   assertAccountNotRestricted,
 } from '../lib/rating-performance.js';
+import {
+  createSmileCashSubscriber,
+  normalizeDateOfBirth,
+  normalizeGender,
+  normalizeZimMobile,
+} from '../lib/smile-cash.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -289,6 +295,108 @@ router.patch('/me/payout-details', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('PATCH /api/drivers/me/payout-details', err);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const appUser = toAppUser(user);
+    const verification = await getDriverVerificationFromMysql(req.userId, user);
+    const profile = verification?.driverProfile || {};
+
+    const firstName = String(appUser.first_name || user?.firstName || '').trim();
+    const lastName = String(appUser.last_name || user?.lastName || '').trim();
+    const idNumber = String(req.body?.idNumber || profile.nationalIdNumber || '').trim();
+    const dateOfBirth = String(req.body?.dateOfBirth || profile.dateOfBirth || '').trim();
+    const gender = String(req.body?.gender || profile.gender || '').trim();
+    const mobile = String(
+      req.body?.mobile
+      || profile.smileCashMobile
+      || appUser.phone_number
+      || user?.primaryPhoneNumber?.phoneNumber
+      || ''
+    ).trim();
+
+    if (!profile.nationalIdNumber && !idNumber) {
+      return res.status(400).json({ error: 'Complete national ID verification before opening Smile Cash' });
+    }
+
+    const normalizedDob = normalizeDateOfBirth(dateOfBirth);
+    const normalizedGender = normalizeGender(gender);
+    const normalizedMobile = normalizeZimMobile(mobile);
+
+    if (!normalizedDob || !normalizedGender) {
+      return res.status(400).json({ error: 'Date of birth and gender are required' });
+    }
+    if (!normalizedMobile) {
+      return res.status(400).json({ error: 'A valid mobile number is required' });
+    }
+
+    await query(
+      `INSERT INTO driver_identity (
+         driver_user_id,
+         profile_status,
+         date_of_birth,
+         gender,
+         smile_cash_mobile,
+         smile_cash_status,
+         smile_cash_last_error
+       ) VALUES (?, 'pending', ?, ?, ?, 'pending', NULL)
+       ON DUPLICATE KEY UPDATE
+         date_of_birth = VALUES(date_of_birth),
+         gender = VALUES(gender),
+         smile_cash_mobile = VALUES(smile_cash_mobile),
+         smile_cash_status = 'pending',
+         smile_cash_last_error = NULL,
+         updated_at = CURRENT_TIMESTAMP`,
+      [req.userId, normalizedDob, normalizedGender, normalizedMobile]
+    );
+
+    try {
+      const result = await createSmileCashSubscriber({
+        firstName,
+        lastName,
+        mobile: normalizedMobile,
+        dateOfBirth: normalizedDob,
+        idNumber,
+        gender: normalizedGender,
+        source: 'TRUST_EXPRESS',
+      });
+
+      await query(
+        `UPDATE driver_identity
+         SET smile_cash_mobile = ?,
+             smile_cash_status = 'active',
+             smile_cash_opened_at = CURRENT_TIMESTAMP,
+             smile_cash_last_error = NULL
+         WHERE driver_user_id = ?`,
+        [result.mobile, req.userId]
+      );
+    } catch (err) {
+      await query(
+        `UPDATE driver_identity
+         SET smile_cash_status = 'failed',
+             smile_cash_last_error = ?
+         WHERE driver_user_id = ?`,
+        [String(err.message || 'Smile Cash registration failed').slice(0, 1000), req.userId]
+      );
+      return res.status(err.status || 502).json({
+        error: err.message || 'Smile Cash registration failed',
+        providerPayload: err.providerPayload || null,
+      });
+    }
+
+    const refreshed = await getDriverVerificationFromMysql(req.userId, user);
+    return res.json({
+      ok: true,
+      driverProfile: refreshed.driverProfile,
+    });
+  } catch (err) {
+    console.error('POST /api/drivers/me/smile-cash/open', err);
+    return res.status(err.status || 500).json({ error: err.message || 'Server error' });
   }
 });
 

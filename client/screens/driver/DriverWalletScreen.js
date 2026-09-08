@@ -6,7 +6,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { getDriverWallet, initiateDriverWalletTopup, verifyDriverWalletTopup } from '../../api';
+import { cashOutDriverWallet, getDriverWallet, initiateDriverWalletTopup, verifyDriverWalletTopup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -72,6 +72,7 @@ const DriverWalletScreen = () => {
     paymentsUnavailableMessage: '',
     sufficientBalance: true,
     lowBalanceMessage: '',
+    withdrawableBalance: 0,
   });
   const providerLabel = wallet.paymentProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack';
   const [summary, setSummary] = useState({
@@ -83,6 +84,7 @@ const DriverWalletScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [topupAmount, setTopupAmount] = useState('5');
   const [startingTopup, setStartingTopup] = useState(false);
+  const [cashingOut, setCashingOut] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -125,6 +127,7 @@ const DriverWalletScreen = () => {
         paymentsUnavailableMessage: data?.wallet?.paymentsUnavailableMessage || data?.settings?.paymentsUnavailableMessage || '',
         sufficientBalance: data?.wallet?.sufficientBalance !== false,
         lowBalanceMessage: data?.wallet?.lowBalanceMessage || '',
+        withdrawableBalance: Number(data?.wallet?.withdrawableBalance || 0),
       });
       setSummary({
         totalTopups: Number(data?.summary?.totalTopups || 0),
@@ -146,6 +149,7 @@ const DriverWalletScreen = () => {
         paymentsUnavailableMessage: '',
         sufficientBalance: true,
         lowBalanceMessage: '',
+        withdrawableBalance: 0,
       });
       setSummary({
         totalTopups: 0,
@@ -212,6 +216,39 @@ const DriverWalletScreen = () => {
     }
   };
 
+  const handleCashOut = async () => {
+    const balance = Number(wallet.withdrawableBalance || 0);
+    if (!(balance > 0)) {
+      Alert.alert('No balance', 'You do not have a withdrawable wallet balance yet.');
+      return;
+    }
+
+    Alert.alert(
+      'Cash out wallet?',
+      `Send ${formatCurrency(balance, wallet.currency)} to your Smile Cash wallet now.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Cash out',
+          onPress: async () => {
+            try {
+              setCashingOut(true);
+              const token = await getTokenRef.current();
+              if (!token) throw new Error('Not signed in');
+              await cashOutDriverWallet(token, {});
+              await loadWallet(false);
+              Alert.alert('Cash out sent', 'Your wallet balance was sent to your Smile Cash account.');
+            } catch (cashoutError) {
+              Alert.alert('Cash out failed', cashoutError?.message || 'Could not cash out your wallet.');
+            } finally {
+              setCashingOut(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   useEffect(() => {
     if (!isFocused) return undefined;
     loadWallet(false);
@@ -250,6 +287,19 @@ const DriverWalletScreen = () => {
                 <Text className="text-xs text-white/80">Top-ups: {formatCurrency(summary.totalTopups, wallet.currency)}</Text>
                 <Text className="text-xs text-white/80">Service fee paid: {formatCurrency(summary.totalCommissionPaid, wallet.currency)}</Text>
               </View>
+              <Text className="mt-3 text-sm text-white/80">
+                Withdrawable passenger payments: {formatCurrency(wallet.withdrawableBalance, wallet.currency)}
+              </Text>
+              <TouchableOpacity
+                onPress={handleCashOut}
+                disabled={cashingOut || Number(wallet.withdrawableBalance || 0) <= 0}
+                className="mt-4 h-12 items-center justify-center rounded-2xl bg-white"
+                style={{ opacity: cashingOut || Number(wallet.withdrawableBalance || 0) <= 0 ? 0.65 : 1 }}
+              >
+                <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
+                  {cashingOut ? 'Cashing out...' : 'Cash out to Smile Cash'}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 

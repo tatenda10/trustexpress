@@ -3,10 +3,14 @@ import { View, Text, TouchableOpacity, ActivityIndicator, TextInput, Alert, Scro
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getPassengerRideDetails, reportLostItem, submitPassengerDriverRating, tipDriver } from '../../api';
+import * as ExpoLinking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+import { getPassengerRideDetails, initiatePassengerRideSmilePay, reportLostItem, submitPassengerDriverRating, tipDriver, verifyPassengerRideSmilePay } from '../../api';
 import { downloadReceiptPdf, printReceiptPdf } from '../../services/receiptPrint';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_DRIVER_RATING_TAGS, isPassengerDriverReviewTagSelected, togglePassengerDriverReviewTag } from '../../constants/rideRatingTags';
+
+WebBrowser.maybeCompleteAuthSession();
 
 function formatCurrency(value) {
   return `$${Number(value || 0).toFixed(2)}`;
@@ -44,6 +48,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const [printingReceipt, setPrintingReceipt] = useState(false);
   const [submittingLostItem, setSubmittingLostItem] = useState(false);
   const [submittingTip, setSubmittingTip] = useState(false);
+  const [startingPayment, setStartingPayment] = useState(false);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
   const [lostItemDescription, setLostItemDescription] = useState('');
@@ -180,6 +185,63 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     }
   };
 
+  const handlePayWithSmilePay = async () => {
+    try {
+      if (!rideRequestId) return;
+      setStartingPayment(true);
+      const token = await getToken();
+      if (!token) throw new Error('Not signed in');
+      const callbackUrl = ExpoLinking.createURL('passenger-ride-payment');
+      const result = await initiatePassengerRideSmilePay(token, rideRequestId, { callbackUrl });
+      const payment = result?.payment || {};
+      if (!payment.authorizationUrl) {
+        throw new Error('Could not start Smile&Pay checkout.');
+      }
+
+      const authResult = await WebBrowser.openAuthSessionAsync(payment.authorizationUrl, callbackUrl);
+      const references = [payment.reference].filter(Boolean);
+      if (authResult?.type === 'success' && authResult?.url) {
+        const parsed = ExpoLinking.parse(authResult.url);
+        const returnedReference =
+          parsed?.queryParams?.reference
+          || parsed?.queryParams?.orderReference
+          || parsed?.queryParams?.transactionReference;
+        if (returnedReference && !references.includes(String(returnedReference))) {
+          references.push(String(returnedReference));
+        }
+      }
+
+      let verifiedPayment = null;
+      for (const reference of references) {
+        const verifyResult = await verifyPassengerRideSmilePay(token, rideRequestId, reference);
+        verifiedPayment = verifyResult?.payment || verifiedPayment;
+      }
+      const verifiedStatus = String(verifiedPayment?.status || '').toLowerCase();
+      if (verifiedStatus !== 'success') {
+        setRide((current) => current ? {
+          ...current,
+          paymentStatus: verifiedStatus || 'pending',
+          paymentProvider: 'smilepay',
+          paymentReference: references[0] || current.paymentReference,
+        } : current);
+        Alert.alert('Payment pending', 'We could not confirm a successful Smile&Pay payment yet. Please try checking again in a moment.');
+        return;
+      }
+      setRide((current) => current ? {
+        ...current,
+        paymentStatus: 'paid',
+        paymentProvider: 'smilepay',
+        paymentReference: references[0] || current.paymentReference,
+        canPayWithSmilePay: false,
+      } : current);
+      Alert.alert('Payment complete', 'Your Smile&Pay payment was received and reflected in the driver wallet.');
+    } catch (error) {
+      Alert.alert('Payment failed', error?.message || 'Could not complete Smile&Pay payment.');
+    } finally {
+      setStartingPayment(false);
+    }
+  };
+
   if (loading) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
@@ -198,6 +260,8 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   }
 
   const { originalFare, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
+  const paymentStatus = String(ride?.paymentStatus || 'unpaid').toLowerCase();
+  const canPayWithSmilePay = ride?.canPayWithSmilePay !== false && ride?.rawStatus === 'completed' && paymentStatus !== 'paid';
 
   return (
     <View className="flex-1 bg-white">
@@ -246,6 +310,32 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
             <Text className="text-sm text-gray-500">Driver</Text>
             <Text className="mt-1 text-base font-bold text-gray-900">{ride.driverName || 'No driver assigned'}</Text>
             <Text className="mt-1 text-sm text-gray-500">{formatDate(ride.completedAt || ride.requestedAt)}</Text>
+          </View>
+
+          <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-sm font-semibold text-gray-900">Smile&Pay</Text>
+              <Text className={`text-xs font-bold uppercase ${paymentStatus === 'paid' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {paymentStatus === 'paid' ? 'Paid' : 'Unpaid'}
+              </Text>
+            </View>
+            <Text className="mt-2 text-sm text-gray-500">
+              Passenger payments go to Trust Express first, then reflect in the driver wallet for cashout.
+            </Text>
+            {canPayWithSmilePay ? (
+              <TouchableOpacity
+                onPress={handlePayWithSmilePay}
+                disabled={startingPayment}
+                className="mt-4 h-12 items-center justify-center rounded-[16px]"
+                style={{ backgroundColor: PRIMARY_BLUE, opacity: startingPayment ? 0.7 : 1 }}
+              >
+                {startingPayment ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text className="text-sm font-bold uppercase text-white">Pay with Smile&Pay</Text>
+                )}
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View className="mt-5 flex-row items-center justify-between gap-3">
@@ -342,7 +432,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
           </View>
         ) : null}
 
-        {ride.canTipDriver ? (
+        {ride.canTipDriver && paymentStatus !== 'paid' ? (
           <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
             <Text className="text-xl font-bold text-gray-900">Tip Driver</Text>
             <Text className="mt-2 text-sm text-gray-500">

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
+import { upload } from '../middleware/upload.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
 import { getClerkClient } from '../lib/clerk-client.js';
 import { getDriverProfileImageReview, getPrimaryEmail, getPrimaryPhone, mergePrivateMetadata, normalizeRole } from '../lib/clerk-user.js';
@@ -18,6 +19,45 @@ import {
 
 const router = Router();
 const DRIVER_ONLINE_STALE_DAYS = 1;
+const PROFILE_DOCUMENT_UPLOAD_FIELDS = [
+  { name: 'nationalIdFront', maxCount: 1 },
+  { name: 'nationalIdBack', maxCount: 1 },
+  { name: 'driverLicence', maxCount: 1 },
+  { name: 'selfie', maxCount: 1 },
+  { name: 'selfieWithIdCard', maxCount: 1 },
+];
+
+function normalizeOptionalText(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+function runProfileDocumentUpload(req, res) {
+  return new Promise((resolve, reject) => {
+    upload.fields(PROFILE_DOCUMENT_UPLOAD_FIELDS)(req, res, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function getUploadedPath(req, fieldName) {
+  const file = Array.isArray(req.files?.[fieldName]) ? req.files[fieldName][0] : null;
+  return file?.filename ? `/uploads/${file.filename}` : null;
+}
+
+function mapIdentityProfileDocs(row) {
+  if (!row) return null;
+  return {
+    nationalIdFrontUrl: normalizeUploadPath(row.national_id_front_url),
+    nationalIdBackUrl: normalizeUploadPath(row.national_id_back_url),
+    driverLicenceUrl: normalizeUploadPath(row.driver_licence_url),
+    selfieUrl: normalizeUploadPath(row.selfie_url),
+    selfieWithIdCardUrl: normalizeUploadPath(row.selfie_with_id_card_url),
+    nationalIdNumber: row.national_id_number || null,
+    driverLicenceNumber: row.driver_licence_number || null,
+  };
+}
 
 function mapOnlineDriverRow(row) {
   const rideStatus = String(row.ride_status || '');
@@ -99,6 +139,15 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
         rejectionReason: identityRow.profile_rejection_reason || null,
         ecocashNumber: identityRow.ecocash_number || null,
         ecocashRegisteredName: identityRow.ecocash_registered_name || null,
+        dateOfBirth: identityRow.date_of_birth
+          ? String(identityRow.date_of_birth).slice(0, 10)
+          : null,
+        gender: identityRow.gender || null,
+        smileCashMobile: identityRow.smile_cash_mobile || null,
+        smileCashStatus: identityRow.smile_cash_status || null,
+        smileCashOpenedAt: identityRow.smile_cash_opened_at
+          ? new Date(identityRow.smile_cash_opened_at).toISOString()
+          : null,
         hasDocuments: hasProfileDocuments,
         missingRequiredCount: [
           identityRow?.national_id_front_url,
@@ -606,17 +655,7 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
 
     const mapped = mapDriverFromClerkAndMysql(user, identityRow, vehicleRow);
 
-    const profileDocs = identityRow
-      ? {
-          nationalIdFrontUrl: normalizeUploadPath(identityRow.national_id_front_url),
-          nationalIdBackUrl: normalizeUploadPath(identityRow.national_id_back_url),
-          driverLicenceUrl: normalizeUploadPath(identityRow.driver_licence_url),
-          selfieUrl: normalizeUploadPath(identityRow.selfie_url),
-          selfieWithIdCardUrl: normalizeUploadPath(identityRow.selfie_with_id_card_url),
-          nationalIdNumber: identityRow.national_id_number || null,
-          driverLicenceNumber: identityRow.driver_licence_number || null,
-        }
-      : null;
+    const profileDocs = mapIdentityProfileDocs(identityRow);
 
     const vehicleMeta = vehicleRowToMeta(vehicleRow);
     const vehicleDocs = vehicleRow
@@ -725,6 +764,150 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
     return res.status(500).json({ error: 'Server error' });
   }
 });
+
+router.post(
+  '/:driverId/documents',
+  requireAdminAuth,
+  requirePermission('verification.review'),
+  async (req, res) => {
+    try {
+      await runProfileDocumentUpload(req, res);
+
+      const driverId = String(req.params.driverId || '').trim();
+      if (!driverId) {
+        return res.status(400).json({ error: 'Invalid driver id' });
+      }
+
+      const uploaded = {
+        nationalIdFrontUrl: getUploadedPath(req, 'nationalIdFront'),
+        nationalIdBackUrl: getUploadedPath(req, 'nationalIdBack'),
+        driverLicenceUrl: getUploadedPath(req, 'driverLicence'),
+        selfieUrl: getUploadedPath(req, 'selfie'),
+        selfieWithIdCardUrl: getUploadedPath(req, 'selfieWithIdCard'),
+      };
+      const nationalIdNumber = normalizeOptionalText(req.body?.nationalIdNumber);
+      const driverLicenceNumber = normalizeOptionalText(req.body?.driverLicenceNumber);
+      const hasUpload = Object.values(uploaded).some(Boolean);
+      const hasNumberUpdate = !!(nationalIdNumber || driverLicenceNumber);
+
+      if (!hasUpload && !hasNumberUpdate) {
+        return res.status(400).json({ error: 'Upload at least one document or enter an ID/licence number' });
+      }
+
+      const clerkClient = getClerkClient();
+      const user = await clerkClient.users.getUser(driverId);
+      if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
+        return res.status(404).json({ error: 'Driver not found' });
+      }
+
+      if (nationalIdNumber) {
+        const [duplicate] = await query(
+          `SELECT driver_user_id
+           FROM driver_identity
+           WHERE national_id_number = ? AND driver_user_id <> ?
+           LIMIT 1`,
+          [nationalIdNumber, driverId]
+        );
+        if (duplicate) {
+          return res.status(409).json({ error: 'National ID number is already used by another driver' });
+        }
+      }
+
+      if (driverLicenceNumber) {
+        const [duplicate] = await query(
+          `SELECT driver_user_id
+           FROM driver_identity
+           WHERE driver_licence_number = ? AND driver_user_id <> ?
+           LIMIT 1`,
+          [driverLicenceNumber, driverId]
+        );
+        if (duplicate) {
+          return res.status(409).json({ error: 'Driver licence number is already used by another driver' });
+        }
+      }
+
+      const existing = await getDriverIdentity(driverId);
+      const nextDocs = {
+        nationalIdFrontUrl: uploaded.nationalIdFrontUrl || normalizeUploadPath(existing?.national_id_front_url),
+        nationalIdBackUrl: uploaded.nationalIdBackUrl || normalizeUploadPath(existing?.national_id_back_url),
+        driverLicenceUrl: uploaded.driverLicenceUrl || normalizeUploadPath(existing?.driver_licence_url),
+        selfieUrl: uploaded.selfieUrl || normalizeUploadPath(existing?.selfie_url),
+        selfieWithIdCardUrl: uploaded.selfieWithIdCardUrl || normalizeUploadPath(existing?.selfie_with_id_card_url),
+        nationalIdNumber: nationalIdNumber || existing?.national_id_number || null,
+        driverLicenceNumber: driverLicenceNumber || existing?.driver_licence_number || null,
+      };
+      const isComplete = !!(
+        nextDocs.nationalIdFrontUrl &&
+        nextDocs.nationalIdBackUrl &&
+        nextDocs.driverLicenceUrl &&
+        nextDocs.selfieUrl &&
+        nextDocs.selfieWithIdCardUrl &&
+        nextDocs.nationalIdNumber &&
+        nextDocs.driverLicenceNumber
+      );
+      const nextStatus = isComplete ? 'pending' : (existing?.profile_status || 'pending');
+
+      await query(
+        `INSERT INTO driver_identity (
+           driver_user_id,
+           national_id_front_url,
+           national_id_back_url,
+           driver_licence_url,
+           selfie_url,
+           selfie_with_id_card_url,
+           national_id_number,
+           driver_licence_number,
+           profile_status,
+           profile_submitted_at,
+           profile_rejection_reason,
+           profile_can_resubmit
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 1)
+         ON DUPLICATE KEY UPDATE
+           national_id_front_url = VALUES(national_id_front_url),
+           national_id_back_url = VALUES(national_id_back_url),
+           driver_licence_url = VALUES(driver_licence_url),
+           selfie_url = VALUES(selfie_url),
+           selfie_with_id_card_url = VALUES(selfie_with_id_card_url),
+           national_id_number = VALUES(national_id_number),
+           driver_licence_number = VALUES(driver_licence_number),
+           profile_status = VALUES(profile_status),
+           profile_submitted_at = CURRENT_TIMESTAMP,
+           profile_reviewed_at = NULL,
+           profile_rejection_reason = NULL,
+           profile_can_resubmit = 1,
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          driverId,
+          nextDocs.nationalIdFrontUrl,
+          nextDocs.nationalIdBackUrl,
+          nextDocs.driverLicenceUrl,
+          nextDocs.selfieUrl,
+          nextDocs.selfieWithIdCardUrl,
+          nextDocs.nationalIdNumber,
+          nextDocs.driverLicenceNumber,
+          nextStatus,
+        ]
+      );
+
+      const refreshed = await getDriverIdentity(driverId);
+      return res.json({
+        ok: true,
+        complete: isComplete,
+        profileStatus: refreshed?.profile_status || nextStatus,
+        profileDocs: mapIdentityProfileDocs(refreshed),
+      });
+    } catch (err) {
+      console.error('POST /api/admin/drivers/:driverId/documents', err);
+      if (err?.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ error: 'National ID or driver licence number is already used by another driver' });
+      }
+      const message = err?.message || 'Server error';
+      const status = message.includes('Unsupported file type') ? 400 : 500;
+      return res.status(status).json({ error: status === 400 ? message : 'Server error' });
+    }
+  }
+);
 
 function collectVehiclePhotoCandidates(vehicleRow) {
   const candidates = [];

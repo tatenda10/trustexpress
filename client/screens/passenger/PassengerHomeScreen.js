@@ -1005,6 +1005,16 @@ export default function PassengerHomeScreen({ navigation, route }) {
         <View pointerEvents="none" className="absolute inset-0 bg-black/25" />
 
         <View style={{ paddingTop: insets.top + 10 }} className="px-5">
+          <View className="mb-3 flex-row items-center justify-between">
+            <TouchableOpacity
+              onPress={() => navigation.navigate('PassengerHireHome')}
+              className="flex-row items-center rounded-full bg-white/95 px-4 py-2.5"
+              activeOpacity={0.85}
+            >
+              <Ionicons name="bus-outline" size={18} color={PRIMARY_BLUE} />
+              <Text className="ml-2 text-sm font-semibold text-gray-900">Hire a vehicle</Text>
+            </TouchableOpacity>
+          </View>
           {dropoffCoordinate ? (
             <View className="rounded-[28px] bg-white/95 px-4 py-4">
               <View className="flex-row items-start">

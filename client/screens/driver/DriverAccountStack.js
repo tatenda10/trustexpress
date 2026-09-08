@@ -4,6 +4,10 @@ import DriverAccountScreen from './DriverAccountScreen';
 import DriverPhoneVerificationPage from './DriverPhoneVerificationPage';
 import DriverReviewsScreen from './DriverReviewsScreen';
 import DriverEcoCashPayoutScreen from './DriverEcoCashPayoutScreen';
+import DriverSmileCashScreen from './DriverSmileCashScreen';
+import DriverHireVehiclesScreen from './DriverHireVehiclesScreen';
+import DriverHireVehicleFormScreen from './DriverHireVehicleFormScreen';
+import DriverHireOpenRequestsScreen from './DriverHireOpenRequestsScreen';
 import SupportChatScreen from '../shared/SupportChatScreen';
 import LegalDocumentScreen from '../shared/LegalDocumentScreen';
 import DriverDocumentationPage from './DriverDocumentationPage';
@@ -36,6 +40,14 @@ export default function DriverAccountStack({ route }) {
         component={DriverEcoCashPayoutScreen}
         initialParams={{ driverStatus }}
       />
+      <Stack.Screen
+        name="DriverSmileCash"
+        component={DriverSmileCashScreen}
+        initialParams={{ driverStatus }}
+      />
+      <Stack.Screen name="DriverHireVehicles" component={DriverHireVehiclesScreen} />
+      <Stack.Screen name="DriverHireVehicleForm" component={DriverHireVehicleFormScreen} />
+      <Stack.Screen name="DriverHireOpenRequests" component={DriverHireOpenRequestsScreen} />
       <Stack.Screen
         name="DriverSupportChat"
         component={SupportChatScreen}

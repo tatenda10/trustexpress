@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS driver_wallet_cashouts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  public_id VARCHAR(32) NOT NULL,
+  driver_user_id VARCHAR(255) NOT NULL,
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+  receiver_mobile VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  wallet_debit_transaction_id BIGINT UNSIGNED NULL DEFAULT NULL,
+  refund_transaction_id BIGINT UNSIGNED NULL DEFAULT NULL,
+  auth_transaction_id VARCHAR(128) NULL DEFAULT NULL,
+  payment_transaction_id VARCHAR(128) NULL DEFAULT NULL,
+  error_message TEXT NULL DEFAULT NULL,
+  provider_payload JSON NULL DEFAULT NULL,
+  requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP NULL DEFAULT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_driver_wallet_cashouts_public_id (public_id),
+  KEY idx_driver_wallet_cashouts_driver (driver_user_id, requested_at),
+  KEY idx_driver_wallet_cashouts_status (status)
+);
