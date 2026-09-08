@@ -9,7 +9,9 @@ export default function SmileCashPayoutsPage() {
   const [payouts, setPayouts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [driverUserId, setDriverUserId] = useState('')
+  const [driverEmail, setDriverEmail] = useState('')
+  const [verifiedDriver, setVerifiedDriver] = useState(null)
+  const [verifyingDriver, setVerifyingDriver] = useState(false)
   const [amount, setAmount] = useState('')
   const [currency, setCurrency] = useState('USD')
   const [narration, setNarration] = useState('Trust Express payout')
@@ -72,14 +74,40 @@ export default function SmileCashPayoutsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
+  const verifyDriver = async () => {
+    const email = driverEmail.trim().toLowerCase()
+    if (!email) return
+    try {
+      setVerifyingDriver(true)
+      setVerifiedDriver(null)
+      const res = await axios.get(`${BASE_URL}/api/admin/smile-cash/drivers/lookup`, {
+        params: { email },
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setVerifiedDriver(res.data?.driver || null)
+    } catch (err) {
+      window.alert(err?.response?.data?.error || err.message || 'Could not verify driver')
+    } finally {
+      setVerifyingDriver(false)
+    }
+  }
+
   const submit = async (e) => {
     e.preventDefault()
+    if (!verifiedDriver || verifiedDriver.email !== driverEmail.trim().toLowerCase()) {
+      window.alert('Verify the driver email before sending this payout.')
+      return
+    }
+    const confirmation = window.confirm(
+      `Send ${currency} ${Number(amount || 0).toFixed(2)} to ${verifiedDriver.name || verifiedDriver.email} at ${verifiedDriver.smileCashMobile || 'no Smile Cash mobile'}?`
+    )
+    if (!confirmation) return
     try {
       setSubmitting(true)
       await axios.post(
         `${BASE_URL}/api/admin/smile-cash/payouts`,
         {
-          driverUserId: driverUserId.trim(),
+          driverEmail: driverEmail.trim().toLowerCase(),
           amount: Number(amount),
           currency,
           narration,
@@ -88,6 +116,7 @@ export default function SmileCashPayoutsPage() {
         { headers: { Authorization: `Bearer ${token}` } }
       )
       setAmount('')
+      setVerifiedDriver(null)
       await load()
     } catch (err) {
       window.alert(err?.response?.data?.error || err.message || 'Payout failed')
@@ -148,15 +177,29 @@ export default function SmileCashPayoutsPage() {
           </div>
 
           <form onSubmit={submit} className="grid gap-3 border border-slate-200 bg-white p-4 md:grid-cols-2">
-            <label className="text-sm">
-              <span className="mb-1 block text-slate-500">Driver user id (Clerk)</span>
-              <input
-                value={driverUserId}
-                onChange={(e) => setDriverUserId(e.target.value)}
-                className="w-full rounded border border-slate-300 px-3 py-2"
-                required
-              />
-            </label>
+            <div className="text-sm">
+              <span className="mb-1 block text-slate-500">Driver email</span>
+              <div className="flex gap-2">
+                <input
+                  value={driverEmail}
+                  onChange={(e) => {
+                    setDriverEmail(e.target.value)
+                    setVerifiedDriver(null)
+                  }}
+                  type="email"
+                  className="w-full rounded border border-slate-300 px-3 py-2"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={verifyDriver}
+                  disabled={verifyingDriver || !driverEmail.trim()}
+                  className="rounded border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-60"
+                >
+                  {verifyingDriver ? 'Checking…' : 'Verify'}
+                </button>
+              </div>
+            </div>
             <label className="text-sm">
               <span className="mb-1 block text-slate-500">Amount</span>
               <input
@@ -188,10 +231,21 @@ export default function SmileCashPayoutsPage() {
                 className="w-full rounded border border-slate-300 px-3 py-2"
               />
             </label>
+            {verifiedDriver ? (
+              <div className="rounded border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 md:col-span-2">
+                <p className="font-semibold">Verified recipient</p>
+                <p className="mt-1">
+                  {verifiedDriver.name || 'Driver'} · {verifiedDriver.email} · {verifiedDriver.phone || 'no phone'}
+                </p>
+                <p className="mt-1">
+                  Smile Cash: {verifiedDriver.smileCashMobile || 'missing'} · Status: {verifiedDriver.smileCashStatus || 'not opened'} · ID: {verifiedDriver.nationalIdNumber || 'missing'}
+                </p>
+              </div>
+            ) : null}
             <div className="md:col-span-2">
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || !verifiedDriver}
                 className="rounded bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
               >
                 {submitting ? 'Sending…' : 'Send Smile Cash payout'}
@@ -220,7 +274,10 @@ export default function SmileCashPayoutsPage() {
             {payouts.map((item) => (
               <tr key={item.id} className="border-t border-slate-100">
                 <td className="px-3 py-2 font-medium text-slate-800">{item.publicId}</td>
-                <td className="px-3 py-2 text-slate-700">{item.driverName || item.driverUserId}</td>
+                <td className="px-3 py-2 text-slate-700">
+                  <div>{item.driverName || item.driverUserId}</div>
+                  {item.driverEmail ? <div className="text-xs text-slate-500">{item.driverEmail}</div> : null}
+                </td>
                 <td className="px-3 py-2 text-slate-700">{item.currency} {Number(item.amount).toFixed(2)}</td>
                 <td className="px-3 py-2 text-slate-700">{item.receiverMobile}</td>
                 <td className="px-3 py-2 text-slate-700">{item.status}</td>
