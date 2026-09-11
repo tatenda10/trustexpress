@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Tex
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getMe, openPassengerSmileCash } from '../../api';
+import { getMe, linkPassengerSmileCash, openPassengerSmileCash } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 const GENDER_OPTIONS = [
@@ -54,19 +54,47 @@ export default function PassengerSmileCashScreen({ navigation }) {
   }, []);
 
   const handleOpen = async () => {
+    const payload = {
+      mobile,
+      idNumber,
+      dateOfBirth,
+      gender,
+    };
     try {
       setSaving(true);
       const token = await getTokenRef.current({ skipCache: true });
       if (!token) throw new Error('Not signed in');
-      await openPassengerSmileCash(token, {
-        mobile,
-        idNumber,
-        dateOfBirth,
-        gender,
-      });
+      await openPassengerSmileCash(token, payload);
       await load();
       Alert.alert('Smile Cash', 'Your Smile Cash wallet registration was submitted successfully.');
     } catch (error) {
+      if (error?.code === 'SMILE_CASH_MOBILE_ALREADY_TAKEN') {
+        Alert.alert(
+          'Smile Cash already exists',
+          'This mobile number already has a Smile Cash wallet. If it belongs to you, link it to your Trust Express account.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Link existing',
+              onPress: async () => {
+                try {
+                  setSaving(true);
+                  const token = await getTokenRef.current({ skipCache: true });
+                  if (!token) throw new Error('Not signed in');
+                  await linkPassengerSmileCash(token, payload);
+                  await load();
+                  Alert.alert('Smile Cash', 'Your existing Smile Cash wallet has been linked.');
+                } catch (linkError) {
+                  Alert.alert('Smile Cash', linkError?.message || 'Could not link Smile Cash wallet.');
+                } finally {
+                  setSaving(false);
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
       Alert.alert('Smile Cash', error?.message || 'Could not open Smile Cash wallet.');
     } finally {
       setSaving(false);

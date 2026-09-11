@@ -1,0 +1,2 @@
+ALTER TABLE hire_requests
+  ADD COLUMN title VARCHAR(160) NULL DEFAULT NULL AFTER category;

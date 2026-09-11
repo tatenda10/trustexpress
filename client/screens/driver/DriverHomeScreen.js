@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, Platform, AppState } from 'react-native';
+import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, Platform, AppState, DeviceEventEmitter } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
@@ -431,16 +431,47 @@ const DriverHomeScreen = ({ navigation, route }) => {
           );
         };
 
+        const handleHireRequest = (payload = {}) => {
+          if (!active) return;
+          DeviceEventEmitter.emit('TrustHiringNewRequest', payload);
+          setRealtimeSignal((value) => value + 1);
+          try {
+            Vibration.vibrate([200, 100, 200]);
+          } catch (_) {}
+          const pickupLabel = payload?.pickupLabel || 'Pickup';
+          const dropoffLabel = payload?.dropoffLabel || 'destination';
+          const category = payload?.category ? String(payload.category).replace(/_/g, ' ') : 'vehicle hire';
+          const offer = payload?.passengerOfferAmount
+            ? `\nPassenger bid: ${payload?.fareCurrency || 'USD'} ${Number(payload.passengerOfferAmount).toFixed(2)}`
+            : '';
+          Alert.alert(
+            'New transport request',
+            `${category}: ${pickupLabel}${dropoffLabel ? ` to ${dropoffLabel}` : ''}${offer}`,
+            [
+              { text: 'Later', style: 'cancel' },
+              {
+                text: 'View jobs',
+                onPress: () => navigation.navigate('DriverHireJobs', {
+                  screen: 'DriverHireOpenRequests',
+                  params: { notificationTs: Date.now() },
+                }),
+              },
+            ]
+          );
+        };
+
         localSocket.on('ride_request:new', handleRealtimeRefresh);
         localSocket.on('ride_request:removed', handleRealtimeRefresh);
         localSocket.on('driver_ride:updated', handleRealtimeRefresh);
         localSocket.on('driver_rating:received', handleDriverRating);
+        localSocket.on('hire_request:new', handleHireRequest);
 
         localSocket.__driverHomeCleanup = () => {
           localSocket.off('ride_request:new', handleRealtimeRefresh);
           localSocket.off('ride_request:removed', handleRealtimeRefresh);
           localSocket.off('driver_ride:updated', handleRealtimeRefresh);
           localSocket.off('driver_rating:received', handleDriverRating);
+          localSocket.off('hire_request:new', handleHireRequest);
         };
       } catch {
         // Keep polling as the fallback when realtime setup fails.

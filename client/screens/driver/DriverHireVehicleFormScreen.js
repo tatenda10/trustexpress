@@ -17,7 +17,16 @@ import { createHireVehicle, resolveUploadedMediaUrl, updateHireVehicle, uploadFi
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
-const CATEGORIES = ['sedan', 'suv', 'van', 'bus', 'truck', 'other'];
+const CATEGORIES = [
+  { value: 'sedan', label: 'Sedan' },
+  { value: 'suv', label: 'SUV' },
+  { value: 'van', label: 'Van' },
+  { value: 'moving_van', label: 'Moving van' },
+  { value: 'pickup', label: 'Pickup' },
+  { value: 'truck', label: 'Truck' },
+  { value: 'bus', label: 'Bus' },
+  { value: 'other', label: 'Other' },
+];
 
 export default function DriverHireVehicleFormScreen({ navigation, route }) {
   const existing = route.params?.vehicle || null;
@@ -41,6 +50,11 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
 
   const pickPhoto = async () => {
     try {
+      const remainingSlots = Math.max(0, 8 - photoUrls.length);
+      if (remainingSlots < 1) {
+        Alert.alert('Photo limit reached', 'You can upload up to 8 vehicle photos.');
+        return;
+      }
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
         Alert.alert('Permission needed', 'Allow photo library access to upload vehicle photos.');
@@ -48,23 +62,42 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
       }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots,
         quality: 0.8,
       });
-      if (result.canceled || !result.assets?.[0]?.uri) return;
+      const selectedAssets = Array.isArray(result.assets)
+        ? result.assets.filter((asset) => asset?.uri).slice(0, remainingSlots)
+        : [];
+      if (result.canceled || selectedAssets.length === 0) return;
 
       setUploading(true);
       const token = await getToken({ skipCache: true });
-      const localUri = await persistLocalImageUri(result.assets[0].uri);
-      const prepared = await prepareImageForUpload(localUri);
-      const uploaded = await uploadFile(token, prepared);
-      const url = uploaded?.url || uploaded?.path;
-      if (!url) throw new Error('Upload failed');
-      setPhotoUrls((prev) => [...prev, url].slice(0, 8));
+      const uploadedUrls = [];
+      for (const asset of selectedAssets) {
+        const localUri = await persistLocalImageUri(asset.uri);
+        const prepared = await prepareImageForUpload(localUri);
+        const formData = new FormData();
+        formData.append('file', {
+          uri: prepared,
+          name: `hire-vehicle-${Date.now()}-${uploadedUrls.length}.jpg`,
+          type: 'image/jpeg',
+        });
+        const uploaded = await uploadFile(token, formData);
+        const url = uploaded?.url || uploaded?.path;
+        if (url) uploadedUrls.push(url);
+      }
+      if (uploadedUrls.length === 0) throw new Error('Upload failed');
+      setPhotoUrls((prev) => [...prev, ...uploadedUrls].slice(0, 8));
     } catch (err) {
       Alert.alert('Upload failed', err?.message || 'Could not upload photo');
     } finally {
       setUploading(false);
     }
+  };
+
+  const makeDisplayPhoto = (url) => {
+    setPhotoUrls((prev) => [url, ...prev.filter((item) => item !== url)]);
   };
 
   const handleSave = async () => {
@@ -130,15 +163,15 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
           <View className="flex-row flex-wrap gap-2">
             {CATEGORIES.map((item) => (
               <TouchableOpacity
-                key={item}
-                onPress={() => setCategory(item)}
+                key={item.value}
+                onPress={() => setCategory(item.value)}
                 className="rounded-full px-3 py-2"
                 style={{
-                  backgroundColor: category === item ? PRIMARY_BLUE : '#f1f5f9',
+                  backgroundColor: category === item.value ? PRIMARY_BLUE : '#f1f5f9',
                 }}
               >
-                <Text className="text-xs font-semibold capitalize" style={{ color: category === item ? '#fff' : '#334155' }}>
-                  {item}
+                <Text className="text-xs font-semibold" style={{ color: category === item.value ? '#fff' : '#334155' }}>
+                  {item.label}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -153,13 +186,21 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
           <Field label="Description" value={description} onChangeText={setDescription} placeholder="Notes for passengers" multiline />
 
           <Text className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Photos</Text>
+          <Text className="mb-3 text-xs text-gray-500">Tap a photo to make it the display photo. You can upload up to 8.</Text>
           <View className="flex-row flex-wrap gap-2">
-            {photoUrls.map((url) => (
+            {photoUrls.map((url, index) => (
               <View key={url} className="relative">
-                <Image
-                  source={{ uri: resolveUploadedMediaUrl(url) }}
-                  className="h-20 w-20 rounded-xl"
-                />
+                <TouchableOpacity onPress={() => makeDisplayPhoto(url)} activeOpacity={0.85}>
+                  <Image
+                    source={{ uri: resolveUploadedMediaUrl(url) }}
+                    className="h-20 w-20 rounded-xl"
+                  />
+                  {index === 0 ? (
+                    <View className="absolute bottom-1 left-1 rounded-full bg-blue-600 px-2 py-1">
+                      <Text className="text-[10px] font-bold text-white">Display</Text>
+                    </View>
+                  ) : null}
+                </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => setPhotoUrls((prev) => prev.filter((item) => item !== url))}
                   className="absolute -right-1 -top-1 h-6 w-6 items-center justify-center rounded-full bg-rose-500"

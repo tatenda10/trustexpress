@@ -421,11 +421,11 @@ const DriverAccountScreen = ({ navigation, route }) => {
       danger: false,
     },
     {
-      key: 'hire-jobs',
-      title: 'Hire jobs',
-      subtitle: 'Browse open hire requests and send quotes',
-      icon: 'briefcase-outline',
-      onPress: () => navigation.navigate('DriverHireOpenRequests'),
+      key: 'income',
+      title: 'Income',
+      subtitle: 'Track earnings, goals and trip history',
+      icon: 'stats-chart-outline',
+      onPress: () => navigation.navigate('DriverIncomeStack'),
       danger: false,
     },
     {

@@ -385,6 +385,7 @@ router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
       );
       return res.status(err.status || 502).json({
         error: err.message || 'Smile Cash registration failed',
+        code: err.code || null,
         providerPayload: err.providerPayload || null,
       });
     }
@@ -397,6 +398,76 @@ router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('POST /api/drivers/me/smile-cash/open', err);
     return res.status(err.status || 500).json({ error: err.message || 'Server error' });
+  }
+});
+
+router.post('/me/smile-cash/link', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const appUser = toAppUser(user);
+    const verification = await getDriverVerificationFromMysql(req.userId, user);
+    const profile = verification?.driverProfile || {};
+    const idNumber = String(req.body?.idNumber || profile.nationalIdNumber || '').trim();
+    const dateOfBirth = String(req.body?.dateOfBirth || profile.dateOfBirth || '').trim();
+    const gender = String(req.body?.gender || profile.gender || '').trim();
+    const mobile = String(
+      req.body?.mobile
+      || profile.smileCashMobile
+      || appUser.phone_number
+      || user?.primaryPhoneNumber?.phoneNumber
+      || ''
+    ).trim();
+
+    if (!profile.nationalIdNumber && !idNumber) {
+      return res.status(400).json({ error: 'Complete national ID verification before linking Smile Cash' });
+    }
+
+    const normalizedDob = normalizeDateOfBirth(dateOfBirth);
+    const normalizedGender = normalizeGender(gender);
+    const normalizedMobile = normalizeZimMobile(mobile);
+
+    if (!normalizedDob || !normalizedGender) {
+      return res.status(400).json({ error: 'Date of birth and gender are required' });
+    }
+    if (!normalizedMobile) {
+      return res.status(400).json({ error: 'A valid mobile number is required' });
+    }
+
+    await query(
+      `INSERT INTO driver_identity (
+         driver_user_id,
+         profile_status,
+         date_of_birth,
+         gender,
+         smile_cash_mobile,
+         smile_cash_status,
+         smile_cash_opened_at,
+         smile_cash_last_error
+       ) VALUES (?, 'pending', ?, ?, ?, 'active', CURRENT_TIMESTAMP, NULL)
+       ON DUPLICATE KEY UPDATE
+         date_of_birth = VALUES(date_of_birth),
+         gender = VALUES(gender),
+         smile_cash_mobile = VALUES(smile_cash_mobile),
+         smile_cash_status = 'active',
+         smile_cash_opened_at = COALESCE(driver_identity.smile_cash_opened_at, CURRENT_TIMESTAMP),
+         smile_cash_last_error = NULL,
+         updated_at = CURRENT_TIMESTAMP`,
+      [req.userId, normalizedDob, normalizedGender, normalizedMobile]
+    );
+
+    const refreshed = await getDriverVerificationFromMysql(req.userId, user);
+    return res.json({
+      ok: true,
+      driverProfile: refreshed.driverProfile,
+    });
+  } catch (err) {
+    console.error('POST /api/drivers/me/smile-cash/link', err);
+    return res.status(err.status || 500).json({
+      error: err.message || 'Server error',
+      code: err.code || null,
+    });
   }
 });
 

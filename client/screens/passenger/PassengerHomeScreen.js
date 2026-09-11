@@ -298,6 +298,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [routeReady, setRouteReady] = useState(false);
   const [nearbyDrivers, setNearbyDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
+  const [tripMode, setTripMode] = useState('ride'); // 'ride' | 'hire'
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -929,6 +930,26 @@ export default function PassengerHomeScreen({ navigation, route }) {
     });
   };
 
+  const openHireRequestScreen = () => {
+    if (!pickupCoordinate || !dropoffCoordinate) {
+      Alert.alert('Missing route', 'Set your pickup and destination on the map first.');
+      return;
+    }
+    if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
+      Alert.alert('Outside Bulawayo', 'Trust Express currently supports hiring within Bulawayo only.');
+      return;
+    }
+    navigation.navigate('PassengerHireCreate', {
+      category: 'truck',
+      pickupLabel: pickupLabel.replace(/^Pickup:\s*/i, ''),
+      dropoffLabel: dropoffLabel.replace(/^Drop-off:\s*/i, ''),
+      pickupCoordinate,
+      dropoffCoordinate,
+      distanceKm: routeDistanceKm > 0 ? routeDistanceKm : null,
+      estimatedMinutes: routeDurationMinutes > 0 ? routeDurationMinutes : estimatedMinutes,
+    });
+  };
+
   return (
     <SafeAreaView className="flex-1 bg-white" edges={['top', 'left', 'right']}>
       <View className="flex-1 bg-[#eef4ff]">
@@ -1005,16 +1026,6 @@ export default function PassengerHomeScreen({ navigation, route }) {
         <View pointerEvents="none" className="absolute inset-0 bg-black/25" />
 
         <View style={{ paddingTop: insets.top + 10 }} className="px-5">
-          <View className="mb-3 flex-row items-center justify-between">
-            <TouchableOpacity
-              onPress={() => navigation.navigate('PassengerHireHome')}
-              className="flex-row items-center rounded-full bg-white/95 px-4 py-2.5"
-              activeOpacity={0.85}
-            >
-              <Ionicons name="bus-outline" size={18} color={PRIMARY_BLUE} />
-              <Text className="ml-2 text-sm font-semibold text-gray-900">Hire a vehicle</Text>
-            </TouchableOpacity>
-          </View>
           {dropoffCoordinate ? (
             <View className="rounded-[28px] bg-white/95 px-4 py-4">
               <View className="flex-row items-start">
@@ -1060,7 +1071,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
         <View
           className="mt-auto rounded-t-[32px] bg-[#f8f8f6] px-5 pt-4"
-          style={{ marginBottom: tabBarHeight + 40, minHeight: dropoffCoordinate ? 250 : 320 }}
+          style={{ marginBottom: tabBarHeight + 40, minHeight: dropoffCoordinate ? 320 : 380 }}
         >
           <View className="items-center">
             <View className="h-2 w-16 rounded-full bg-gray-300" />
@@ -1090,29 +1101,97 @@ export default function PassengerHomeScreen({ navigation, route }) {
             </View>
           </TouchableOpacity>
 
+          <View className="mt-3 flex-row gap-2">
+            <TouchableOpacity
+              onPress={() => setTripMode('ride')}
+              activeOpacity={0.85}
+              className="flex-1 flex-row items-center justify-center rounded-[18px] px-3 py-3"
+              style={{
+                backgroundColor: tripMode === 'ride' ? PRIMARY_BLUE : '#ffffff',
+                borderWidth: 1,
+                borderColor: tripMode === 'ride' ? PRIMARY_BLUE : '#e5e7eb',
+              }}
+            >
+              <Ionicons name="car-outline" size={18} color={tripMode === 'ride' ? '#fff' : '#111827'} />
+              <Text
+                className="ml-2 text-sm font-bold"
+                style={{ color: tripMode === 'ride' ? '#fff' : '#111827' }}
+              >
+                Normal ride
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setTripMode('hire');
+                if (!dropoffCoordinate) {
+                  openRouteModal();
+                }
+              }}
+              activeOpacity={0.85}
+              className="flex-1 flex-row items-center justify-center rounded-[18px] px-3 py-3"
+              style={{
+                backgroundColor: tripMode === 'hire' ? PRIMARY_BLUE : '#ffffff',
+                borderWidth: 1,
+                borderColor: tripMode === 'hire' ? PRIMARY_BLUE : '#e5e7eb',
+              }}
+            >
+              <Ionicons name="bus-outline" size={18} color={tripMode === 'hire' ? '#fff' : '#111827'} />
+              <Text
+                className="ml-2 text-sm font-bold"
+                style={{ color: tripMode === 'hire' ? '#fff' : '#111827' }}
+              >
+                Hire a truck
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           {dropoffCoordinate ? (
             <View className="mt-4 pb-5">
               <View className="rounded-[22px] bg-white px-4 py-4">
-                <Text className="text-sm font-medium text-gray-400">Trip preview</Text>
+                <Text className="text-sm font-medium text-gray-400">
+                  {tripMode === 'hire' ? 'Hire trip preview' : 'Trip preview'}
+                </Text>
                 <Text className="mt-1 text-base font-semibold text-gray-900">
                   {routeDistanceKm > 0 ? `${distanceKm.toFixed(1)} km • ${estimatedMinutes} min away` : 'Calculating road distance...'}
                 </Text>
+                {tripMode === 'hire' ? (
+                  <Text className="mt-1 text-sm text-gray-500">
+                    Next: add truck specs, notes and your offer fee.
+                  </Text>
+                ) : null}
               </View>
               <TouchableOpacity
-                onPress={openChooseRideScreen}
-                disabled={loadingLocation || isCalculating || !routeReady}
+                onPress={tripMode === 'hire' ? openHireRequestScreen : openChooseRideScreen}
+                disabled={
+                  tripMode === 'ride'
+                    ? (loadingLocation || isCalculating || !routeReady)
+                    : (loadingLocation || !pickupCoordinate || !dropoffCoordinate)
+                }
                 className="mt-4 h-16 items-center justify-center rounded-[22px]"
-                style={{ backgroundColor: loadingLocation || isCalculating || !routeReady ? '#93c5fd' : PRIMARY_BLUE }}
+                style={{
+                  backgroundColor: (
+                    tripMode === 'ride'
+                      ? (loadingLocation || isCalculating || !routeReady)
+                      : (loadingLocation || !pickupCoordinate || !dropoffCoordinate)
+                  ) ? '#93c5fd' : PRIMARY_BLUE,
+                }}
               >
-                {isCalculating || !routeReady ? (
+                {tripMode === 'ride' && (isCalculating || !routeReady) ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text className="text-lg font-bold text-white">Choose ride</Text>
+                  <Text className="text-lg font-bold text-white">
+                    {tripMode === 'hire' ? 'Continue hire request' : 'Choose ride'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
           ) : (
             <View className="pb-5">
+              <Text className="mt-3 text-sm text-gray-500">
+                {tripMode === 'hire'
+                  ? 'Choose pickup and drop-off on the map, then continue your truck hire request.'
+                  : 'Choose a destination to request a normal ride.'}
+              </Text>
               {recentTrips.length ? (
                 <View className="mt-4 rounded-[20px] bg-white px-4 py-4">
                   <Text className="text-sm font-semibold text-gray-700">Recent trips</Text>

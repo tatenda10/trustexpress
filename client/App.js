@@ -254,6 +254,36 @@ function AppStack({ currentRouteName }) {
     });
   }, []);
 
+  const openDriverHireRequests = useCallback(() => {
+    if (!navigationRef.isReady()) return;
+    navigationRef.navigate('DriverTabs', {
+      screen: 'DriverHireJobs',
+      params: {
+        screen: 'DriverHireOpenRequests',
+        params: {
+          notificationTs: Date.now(),
+        },
+      },
+    });
+  }, []);
+
+  const openPassengerHireDetail = useCallback((hireRequestId = null) => {
+    if (!navigationRef.isReady()) return;
+    const parsedHireRequestId = Number(hireRequestId);
+    navigationRef.navigate('PassengerTabs', {
+      screen: 'PassengerHiring',
+      params: {
+        screen: 'PassengerHireDetail',
+        params: {
+          requestId: Number.isInteger(parsedHireRequestId) && parsedHireRequestId > 0
+            ? parsedHireRequestId
+            : undefined,
+          notificationTs: Date.now(),
+        },
+      },
+    });
+  }, []);
+
   useEffect(() => {
     if (!user?.id) {
       sessionDriverStatusUserId = null;
@@ -445,6 +475,14 @@ function AppStack({ currentRouteName }) {
         const data = response?.notification?.request?.content?.data || {};
         if (data?.type === 'driver_new_ride_request' && isDriver) {
           openDriverIncomingRequest(data?.rideRequestId);
+        } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && isDriver) {
+          DeviceEventEmitter.emit('TrustHiringNewRequest', data);
+          openDriverHireRequests();
+        } else if (data?.type === 'driver_new_hire_quote' && !isDriver) {
+          openPassengerHireDetail(data?.hireRequestId);
+        } else if (data?.type === 'hire_booking_confirmed') {
+          if (isDriver) openDriverHireRequests();
+          else openPassengerHireDetail(data?.hireRequestId);
         }
       })
       .catch(() => {});
@@ -468,6 +506,43 @@ function AppStack({ currentRouteName }) {
         if (AppState.currentState === 'active') {
           openDriverIncomingRequest(data?.rideRequestId);
         }
+      } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && isDriver) {
+        DeviceEventEmitter.emit('TrustHiringNewRequest', data);
+        Alert.alert(
+          data?.type === 'driver_hire_offer_updated' ? 'New passenger offer' : 'New transport request',
+          notification?.request?.content?.body
+            || (data?.type === 'driver_hire_offer_updated'
+              ? 'A passenger updated their hire offer. Accept it or send your own quote.'
+              : 'A new truck, moving or travel request is available.'),
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'View jobs', onPress: openDriverHireRequests },
+          ]
+        );
+      } else if (data?.type === 'driver_new_hire_quote' && !isDriver) {
+        Alert.alert(
+          'New hiring quote',
+          notification?.request?.content?.body || 'A driver sent a pending quote for your hiring request.',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'View quote', onPress: () => openPassengerHireDetail(data?.hireRequestId) },
+          ]
+        );
+      } else if (data?.type === 'hire_booking_confirmed') {
+        Alert.alert(
+          notification?.request?.content?.title || 'Hire job booked',
+          notification?.request?.content?.body || 'A hire job was booked and is now closed.',
+          [
+            { text: 'OK', style: 'cancel' },
+            {
+              text: 'View',
+              onPress: () => {
+                if (isDriver) openDriverHireRequests();
+                else openPassengerHireDetail(data?.hireRequestId);
+              },
+            },
+          ]
+        );
       } else if (data?.type === 'ride_status' && isDriver) {
         const rideStatus = String(data?.status || '').toLowerCase();
         if (['driver_assigned', 'driver_arrived', 'in_progress'].includes(rideStatus)) {
@@ -498,6 +573,14 @@ function AppStack({ currentRouteName }) {
       });
       if (data?.type === 'driver_new_ride_request') {
         openDriverIncomingRequest(data?.rideRequestId);
+      } else if (data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') {
+        DeviceEventEmitter.emit('TrustHiringNewRequest', data);
+        openDriverHireRequests();
+      } else if (data?.type === 'driver_new_hire_quote') {
+        openPassengerHireDetail(data?.hireRequestId);
+      } else if (data?.type === 'hire_booking_confirmed') {
+        if (isDriver) openDriverHireRequests();
+        else openPassengerHireDetail(data?.hireRequestId);
       }
     });
 
@@ -506,7 +589,7 @@ function AppStack({ currentRouteName }) {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [isDriver, maybeShowBackgroundRideRequestAlert, openDriverIncomingRequest]);
+  }, [isDriver, maybeShowBackgroundRideRequestAlert, openDriverHireRequests, openDriverIncomingRequest, openPassengerHireDetail]);
 
   useEffect(() => {
     if (!isDriver) return undefined;

@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Tex
 import { Ionicons } from '@expo/vector-icons';
 import { useUser, useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { openDriverSmileCash } from '../../api';
+import { linkDriverSmileCash, openDriverSmileCash } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
@@ -38,20 +38,49 @@ export default function DriverSmileCashScreen({ navigation }) {
   const isActive = String(profile.smileCashStatus || '').toLowerCase() === 'active';
 
   const handleOpen = async () => {
+    const payload = {
+      mobile,
+      dateOfBirth,
+      gender,
+      idNumber: profile.nationalIdNumber || undefined,
+    };
     try {
       setSaving(true);
       const token = await getTokenRef.current({ skipCache: true });
       if (!token) throw new Error('Not signed in');
-      await openDriverSmileCash(token, {
-        mobile,
-        dateOfBirth,
-        gender,
-        idNumber: profile.nationalIdNumber || undefined,
-      });
+      await openDriverSmileCash(token, payload);
       await refetchRef.current();
       Alert.alert('Smile Cash', 'Your Smile Cash wallet registration was submitted successfully.');
       navigation.goBack();
     } catch (error) {
+      if (error?.code === 'SMILE_CASH_MOBILE_ALREADY_TAKEN') {
+        Alert.alert(
+          'Smile Cash already exists',
+          'This mobile number already has a Smile Cash wallet. If it belongs to you, link it to your Trust Express account.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Link existing',
+              onPress: async () => {
+                try {
+                  setSaving(true);
+                  const token = await getTokenRef.current({ skipCache: true });
+                  if (!token) throw new Error('Not signed in');
+                  await linkDriverSmileCash(token, payload);
+                  await refetchRef.current();
+                  Alert.alert('Smile Cash', 'Your existing Smile Cash wallet has been linked.');
+                  navigation.goBack();
+                } catch (linkError) {
+                  Alert.alert('Smile Cash', linkError?.message || 'Could not link Smile Cash wallet.');
+                } finally {
+                  setSaving(false);
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
       Alert.alert('Smile Cash', error?.message || 'Could not open Smile Cash wallet.');
     } finally {
       setSaving(false);

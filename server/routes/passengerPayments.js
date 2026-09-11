@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import {
+  choosePassengerRideCashPayment,
   handlePassengerSmilePayWebhook,
   initializePassengerRidePayment,
+  linkPassengerSmileCash,
   openPassengerSmileCash,
   verifyPassengerRidePayment,
 } from '../lib/passenger-payments.js';
@@ -33,6 +35,47 @@ router.post('/smile-cash/open', requireAuth, async (req, res) => {
     return res.json({ ok: true, smileCash });
   } catch (err) {
     console.error('POST /api/passengers/payments/smile-cash/open', err);
+    return res.status(err.status || 500).json({
+      error: err.message || 'Server error',
+      code: err.code || null,
+    });
+  }
+});
+
+router.post('/smile-cash/link', requireAuth, async (req, res) => {
+  try {
+    const passenger = await requirePassenger(req, res);
+    if (!passenger) return;
+    const smileCash = await linkPassengerSmileCash({
+      passengerUserId: req.userId,
+      clerkUser: passenger.clerkUser,
+      payload: req.body || {},
+    });
+    return res.json({ ok: true, smileCash });
+  } catch (err) {
+    console.error('POST /api/passengers/payments/smile-cash/link', err);
+    return res.status(err.status || 500).json({
+      error: err.message || 'Server error',
+      code: err.code || null,
+    });
+  }
+});
+
+router.post('/rides/:rideRequestId/choose-cash', requireAuth, async (req, res) => {
+  try {
+    const passenger = await requirePassenger(req, res);
+    if (!passenger) return;
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+    const payment = await choosePassengerRideCashPayment({
+      passengerUserId: req.userId,
+      rideRequestId,
+    });
+    return res.json({ ok: true, payment });
+  } catch (err) {
+    console.error('POST /api/passengers/payments/rides/:rideRequestId/choose-cash', err);
     return res.status(err.status || 500).json({ error: err.message || 'Server error' });
   }
 });

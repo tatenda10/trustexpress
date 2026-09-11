@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PassengerHomeStack from './PassengerHomeStack';
 import PassengerActivityStack from './PassengerActivityStack';
+import PassengerHireStack from './PassengerHireStack';
 import PassengerAccountStack from './PassengerAccountStack';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
@@ -86,6 +87,15 @@ export default function PassengerTabNavigator() {
             ? { display: 'none' }
             : baseTabBarStyle,
         })}
+      />
+      <Tab.Screen
+        name="PassengerHiring"
+        component={PassengerHireStack}
+        options={{
+          title: 'Hiring',
+          tabBarIcon: ({ color }) => <Ionicons name="briefcase-outline" size={20} color={color} />,
+          tabBarLabel: ({ focused, color }) => <TabLabel label="Hiring" focused={focused} color={color} />,
+        }}
       />
       <Tab.Screen
         name="PassengerActivity"

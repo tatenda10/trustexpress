@@ -172,8 +172,23 @@ export async function openDriverSmileCash(token, payload) {
   }, token);
 }
 
+export async function linkDriverSmileCash(token, payload) {
+  return apiFetch('/api/drivers/me/smile-cash/link', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
 export async function listHireVehicles(token) {
   return apiFetch('/api/hire/vehicles', {}, token);
+}
+
+export async function browseHireFleet(token, params = {}) {
+  const search = new URLSearchParams();
+  if (params.q) search.set('q', String(params.q));
+  if (params.category) search.set('category', String(params.category));
+  const suffix = search.toString() ? `?${search.toString()}` : '';
+  return apiFetch(`/api/hire/fleet${suffix}`, {}, token);
 }
 
 export async function createHireVehicle(token, payload) {
@@ -194,6 +209,17 @@ export async function listHireRequests(token) {
   return apiFetch('/api/hire/requests', {}, token);
 }
 
+export async function getHireFareEstimate(token, params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      query.set(key, String(value));
+    }
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return apiFetch(`/api/hire/fare-estimate${suffix}`, {}, token);
+}
+
 export async function createHireRequest(token, payload) {
   return apiFetch('/api/hire/requests', {
     method: 'POST',
@@ -203,6 +229,13 @@ export async function createHireRequest(token, payload) {
 
 export async function getHireRequest(token, requestId) {
   return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}`, {}, token);
+}
+
+export async function updateHireRequestOffer(token, requestId, payload) {
+  return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}/offer`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, token);
 }
 
 export async function cancelHireRequest(token, requestId) {
@@ -218,6 +251,13 @@ export async function listOpenHireRequests(token) {
 
 export async function createHireQuote(token, requestId, payload) {
   return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}/quotes`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function acceptPassengerHireOffer(token, requestId, payload) {
+  return apiFetch(`/api/hire/requests/${encodeURIComponent(requestId)}/accept-passenger-offer`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }, token);
@@ -402,6 +442,13 @@ export async function openPassengerSmileCash(token, payload) {
   }, token);
 }
 
+export async function linkPassengerSmileCash(token, payload) {
+  return apiFetch('/api/passengers/payments/smile-cash/link', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
 export async function getNearbyPassengerDrivers(token, { latitude, longitude, radiusKm = 8 }) {
   const params = new URLSearchParams({
     latitude: String(latitude),
@@ -474,6 +521,13 @@ export async function initiatePassengerRideSmilePay(token, rideRequestId, payloa
   return apiFetch(`/api/passengers/payments/rides/${rideRequestId}/smilepay/initiate`, {
     method: 'POST',
     body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function choosePassengerRideCashPayment(token, rideRequestId) {
+  return apiFetch(`/api/passengers/payments/rides/${rideRequestId}/choose-cash`, {
+    method: 'POST',
+    body: JSON.stringify({}),
   }, token);
 }
 

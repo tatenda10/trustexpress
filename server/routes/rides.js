@@ -85,13 +85,21 @@ function parseJsonArray(value) {
 
 function buildRidePaymentPayload(ride) {
   const paymentStatus = String(ride?.payment_status || 'unpaid').trim().toLowerCase() || 'unpaid';
+  const paymentMethod = String(ride?.payment_method || '').trim().toLowerCase() || null;
+  const rideStatus = String(ride?.status || '').trim().toLowerCase();
+  const payableStatuses = new Set(['driver_assigned', 'driver_arrived', 'in_progress', 'completed']);
+  const isPayable = payableStatuses.has(rideStatus);
+  const isPaid = paymentStatus === 'paid' || Boolean(ride?.paid_at);
+  const choseCash = paymentMethod === 'cash';
   return {
     paymentStatus,
     paymentProvider: ride?.payment_provider || null,
     paymentReference: ride?.payment_reference || null,
-    paymentMethod: ride?.payment_method || null,
+    paymentMethod,
     paidAt: toIsoOrNull(ride?.paid_at),
-    canPayWithSmilePay: ride?.status === 'completed' && paymentStatus !== 'paid',
+    canChoosePaymentMethod: isPayable && !isPaid && !choseCash,
+    canPayCash: isPayable && !isPaid && !choseCash,
+    canPayWithSmilePay: isPayable && !isPaid && !choseCash,
   };
 }
 

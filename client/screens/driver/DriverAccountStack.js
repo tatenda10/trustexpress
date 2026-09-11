@@ -8,6 +8,8 @@ import DriverSmileCashScreen from './DriverSmileCashScreen';
 import DriverHireVehiclesScreen from './DriverHireVehiclesScreen';
 import DriverHireVehicleFormScreen from './DriverHireVehicleFormScreen';
 import DriverHireOpenRequestsScreen from './DriverHireOpenRequestsScreen';
+import DriverHireDetailScreen from './DriverHireDetailScreen';
+import DriverActivityStack from './DriverActivityStack';
 import SupportChatScreen from '../shared/SupportChatScreen';
 import LegalDocumentScreen from '../shared/LegalDocumentScreen';
 import DriverDocumentationPage from './DriverDocumentationPage';
@@ -48,6 +50,8 @@ export default function DriverAccountStack({ route }) {
       <Stack.Screen name="DriverHireVehicles" component={DriverHireVehiclesScreen} />
       <Stack.Screen name="DriverHireVehicleForm" component={DriverHireVehicleFormScreen} />
       <Stack.Screen name="DriverHireOpenRequests" component={DriverHireOpenRequestsScreen} />
+      <Stack.Screen name="DriverHireDetail" component={DriverHireDetailScreen} />
+      <Stack.Screen name="DriverIncomeStack" component={DriverActivityStack} />
       <Stack.Screen
         name="DriverSupportChat"
         component={SupportChatScreen}

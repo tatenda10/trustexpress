@@ -3,6 +3,13 @@ import { toAppUser } from './clerk-user.js';
 import { getPaymentProvider } from './payment-providers/index.js';
 import { createSmileCashSubscriber, normalizeDateOfBirth, normalizeGender, normalizeZimMobile } from './smile-cash.js';
 
+const PAYABLE_RIDE_STATUSES = new Set([
+  'driver_assigned',
+  'driver_arrived',
+  'in_progress',
+  'completed',
+]);
+
 function buildPaymentError(message, status = 400) {
   const error = new Error(message);
   error.status = status;
@@ -13,6 +20,13 @@ function normalizeMoney(value) {
   const amount = Number(value || 0);
   if (!Number.isFinite(amount)) return 0;
   return Math.round(amount * 100) / 100;
+}
+
+function getRideGrossFare(ride) {
+  return normalizeMoney(
+    Number(ride?.final_estimated_amount || ride?.estimated_amount || 0)
+    + Number(ride?.tip_amount || 0)
+  );
 }
 
 function makePaymentReference(rideRequestId) {
@@ -29,6 +43,21 @@ function shapePassengerSmileCash(row) {
     gender: row?.gender || null,
     nationalIdNumber: row?.national_id_number || null,
   };
+}
+
+function assertRidePayable(ride) {
+  if (!ride) throw buildPaymentError('Ride request not found', 404);
+  if (!PAYABLE_RIDE_STATUSES.has(String(ride.status || '').toLowerCase())) {
+    throw buildPaymentError('Payment opens once a driver is assigned to your ride', 409);
+  }
+  if (!ride.driver_user_id) throw buildPaymentError('Ride has no assigned driver', 409);
+  const paymentStatus = String(ride.payment_status || '').toLowerCase();
+  if (paymentStatus === 'paid' || ride.paid_at) {
+    throw buildPaymentError('This ride is already paid', 409);
+  }
+  if (String(ride.payment_method || '').toLowerCase() === 'cash') {
+    throw buildPaymentError('This ride is set to pay with cash', 409);
+  }
 }
 
 export async function openPassengerSmileCash({ passengerUserId, clerkUser, payload = {} }) {
@@ -121,6 +150,94 @@ export async function openPassengerSmileCash({ passengerUserId, clerkUser, paylo
   return shapePassengerSmileCash(updated);
 }
 
+export async function linkPassengerSmileCash({ passengerUserId, clerkUser, payload = {} }) {
+  const appUser = toAppUser(clerkUser);
+  const [identity] = await query(
+    `SELECT *
+     FROM passenger_identity
+     WHERE passenger_user_id = ?
+     LIMIT 1`,
+    [passengerUserId]
+  );
+
+  const idNumber = String(payload.idNumber || identity?.national_id_number || '').trim().toUpperCase();
+  const dateOfBirth = normalizeDateOfBirth(payload.dateOfBirth || identity?.date_of_birth || '');
+  const gender = normalizeGender(payload.gender || identity?.gender || '');
+  const mobile = normalizeZimMobile(
+    payload.mobile
+    || identity?.smile_cash_mobile
+    || appUser.phone_number
+    || clerkUser?.primaryPhoneNumber?.phoneNumber
+    || ''
+  );
+
+  if (!idNumber) throw buildPaymentError('National ID number is required');
+  if (!dateOfBirth || !gender) throw buildPaymentError('Date of birth and gender are required');
+  if (!mobile) throw buildPaymentError('A valid mobile number is required');
+
+  await query(
+    `INSERT INTO passenger_identity (
+       passenger_user_id,
+       date_of_birth,
+       gender,
+       national_id_number,
+       smile_cash_mobile,
+       smile_cash_status,
+       smile_cash_opened_at,
+       smile_cash_last_error
+     ) VALUES (?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, NULL)
+     ON DUPLICATE KEY UPDATE
+       date_of_birth = VALUES(date_of_birth),
+       gender = VALUES(gender),
+       national_id_number = VALUES(national_id_number),
+       smile_cash_mobile = VALUES(smile_cash_mobile),
+       smile_cash_status = 'active',
+       smile_cash_opened_at = COALESCE(passenger_identity.smile_cash_opened_at, CURRENT_TIMESTAMP),
+       smile_cash_last_error = NULL,
+       updated_at = CURRENT_TIMESTAMP`,
+    [passengerUserId, dateOfBirth, gender, idNumber, mobile]
+  );
+
+  const [updated] = await query(
+    `SELECT *
+     FROM passenger_identity
+     WHERE passenger_user_id = ?
+     LIMIT 1`,
+    [passengerUserId]
+  );
+  return shapePassengerSmileCash(updated);
+}
+
+export async function choosePassengerRideCashPayment({ passengerUserId, rideRequestId }) {
+  const [ride] = await query(
+    `SELECT *
+     FROM ride_requests
+     WHERE id = ?
+       AND passenger_user_id = ?
+     LIMIT 1`,
+    [rideRequestId, passengerUserId]
+  );
+  assertRidePayable(ride);
+
+  await query(
+    `UPDATE ride_requests
+     SET payment_method = 'cash',
+         payment_provider = NULL,
+         payment_reference = NULL,
+         payment_status = 'unpaid'
+     WHERE id = ?`,
+    [ride.id]
+  );
+
+  return {
+    paymentStatus: 'unpaid',
+    paymentMethod: 'cash',
+    canPayCash: false,
+    canPayWithSmilePay: false,
+    canChoosePaymentMethod: false,
+  };
+}
+
 export async function initializePassengerRidePayment({
   passengerUserId,
   passenger,
@@ -138,22 +255,12 @@ export async function initializePassengerRidePayment({
      LIMIT 1`,
     [rideRequestId, passengerUserId]
   );
-  if (!ride) throw buildPaymentError('Ride request not found', 404);
-  if (ride.status !== 'completed') throw buildPaymentError('Pay after the ride is completed', 409);
-  if (!ride.driver_user_id) throw buildPaymentError('Ride has no assigned driver', 409);
+  assertRidePayable(ride);
 
-  const existingPaidStatus = String(ride.payment_status || '').toLowerCase();
-  if (existingPaidStatus === 'paid' || ride.paid_at) {
-    throw buildPaymentError('This ride is already paid', 409);
-  }
-
-  const receiverMobile = normalizeZimMobile(ride.driver_smile_cash_mobile || '');
-  if (!receiverMobile || String(ride.driver_smile_cash_status || '').toLowerCase() !== 'active') {
-    throw buildPaymentError('Driver must open an active Smile Cash account before passenger payment', 409);
-  }
-
-  const amount = normalizeMoney(Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0));
+  const amount = getRideGrossFare(ride);
   if (!(amount > 0)) throw buildPaymentError('Ride amount must be greater than zero');
+
+  const receiverMobile = normalizeZimMobile(ride.driver_smile_cash_mobile || '') || null;
 
   const [existingPending] = await query(
     `SELECT *
@@ -228,7 +335,8 @@ export async function initializePassengerRidePayment({
     `UPDATE ride_requests
      SET payment_status = 'pending',
          payment_provider = 'smilepay',
-         payment_reference = ?
+         payment_reference = ?,
+         payment_method = NULL
      WHERE id = ?`,
     [reference, ride.id]
   );
@@ -316,7 +424,7 @@ async function creditDriverWalletForPassengerPayment(connection, payment) {
       balanceAfter,
       payment.reference,
       payment.provider_transaction_id || null,
-      'Passenger Smile&Pay ride payment',
+      'Passenger Smile&Pay ride payment (full fare credited; commission charged on trip complete)',
     ]
   );
 
@@ -414,12 +522,12 @@ export async function verifyPassengerRidePayment({ passengerUserId = null, rideR
            payment_method = ?,
            paid_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [safeReference, verification.paymentMethod || null, locked.ride_request_id]
+      [safeReference, verification.paymentMethod || 'online', locked.ride_request_id]
     );
 
     const walletCreditTransactionId = await creditDriverWalletForPassengerPayment(connection, {
       ...locked,
-      payment_method: verification.paymentMethod || null,
+      payment_method: verification.paymentMethod || 'online',
       provider_transaction_id: verification.externalTransactionId || null,
     });
 

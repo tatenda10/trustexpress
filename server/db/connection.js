@@ -12,6 +12,7 @@ const DB_CONFIG = {
   connectTimeout: 10000,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
+  idleTimeout: 60000,
 };
 
 let pool = mysql.createPool(DB_CONFIG);
@@ -36,6 +37,14 @@ function resetPool() {
   pool = mysql.createPool(DB_CONFIG);
   pool.on('connection', (connection) => {
     connection.on('error', (error) => {
+      if (isTransientDbError(error)) {
+        console.warn('[db/connection] transient MySQL connection reset', {
+          code: error.code,
+          syscall: error.syscall,
+          fatal: error.fatal === true,
+        });
+        return;
+      }
       console.error('[db/connection] mysql connection error', error);
     });
   });
@@ -58,7 +67,7 @@ export async function query(sql, params = []) {
   }
 }
 
-export async function withTransaction(work) {
+async function runTransaction(work) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -70,6 +79,19 @@ export async function withTransaction(work) {
     throw error;
   } finally {
     connection.release();
+  }
+}
+
+export async function withTransaction(work) {
+  try {
+    return await runTransaction(work);
+  } catch (error) {
+    if (isTransientDbError(error)) {
+      console.warn('[db/connection] transient MySQL transaction error, resetting pool and retrying', error.code);
+      resetPool();
+      return runTransaction(work);
+    }
+    throw error;
   }
 }
 

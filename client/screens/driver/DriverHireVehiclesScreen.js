@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -24,25 +24,40 @@ function statusColor(status) {
 export default function DriverHireVehiclesScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [vehicles, setVehicles] = useState([]);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   const load = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
       setError('');
-      const token = await getToken({ skipCache: true });
+      const token = await getTokenRef.current({ skipCache: true });
       const data = await listHireVehicles(token);
+      console.log('[DriverHireVehicles] API result', {
+        count: Array.isArray(data?.vehicles) ? data.vehicles.length : null,
+        rawKeys: data && typeof data === 'object' ? Object.keys(data) : null,
+      });
       setVehicles(Array.isArray(data?.vehicles) ? data.vehicles : []);
     } catch (err) {
-      setError(err?.message || 'Could not load hire vehicles');
+      console.log('[DriverHireVehicles] load failed', {
+        message: err?.message || null,
+        status: err?.status || null,
+        code: err?.code || null,
+      });
+      setVehicles([]);
+      setError(err?.message || 'Could not load vehicles for hiring');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [getToken]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -62,7 +77,7 @@ export default function DriverHireVehiclesScreen({ navigation }) {
         >
           <Ionicons name="chevron-back" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text className="text-[18px] font-bold text-gray-900">Hire vehicles</Text>
+        <Text className="text-[18px] font-bold text-gray-900">Hiring vehicles</Text>
         <TouchableOpacity
           onPress={() => navigation.navigate('DriverHireVehicleForm')}
           className="h-10 w-10 items-center justify-center rounded-full bg-white"
@@ -92,9 +107,11 @@ export default function DriverHireVehiclesScreen({ navigation }) {
           )}
           ListEmptyComponent={(
             <View className="mt-10 rounded-[24px] bg-white px-5 py-8 items-center">
-              <Text className="text-base font-semibold text-gray-900">No hire vehicles yet</Text>
+              <Text className="text-base font-semibold text-gray-900">
+                {error ? 'Could not load hiring vehicles' : 'No hiring vehicles yet'}
+              </Text>
               <Text className="mt-2 text-center text-sm text-gray-500">
-                Add a vehicle to receive hire quotes from passengers.
+                {error || 'Add a vehicle to receive hiring quotes from passengers.'}
               </Text>
               <TouchableOpacity
                 onPress={() => navigation.navigate('DriverHireVehicleForm')}

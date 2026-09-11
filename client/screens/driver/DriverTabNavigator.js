@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { DeviceEventEmitter } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import DriverHomeStack from './DriverHomeStack';
 import DriverWalletScreen from './DriverWalletScreen';
 import DriverDiscountReimbursementsScreen from './DriverDiscountReimbursementsScreen';
-import DriverActivityStack from './DriverActivityStack';
+import DriverHireStack from './DriverHireStack';
 import DriverAccountStack from './DriverAccountStack';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
@@ -13,6 +14,15 @@ const ICON_SIZE = 24;
 
 export default function DriverTabNavigator({ route }) {
   const driverStatus = route?.params?.driverStatus ?? null;
+  const [hiringBadgeCount, setHiringBadgeCount] = useState(0);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener('TrustHiringNewRequest', () => {
+      setHiringBadgeCount((count) => Math.min(count + 1, 99));
+    });
+    return () => subscription.remove();
+  }, []);
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -48,11 +58,16 @@ export default function DriverTabNavigator({ route }) {
         }}
       />
       <Tab.Screen
-        name="DriverActivity"
-        component={DriverActivityStack}
+        name="DriverHireJobs"
+        component={DriverHireStack}
+        listeners={{
+          tabPress: () => setHiringBadgeCount(0),
+          focus: () => setHiringBadgeCount(0),
+        }}
         options={{
-          title: 'Income',
-          tabBarIcon: ({ color }) => <Ionicons name="stats-chart-outline" size={ICON_SIZE} color={color} />,
+          title: 'Hiring',
+          tabBarIcon: ({ color }) => <Ionicons name="notifications-outline" size={ICON_SIZE} color={color} />,
+          tabBarBadge: hiringBadgeCount > 0 ? hiringBadgeCount : undefined,
         }}
       />
       <Tab.Screen

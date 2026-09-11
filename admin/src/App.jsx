@@ -29,6 +29,8 @@ import VehicleCatalogPage from './pages/VehicleCatalogPage'
 import AgentRewardsPage from './pages/AgentRewardsPage'
 import CaptainRewardsPage from './pages/CaptainRewardsPage'
 import HireVehiclesPage from './pages/HireVehiclesPage'
+import HireJobsPage from './pages/HireJobsPage'
+import HireJobDetailPage from './pages/HireJobDetailPage'
 import SmileCashPayoutsPage from './pages/SmileCashPayoutsPage'
 import SupportInboxPage from './pages/SupportInboxPage'
 import SupportAgentPage from './pages/SupportAgentPage'
@@ -199,6 +201,14 @@ function AppRoutes() {
         <Route
           path="hire-vehicles"
           element={<PermissionRoute permission="verification.read"><HireVehiclesPage /></PermissionRoute>}
+        />
+        <Route
+          path="hire-jobs"
+          element={<PermissionRoute permission="ride_ops.read"><HireJobsPage /></PermissionRoute>}
+        />
+        <Route
+          path="hire-jobs/:requestId"
+          element={<PermissionRoute permission="ride_ops.read"><HireJobDetailPage /></PermissionRoute>}
         />
         <Route
           path="driver-wallet-settings"

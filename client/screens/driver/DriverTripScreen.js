@@ -1082,7 +1082,11 @@ export default function DriverTripScreen({ navigation, route }) {
               clearRideRequestNotifications().catch(() => {});
               Alert.alert('Ride cancelled', 'The ride has been cancelled.');
               const parentNavigator = navigation.getParent?.();
-              if (parentNavigator) parentNavigator.navigate('DriverActivity');
+              if (parentNavigator) {
+                parentNavigator.navigate('DriverAccount', {
+                  screen: 'DriverIncomeStack',
+                });
+              }
               else navigation.goBack();
             } catch (error) {
               Alert.alert('Cancel ride failed', error?.message || 'Could not cancel this ride.');

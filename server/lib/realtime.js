@@ -25,6 +25,14 @@ export function emitRideRequestRemovedFromDriver(driverUserId, payload = {}) {
   emitToUser(driverUserId, 'ride_request:removed', payload);
 }
 
+export function emitHireRequestToDriver(driverUserId, payload = {}) {
+  emitToUser(driverUserId, 'hire_request:new', payload);
+}
+
+export function emitHireQuoteToPassenger(passengerUserId, payload = {}) {
+  emitToUser(passengerUserId, 'hire_quote:new', payload);
+}
+
 export function emitRideStatusToPassenger(passengerUserId, payload = {}) {
   emitToUser(passengerUserId, 'ride_status:updated', payload);
 }

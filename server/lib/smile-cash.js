@@ -9,6 +9,36 @@ function buildError(message, status = 400) {
   return error;
 }
 
+function mapWalletError(data, fallbackStatus) {
+  const rawMessage = String(
+    data?.responseMessage
+      || data?.message
+      || data?.error
+      || ''
+  ).trim();
+  const rawStatus = String(data?.status || data?.code || data?.responseCode || '').trim().toUpperCase();
+  const normalizedMessage = rawMessage.toLowerCase();
+
+  if (
+    rawStatus === 'CONFLICT'
+    || normalizedMessage.includes('mobile already taken')
+    || normalizedMessage.includes('already taken')
+    || normalizedMessage.includes('already exists')
+  ) {
+    return {
+      status: 409,
+      message: 'This mobile number is already registered with Smile Cash. Use that existing Smile Cash number or contact support.',
+      code: 'SMILE_CASH_MOBILE_ALREADY_TAKEN',
+    };
+  }
+
+  return {
+    status: fallbackStatus,
+    message: rawMessage || `Smile Cash request failed with status ${fallbackStatus}`,
+    code: rawStatus || null,
+  };
+}
+
 function normalizeMoney(value) {
   const amount = Number(value || 0);
   if (!Number.isFinite(amount)) return 0;
@@ -93,13 +123,9 @@ async function walletRequest(path, { method = 'POST', body } = {}) {
     || ['00', '0', '200', '201', 'SUCCESS', 'SUCCESSFUL'].includes(responseCode.toUpperCase());
   const failedFlag = data?.success === false || data?.error === true;
   if (!res.ok || failedFlag || !okByCode) {
-    const error = buildError(
-      data?.responseMessage
-        || data?.message
-        || data?.error
-        || `Smile Cash request failed with status ${res.status}`,
-      502
-    );
+    const mapped = mapWalletError(data, res.status >= 400 && res.status < 500 ? res.status : 502);
+    const error = buildError(mapped.message, mapped.status);
+    error.code = mapped.code;
     error.providerPayload = data;
     throw error;
   }
