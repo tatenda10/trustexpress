@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { normalizePaymentMethod } from '../lib/payment-method.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
@@ -91,14 +92,15 @@ function buildRidePaymentPayload(ride) {
   const isPayable = payableStatuses.has(rideStatus);
   const isPaid = paymentStatus === 'paid' || Boolean(ride?.paid_at);
   const choseCash = paymentMethod === 'cash';
+  const choseOnline = paymentMethod === 'online';
   return {
     paymentStatus,
     paymentProvider: ride?.payment_provider || null,
     paymentReference: ride?.payment_reference || null,
     paymentMethod,
     paidAt: toIsoOrNull(ride?.paid_at),
-    canChoosePaymentMethod: isPayable && !isPaid && !choseCash,
-    canPayCash: isPayable && !isPaid && !choseCash,
+    canChoosePaymentMethod: isPayable && !isPaid && !choseCash && !choseOnline,
+    canPayCash: isPayable && !isPaid && !choseCash && !choseOnline,
     canPayWithSmilePay: isPayable && !isPaid && !choseCash,
   };
 }
@@ -421,13 +423,20 @@ async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKe
     `SELECT da.*
      FROM driver_availability da
      LEFT JOIN ride_requests active_ride
-       ON active_ride.driver_user_id = da.driver_user_id
+       ON BINARY active_ride.driver_user_id = BINARY da.driver_user_id
       AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+     LEFT JOIN hire_bookings active_hire
+       ON BINARY active_hire.driver_user_id = BINARY da.driver_user_id
+      AND active_hire.status IN ('confirmed', 'driver_arrived', 'in_progress')
+     LEFT JOIN driver_identity di
+       ON BINARY di.driver_user_id = BINARY da.driver_user_id
      WHERE da.is_online = 1
        AND da.current_lat IS NOT NULL
        AND da.current_lng IS NOT NULL
        AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
        AND active_ride.id IS NULL
+       AND active_hire.id IS NULL
+       AND COALESCE(di.driver_kind, 'standard') <> 'truck'
      ORDER BY da.updated_at DESC`
   );
 
@@ -854,7 +863,9 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       selectedTier,
       discountCode = '',
       passengerCount,
+      paymentMethod: paymentMethodRaw,
     } = req.body || {};
+    const paymentMethod = normalizePaymentMethod(paymentMethodRaw);
 
     const pickupLat = Number(pickupCoordinate?.latitude);
     const pickupLng = Number(pickupCoordinate?.longitude);
@@ -872,6 +883,9 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       return res.status(400).json({
         error: `Confirm how many people are riding. This ${tier.tier_name} fits up to ${maxPassengerCount}.`,
       });
+    }
+    if (!paymentMethod) {
+      return res.status(400).json({ error: 'Choose cash or pay online' });
     }
     if (![pickupLat, pickupLng, dropoffLat, dropoffLng].every(Number.isFinite)) {
       return res.status(400).json({ error: 'Valid pickup and drop-off coordinates are required' });
@@ -972,8 +986,9 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         discount_type,
         discount_value,
         discount_applied_at,
+        payment_method,
         status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
       [
         publicId,
         req.userId,
@@ -1005,6 +1020,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         validatedDiscount?.discountType || null,
         validatedDiscount?.discountValue ?? null,
         validatedDiscount ? new Date() : null,
+        paymentMethod,
       ]
     );
 
@@ -1073,6 +1089,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         requestedTierKey: tier.tier_key,
         requestedTierName: tier.tier_name,
         passengerCount: partySize,
+        paymentMethod,
       });
     });
 
@@ -1119,6 +1136,7 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         requestedTierKey: tier.tier_key,
         requestedTierName: tier.tier_name,
         passengerCount: partySize,
+        paymentMethod,
         visibleDriversPreview: nearbyDrivers.slice(0, 4).map((driver) => ({
           id: driver.id,
           driverName: driver.driverName,

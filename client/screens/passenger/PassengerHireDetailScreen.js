@@ -27,6 +27,9 @@ import {
 } from '../../api';
 import HireRouteOverview from '../../components/hire/HireRouteOverview';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { isLiveHireBooking } from '../../constants/hire';
+import { paymentMethodLabel } from '../../constants/payment';
+import { connectRealtime } from '../../realtime';
 
 export default function PassengerHireDetailScreen({ navigation, route }) {
   const requestId = route.params?.requestId;
@@ -40,6 +43,7 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [request, setRequest] = useState(null);
   const [quotes, setQuotes] = useState([]);
+  const [booking, setBooking] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [offerModalVisible, setOfferModalVisible] = useState(false);
   const [offerAmount, setOfferAmount] = useState('');
@@ -69,6 +73,7 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
 
       setRequest(data?.request || null);
       setQuotes(Array.isArray(data?.quotes) ? data.quotes : []);
+      setBooking(data?.booking || null);
       hasLoadedRef.current = true;
     } catch (err) {
       if (fetchId !== fetchIdRef.current) return;
@@ -95,6 +100,29 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
     lastNotificationTsRef.current = notificationTs;
     load({ silent: true });
   }, [load, route?.params?.notificationTs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let socket = null;
+    const onConfirmed = (payload) => {
+      if (cancelled) return;
+      if (Number(payload?.hireRequestId) !== Number(requestId)) return;
+      navigation.navigate('PassengerHireTracking', { requestId });
+    };
+    (async () => {
+      try {
+        const token = await getTokenRef.current({ skipCache: true });
+        socket = connectRealtime(token);
+        socket.on('hire_booking:confirmed', onConfirmed);
+      } catch {
+        // Push notification still opens tracking.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      socket?.off?.('hire_booking:confirmed', onConfirmed);
+    };
+  }, [navigation, requestId]);
 
   const canEdit = ['open', 'quoted'].includes(request?.status);
 
@@ -138,17 +166,7 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
       setBusyId(quoteId);
       const token = await getTokenRef.current({ skipCache: true });
       await acceptHireQuote(token, quoteId);
-      Alert.alert('Booked', 'Hire booking confirmed. This job is now closed.', [
-        {
-          text: 'OK',
-          onPress: () => {
-            navigation.navigate('PassengerHireHome', {
-              initialTab: 'jobs',
-              refreshAt: Date.now(),
-            });
-          },
-        },
-      ]);
+      navigation.navigate('PassengerHireTracking', { requestId });
     } catch (err) {
       Alert.alert('Could not accept quote', err?.message || 'Try again');
     } finally {
@@ -221,7 +239,9 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
         <View className="mt-3 rounded-[24px] bg-white px-4 py-4">
           <Text className="text-xs uppercase tracking-wide text-gray-500">
             {request?.status} · {request?.passengerCount} pax
+            {request?.tripType ? ` · ${request.tripType}` : ''}
             {request?.category ? ` · ${String(request.category).replace(/_/g, ' ')}` : ''}
+            {paymentMethodLabel(request?.paymentMethod) ? ` · ${paymentMethodLabel(request.paymentMethod)}` : ''}
           </Text>
           <Text className="mt-1 text-sm text-gray-600">
             {request?.startAt ? new Date(request.startAt).toLocaleString() : ''}
@@ -288,6 +308,18 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
             </View>
           ))
         )}
+
+        {request?.status === 'booked' ? (
+          <TouchableOpacity
+            onPress={() => navigation.navigate('PassengerHireTracking', { requestId })}
+            className="mt-4 h-11 items-center justify-center rounded-2xl"
+            style={{ backgroundColor: PRIMARY_BLUE }}
+          >
+            <Text className="font-bold text-white">
+              {isLiveHireBooking(booking?.status) ? 'Track hire' : 'Open hire map'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
         {canEdit ? (
           <TouchableOpacity

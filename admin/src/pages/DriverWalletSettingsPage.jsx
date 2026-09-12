@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 
@@ -264,6 +265,11 @@ export default function DriverWalletSettingsPage() {
         <h1 className="text-xl font-semibold text-slate-900">Driver wallet settings</h1>
         <p className="mt-1 text-xs text-slate-500">
           Master payments switch, provider, and admin wallet top-ups for new drivers.
+          Ride service fee is set here.{' '}
+          <Link to="/dashboard/hire-commission" className="font-medium text-indigo-600 hover:text-indigo-800">
+            Hire commission bands
+          </Link>
+          {' '}are configured separately.
         </p>
       </div>
 

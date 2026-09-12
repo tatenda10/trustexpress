@@ -8,6 +8,7 @@ import {
   shapeHireRequest,
   shapeHireQuote,
 } from '../lib/hire.js';
+import { previewHireCommissionFromSettings } from '../lib/hire-commission.js';
 
 const router = Router();
 
@@ -340,8 +341,22 @@ router.get('/requests/:id', requireAdminAuth, requirePermission('ride_ops.read')
     }
     timeline.sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
 
+    let commissionPreview = null;
+    try {
+      commissionPreview = await previewHireCommissionFromSettings({
+        category: bookingRow?.vehicle_category || request.category,
+        tripType: request.tripType,
+        distanceKm: request.estimatedDistanceKm,
+        transportAmount: bookingRow?.amount ?? request.passengerOfferAmount,
+        expensesAmount: bookingRow?.expenses_amount || 0,
+      });
+    } catch (previewError) {
+      console.error('GET /api/admin/hire/requests/:id commission preview', previewError);
+    }
+
     return res.json({
       request,
+      commissionPreview,
       preferredVehicle,
       quotes: quotes.map((quoteRow) => ({
         ...shapeHireQuote(quoteRow),

@@ -16,17 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createHireVehicle, resolveUploadedMediaUrl, updateHireVehicle, uploadFile } from '../../api';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 import { PRIMARY_BLUE } from '../../constants/colors';
-
-const CATEGORIES = [
-  { value: 'sedan', label: 'Sedan' },
-  { value: 'suv', label: 'SUV' },
-  { value: 'van', label: 'Van' },
-  { value: 'moving_van', label: 'Moving van' },
-  { value: 'pickup', label: 'Pickup' },
-  { value: 'truck', label: 'Truck' },
-  { value: 'bus', label: 'Bus' },
-  { value: 'other', label: 'Other' },
-];
+import { HIRE_VEHICLE_CATEGORIES } from '../../constants/hire';
 
 export default function DriverHireVehicleFormScreen({ navigation, route }) {
   const existing = route.params?.vehicle || null;
@@ -161,7 +151,7 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
           <Field label="Title" value={title} onChangeText={setTitle} placeholder="e.g. Toyota Quantum for hire" />
           <Text className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Category</Text>
           <View className="flex-row flex-wrap gap-2">
-            {CATEGORIES.map((item) => (
+            {HIRE_VEHICLE_CATEGORIES.map((item) => (
               <TouchableOpacity
                 key={item.value}
                 onPress={() => setCategory(item.value)}

@@ -184,9 +184,49 @@ export async function getDriverIncomeDashboard(driverUserId, { period = 'day', o
     [driverUserId, range.rangeStart, range.rangeEnd]
   );
 
-  const earnings = normalizeMoney(summaryRow?.earnings);
-  const completedRides = Number(summaryRow?.completed_rides || 0);
-  const averagePerRide = normalizeMoney(summaryRow?.avg_per_ride);
+  const [hireSummaryRow] = await query(
+    `SELECT
+       COUNT(*) AS completed_hires,
+       COALESCE(SUM(hb.amount), 0) AS earnings
+     FROM hire_bookings hb
+     WHERE hb.driver_user_id = ?
+       AND hb.status = 'completed'
+       AND hb.completed_at IS NOT NULL
+       AND hb.completed_at >= ?
+       AND hb.completed_at <= ?`,
+    [driverUserId, range.rangeStart, range.rangeEnd]
+  ).catch(() => [{}]);
+
+  const hireJobs = await query(
+    `SELECT
+       hb.id,
+       hb.public_id,
+       hb.amount,
+       hb.completed_at,
+       hr.pickup_label,
+       hr.dropoff_label,
+       hr.title
+     FROM hire_bookings hb
+     INNER JOIN hire_requests hr ON hr.id = hb.hire_request_id
+     WHERE hb.driver_user_id = ?
+       AND hb.status = 'completed'
+       AND hb.completed_at IS NOT NULL
+       AND hb.completed_at >= ?
+       AND hb.completed_at <= ?
+     ORDER BY hb.completed_at DESC, hb.id DESC
+     LIMIT ${safeLimit}`,
+    [driverUserId, range.rangeStart, range.rangeEnd]
+  ).catch(() => []);
+
+  const hireEarnings = normalizeMoney(hireSummaryRow?.earnings);
+  const completedHires = Number(hireSummaryRow?.completed_hires || 0);
+  const rideEarnings = normalizeMoney(summaryRow?.earnings);
+  const completedRidesOnly = Number(summaryRow?.completed_rides || 0);
+  const earnings = normalizeMoney(rideEarnings + hireEarnings);
+  const completedRides = completedRidesOnly + completedHires;
+  const averagePerRide = completedRides > 0
+    ? normalizeMoney(earnings / completedRides)
+    : 0;
   const dailyGoalAmount = goal.dailyGoalAmount;
   // Goal tracking is most relevant for "day" view; still show the plan on week/month for reference.
   const remainingToGoal = Math.max(0, normalizeMoney(dailyGoalAmount - earnings));
@@ -217,18 +257,33 @@ export async function getDriverIncomeDashboard(driverUserId, { period = 'day', o
         ? true
         : remainingToGoal <= 0 && earnings >= dailyGoalAmount,
     },
-    rides: rides.map((row) => ({
-      id: row.id,
-      publicId: row.public_id,
-      passengerName: row.passenger_name || 'Passenger',
-      pickupLabel: row.pickup_label,
-      dropoffLabel: row.dropoff_label,
-      tierName: row.requested_tier_name,
-      tipAmount: normalizeMoney(row.tip_amount),
-      totalEarned: normalizeMoney(
-        Number(row.original_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0)
-      ),
-      completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
-    })),
+    rides: [
+      ...rides.map((row) => ({
+        id: `ride-${row.id}`,
+        publicId: row.public_id,
+        kind: 'ride',
+        passengerName: row.passenger_name || 'Passenger',
+        pickupLabel: row.pickup_label,
+        dropoffLabel: row.dropoff_label,
+        tierName: row.requested_tier_name,
+        tipAmount: normalizeMoney(row.tip_amount),
+        totalEarned: normalizeMoney(
+          Number(row.original_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0)
+        ),
+        completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+      })),
+      ...(Array.isArray(hireJobs) ? hireJobs : []).map((row) => ({
+        id: `hire-${row.id}`,
+        publicId: row.public_id,
+        kind: 'hire',
+        passengerName: row.title || 'Hire job',
+        pickupLabel: row.pickup_label,
+        dropoffLabel: row.dropoff_label,
+        tierName: 'Hire',
+        tipAmount: 0,
+        totalEarned: normalizeMoney(row.amount),
+        completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+      })),
+    ].sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0)).slice(0, safeLimit),
   };
 }

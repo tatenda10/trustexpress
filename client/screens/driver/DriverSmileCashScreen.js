@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Tex
 import { Ionicons } from '@expo/vector-icons';
 import { useUser, useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { linkDriverSmileCash, openDriverSmileCash } from '../../api';
+import { linkDriverSmileCash, openDriverSmileCash, unlinkDriverSmileCash } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
@@ -87,6 +87,34 @@ export default function DriverSmileCashScreen({ navigation }) {
     }
   };
 
+  const handleUnlink = () => {
+    Alert.alert(
+      'Use a different Smile Cash number?',
+      'This unlinks the current Smile Cash wallet so you can register or link your personal number. Cash outs only go to the linked personal wallet.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setSaving(true);
+              const token = await getTokenRef.current({ skipCache: true });
+              if (!token) throw new Error('Not signed in');
+              await unlinkDriverSmileCash(token);
+              await refetchRef.current();
+              Alert.alert('Smile Cash unlinked', 'Enter your personal mobile number, then open or link that Smile Cash wallet.');
+            } catch (unlinkError) {
+              Alert.alert('Smile Cash', unlinkError?.message || 'Could not unlink Smile Cash.');
+            } finally {
+              setSaving(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <View className="flex-1 bg-[#f6f7f3]">
       <View
@@ -125,6 +153,9 @@ export default function DriverSmileCashScreen({ navigation }) {
             <View className="mt-5 rounded-[18px] bg-emerald-50 px-4 py-3">
               <Text className="text-sm font-semibold text-emerald-800">
                 Active on {profile.smileCashMobile}
+              </Text>
+              <Text className="mt-1 text-sm text-emerald-700">
+                Cash outs go to this number. If this is the company Smile Cash account, unlink it and use your personal number.
               </Text>
             </View>
           ) : null}
@@ -191,7 +222,20 @@ export default function DriverSmileCashScreen({ navigation }) {
             </Text>
           </View>
 
-          {!isActive ? (
+          {isActive ? (
+            <TouchableOpacity
+              onPress={handleUnlink}
+              disabled={saving}
+              className="mt-5 h-12 items-center justify-center rounded-[18px] border border-rose-200 bg-rose-50"
+              style={{ opacity: saving ? 0.7 : 1 }}
+            >
+              {saving ? (
+                <ActivityIndicator color="#be123c" />
+              ) : (
+                <Text className="text-sm font-bold uppercase text-rose-700">Unlink and use another number</Text>
+              )}
+            </TouchableOpacity>
+          ) : (
             <TouchableOpacity
               onPress={handleOpen}
               disabled={saving}
@@ -204,7 +248,7 @@ export default function DriverSmileCashScreen({ navigation }) {
                 <Text className="text-sm font-bold uppercase text-white">Open Smile Cash</Text>
               )}
             </TouchableOpacity>
-          ) : null}
+          )}
         </View>
       </ScrollView>
     </View>

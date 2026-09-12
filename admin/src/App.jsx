@@ -37,6 +37,7 @@ import SupportAgentPage from './pages/SupportAgentPage'
 import DiscountCodesPage from './pages/DiscountCodesPage'
 import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursementsPage'
 import DriverWalletSettingsPage from './pages/DriverWalletSettingsPage'
+import HireCommissionSettingsPage from './pages/HireCommissionSettingsPage'
 import { getDefaultDashboardPath } from './utils/dashboardHome'
 
 function ProtectedRoute({ children }) {
@@ -213,6 +214,10 @@ function AppRoutes() {
         <Route
           path="driver-wallet-settings"
           element={<PermissionRoute permission="payouts.read"><DriverWalletSettingsPage /></PermissionRoute>}
+        />
+        <Route
+          path="hire-commission"
+          element={<PermissionRoute permission="payouts.read"><HireCommissionSettingsPage /></PermissionRoute>}
         />
         <Route
           path="promotions"

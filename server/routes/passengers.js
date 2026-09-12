@@ -97,13 +97,20 @@ router.get('/nearby-drivers', requireAuth, async (req, res) => {
          da.current_lng
        FROM driver_availability da
        LEFT JOIN ride_requests active_ride
-         ON active_ride.driver_user_id = da.driver_user_id
+         ON BINARY active_ride.driver_user_id = BINARY da.driver_user_id
         AND active_ride.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+       LEFT JOIN hire_bookings active_hire
+         ON BINARY active_hire.driver_user_id = BINARY da.driver_user_id
+        AND active_hire.status IN ('confirmed', 'driver_arrived', 'in_progress')
+       LEFT JOIN driver_identity di
+         ON BINARY di.driver_user_id = BINARY da.driver_user_id
        WHERE da.is_online = 1
          AND da.current_lat IS NOT NULL
          AND da.current_lng IS NOT NULL
          AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
          AND active_ride.id IS NULL
+         AND active_hire.id IS NULL
+         AND COALESCE(di.driver_kind, 'standard') <> 'truck'
          AND da.current_lat BETWEEN ? AND ?
          AND da.current_lng BETWEEN ? AND ?
        ORDER BY da.updated_at DESC

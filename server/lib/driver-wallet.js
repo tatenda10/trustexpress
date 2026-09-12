@@ -1,7 +1,12 @@
 import { query, withTransaction } from '../db/connection.js';
 import { getDriverWalletSettings } from './driver-wallet-settings.js';
+import {
+  getHireCommissionSettings,
+  HIRE_COMMISSION_SOURCE_TYPE,
+  previewHireCommission,
+} from './hire-commission.js';
 import { getPaymentProvider, normalizePaymentProvider } from './payment-providers/index.js';
-import { createSmileCashPayoutPublicId, executeSmileCashExternalCashout, normalizeZimMobile } from './smile-cash.js';
+import { createSmileCashPayoutPublicId, executeSmileCashExternalCashout, isCompanySmileCashNumber, normalizeZimMobile } from './smile-cash.js';
 
 /** @deprecated Use getDriverWalletSettings().commissionRatePercent */
 export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
@@ -260,10 +265,19 @@ export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}
     normalizeMoney(wallet?.available_balance || 0),
     await getDriverWithdrawableBalance(driverUserId)
   );
+  const [identity] = await query(
+    `SELECT smile_cash_mobile, smile_cash_status
+     FROM driver_identity
+     WHERE driver_user_id = ?
+     LIMIT 1`,
+    [driverUserId]
+  );
   return {
     wallet: {
       ...mapWalletStatus(wallet, settings),
       withdrawableBalance,
+      smileCashMobile: identity?.smile_cash_mobile || null,
+      smileCashStatus: identity?.smile_cash_status || null,
     },
     settings: {
       commissionRatePercent: Number(settings.commissionRatePercent || 9.5),
@@ -713,6 +727,12 @@ export async function cashOutDriverWallet({
   if (!receiverMobile || String(identity?.smile_cash_status || '').toLowerCase() !== 'active') {
     throw buildWalletError('Open an active Smile Cash wallet before cashing out', 409);
   }
+  if (isCompanySmileCashNumber(receiverMobile)) {
+    throw buildWalletError(
+      'The company Smile Cash number is linked on this account. Unlink it and link your personal Smile Cash number, then cash out again.',
+      409
+    );
+  }
 
   const settings = await getDriverWalletSettings();
   const currency = String(settings.currency || DRIVER_WALLET_CURRENCY || 'USD').toUpperCase();
@@ -966,6 +986,25 @@ export async function deductCommissionForCompletedRide({
   const commissionRate = commissionRatePercent / 100;
   const fareAmount = normalizeMoney(tripFareAmount);
 
+  const [ridePayment] = await query(
+    `SELECT payment_status, payment_method
+     FROM ride_requests
+     WHERE id = ?
+     LIMIT 1`,
+    [rideRequestId]
+  );
+  const paymentStatus = String(ridePayment?.payment_status || '').toLowerCase();
+  const paymentMethod = String(ridePayment?.payment_method || '').toLowerCase();
+  if (paymentStatus === 'paid' && paymentMethod && paymentMethod !== 'cash') {
+    return {
+      charged: false,
+      skipped: true,
+      reason: 'already_netted_on_online_payment',
+      commissionAmount: 0,
+      commissionRatePercent,
+    };
+  }
+
   // Payments system off: skip commission — behave like the pre-wallet default.
   if (settings.paymentsEnabled !== true) {
     return {
@@ -1110,6 +1149,196 @@ export async function deductCommissionForCompletedRide({
       balanceBefore,
       balanceAfter,
       promotionalBalanceAfter: promoAfter,
+    };
+  });
+}
+
+export async function deductCommissionForCompletedHire({
+  driverUserId,
+  hireBookingId,
+  hireRequestId = null,
+  transportAmount,
+  expensesAmount = 0,
+  category = null,
+  tripType = null,
+  distanceKm = null,
+  passengerUserId = null,
+  passengerName = null,
+}) {
+  const walletSettings = await getDriverWalletSettings();
+  const hireSettings = await getHireCommissionSettings();
+  const preview = previewHireCommission({
+    settings: hireSettings,
+    category,
+    tripType,
+    distanceKm,
+    transportAmount,
+    expensesAmount,
+  });
+  const currency = walletSettings.currency || DRIVER_WALLET_CURRENCY;
+  const commissionRatePercent = preview.commissionRatePercent;
+  const fareAmount = preview.commissionBase;
+
+  if (walletSettings.paymentsEnabled !== true) {
+    return {
+      charged: false,
+      skipped: true,
+      reason: 'payments_disabled',
+      commissionAmount: 0,
+      commissionRatePercent,
+      preview,
+    };
+  }
+
+  if (hireSettings.enabled !== true) {
+    return {
+      charged: false,
+      skipped: true,
+      reason: 'hire_commission_disabled',
+      commissionAmount: 0,
+      commissionRatePercent,
+      preview,
+    };
+  }
+
+  if (!(fareAmount > 0) || !(preview.commissionAmount > 0)) {
+    return {
+      charged: false,
+      commissionAmount: 0,
+      commissionRatePercent,
+      preview,
+    };
+  }
+
+  return withTransaction(async (connection) => {
+    const wallet = await ensureDriverWallet(driverUserId, connection);
+    const [existingRows] = await connection.execute(
+      `SELECT id, transaction_type, amount, balance_after
+       FROM driver_wallet_transactions
+       WHERE driver_user_id = ?
+         AND source_type = ?
+         AND source_id = ?
+       ORDER BY id ASC`,
+      [driverUserId, HIRE_COMMISSION_SOURCE_TYPE, String(hireBookingId)]
+    );
+    if (existingRows.length > 0) {
+      const commissionAmount = existingRows.reduce(
+        (sum, row) => sum + Math.abs(normalizeMoney(row.amount)),
+        0
+      );
+      const cashRow = existingRows.find((row) => row.transaction_type === 'commission_debit') || existingRows[existingRows.length - 1];
+      return {
+        charged: false,
+        alreadyCharged: true,
+        commissionAmount: normalizeMoney(commissionAmount),
+        commissionRatePercent,
+        balanceAfter: normalizeMoney(cashRow.balance_after),
+        preview,
+      };
+    }
+
+    const balanceBefore = normalizeMoney(wallet?.available_balance || 0);
+    const promoBefore = normalizeMoney(wallet?.promotional_balance || 0);
+    const commissionAmount = preview.commissionAmount;
+    const promoUsed = normalizeMoney(Math.min(promoBefore, commissionAmount));
+    const cashUsed = normalizeMoney(commissionAmount - promoUsed);
+    const promoAfter = normalizeMoney(promoBefore - promoUsed);
+    const balanceAfter = normalizeMoney(balanceBefore - cashUsed);
+    const bandLabel = preview.band?.label || 'hire';
+    const bookingLabel = hireRequestId ? `#${hireRequestId}` : `#${hireBookingId}`;
+
+    await connection.execute(
+      `UPDATE driver_wallets
+       SET available_balance = ?,
+           promotional_balance = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [balanceAfter, promoAfter, driverUserId]
+    );
+
+    if (promoUsed > 0) {
+      await connection.execute(
+        `INSERT INTO driver_wallet_transactions (
+           driver_user_id,
+           transaction_type,
+           amount,
+           currency,
+           payment_method,
+           source_type,
+           source_id,
+           trip_id,
+           passenger_user_id,
+           passenger_name,
+           trip_fare_amount,
+           commission_rate_percent,
+           balance_before,
+           balance_after,
+           description
+         ) VALUES (?, 'promo_commission_debit', ?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          driverUserId,
+          normalizeMoney(-promoUsed),
+          currency,
+          HIRE_COMMISSION_SOURCE_TYPE,
+          String(hireBookingId),
+          passengerUserId,
+          passengerName,
+          fareAmount,
+          commissionRatePercent,
+          promoBefore,
+          promoAfter,
+          `Promotional float applied to hire service fee (${bandLabel}) for booking ${bookingLabel}`,
+        ]
+      );
+    }
+
+    if (cashUsed > 0) {
+      await connection.execute(
+        `INSERT INTO driver_wallet_transactions (
+           driver_user_id,
+           transaction_type,
+           amount,
+           currency,
+           payment_method,
+           source_type,
+           source_id,
+           trip_id,
+           passenger_user_id,
+           passenger_name,
+           trip_fare_amount,
+           commission_rate_percent,
+           balance_before,
+           balance_after,
+           description
+         ) VALUES (?, 'commission_debit', ?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          driverUserId,
+          normalizeMoney(-cashUsed),
+          currency,
+          HIRE_COMMISSION_SOURCE_TYPE,
+          String(hireBookingId),
+          passengerUserId,
+          passengerName,
+          fareAmount,
+          commissionRatePercent,
+          balanceBefore,
+          balanceAfter,
+          `Trust Express hire service fee (${bandLabel}) for booking ${bookingLabel}`,
+        ]
+      );
+    }
+
+    return {
+      charged: true,
+      alreadyCharged: false,
+      commissionAmount,
+      promoUsed,
+      cashUsed,
+      commissionRatePercent,
+      balanceBefore,
+      balanceAfter,
+      promotionalBalanceAfter: promoAfter,
+      preview,
     };
   });
 }

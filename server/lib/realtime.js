@@ -33,6 +33,10 @@ export function emitHireQuoteToPassenger(passengerUserId, payload = {}) {
   emitToUser(passengerUserId, 'hire_quote:new', payload);
 }
 
+export function emitHireBookingUpdated(userId, payload = {}) {
+  emitToUser(userId, 'hire_booking:updated', payload);
+}
+
 export function emitRideStatusToPassenger(passengerUserId, payload = {}) {
   emitToUser(passengerUserId, 'ride_status:updated', payload);
 }

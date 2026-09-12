@@ -8,6 +8,7 @@ import {
   RefreshControl,
   TextInput,
   Image,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -23,6 +24,8 @@ import {
 } from '../../api';
 import HireRouteOverview from '../../components/hire/HireRouteOverview';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { isLiveHireBooking } from '../../constants/hire';
+import { paymentMethodLabel } from '../../constants/payment';
 
 export default function DriverHireDetailScreen({ navigation, route }) {
   const requestId = route.params?.requestId;
@@ -34,6 +37,8 @@ export default function DriverHireDetailScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [request, setRequest] = useState(null);
+  const [booking, setBooking] = useState(null);
+  const [passenger, setPassenger] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [vehicleId, setVehicleId] = useState(null);
   const [amount, setAmount] = useState('');
@@ -53,6 +58,8 @@ export default function DriverHireDetailScreen({ navigation, route }) {
       if (requestResult.status === 'rejected') throw requestResult.reason;
       const nextRequest = requestResult.value?.request || null;
       setRequest(nextRequest);
+      setBooking(requestResult.value?.booking || null);
+      setPassenger(requestResult.value?.passenger || null);
       if (nextRequest?.passengerOfferAmount != null) {
         setAmount((current) => (current ? current : String(Number(nextRequest.passengerOfferAmount))));
       }
@@ -129,8 +136,8 @@ export default function DriverHireDetailScreen({ navigation, route }) {
         hireVehicleId: vehicleId,
         message: message.trim() || undefined,
       });
-      Alert.alert('Offer accepted', 'Job booked at the passenger offer. It is now closed.');
-      navigation.goBack();
+      await load({ silent: true });
+      navigation.navigate('DriverHireTrip', { requestId });
     } catch (err) {
       Alert.alert('Accept failed', err?.message || 'Could not accept passenger offer');
     } finally {
@@ -185,7 +192,9 @@ export default function DriverHireDetailScreen({ navigation, route }) {
         <View className="mt-3 rounded-[24px] bg-white px-4 py-4">
           <Text className="text-xs uppercase tracking-wide text-gray-500">
             {request?.status} · {request?.passengerCount} pax
+            {request?.tripType ? ` · ${request.tripType}` : ''}
             {request?.category ? ` · ${String(request.category).replace(/_/g, ' ')}` : ''}
+            {paymentMethodLabel(request?.paymentMethod) ? ` · ${paymentMethodLabel(request.paymentMethod)}` : ''}
           </Text>
           <Text className="mt-1 text-sm text-gray-600">
             {request?.startAt ? new Date(request.startAt).toLocaleString() : ''}
@@ -208,10 +217,39 @@ export default function DriverHireDetailScreen({ navigation, route }) {
 
         {!canRespond ? (
           <View className="mt-4 rounded-[24px] bg-white px-4 py-5">
-            <Text className="text-base font-bold text-gray-900">Job closed</Text>
-            <Text className="mt-1 text-sm text-gray-500">
-              This hire request is no longer open for quotes.
+            <Text className="text-base font-bold text-gray-900">
+              {booking ? 'Your booked job' : 'Job closed'}
             </Text>
+            <Text className="mt-1 text-sm text-gray-500">
+              {booking
+                ? 'Open the live map to follow directions to the passenger, start the ride, and complete the job.'
+                : 'This hire request is no longer open for quotes.'}
+            </Text>
+            {paymentMethodLabel(request?.paymentMethod) ? (
+              <Text className="mt-3 text-sm font-semibold text-gray-900">
+                Payment: {paymentMethodLabel(request.paymentMethod)}
+              </Text>
+            ) : null}
+            {passenger?.name ? (
+              <Text className="mt-1 text-sm text-gray-700">Passenger: {passenger.name}</Text>
+            ) : null}
+            {passenger?.phone ? (
+              <TouchableOpacity
+                onPress={() => Linking.openURL(`tel:${passenger.phone}`)}
+                className="mt-3 h-12 items-center justify-center rounded-2xl bg-slate-100"
+              >
+                <Text className="font-semibold text-gray-900">Call passenger</Text>
+              </TouchableOpacity>
+            ) : null}
+            {isLiveHireBooking(booking?.status) ? (
+              <TouchableOpacity
+                onPress={() => navigation.navigate('DriverHireTrip', { requestId })}
+                className="mt-3 h-12 items-center justify-center rounded-2xl"
+                style={{ backgroundColor: PRIMARY_BLUE }}
+              >
+                <Text className="font-semibold text-white">Open live trip</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : (
           <View className="mt-4 rounded-[24px] bg-white px-4 py-4">

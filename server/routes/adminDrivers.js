@@ -134,6 +134,7 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
   const profile = identityRow
     ? {
         id: `profile_${user.id}`,
+        driverKind: identityRow.driver_kind || null,
         status: identityRow.profile_status || 'pending',
         submittedAt: identityRow.profile_submitted_at ? new Date(identityRow.profile_submitted_at).toISOString() : null,
         rejectionReason: identityRow.profile_rejection_reason || null,
@@ -382,6 +383,7 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
           item.vehicle?.model,
           item.vehicle?.numberPlate,
           item.vehicle?.vehicleTierName,
+          item.profile?.driverKind,
         ]
           .filter(Boolean)
           .join(' ')
@@ -400,6 +402,13 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
 
     if (['identity', 'vehicle', 'profile_image'].includes(verificationType)) {
       drivers = drivers.filter((item) => deriveVerificationType(item) === verificationType);
+    }
+
+    const driverKindFilter = String(req.query.driverKind || 'all').toLowerCase();
+    if (driverKindFilter === 'truck') {
+      drivers = drivers.filter((item) => String(item.profile?.driverKind || '').toLowerCase() === 'truck');
+    } else if (driverKindFilter === 'standard') {
+      drivers = drivers.filter((item) => String(item.profile?.driverKind || '').toLowerCase() !== 'truck');
     }
 
     const sortDirection = sortOrder === 'asc' ? 1 : -1;

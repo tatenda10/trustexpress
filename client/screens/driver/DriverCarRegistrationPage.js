@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { getDriverVehicleRoute, isTruckDriver } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
 const DriverCarRegistrationPage = ({ navigation, route }) => {
@@ -17,15 +18,18 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
   const isRejected = status === 'rejected';
   const canResubmit = vehicle?.canResubmit !== false;
   const notSubmitted = !vehicle;
+  const truckDriver = isTruckDriver(driverStatus);
 
   const openVehicleForm = (changeVehicle = false) => {
     const rootNavigation = navigation.getParent()?.getParent();
-    rootNavigation?.navigate?.('DriverRegisterCar', { driverStatus, changeVehicle });
+    rootNavigation?.navigate?.(getDriverVehicleRoute(driverStatus), { driverStatus, changeVehicle });
   };
   const confirmVehicleChange = () => {
     Alert.alert(
-      'Change car?',
-      'Changing your car will submit the new vehicle for admin review. You will be taken offline and cannot go online again until the new car is approved.',
+      truckDriver ? 'Change truck?' : 'Change car?',
+      truckDriver
+        ? 'Changing your truck will submit the new vehicle for admin review. You will stay offline for rides until hiring documents are approved.'
+        : 'Changing your car will submit the new vehicle for admin review. You will be taken offline and cannot go online again until the new car is approved.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Continue', onPress: () => openVehicleForm(true) },
@@ -53,7 +57,7 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
         <TouchableOpacity onPress={() => navigation.goBack()} className="p-2 -ml-2">
           <Ionicons name="arrow-back" size={24} color="#111" />
         </TouchableOpacity>
-        <Text className="text-lg font-bold text-gray-900 ml-2">Car registration</Text>
+        <Text className="text-lg font-bold text-gray-900 ml-2">{truckDriver ? 'Truck registration' : 'Car registration'}</Text>
       </View>
       <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
         <View className="items-center py-8">
@@ -72,8 +76,8 @@ const DriverCarRegistrationPage = ({ navigation, route }) => {
             {isPending && 'Your vehicle is being reviewed. We\'ll notify you once approved.'}
             {isApproved && vehicle?.numberPlate && (
               approvedTierName
-                ? `Your vehicle ${vehicle.numberPlate} is verified for ${approvedTierName}. You can submit a different car for review.`
-                : `Your vehicle ${vehicle.numberPlate} has been verified. You can submit a different car for review.`
+                ? `Your vehicle ${vehicle.numberPlate} is verified for ${approvedTierName}. You can submit a different vehicle for review.`
+                : `Your vehicle ${vehicle.numberPlate} has been verified. You can submit a different vehicle for review.`
             )}
             {isRejected && !canResubmit && 'You are not allowed to resubmit. Contact support if you believe this is an error.'}
             {isRejected && canResubmit && (vehicle?.rejectionReason || 'Your vehicle was not approved. You can resubmit below.')}

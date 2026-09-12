@@ -13,6 +13,7 @@ import { sendExpoPushNotifications } from '../lib/push.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideStatusToDriver,
+  emitHireBookingUpdated,
   emitRideStatusToPassenger,
   emitTripRatingToPassenger,
 } from '../lib/realtime.js';
@@ -46,6 +47,8 @@ import {
   normalizeGender,
   normalizeZimMobile,
 } from '../lib/smile-cash.js';
+import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
+import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -298,6 +301,56 @@ router.patch('/me/payout-details', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/me/kind', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    const driverKind = normalizeDriverKind(req.body?.driverKind);
+    if (!driverKind) {
+      return res.status(400).json({ error: 'Choose truck or normal driver' });
+    }
+
+    try {
+      await query(
+        `INSERT INTO driver_identity (driver_user_id, profile_status, driver_kind)
+         VALUES (?, 'pending', ?)
+         ON DUPLICATE KEY UPDATE
+           driver_kind = VALUES(driver_kind),
+           updated_at = CURRENT_TIMESTAMP`,
+        [req.userId, driverKind]
+      );
+    } catch (dbError) {
+      if (dbError?.code === 'ER_BAD_FIELD_ERROR') {
+        await query(
+          `ALTER TABLE driver_identity
+           ADD COLUMN driver_kind VARCHAR(16) NULL DEFAULT NULL AFTER driver_user_id`
+        );
+        await query(
+          `INSERT INTO driver_identity (driver_user_id, profile_status, driver_kind)
+           VALUES (?, 'pending', ?)
+           ON DUPLICATE KEY UPDATE
+             driver_kind = VALUES(driver_kind),
+             updated_at = CURRENT_TIMESTAMP`,
+          [req.userId, driverKind]
+        );
+      } else {
+        throw dbError;
+      }
+    }
+
+    const verification = await getDriverVerificationFromMysql(req.userId, user);
+    return res.json({
+      ok: true,
+      driverKind,
+      driverProfile: verification.driverProfile,
+    });
+  } catch (err) {
+    console.error('POST /api/drivers/me/kind', err);
+    return res.status(err.status || 500).json({ error: err.message || 'Server error' });
+  }
+});
+
 router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -471,6 +524,33 @@ router.post('/me/smile-cash/link', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/me/smile-cash/unlink', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+
+    await query(
+      `UPDATE driver_identity
+       SET smile_cash_mobile = NULL,
+           smile_cash_status = 'unlinked',
+           smile_cash_opened_at = NULL,
+           smile_cash_last_error = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [req.userId]
+    );
+
+    const refreshed = await getDriverVerificationFromMysql(req.userId, user);
+    return res.json({
+      ok: true,
+      driverProfile: refreshed.driverProfile,
+    });
+  } catch (err) {
+    console.error('POST /api/drivers/me/smile-cash/unlink', err);
+    return res.status(err.status || 500).json({ error: err.message || 'Server error' });
+  }
+});
+
 router.get('/vehicle-options', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -562,16 +642,23 @@ router.post('/availability', requireAuth, async (req, res) => {
     );
     const wasOnline = Number(existingAvailability?.is_online || 0) === 1;
     const isLocationHeartbeat = isOnline && wasOnline;
+    const forHire = req.body?.forHire === true;
 
     // Mid-ride / heartbeat location updates should not re-run go-online gates.
     // Wallet/verification checks only apply when transitioning offline -> online.
-    if (isOnline && !isLocationHeartbeat) {
+    if (isOnline && !isLocationHeartbeat && !forHire) {
       try {
         assertAccountNotRestricted(user, 'driver');
       } catch (restrictionError) {
         return res.status(restrictionError?.status || 403).json({
           error: restrictionError?.message || 'Account is restricted.',
           code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
+        });
+      }
+
+      if (isTruckDriver(profile)) {
+        return res.status(403).json({
+          error: 'Truck drivers take hire jobs from the Hiring tab. Ride requests are for normal drivers.',
         });
       }
 
@@ -623,7 +710,7 @@ router.post('/availability', requireAuth, async (req, res) => {
         car_photo_url = VALUES(car_photo_url),
         current_lat = VALUES(current_lat),
         current_lng = VALUES(current_lng),
-        is_online = VALUES(is_online),
+        is_online = ${forHire ? '0' : 'VALUES(is_online)'},
         last_seen_at = CURRENT_TIMESTAMP`,
       [
         req.userId,
@@ -637,7 +724,7 @@ router.post('/availability', requireAuth, async (req, res) => {
         vehicle?.carPhotoFrontUrl || vehicle?.carPhotoUrls?.[0] || null,
         Number.isFinite(latitude) ? latitude : null,
         Number.isFinite(longitude) ? longitude : null,
-        isOnline ? 1 : 0,
+        forHire ? 0 : (isOnline ? 1 : 0),
       ]
     );
 
@@ -660,6 +747,29 @@ router.post('/availability', requireAuth, async (req, res) => {
           driverCoordinate: { latitude, longitude },
           driverLocationUpdatedAt: new Date().toISOString(),
         });
+      } else {
+        const [activeHire] = await query(
+          `SELECT id, hire_request_id, passenger_user_id, driver_user_id, status
+           FROM hire_bookings
+           WHERE driver_user_id = ?
+             AND status IN ('confirmed', 'driver_arrived', 'in_progress')
+           ORDER BY COALESCE(started_at, arrived_at, created_at) DESC, id DESC
+           LIMIT 1`,
+          [req.userId]
+        );
+        if (activeHire?.passenger_user_id) {
+          const livePayload = {
+            hireBookingId: activeHire.id,
+            hireRequestId: activeHire.hire_request_id,
+            status: activeHire.status,
+            driverStage: mapHireDriverStage(activeHire.status),
+            passengerStage: mapHirePassengerStage(activeHire.status),
+            driverCoordinate: { latitude, longitude },
+            driverLocationUpdatedAt: new Date().toISOString(),
+          };
+          emitHireBookingUpdated(activeHire.passenger_user_id, livePayload);
+          emitHireBookingUpdated(activeHire.driver_user_id, livePayload);
+        }
       }
     }
 
@@ -765,6 +875,18 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       return res.json({ requests: [], wallet: walletStatus });
     }
 
+    const [activeHire] = await query(
+      `SELECT id
+       FROM hire_bookings
+       WHERE driver_user_id = ?
+         AND status IN ('confirmed', 'driver_arrived', 'in_progress')
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (activeHire || isTruckDriver((await getDriverVerificationFromMysql(req.userId, user))?.driverProfile)) {
+      return res.json({ requests: [], wallet: walletStatus });
+    }
+
     await refreshOpenRideOffers();
     await query(
       `UPDATE ride_request_driver_responses rr
@@ -811,6 +933,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.final_estimated_amount,
          r.driver_reimbursement_amount,
          r.discount_code,
+         r.payment_method,
          r.status,
          r.requested_at,
          r.driver_found_at,
@@ -876,6 +999,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         discountAmount: Number(row.discount_amount || 0),
         driverReimbursementAmount: Number(row.driver_reimbursement_amount || 0),
         discountCode: row.discount_code || null,
+        paymentMethod: row.payment_method || null,
         status: row.status,
         requestedAt,
         offerPresentedAt,
@@ -968,6 +1092,13 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       return res.status(400).json({ error: 'Driver must be online before accepting rides' });
     }
 
+    const verification = await getDriverVerificationFromMysql(req.userId, user);
+    if (isTruckDriver(verification?.driverProfile)) {
+      return res.status(403).json({
+        error: 'Truck drivers take hire jobs from the Hiring tab. Ride requests are for normal drivers.',
+      });
+    }
+
     const [activeRide] = await query(
       `SELECT id
        FROM ride_requests
@@ -978,6 +1109,18 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
     );
     if (activeRide) {
       return res.status(409).json({ error: 'Finish the current trip before accepting another ride' });
+    }
+
+    const [activeHire] = await query(
+      `SELECT id
+       FROM hire_bookings
+       WHERE driver_user_id = ?
+         AND status IN ('confirmed', 'driver_arrived', 'in_progress')
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (activeHire) {
+      return res.status(409).json({ error: 'Finish the current hire job before accepting a ride' });
     }
 
     await refreshOpenRideOffers(rideRequestId);
@@ -1197,7 +1340,9 @@ router.get('/current-ride', requireAuth, async (req, res) => {
          final_estimated_amount,
          driver_reimbursement_amount,
          discount_code,
+         payment_method,
          tip_amount,
+         passenger_confirmed_at,
          status,
          requested_at,
          assigned_at,
@@ -1259,6 +1404,7 @@ router.get('/current-ride', requireAuth, async (req, res) => {
         discountAmount: Number(ride.discount_amount || 0),
         driverReimbursementAmount: Number(ride.driver_reimbursement_amount || 0),
         discountCode: ride.discount_code || null,
+        paymentMethod: ride.payment_method || null,
         tipAmount: Number(ride.tip_amount || 0),
         totalAmount: Number(ride.original_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         ...buildRideStopsPayload(ride),
@@ -2138,7 +2284,9 @@ router.post('/documents', requireAuth, async (req, res) => {
       selfieWithIdCardUrl,
       nationalIdNumber,
       driverLicenceNumber,
+      driverKind: rawDriverKind,
     } = req.body || {};
+    const driverKind = normalizeDriverKind(rawDriverKind || existing.driverProfile?.driverKind);
     const currentProfile = existing.driverProfile || null;
     const currentValues = {
       nationalIdFrontUrl: currentProfile?.nationalIdFrontUrl || null,
@@ -2217,11 +2365,12 @@ router.post('/documents', requireAuth, async (req, res) => {
     try {
       await query(
         `INSERT INTO driver_identity (
-          driver_user_id, national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
+          driver_user_id, driver_kind, national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
           national_id_number, driver_licence_number,
           profile_status, profile_submitted_at, profile_rejection_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
         ON DUPLICATE KEY UPDATE
+          driver_kind = COALESCE(VALUES(driver_kind), driver_identity.driver_kind),
           national_id_front_url = VALUES(national_id_front_url),
           national_id_back_url = VALUES(national_id_back_url),
           driver_licence_url = VALUES(driver_licence_url),
@@ -2236,6 +2385,7 @@ router.post('/documents', requireAuth, async (req, res) => {
           updated_at = CURRENT_TIMESTAMP`,
         [
           req.userId,
+          driverKind,
           nextValues.nationalIdFrontUrl,
           nextValues.nationalIdBackUrl,
           nextValues.driverLicenceUrl,
@@ -2394,8 +2544,10 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     if (providedVehicleCount === 0) {
       return res.status(400).json({ error: 'Submit at least one vehicle detail or document to save progress' });
     }
-    if (nextYear !== null && (!Number.isInteger(Number(nextYear)) || Number(nextYear) < 2010)) {
-      return res.status(400).json({ error: 'Vehicle year must be 2010 or newer' });
+    const truckDriver = isTruckDriver(verification.driverProfile);
+    const minYear = truckDriver ? 1990 : 2010;
+    if (nextYear !== null && (!Number.isInteger(Number(nextYear)) || Number(nextYear) < minYear)) {
+      return res.status(400).json({ error: `Vehicle year must be ${minYear} or newer` });
     }
     if (nextSeatCount !== null && (!Number.isInteger(nextSeatCount) || nextSeatCount < 1)) {
       return res.status(400).json({ error: 'seatCount must be a valid whole number when provided' });
@@ -2403,8 +2555,8 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     if (nextDoorCount !== null && (!Number.isInteger(nextDoorCount) || nextDoorCount < 1)) {
       return res.status(400).json({ error: 'doorCount must be a valid whole number when provided' });
     }
-    let tierKey = nextTierKey || null;
-    let tierName = nextTierNameInput || null;
+    let tierKey = truckDriver ? null : (nextTierKey || null);
+    let tierName = truckDriver ? null : (nextTierNameInput || null);
     if (tierKey) {
       const configuredVehicleTiers = await loadVehicleTierRules();
       let matchedTier = configuredVehicleTiers.find((tier) => String(tier.tierKey || '').trim().toLowerCase() === tierKey) || null;

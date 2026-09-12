@@ -2,6 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import DriverHireOpenRequestsScreen from './DriverHireOpenRequestsScreen';
 import DriverHireDetailScreen from './DriverHireDetailScreen';
+import DriverHireTripScreen from './DriverHireTripScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -10,6 +11,7 @@ export default function DriverHireStack() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="DriverHireOpenRequests" component={DriverHireOpenRequestsScreen} />
       <Stack.Screen name="DriverHireDetail" component={DriverHireDetailScreen} />
+      <Stack.Screen name="DriverHireTrip" component={DriverHireTripScreen} />
     </Stack.Navigator>
   );
 }

@@ -55,6 +55,7 @@ function shapeProfileFromRow(row) {
   if (!row) return null;
   return {
     id: `profile_${row.driver_user_id}`,
+    driverKind: row.driver_kind || null,
     status: row.profile_status || 'pending',
     submittedAt: row.profile_submitted_at ? new Date(row.profile_submitted_at).toISOString() : null,
     rejectionReason: row.profile_rejection_reason || null,

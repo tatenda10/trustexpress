@@ -15,6 +15,7 @@ const Tab = createBottomTabNavigator();
 const HIDDEN_TAB_BAR_ROUTES = new Set([
   'PassengerNearbyCars',
   'PassengerRideTracking',
+  'PassengerHireTracking',
   'RideChat',
 ]);
 
@@ -91,11 +92,14 @@ export default function PassengerTabNavigator() {
       <Tab.Screen
         name="PassengerHiring"
         component={PassengerHireStack}
-        options={{
+        options={({ route }) => ({
           title: 'Hiring',
           tabBarIcon: ({ color }) => <Ionicons name="briefcase-outline" size={20} color={color} />,
           tabBarLabel: ({ focused, color }) => <TabLabel label="Hiring" focused={focused} color={color} />,
-        }}
+          tabBarStyle: shouldHideTabBar(route)
+            ? { display: 'none' }
+            : baseTabBarStyle,
+        })}
       />
       <Tab.Screen
         name="PassengerActivity"

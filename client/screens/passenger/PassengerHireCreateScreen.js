@@ -14,16 +14,8 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { createHireRequest } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
-
-const CATEGORIES = [
-  { value: 'truck', label: 'Truck' },
-  { value: 'moving_van', label: 'Moving van' },
-  { value: 'pickup', label: 'Pickup' },
-  { value: 'van', label: 'Van' },
-  { value: 'suv', label: 'SUV' },
-  { value: 'bus', label: 'Bus' },
-  { value: 'sedan', label: 'Sedan' },
-];
+import { HIRE_VEHICLE_CATEGORIES, inferHireTripType } from '../../constants/hire';
+import { PAYMENT_METHOD_CASH, PAYMENT_METHOD_ONLINE } from '../../constants/payment';
 
 function defaultStartAtLocal() {
   const date = new Date(Date.now() + 60 * 60 * 1000);
@@ -56,6 +48,9 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
   const [category, setCategory] = useState(
     String(preferredVehicle?.category || params.category || 'truck').toLowerCase()
   );
+  const [tripType, setTripType] = useState(
+    inferHireTripType(params.distanceKm)
+  );
   const [passengerOfferAmount, setPassengerOfferAmount] = useState(
     preferredVehicle?.dailyRate != null ? String(preferredVehicle.dailyRate) : ''
   );
@@ -65,6 +60,7 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
       : ''
   );
   const [saving, setSaving] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState(null);
 
   const heading = useMemo(
     () => (preferredVehicle ? 'Request this vehicle' : 'Hire request details'),
@@ -157,6 +153,10 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
         Alert.alert('Specs required', 'Add notes such as load size, helpers needed, or special instructions.');
         return;
       }
+      if (!paymentMethod) {
+        Alert.alert('Payment method', 'Tick cash or pay online so drivers know how you will pay.');
+        return;
+      }
 
       setSaving(true);
       const token = await getToken({ skipCache: true });
@@ -167,9 +167,12 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
         startAt: parsedStart.toISOString(),
         passengerCount: Number(passengerCount) || 1,
         category: category || 'truck',
+        tripType,
+        estimatedDistanceKm: params.distanceKm ? Number(params.distanceKm) : undefined,
         passengerOfferAmount: offerAmount,
         fareCurrency: preferredVehicle?.currency || 'USD',
         notes: notes.trim(),
+        paymentMethod,
         preferredHireVehicleId: preferredVehicle?.id || undefined,
         pickupLat: pickupCoordinate?.latitude,
         pickupLng: pickupCoordinate?.longitude,
@@ -294,9 +297,34 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
               placeholder="1"
             />
 
+            <Text className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Trip type</Text>
+            <View className="flex-row flex-wrap gap-2">
+              {[
+                { value: 'local', label: 'Local' },
+                { value: 'intercity', label: 'Intercity' },
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.value}
+                  onPress={() => setTripType(item.value)}
+                  className="rounded-full px-3 py-2"
+                  style={{ backgroundColor: tripType === item.value ? PRIMARY_BLUE : '#f1f5f9' }}
+                >
+                  <Text
+                    className="text-xs font-semibold"
+                    style={{ color: tripType === item.value ? '#fff' : '#334155' }}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text className="mt-2 text-xs text-slate-500">
+              Local is for city jobs and deliveries. Intercity is for longer trips between cities.
+            </Text>
+
             <Text className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Vehicle type</Text>
             <View className="flex-row flex-wrap gap-2">
-              {CATEGORIES.map((item) => (
+              {HIRE_VEHICLE_CATEGORIES.map((item) => (
                 <TouchableOpacity
                   key={item.value}
                   onPress={() => setCategory(item.value)}
@@ -306,6 +334,33 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
                   <Text
                     className="text-xs font-semibold"
                     style={{ color: category === item.value ? '#fff' : '#334155' }}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">How will you pay?</Text>
+            <View className="flex-row flex-wrap gap-2">
+              {[
+                { value: PAYMENT_METHOD_CASH, label: 'Cash' },
+                { value: PAYMENT_METHOD_ONLINE, label: 'Pay online' },
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.value}
+                  onPress={() => setPaymentMethod(item.value)}
+                  className="flex-row items-center rounded-full px-3 py-2"
+                  style={{ backgroundColor: paymentMethod === item.value ? PRIMARY_BLUE : '#f1f5f9' }}
+                >
+                  <Ionicons
+                    name={paymentMethod === item.value ? 'checkbox' : 'square-outline'}
+                    size={16}
+                    color={paymentMethod === item.value ? '#fff' : '#334155'}
+                  />
+                  <Text
+                    className="ml-2 text-xs font-semibold"
+                    style={{ color: paymentMethod === item.value ? '#fff' : '#334155' }}
                   >
                     {item.label}
                   </Text>

@@ -73,6 +73,7 @@ const DriverWalletScreen = () => {
     sufficientBalance: true,
     lowBalanceMessage: '',
     withdrawableBalance: 0,
+    smileCashMobile: null,
   });
   const providerLabel = wallet.paymentProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack';
   const [summary, setSummary] = useState({
@@ -128,6 +129,7 @@ const DriverWalletScreen = () => {
         sufficientBalance: data?.wallet?.sufficientBalance !== false,
         lowBalanceMessage: data?.wallet?.lowBalanceMessage || '',
         withdrawableBalance: Number(data?.wallet?.withdrawableBalance || 0),
+        smileCashMobile: data?.wallet?.smileCashMobile || null,
       });
       setSummary({
         totalTopups: Number(data?.summary?.totalTopups || 0),
@@ -225,7 +227,7 @@ const DriverWalletScreen = () => {
 
     Alert.alert(
       'Cash out wallet?',
-      `Send ${formatCurrency(balance, wallet.currency)} to your Smile Cash wallet now.`,
+      `Send ${formatCurrency(balance, wallet.currency)} to your wallet now. This is your passenger-payment balance after the service fee.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -237,7 +239,7 @@ const DriverWalletScreen = () => {
               if (!token) throw new Error('Not signed in');
               await cashOutDriverWallet(token, {});
               await loadWallet(false);
-              Alert.alert('Cash out sent', 'Your wallet balance was sent to your Smile Cash account.');
+              Alert.alert('Cash out sent', 'Your wallet balance was sent.');
             } catch (cashoutError) {
               Alert.alert('Cash out failed', cashoutError?.message || 'Could not cash out your wallet.');
             } finally {
@@ -297,7 +299,7 @@ const DriverWalletScreen = () => {
                 style={{ opacity: cashingOut || Number(wallet.withdrawableBalance || 0) <= 0 ? 0.65 : 1 }}
               >
                 <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
-                  {cashingOut ? 'Cashing out...' : 'Cash out to Smile Cash'}
+                  {cashingOut ? 'Cashing out...' : 'Cash out'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -325,7 +327,7 @@ const DriverWalletScreen = () => {
               <Text className="text-base font-bold text-gray-900">Top up wallet</Text>
               <Text className="mt-1 text-sm text-gray-500">
                 {wallet.paymentsEnabled
-                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount, wallet.currency)} – ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}). Service fee on completed trips is ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}%.`
+                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount, wallet.currency)} – ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}). Cash trips deduct the ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}% service fee on complete. Online passenger payments withhold that fee first and credit the remainder.`
                   : 'Wallet top-ups are not available yet. You can still view your balance and transaction history here.'}
               </Text>
               {wallet.paymentsEnabled ? (

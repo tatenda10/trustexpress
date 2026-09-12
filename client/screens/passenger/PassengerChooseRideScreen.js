@@ -15,6 +15,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions, validatePassengerDiscount } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { PAYMENT_METHOD_CASH, PAYMENT_METHOD_ONLINE } from '../../constants/payment';
 import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 import { connectRealtime } from '../../realtime';
 import RideTierCarIcon from '../../components/RideTierCarIcon';
@@ -191,6 +192,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [selectedTierKey, setSelectedTierKey] = useState('');
   const [passengerCount, setPassengerCount] = useState(null);
   const [isSubmittingRide, setIsSubmittingRide] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState(null);
   const [appliedDiscount, setAppliedDiscount] = useState(null);
 
   const slideAnim = useRef(new Animated.Value(40)).current;
@@ -414,6 +416,10 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       Alert.alert('Calculating road distance', 'Please wait for the road distance to finish calculating, then choose your ride.');
       return;
     }
+    if (!paymentMethod) {
+      Alert.alert('Payment method', 'Tick cash or pay online before requesting a driver.');
+      return;
+    }
     setIsSubmittingRide(true);
     let token = null;
     try {
@@ -435,6 +441,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
         estimatedAmount: finalEstimatedAmount,
         selectedTier,
         passengerCount,
+        paymentMethod,
       });
       const serverRide = data?.rideRequest || null;
       const nextDistanceKm = Number(serverRide?.estimatedDistanceKm || distanceKm || 0);
@@ -597,6 +604,33 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             <Text style={styles.infoPillText}>Price locked in • No surge pricing</Text>
           </View>
         )}
+
+        <Text style={styles.paymentTitle}>How will you pay?</Text>
+        <View style={styles.paymentRow}>
+          {[
+            { value: PAYMENT_METHOD_CASH, label: 'Cash' },
+            { value: PAYMENT_METHOD_ONLINE, label: 'Pay online' },
+          ].map((option) => {
+            const active = paymentMethod === option.value;
+            return (
+              <TouchableOpacity
+                key={option.value}
+                onPress={() => setPaymentMethod(option.value)}
+                style={[styles.paymentChip, active && styles.paymentChipActive]}
+                activeOpacity={0.85}
+              >
+                <Ionicons
+                  name={active ? 'checkbox' : 'square-outline'}
+                  size={16}
+                  color={active ? '#fff' : '#334155'}
+                />
+                <Text style={[styles.paymentChipText, active && styles.paymentChipTextActive]}>
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
         <TouchableOpacity
           onPress={handleFindRide}
@@ -1061,6 +1095,40 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: '#111827',
     fontWeight: '900',
+  },
+  paymentTitle: {
+    marginBottom: 8,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#64748b',
+  },
+  paymentRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  paymentChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+  },
+  paymentChipActive: {
+    backgroundColor: PRIMARY_BLUE,
+  },
+  paymentChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  paymentChipTextActive: {
+    color: '#fff',
   },
   ctaBtn: {
     height: 56,

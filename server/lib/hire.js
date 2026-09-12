@@ -73,6 +73,8 @@ export function shapeHireRequest(row) {
     publicId: row.public_id,
     passengerUserId: row.passenger_user_id,
     category: row.category || null,
+    tripType: row.trip_type || 'local',
+    estimatedDistanceKm: row.estimated_distance_km == null ? null : Number(row.estimated_distance_km),
     title: row.title ? String(row.title).trim() : null,
     pickupLabel: row.pickup_label,
     pickupLat: row.pickup_lat == null ? null : Number(row.pickup_lat),
@@ -87,17 +89,20 @@ export function shapeHireRequest(row) {
     recommendedFareMax: row.recommended_fare_max == null ? null : Number(row.recommended_fare_max),
     passengerOfferAmount: row.passenger_offer_amount == null ? null : Number(row.passenger_offer_amount),
     fareCurrency: row.fare_currency || 'USD',
+    paymentMethod: row.payment_method || null,
     notes: row.notes || null,
     preferredHireVehicleId: row.preferred_hire_vehicle_id == null
       ? null
       : Number(row.preferred_hire_vehicle_id),
     status: row.status,
+    bookingStatus: row.booking_status || null,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     quoteCount: row.quote_count == null ? undefined : Number(row.quote_count),
   };
 }
 
 const HIRE_FARE_PROFILES = {
+  delivery: { min: 15, max: 35 },
   sedan: { min: 25, max: 45 },
   suv: { min: 35, max: 65 },
   van: { min: 45, max: 80 },
@@ -165,6 +170,24 @@ export function shapeHireQuote(row) {
   };
 }
 
+export function mapHireDriverStage(status) {
+  const value = String(status || '').toLowerCase();
+  if (value === 'driver_arrived') return 'waiting_for_customer';
+  if (value === 'in_progress') return 'on_trip';
+  if (value === 'completed') return 'completed';
+  if (value === 'cancelled') return 'cancelled';
+  return 'to_pickup';
+}
+
+export function mapHirePassengerStage(status) {
+  const value = String(status || '').toLowerCase();
+  if (value === 'driver_arrived') return 'waiting_at_pickup';
+  if (value === 'in_progress') return 'on_trip';
+  if (value === 'completed') return 'completed';
+  if (value === 'cancelled') return 'cancelled';
+  return 'driver_on_the_way';
+}
+
 export function shapeHireBooking(row) {
   if (!row) return null;
   return {
@@ -176,24 +199,37 @@ export function shapeHireBooking(row) {
     passengerUserId: row.passenger_user_id,
     driverUserId: row.driver_user_id,
     amount: Number(row.amount),
+    expensesAmount: row.expenses_amount == null ? 0 : Number(row.expenses_amount),
     currency: row.currency || 'USD',
     status: row.status,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
+    arrivedAt: row.arrived_at ? new Date(row.arrived_at).toISOString() : null,
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
-    request: row.request_public_id
+    request: row.request_public_id || row.pickup_label
       ? {
-          publicId: row.request_public_id,
+          id: row.hire_request_id == null ? null : Number(row.hire_request_id),
+          publicId: row.request_public_id || null,
+          title: row.request_title || row.title || null,
           pickupLabel: row.pickup_label,
           dropoffLabel: row.dropoff_label,
+          pickupLat: row.pickup_lat == null ? null : Number(row.pickup_lat),
+          pickupLng: row.pickup_lng == null ? null : Number(row.pickup_lng),
+          dropoffLat: row.dropoff_lat == null ? null : Number(row.dropoff_lat),
+          dropoffLng: row.dropoff_lng == null ? null : Number(row.dropoff_lng),
           startAt: row.start_at ? new Date(row.start_at).toISOString() : null,
+          paymentMethod: row.payment_method || null,
+          notes: row.notes || null,
         }
       : undefined,
     vehicle: row.vehicle_title
       ? {
           title: row.vehicle_title,
           category: row.vehicle_category,
+          make: row.vehicle_make || null,
+          model: row.vehicle_model || null,
+          numberPlate: row.vehicle_number_plate || null,
           photoUrls: parsePhotoUrls(row.vehicle_photo_urls),
         }
       : undefined,

@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { deleteMe, getApiUrl, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { getDriverVehicleRoute, isTruckDriver } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
 const DriverAccountScreen = ({ navigation, route }) => {
@@ -286,7 +287,10 @@ const DriverAccountScreen = ({ navigation, route }) => {
     null;
   const profileImagePreviewUrl = pendingProfileImageUrl || appProfileImageUrl || displayProfileImageUrl;
 
-  const verificationHeadline = allVerified ? 'Ready to drive' : 'Verification in progress';
+  const truckDriver = isTruckDriver(driverStatus);
+  const verificationHeadline = allVerified
+    ? (truckDriver ? 'Ready for hire jobs' : 'Ready to drive')
+    : 'Verification in progress';
   const verificationTone = allVerified
     ? { bg: '#dcfce7', text: '#166534' }
     : { bg: '#fef3c7', text: '#92400e' };
@@ -299,8 +303,10 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const handleCarRegistrationPress = () => {
     if (vehicleApproved) {
       Alert.alert(
-        'Change car?',
-        'Changing your car will submit the new vehicle for admin review. You will be taken offline and cannot go online again until the new car is approved.',
+        truckDriver ? 'Change truck?' : 'Change car?',
+        truckDriver
+          ? 'Changing your truck will submit the new vehicle for admin review. You will stay offline for rides until hiring documents are approved.'
+          : 'Changing your car will submit the new vehicle for admin review. You will be taken offline and cannot go online again until the new car is approved.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -308,7 +314,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
             onPress: () => {
               const rootNavigation = navigation.getParent()?.getParent();
               if (rootNavigation?.navigate) {
-                rootNavigation.navigate('DriverRegisterCar', { driverStatus, changeVehicle: true });
+                rootNavigation.navigate(getDriverVehicleRoute(driverStatus), { driverStatus, changeVehicle: true });
               } else {
                 navigation.navigate('DriverCarRegistration', { driverStatus, changeVehicle: true });
               }
@@ -364,18 +370,20 @@ const DriverAccountScreen = ({ navigation, route }) => {
     },
     {
       key: 'car',
-      title: 'Car registration',
+      title: truckDriver ? 'Truck registration' : 'Car registration',
       subtitle: !vehicle
         ? 'Not registered'
         : vehicle.status === 'approved'
           ? approvedTierName
             ? `Verified · ${approvedTierName}`
-            : 'Verified · Tap to change car'
+            : truckDriver
+              ? 'Verified · Tap to change truck'
+              : 'Verified · Tap to change car'
           : vehicle.status === 'pending'
             ? 'Under review'
             : 'Rejected',
       verified: vehicle?.status === 'approved',
-      icon: 'car-outline',
+      icon: truckDriver ? 'bus-outline' : 'car-outline',
       changeableWhenVerified: vehicle?.status === 'approved',
       vehicleRegistrationReviewOnly: vehicleRegistrationAwaitingReviewOnly,
       onPress: handleCarRegistrationPress,
@@ -426,16 +434,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
       subtitle: 'Track earnings, goals and trip history',
       icon: 'stats-chart-outline',
       onPress: () => navigation.navigate('DriverIncomeStack'),
-      danger: false,
-    },
-    {
-      key: 'payout',
-      title: 'EcoCash payout details',
-      subtitle: driverStatus?.driverProfile?.ecocashNumber
-        ? `Saved number: ${driverStatus.driverProfile.ecocashNumber}`
-        : 'Add the EcoCash number registered in your own name',
-      icon: 'cash-outline',
-      onPress: () => navigation.navigate('DriverEcoCashPayout'),
       danger: false,
     },
     {

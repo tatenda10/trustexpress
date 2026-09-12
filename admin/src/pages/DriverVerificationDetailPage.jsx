@@ -53,7 +53,7 @@ function requiredDocumentEntries(driver) {
     ],
     carPhotos: uniqueRawCarPhotos.map((rawUrl, index) => ({
       key: `car-photo-${index + 1}`,
-      label: `Car Photo ${index + 1}`,
+      label: `${String(driver?.profile?.driverKind || '').toLowerCase() === 'truck' ? 'Truck' : 'Car'} Photo ${index + 1}`,
       rawUrl,
       url: resolveMediaUrl(rawUrl),
     })),
@@ -282,8 +282,12 @@ export default function DriverVerificationDetailPage() {
       : driver?.vehicle?.status === 'pending' && hasVehicleDocuments
       ? 'vehicle'
       : 'profile'
+  const isTruckDriver = String(driver?.profile?.driverKind || '').toLowerCase() === 'truck'
+  const vehiclePhotoLabel = isTruckDriver ? 'Truck Photos' : 'Car Photos'
   const incomingType = reviewTarget === 'vehicle'
-    ? 'Vehicle Verification'
+    ? isTruckDriver
+      ? 'Truck Verification'
+      : 'Vehicle Verification'
     : reviewTarget === 'profile_image'
       ? 'Profile Photo Verification'
       : 'Identity Verification'
@@ -519,6 +523,9 @@ export default function DriverVerificationDetailPage() {
             <p className="text-[11px] uppercase tracking-wide text-slate-500">Driver Verification / Review</p>
             <h1 className="mt-1 text-xl font-semibold text-slate-900">{driverTitle}</h1>
             <p className="mt-1 text-sm text-slate-600">{incomingType}</p>
+            <span className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${isTruckDriver ? 'bg-orange-50 text-orange-700 ring-1 ring-orange-200' : 'bg-slate-100 text-slate-700 ring-1 ring-slate-200'}`}>
+              {isTruckDriver ? 'Truck driver' : 'Normal driver'}
+            </span>
             <p className="mt-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
               Reviewing: {reviewTarget === 'vehicle' ? 'Vehicle submission' : 'Identity documents'}
             </p>
@@ -649,14 +656,14 @@ export default function DriverVerificationDetailPage() {
 
             <div>
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-800">Car Photos</h3>
+                <h3 className="text-sm font-semibold text-slate-800">{vehiclePhotoLabel}</h3>
                 <span className="text-xs text-slate-500">{documentGroups.carPhotos.length} uploaded</span>
               </div>
           {carPhotoUrls.length > 0 ? (
             <div className="mb-4 overflow-hidden rounded border border-slate-200 bg-slate-50">
               <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
                 <div>
-                  <p className="text-xs font-semibold text-slate-700">Car Photos</p>
+                  <p className="text-xs font-semibold text-slate-700">{vehiclePhotoLabel}</p>
                   <p className="text-[11px] text-slate-500">
                     {carPhotoIndex + 1} / {carPhotoUrls.length}
                     {isCurrentDisplayPhoto ? ' · Current display photo' : ''}
@@ -724,7 +731,7 @@ export default function DriverVerificationDetailPage() {
             </div>
           ) : (
             <div className="rounded-sm border border-dashed border-slate-300 px-3 py-6 text-sm text-slate-500">
-              No car photos uploaded yet.
+              No {isTruckDriver ? 'truck' : 'car'} photos uploaded yet.
             </div>
           )}
             </div>
@@ -781,7 +788,7 @@ export default function DriverVerificationDetailPage() {
         <section className="border border-slate-300 bg-white p-4">
           <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-slate-800">Car Photos</h2>
+              <h2 className="text-sm font-semibold text-slate-800">{vehiclePhotoLabel}</h2>
               <p className="mt-1 text-xs text-slate-500">Submitted vehicle pictures from the driver.</p>
             </div>
             <span className="text-xs text-slate-500">{carPhotoUrls.length} uploaded</span>
@@ -791,7 +798,7 @@ export default function DriverVerificationDetailPage() {
             <div className="mt-4 overflow-hidden rounded border border-slate-200 bg-slate-50">
               <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
                 <div>
-                  <p className="text-xs font-semibold text-slate-700">Car Photos</p>
+                  <p className="text-xs font-semibold text-slate-700">{vehiclePhotoLabel}</p>
                   <p className="text-[11px] text-slate-500">
                     {carPhotoIndex + 1} / {carPhotoUrls.length}
                     {isCurrentDisplayPhoto ? ' · Current display photo' : ''}
@@ -859,11 +866,12 @@ export default function DriverVerificationDetailPage() {
             </div>
           ) : (
             <div className="mt-4 rounded-sm border border-dashed border-slate-300 px-3 py-6 text-sm text-slate-500">
-              No car photos uploaded yet.
+              No {isTruckDriver ? 'truck' : 'car'} photos uploaded yet.
             </div>
           )}
         </section>
 
+        {!isTruckDriver ? (
         <section className="border border-slate-300 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-800">Vehicle Tier</h2>
           <p className="mt-2 text-sm text-slate-700">
@@ -892,10 +900,11 @@ export default function DriverVerificationDetailPage() {
             </p>
           </div>
         </section>
+        ) : null}
       </div>
       ) : null}
 
-      {activeSection === 'car' && driver.tierAssessment ? (
+      {activeSection === 'car' && !isTruckDriver && driver.tierAssessment ? (
         <section className="border border-slate-300 bg-white p-4">
           <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 md:flex-row md:items-center md:justify-between">
             <div>

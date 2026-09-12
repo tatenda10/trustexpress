@@ -57,6 +57,11 @@ function typeStyle(type) {
   return 'bg-sky-50 text-sky-700 ring-1 ring-sky-200'
 }
 
+function kindStyle(kind) {
+  if (kind === 'truck') return 'bg-orange-50 text-orange-700 ring-1 ring-orange-200'
+  return 'bg-slate-100 text-slate-700 ring-1 ring-slate-200'
+}
+
 function deriveVerificationRow(driver) {
   const profileStatus = driver.profile?.status || null
   const vehicleStatus = driver.vehicle?.status || null
@@ -77,8 +82,11 @@ function deriveVerificationRow(driver) {
       : hasIncomingVehicle || hasApprovedVehicle
       ? 'vehicle'
       : 'identity'
+  const driverKind = String(driver.profile?.driverKind || '').toLowerCase() === 'truck' ? 'truck' : 'standard'
   const verificationLabel = verificationType === 'vehicle'
-    ? 'Vehicle Verification'
+    ? driverKind === 'truck'
+      ? 'Truck Verification'
+      : 'Vehicle Verification'
     : verificationType === 'profile_image'
       ? 'Profile Photo Verification'
       : 'Identity Verification'
@@ -96,6 +104,8 @@ function deriveVerificationRow(driver) {
     submittedAt: submittedAt || '-',
     verificationType,
     verificationLabel,
+    driverKind,
+    driverKindLabel: driverKind === 'truck' ? 'Truck' : 'Normal',
     status: hasIncoming ? 'incoming' : isVerified ? 'verified' : isPartial ? 'partial' : 'all',
     raw: driver,
   }
@@ -121,6 +131,8 @@ export default function DriverVerificationPage() {
   const [appliedSearch, setAppliedSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
   const [appliedTypeFilter, setAppliedTypeFilter] = useState('all')
+  const [kindFilter, setKindFilter] = useState('all')
+  const [appliedKindFilter, setAppliedKindFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
@@ -136,6 +148,7 @@ export default function DriverVerificationPage() {
           params: {
             verificationBucket: activeTab,
             verificationType: appliedTypeFilter,
+            driverKind: appliedKindFilter,
             search: appliedSearch,
             verificationStatus: 'all',
             page,
@@ -157,7 +170,7 @@ export default function DriverVerificationPage() {
     }
 
     loadDrivers()
-  }, [activeTab, appliedSearch, appliedTypeFilter, page, pageSize, token])
+  }, [activeTab, appliedSearch, appliedKindFilter, appliedTypeFilter, page, pageSize, token])
 
   useEffect(() => {
     setPage(1)
@@ -165,13 +178,14 @@ export default function DriverVerificationPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [appliedSearch, appliedTypeFilter])
+  }, [appliedSearch, appliedKindFilter, appliedTypeFilter])
 
   const safePage = Math.min(page, totalPages)
 
   const handleSearch = () => {
     setAppliedSearch(searchInput.trim())
     setAppliedTypeFilter(typeFilter)
+    setAppliedKindFilter(kindFilter)
     setPage(1)
   }
 
@@ -206,6 +220,15 @@ export default function DriverVerificationPage() {
             <option value="vehicle">Vehicle only</option>
             <option value="profile_image">Profile photo only</option>
           </select>
+          <select
+            value={kindFilter}
+            onChange={(event) => setKindFilter(event.target.value)}
+            className="h-9 border border-slate-300 bg-white px-3 text-xs text-slate-800 outline-none transition focus:border-indigo-500"
+          >
+            <option value="all">All drivers</option>
+            <option value="standard">Normal drivers</option>
+            <option value="truck">Truck drivers</option>
+          </select>
           <button
             type="button"
             onClick={handleSearch}
@@ -225,6 +248,7 @@ export default function DriverVerificationPage() {
           <thead>
             <tr className="border-b border-slate-300 bg-[#0f172a] text-left text-[11px] uppercase tracking-wide text-slate-200">
               <th className="rounded-tl-sm px-4 py-2 font-semibold">Driver</th>
+              <th className="px-4 py-2 font-semibold">Kind</th>
               <th className="px-4 py-2 font-semibold">Phone</th>
               <th className="px-4 py-2 font-semibold">Submitted</th>
               <th className="px-4 py-2 font-semibold">Incoming Type</th>
@@ -235,13 +259,18 @@ export default function DriverVerificationPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-xs text-slate-500">
+                <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">
                   Loading verification queue...
                 </td>
               </tr>
             ) : rows.map((row) => (
               <tr key={row.id} className="border-b border-slate-200 hover:bg-slate-50">
                 <td className="px-4 py-3 font-medium text-slate-800">{row.name}</td>
+                <td className="px-4 py-3">
+                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${kindStyle(row.driverKind)}`}>
+                    {row.driverKindLabel}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-slate-700">{row.phone}</td>
                 <td className="px-4 py-3 text-slate-700">{row.submittedAt}</td>
                 <td className="px-4 py-3">
@@ -272,7 +301,7 @@ export default function DriverVerificationPage() {
             ))}
             {!loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-xs text-slate-500">
+                <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">
                   No drivers found in this tab.
                 </td>
               </tr>

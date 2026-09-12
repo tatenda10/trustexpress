@@ -21,6 +21,7 @@ import {
   updateDriverAvailability,
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { paymentMethodLabel } from '../../constants/payment';
 import { getHeadingAlongRoute } from '../../lib/mapVehicleHeading';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
@@ -1409,7 +1410,7 @@ export default function DriverTripScreen({ navigation, route }) {
       fareText={formatCurrency(ride.estimatedAmount)}
       passengerProfileImageUrl={passengerProfileImageUrl}
       passengerName={ride.passengerName}
-      passengerSubtitle={ride.passengerPhone || targetLabel}
+      passengerSubtitle={[paymentMethodLabel(ride.paymentMethod), ride.passengerPhone || targetLabel].filter(Boolean).join(' · ')}
       passengerConfirmationText={passengerConfirmationText}
       safetyPinReminderText={safetyPinReminderText}
       stopTimeline={stopTimeline}

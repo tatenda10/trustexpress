@@ -165,6 +165,13 @@ export async function updateDriverPayoutDetails(token, payload) {
   }, token);
 }
 
+export async function updateDriverKind(token, payload) {
+  return apiFetch('/api/drivers/me/kind', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }, token);
+}
+
 export async function openDriverSmileCash(token, payload) {
   return apiFetch('/api/drivers/me/smile-cash/open', {
     method: 'POST',
@@ -176,6 +183,13 @@ export async function linkDriverSmileCash(token, payload) {
   return apiFetch('/api/drivers/me/smile-cash/link', {
     method: 'POST',
     body: JSON.stringify(payload || {}),
+  }, token);
+}
+
+export async function unlinkDriverSmileCash(token) {
+  return apiFetch('/api/drivers/me/smile-cash/unlink', {
+    method: 'POST',
+    body: JSON.stringify({}),
   }, token);
 }
 

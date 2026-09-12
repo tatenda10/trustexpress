@@ -41,6 +41,7 @@ import DriverWelcomeScreen from './screens/driver/DriverWelcomeScreen';
 import DriverUploadDocumentsScreen from './screens/driver/DriverUploadDocumentsScreen';
 import DriverVerifyPhoneScreen from './screens/driver/DriverVerifyPhoneScreen';
 import DriverRegisterCarScreen from './screens/driver/DriverRegisterCarScreen';
+import DriverTypeSelectionScreen from './screens/driver/onboarding/DriverTypeSelectionScreen';
 import DriverTabNavigator from './screens/driver/DriverTabNavigator';
 import DriverOnboardingScreen from './screens/driver/onboarding/DriverOnboardingScreen';
 import DriverCreateAccountScreen from './screens/driver/auth/DriverCreateAccountScreen';
@@ -127,6 +128,7 @@ import {
   DRIVER_SKIP_ONBOARDING_KEY,
 } from './screens/driver/DriverUploadDocumentsScreen';
 import { DRIVER_SKIP_PHONE_VERIFY_KEY } from './screens/driver/DriverVerifyPhoneScreen';
+import { clearPendingDriverKind, getDriverVehicleRoute, mergePendingDriverKind, normalizeDriverKind, readPendingDriverKind } from './constants/driverKind';
 
 const ROLE_STORAGE_KEY = 'trust_express_role';
 const getDriverStatusCacheKey = (userId) => `trust_express_driver_status:${userId}`;
@@ -196,6 +198,7 @@ function AppStack({ currentRouteName }) {
   const [driverSkippedEnhancedSelfie, setDriverSkippedEnhancedSelfie] = useState(false);
   const [driverSkippedPhoneVerify, setDriverSkippedPhoneVerify] = useState(false);
   const [driverStatusHydrated, setDriverStatusHydrated] = useState(() => hasSessionDriverStatus);
+  const [pendingDriverKind, setPendingDriverKind] = useState(null);
   const [passengerLocationGranted, setPassengerLocationGranted] = useState(null);
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
   const [roleBootstrapped, setRoleBootstrapped] = useState(() => hasSessionRoleBootstrap);
@@ -267,6 +270,22 @@ function AppStack({ currentRouteName }) {
     });
   }, []);
 
+  const openDriverHireTrip = useCallback((hireRequestId = null) => {
+    if (!navigationRef.isReady()) return;
+    const parsedHireRequestId = Number(hireRequestId);
+    if (!Number.isInteger(parsedHireRequestId) || parsedHireRequestId <= 0) {
+      openDriverHireRequests();
+      return;
+    }
+    navigationRef.navigate('DriverTabs', {
+      screen: 'DriverHireJobs',
+      params: {
+        screen: 'DriverHireTrip',
+        params: { requestId: parsedHireRequestId },
+      },
+    });
+  }, [openDriverHireRequests]);
+
   const openPassengerHireDetail = useCallback((hireRequestId = null) => {
     if (!navigationRef.isReady()) return;
     const parsedHireRequestId = Number(hireRequestId);
@@ -283,6 +302,22 @@ function AppStack({ currentRouteName }) {
       },
     });
   }, []);
+
+  const openPassengerHireTracking = useCallback((hireRequestId = null) => {
+    if (!navigationRef.isReady()) return;
+    const parsedHireRequestId = Number(hireRequestId);
+    if (!Number.isInteger(parsedHireRequestId) || parsedHireRequestId <= 0) {
+      openPassengerHireDetail(hireRequestId);
+      return;
+    }
+    navigationRef.navigate('PassengerTabs', {
+      screen: 'PassengerHiring',
+      params: {
+        screen: 'PassengerHireTracking',
+        params: { requestId: parsedHireRequestId },
+      },
+    });
+  }, [openPassengerHireDetail]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -316,8 +351,10 @@ function AppStack({ currentRouteName }) {
         if (cached) {
           const parsed = JSON.parse(cached);
           if (parsed && typeof parsed === 'object') {
-            setDriverStatus(parsed);
-            rememberDriverStatus(user.id, parsed);
+            const merged = await mergePendingDriverKind(parsed, user.id);
+            if (cancelled) return;
+            setDriverStatus(merged);
+            rememberDriverStatus(user.id, merged);
           }
         }
       } catch {
@@ -481,8 +518,8 @@ function AppStack({ currentRouteName }) {
         } else if (data?.type === 'driver_new_hire_quote' && !isDriver) {
           openPassengerHireDetail(data?.hireRequestId);
         } else if (data?.type === 'hire_booking_confirmed') {
-          if (isDriver) openDriverHireRequests();
-          else openPassengerHireDetail(data?.hireRequestId);
+          if (isDriver) openDriverHireTrip(data?.hireRequestId);
+          else openPassengerHireTracking(data?.hireRequestId);
         }
       })
       .catch(() => {});
@@ -510,10 +547,13 @@ function AppStack({ currentRouteName }) {
         DeviceEventEmitter.emit('TrustHiringNewRequest', data);
         Alert.alert(
           data?.type === 'driver_hire_offer_updated' ? 'New passenger offer' : 'New transport request',
-          notification?.request?.content?.body
-            || (data?.type === 'driver_hire_offer_updated'
-              ? 'A passenger updated their hire offer. Accept it or send your own quote.'
-              : 'A new truck, moving or travel request is available.'),
+          [
+            notification?.request?.content?.body
+              || (data?.type === 'driver_hire_offer_updated'
+                ? 'A passenger updated their hire offer. Accept it or send your own quote.'
+                : 'A new truck, moving or travel request is available.'),
+            data?.paymentMethodLabel ? `Payment: ${data.paymentMethodLabel}` : '',
+          ].filter(Boolean).join('\n'),
           [
             { text: 'Later', style: 'cancel' },
             { text: 'View jobs', onPress: openDriverHireRequests },
@@ -537,8 +577,8 @@ function AppStack({ currentRouteName }) {
             {
               text: 'View',
               onPress: () => {
-                if (isDriver) openDriverHireRequests();
-                else openPassengerHireDetail(data?.hireRequestId);
+                if (isDriver) openDriverHireTrip(data?.hireRequestId);
+                else openPassengerHireTracking(data?.hireRequestId);
               },
             },
           ]
@@ -579,8 +619,8 @@ function AppStack({ currentRouteName }) {
       } else if (data?.type === 'driver_new_hire_quote') {
         openPassengerHireDetail(data?.hireRequestId);
       } else if (data?.type === 'hire_booking_confirmed') {
-        if (isDriver) openDriverHireRequests();
-        else openPassengerHireDetail(data?.hireRequestId);
+        if (isDriver) openDriverHireTrip(data?.hireRequestId);
+        else openPassengerHireTracking(data?.hireRequestId);
       }
     });
 
@@ -589,7 +629,7 @@ function AppStack({ currentRouteName }) {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [isDriver, maybeShowBackgroundRideRequestAlert, openDriverHireRequests, openDriverIncomingRequest, openPassengerHireDetail]);
+  }, [isDriver, maybeShowBackgroundRideRequestAlert, openDriverHireRequests, openDriverHireTrip, openDriverIncomingRequest, openPassengerHireDetail, openPassengerHireTracking]);
 
   useEffect(() => {
     if (!isDriver) return undefined;
@@ -1095,12 +1135,17 @@ function AppStack({ currentRouteName }) {
         return latest && typeof latest === 'object' ? latest : null;
       }
       const data = await getDriverMe(token, { suppressAuthErrorHandler: true });
-      setDriverStatus(data);
-      if (user?.id) {
-        rememberDriverStatus(user.id, data);
-        AsyncStorage.setItem(getDriverStatusCacheKey(user.id), JSON.stringify(data)).catch(() => {});
+      const serverKind = normalizeDriverKind(data?.driverProfile?.driverKind);
+      if (serverKind && user?.id) {
+        await clearPendingDriverKind(user.id);
       }
-      return data;
+      const merged = await mergePendingDriverKind(data, user?.id);
+      setDriverStatus(merged);
+      if (user?.id) {
+        rememberDriverStatus(user.id, merged);
+        AsyncStorage.setItem(getDriverStatusCacheKey(user.id), JSON.stringify(merged)).catch(() => {});
+      }
+      return merged;
     } catch {
       try {
         if (user?.id) {
@@ -1108,8 +1153,9 @@ function AppStack({ currentRouteName }) {
           if (cached) {
             const parsed = JSON.parse(cached);
             if (parsed && typeof parsed === 'object') {
-              setDriverStatus(parsed);
-              return parsed;
+              const merged = await mergePendingDriverKind(parsed, user.id);
+              setDriverStatus(merged);
+              return merged;
             }
           }
         }
@@ -1137,6 +1183,20 @@ function AppStack({ currentRouteName }) {
     }
     refetchDriverStatus();
   }, [isDriver, refetchDriverStatus]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setPendingDriverKind(null);
+      return undefined;
+    }
+    let cancelled = false;
+    readPendingDriverKind(user.id).then((kind) => {
+      if (!cancelled) setPendingDriverKind(kind);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, driverStatus]);
 
   useEffect(() => {
     async function ensureAgentReferralAttached() {
@@ -1401,6 +1461,9 @@ function AppStack({ currentRouteName }) {
   const needVehicle =
     profileApproved &&
     (!vehicle || (!vehicleApproved && vehicleStatus !== 'pending'));
+  const driverKind = normalizeDriverKind(profile?.driverKind || pendingDriverKind);
+  const needDriverKind = !driverKind && !vehicle;
+  const vehicleRoute = getDriverVehicleRoute({ driverProfile: { ...profile, driverKind } });
   const canGoOnline = profileApproved && vehicleApproved;
 
   if (!driverStatusHydrated || driverLoading) {
@@ -1411,6 +1474,8 @@ function AppStack({ currentRouteName }) {
         ? 'DriverTabs'
       : needDriverProfileCompletion
         ? 'DriverCompleteProfile'
+      : needDriverKind
+        ? 'DriverTypeSelection'
       : needPhoneVerify
         ? 'DriverVerifyPhone'
       : needDriverEnhancedSelfie
@@ -1418,7 +1483,7 @@ function AppStack({ currentRouteName }) {
         : needDriverDocumentUpload
           ? 'DriverUploadDocuments'
           : needVehicle
-            ? 'DriverRegisterCar'
+            ? vehicleRoute
             : 'DriverTabs';
 
   return (
@@ -1449,6 +1514,8 @@ function AppStack({ currentRouteName }) {
                 props.navigation.replace(
                   canGoOnline
                     ? 'DriverTabs'
+                    : needDriverKind
+                      ? 'DriverTypeSelection'
                     : needPhoneVerify
                       ? 'DriverVerifyPhone'
                       : needDriverEnhancedSelfie
@@ -1456,7 +1523,7 @@ function AppStack({ currentRouteName }) {
                         : needDriverDocumentUpload
                           ? 'DriverUploadDocuments'
                           : needVehicle
-                            ? 'DriverRegisterCar'
+                            ? vehicleRoute
                             : 'DriverTabs'
                 );
               }}
@@ -1479,6 +1546,10 @@ function AppStack({ currentRouteName }) {
           )}
         </Stack.Screen>
         <Stack.Screen
+          name="DriverTypeSelection"
+          component={DriverTypeSelectionScreen}
+        />
+        <Stack.Screen
           name="DriverUploadDocuments"
           component={DriverUploadDocumentsScreen}
           initialParams={{ driverStatus }}
@@ -1492,6 +1563,11 @@ function AppStack({ currentRouteName }) {
           name="DriverRegisterCar"
           component={DriverRegisterCarScreen}
           initialParams={{ driverStatus }}
+        />
+        <Stack.Screen
+          name="DriverRegisterTruck"
+          component={DriverRegisterCarScreen}
+          initialParams={{ driverStatus, mode: 'truck' }}
         />
         <Stack.Screen
           name="DriverTabs"

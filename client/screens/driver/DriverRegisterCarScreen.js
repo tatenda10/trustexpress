@@ -23,6 +23,7 @@ import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
 import { VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
+import { isTruckDriver, TRUCK_VEHICLE_CATEGORIES } from '../../constants/driverKind';
 
 function navigateToDriverAccountTab() {
   if (!navigationRef.isReady()) return;
@@ -229,6 +230,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const { getToken } = useAuth();
   const { driverStatus: contextDriverStatus, refetchDriverStatus } = useDriverStatus();
   const driverStatus = contextDriverStatus ?? route.params?.driverStatus ?? null;
+  const isTruckMode = route.name === 'DriverRegisterTruck'
+    || route.params?.mode === 'truck'
+    || isTruckDriver(driverStatus);
   const vehicle = driverStatus?.vehicle;
   const isPending = vehicle?.status === 'pending';
   const isRejected = vehicle?.status === 'rejected';
@@ -243,7 +247,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [color, setColor] = useState(vehicle?.color || '');
   const [seatCount, setSeatCount] = useState(vehicle?.seatCount ? String(vehicle.seatCount) : '');
   const [doorCount, setDoorCount] = useState(vehicle?.doorCount ? String(vehicle.doorCount) : '');
-  const [vehicleCategory, setVehicleCategory] = useState(vehicle?.vehicleCategory || 'sedan');
+  const [vehicleCategory, setVehicleCategory] = useState(
+    vehicle?.vehicleCategory || (isTruckMode ? 'truck' : 'sedan')
+  );
   const [hasAirConditioning, setHasAirConditioning] = useState(vehicle?.hasAirConditioning === true);
   const [hasChargingPorts, setHasChargingPorts] = useState(vehicle?.hasChargingPorts === true);
   const [hasWifi, setHasWifi] = useState(vehicle?.hasWifi === true);
@@ -313,13 +319,15 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           : VEHICLE_MAKE_MODELS;
         setTiers(nextTiers);
         setVehicleCatalog(nextCatalog.length > 0 ? nextCatalog : VEHICLE_MAKE_MODELS);
-        if (!selectedTierKey && nextTiers[0]?.tierKey) {
+        if (!isTruckMode && !selectedTierKey && nextTiers[0]?.tierKey) {
           setSelectedTierKey(nextTiers[0].tierKey);
         }
       } catch (error) {
         if (!active) return;
         setTiers([]);
-        Alert.alert('Vehicle tiers unavailable', error?.message || 'Could not load vehicle tier options');
+        if (!isTruckMode) {
+          Alert.alert('Vehicle tiers unavailable', error?.message || 'Could not load vehicle tier options');
+        }
       } finally {
         if (active) setTiersLoading(false);
       }
@@ -329,19 +337,24 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isTruckMode]);
 
   const pickCarPhotos = async () => {
     try {
       const remaining = Math.max(MAX_CAR_PHOTOS - carPhotoUris.length, 0);
       if (!remaining) {
-        Alert.alert('Photo limit reached', `You can upload up to ${MAX_CAR_PHOTOS} car photos.`);
+        Alert.alert(
+          'Photo limit reached',
+          `You can upload up to ${MAX_CAR_PHOTOS} ${isTruckMode ? 'truck' : 'car'} photos.`,
+        );
         return;
       }
 
       const source = await chooseImageSource({
-        title: 'Add car photos',
-        message: 'Use your camera for a new car photo or choose existing ones from your gallery.',
+        title: isTruckMode ? 'Add truck photos' : 'Add car photos',
+        message: isTruckMode
+          ? 'Use your camera for a new truck photo or choose existing ones from your gallery.'
+          : 'Use your camera for a new car photo or choose existing ones from your gallery.',
       });
       if (!source) return;
 
@@ -349,7 +362,10 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       if (source === 'camera') {
         const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert('Camera permission needed', 'Allow camera access to take car photos.');
+          Alert.alert(
+            'Camera permission needed',
+            `Allow camera access to take ${isTruckMode ? 'truck' : 'car'} photos.`,
+          );
           return;
         }
         result = await ImagePicker.launchCameraAsync({
@@ -361,7 +377,10 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       } else {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert('Gallery permission needed', 'Allow photo library access to choose car photos from your gallery.');
+          Alert.alert(
+            'Gallery permission needed',
+            `Allow photo library access to choose ${isTruckMode ? 'truck' : 'car'} photos from your gallery.`,
+          );
           return;
         }
         result = await ImagePicker.launchImageLibraryAsync({
@@ -382,7 +401,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         return Array.from(new Set(merged)).slice(0, MAX_CAR_PHOTOS);
       });
     } catch {
-      Alert.alert('Error', 'Could not open the car photo picker');
+      Alert.alert('Error', `Could not open the ${isTruckMode ? 'truck' : 'car'} photo picker`);
     }
   };
 
@@ -460,12 +479,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   };
 
   const handleSubmit = async () => {
-    if (!selectedTierKey) {
+    if (!isTruckMode && !selectedTierKey) {
       Alert.alert('Tier required', 'Select a vehicle tier before submitting.');
       return;
     }
     if (carPhotoUris.length < MIN_CAR_PHOTOS) {
-      Alert.alert('More photos needed', `Upload at least ${MIN_CAR_PHOTOS} car photos.`);
+      Alert.alert('More photos needed', `Upload at least ${MIN_CAR_PHOTOS} vehicle photos.`);
       return;
     }
     if (!regBookUri) {
@@ -491,8 +510,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
     const yearNum = Number(year);
     const currentYear = new Date().getFullYear();
-    if (!Number.isInteger(yearNum) || yearNum < 2010 || yearNum > currentYear + 1) {
-      Alert.alert('Invalid year', `Enter a year between 2010 and ${currentYear + 1}.`);
+    const minYear = isTruckMode ? 1990 : 2010;
+    if (!Number.isInteger(yearNum) || yearNum < minYear || yearNum > currentYear + 1) {
+      Alert.alert('Invalid year', `Enter a year between ${minYear} and ${currentYear + 1}.`);
       return;
     }
     const seatsNum = Number(seatCount);
@@ -546,8 +566,8 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         vehicleRegistrationUrl: registrationBookUrl,
         insuranceUrl,
         zinaraUrl,
-        vehicleTierKey: selectedTierKey,
-        vehicleTierName: selectedTier?.tierName || null,
+        vehicleTierKey: isTruckMode ? null : selectedTierKey,
+        vehicleTierName: isTruckMode ? null : (selectedTier?.tierName || null),
       });
 
       pendingSubmitAlertRef.current = true;
@@ -573,7 +593,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       };
       Alert.alert(
         'Vehicle under review',
-        'We are reviewing your registration. You will be notified when there is an update. Status is also shown under Account → Car registration.',
+        `We are reviewing your registration. You will be notified when there is an update. Status is also shown under Account → ${isTruckMode ? 'Truck registration' : 'Car registration'}.`,
         [{ text: 'OK', onPress: finishAfterSubmit }],
         { onDismiss: finishAfterSubmit }
       );
@@ -629,11 +649,17 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 24) }}
         showsVerticalScrollIndicator={false}
       >
-        <Text className="text-2xl font-bold text-gray-900 mb-2">{isChangingApprovedVehicle ? 'Change your car' : 'Register your car'}</Text>
+        <Text className="text-2xl font-bold text-gray-900 mb-2">
+          {isTruckMode
+            ? (isChangingApprovedVehicle ? 'Change your truck' : 'Register your truck')
+            : (isChangingApprovedVehicle ? 'Change your car' : 'Register your car')}
+        </Text>
         <Text className="text-sm text-gray-600 mb-4">
-          {isChangingApprovedVehicle
-            ? 'Submit the new car details and documents for admin review. You will be offline until the new car is approved.'
-            : 'Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.'}
+          {isTruckMode
+            ? 'Upload at least 3 truck photos plus registration, insurance and Zinara. Admin reviews this the same way as cars.'
+            : isChangingApprovedVehicle
+              ? 'Submit the new car details and documents for admin review. You will be offline until the new car is approved.'
+              : 'Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.'}
         </Text>
 
         {isRejected && vehicle?.rejectionReason && (
@@ -643,12 +669,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           </View>
         )}
 
-        <Text className="text-sm font-medium text-gray-700 mb-2">Car photos <Text className="text-red-500">*</Text></Text>
+        <Text className="text-sm font-medium text-gray-700 mb-2">{isTruckMode ? 'Truck photos' : 'Car photos'} <Text className="text-red-500">*</Text></Text>
         <TouchableOpacity onPress={pickCarPhotos} className="mb-3 border border-gray-200 rounded-xl p-4 items-center">
           <Ionicons name="images-outline" size={32} color="#9ca3af" />
-          <Text className="text-gray-900 mt-2 font-medium">Add car photos</Text>
+          <Text className="text-gray-900 mt-2 font-medium">{isTruckMode ? 'Add truck photos' : 'Add car photos'}</Text>
           <Text className="text-gray-500 mt-1 text-center">
-            Minimum {MIN_CAR_PHOTOS}, maximum {MAX_CAR_PHOTOS}. Add the front of the car first (this is shown to passengers), then the rear. Plate must be readable.
+            Minimum {MIN_CAR_PHOTOS}, maximum {MAX_CAR_PHOTOS}. Add the front first, then the rear. Plate must be readable.
           </Text>
         </TouchableOpacity>
 
@@ -674,6 +700,8 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           </View>
         </View>
 
+        {!isTruckMode ? (
+        <>
         <Text className="text-sm font-medium text-gray-700 mb-2">Car tier <Text className="text-red-500">*</Text></Text>
         {tiersLoading ? (
           <View className="mb-4 rounded-xl border border-gray-200 p-4 items-center">
@@ -711,6 +739,8 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
             })}
           </View>
         )}
+        </>
+        ) : null}
 
         <Text className="text-sm font-medium text-gray-700 mb-2">Number plate <Text className="text-red-500">*</Text></Text>
         <TextInput
@@ -736,7 +766,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         <SelectField
           label="Year"
           value={year}
-          placeholder="Choose a year from 2010 onwards"
+          placeholder={isTruckMode ? 'Choose a year from 1990 onwards' : 'Choose a year from 2010 onwards'}
           onPress={() => setShowYearModal(true)}
         />
         <SelectField
@@ -745,7 +775,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           placeholder="Choose a color or type your own"
           onPress={() => setShowColorModal(true)}
         />
-        <Text className="text-sm font-medium text-gray-700 mb-2">Passenger seats <Text className="text-red-500">*</Text></Text>
+        <Text className="text-sm font-medium text-gray-700 mb-2">{isTruckMode ? 'Seats' : 'Passenger seats'} <Text className="text-red-500">*</Text></Text>
         <TextInput
           className="border border-gray-200 rounded-xl p-4 text-base mb-4"
           placeholder="e.g. 5"
@@ -766,7 +796,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
         <Text className="text-sm font-medium text-gray-700 mb-2">Vehicle category</Text>
         <View className="mb-4 flex-row flex-wrap gap-2">
-          {['sedan', 'suv', 'mpv', 'hatchback', 'van', 'other'].map((option) => {
+          {(isTruckMode ? TRUCK_VEHICLE_CATEGORIES.map((item) => item.value) : ['sedan', 'suv', 'mpv', 'hatchback', 'van', 'other']).map((option) => {
             const selected = vehicleCategory === option;
             return (
               <TouchableOpacity
@@ -774,7 +804,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
                 onPress={() => setVehicleCategory(option)}
                 className={`rounded-full border px-4 py-2 ${selected ? 'border-primary bg-blue-50' : 'border-gray-200 bg-white'}`}
               >
-                <Text className={`${selected ? 'text-primary' : 'text-gray-700'} font-medium capitalize`}>{option}</Text>
+                <Text className={`${selected ? 'text-primary' : 'text-gray-700'} font-medium capitalize`}>{String(option).replace(/_/g, ' ')}</Text>
               </TouchableOpacity>
             );
           })}
@@ -806,7 +836,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           ))}
         </View>
 
-        <Text className="text-sm font-medium text-gray-700 mb-2">Car registration book <Text className="text-red-500">*</Text></Text>
+        <Text className="text-sm font-medium text-gray-700 mb-2">{isTruckMode ? 'Vehicle registration book' : 'Car registration book'} <Text className="text-red-500">*</Text></Text>
         <TouchableOpacity onPress={() => pickSingleImage(setRegBookUri)} className="mb-6 border border-gray-200 rounded-xl p-4 items-center">
           {regBookUri ? (
             <>
@@ -852,9 +882,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         </TouchableOpacity>
 
         <TouchableOpacity
-          className={`p-4 rounded-xl bg-primary items-center ${loading || tiersLoading || tiers.length === 0 ? 'opacity-70' : ''}`}
+          className={`p-4 rounded-xl bg-primary items-center ${loading || (!isTruckMode && (tiersLoading || tiers.length === 0)) ? 'opacity-70' : ''}`}
           onPress={handleSubmit}
-          disabled={loading || tiersLoading || tiers.length === 0}
+          disabled={loading || (!isTruckMode && (tiersLoading || tiers.length === 0))}
         >
           {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-white text-lg font-semibold">{isChangingApprovedVehicle ? 'Submit change for review' : 'Submit for review'}</Text>}
         </TouchableOpacity>
@@ -897,7 +927,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       <SelectionModal
         visible={showYearModal}
         title="Select Vehicle Year"
-        options={VEHICLE_YEAR_OPTIONS}
+        options={isTruckMode
+          ? Array.from({ length: Math.max(new Date().getFullYear() - 1990 + 2, 1) }, (_, index) => String(new Date().getFullYear() + 1 - index))
+          : VEHICLE_YEAR_OPTIONS}
         selectedValue={year}
         searchPlaceholder="Search year"
         onClose={() => setShowYearModal(false)}

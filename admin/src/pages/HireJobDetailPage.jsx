@@ -52,6 +52,7 @@ export default function HireJobDetailPage() {
   const [preferredVehicle, setPreferredVehicle] = useState(null)
   const [timeline, setTimeline] = useState([])
   const [transactions, setTransactions] = useState([])
+  const [commissionPreview, setCommissionPreview] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -71,6 +72,7 @@ export default function HireJobDetailPage() {
         setPreferredVehicle(data.preferredVehicle || null)
         setTimeline(Array.isArray(data.timeline) ? data.timeline : [])
         setTransactions(Array.isArray(data.transactions) ? data.transactions : [])
+        setCommissionPreview(data.commissionPreview || null)
       } catch (err) {
         if (!active) return
         setError(err?.response?.data?.error || err?.message || 'Failed to load hire job')
@@ -139,6 +141,11 @@ export default function HireJobDetailPage() {
               <DetailField label="Passenger" value={request.passengerName} />
               <DetailField label="Passenger phone" value={request.passengerPhone} />
               <DetailField label="Category" value={request.category} />
+              <DetailField label="Trip type" value={request.tripType} />
+              <DetailField
+                label="Distance"
+                value={request.estimatedDistanceKm != null ? `${Number(request.estimatedDistanceKm).toFixed(1)} km` : '-'}
+              />
               <DetailField label="People" value={request.passengerCount} />
               <DetailField label="Start" value={formatDateTime(request.startAt)} />
               <DetailField label="Created" value={formatDateTime(request.createdAt)} />
@@ -187,7 +194,8 @@ export default function HireJobDetailPage() {
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <DetailField label="Booking id" value={booking.publicId} />
                 <DetailField label="Status" value={booking.status} />
-                <DetailField label="Amount" value={formatMoney(booking.amount, booking.currency)} />
+                <DetailField label="Hire charge" value={formatMoney(booking.amount, booking.currency)} />
+                <DetailField label="Listed expenses" value={formatMoney(booking.expensesAmount, booking.currency)} />
                 <DetailField label="Vehicle" value={booking.vehicle?.title} />
                 <DetailField label="Driver" value={booking.driverName} />
                 <DetailField label="Driver phone" value={booking.driverPhone} />
@@ -198,6 +206,30 @@ export default function HireJobDetailPage() {
               </div>
             )}
           </div>
+
+          {commissionPreview ? (
+            <div className="border border-slate-300 bg-white p-4">
+              <h2 className="text-sm font-semibold text-slate-800">Hire commission</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Calculated on the agreed hire charge, excluding separately listed expenses.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <DetailField label="Band" value={commissionPreview.band?.label} />
+                <DetailField
+                  label="Rate"
+                  value={`${Number(commissionPreview.commissionRatePercent || 0).toFixed(1)}%`}
+                />
+                <DetailField
+                  label="Commission"
+                  value={formatMoney(commissionPreview.commissionAmount, request.fareCurrency)}
+                />
+                <DetailField
+                  label="Operator receives"
+                  value={formatMoney(commissionPreview.operatorReceives, request.fareCurrency)}
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-3">

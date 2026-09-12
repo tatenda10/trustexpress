@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db/connection.js';
 import { toAppUser } from './clerk-user.js';
 import { getPaymentProvider } from './payment-providers/index.js';
+import { getDriverWalletSettings } from './driver-wallet-settings.js';
 import { createSmileCashSubscriber, normalizeDateOfBirth, normalizeGender, normalizeZimMobile } from './smile-cash.js';
 
 const PAYABLE_RIDE_STATUSES = new Set([
@@ -350,8 +351,13 @@ export async function initializePassengerRidePayment({
   };
 }
 
-async function creditDriverWalletForPassengerPayment(connection, payment) {
-  const amount = normalizeMoney(payment.amount);
+async function creditDriverWalletForPassengerPayment(connection, payment, extras = {}) {
+  const settings = await getDriverWalletSettings();
+  const fareAmount = normalizeMoney(extras.fareAmount ?? payment.amount);
+  const tipAmount = normalizeMoney(extras.tipAmount);
+  const commissionRatePercent = Number(settings.commissionRatePercent || 9.5);
+  const commissionAmount = normalizeMoney(fareAmount * (commissionRatePercent / 100));
+  const amount = normalizeMoney(Math.max(0, fareAmount - commissionAmount + tipAmount));
   const currency = String(payment.currency || 'USD').toUpperCase();
   const sourceId = String(payment.reference || payment.id);
 
@@ -405,12 +411,13 @@ async function creditDriverWalletForPassengerPayment(connection, payment) {
        trip_id,
        passenger_user_id,
        trip_fare_amount,
+       commission_rate_percent,
        balance_before,
        balance_after,
        provider_reference,
        external_transaction_id,
        description
-     ) VALUES (?, 'manual_credit', ?, ?, ?, 'passenger_ride_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, 'manual_credit', ?, ?, ?, 'passenger_ride_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       payment.driver_user_id,
       amount,
@@ -419,12 +426,13 @@ async function creditDriverWalletForPassengerPayment(connection, payment) {
       sourceId,
       payment.ride_request_id,
       payment.passenger_user_id,
-      amount,
+      fareAmount,
+      commissionRatePercent,
       balanceBefore,
       balanceAfter,
       payment.reference,
       payment.provider_transaction_id || null,
-      'Passenger Smile&Pay ride payment (full fare credited; commission charged on trip complete)',
+      `Passenger online payment. Service fee ${commissionRatePercent.toFixed(1)}% withheld. Net credited to Trust Express wallet.`,
     ]
   );
 
@@ -525,10 +533,20 @@ export async function verifyPassengerRidePayment({ passengerUserId = null, rideR
       [safeReference, verification.paymentMethod || 'online', locked.ride_request_id]
     );
 
+    const [rideRow] = await connection.execute(
+      `SELECT final_estimated_amount, estimated_amount, tip_amount
+       FROM ride_requests
+       WHERE id = ?
+       LIMIT 1`,
+      [locked.ride_request_id]
+    );
     const walletCreditTransactionId = await creditDriverWalletForPassengerPayment(connection, {
       ...locked,
       payment_method: verification.paymentMethod || 'online',
       provider_transaction_id: verification.externalTransactionId || null,
+    }, {
+      fareAmount: rideRow?.[0]?.final_estimated_amount || rideRow?.[0]?.estimated_amount || locked.amount,
+      tipAmount: rideRow?.[0]?.tip_amount || 0,
     });
 
     await connection.execute(

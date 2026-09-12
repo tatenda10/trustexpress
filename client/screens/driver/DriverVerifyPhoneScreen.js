@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { getDriverVehicleRoute } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
 import {
@@ -61,7 +62,7 @@ function getNextDriverOnboardingRouteAfterPhoneVerified(driverMe) {
     (!vehicle || (!vehicleApproved && vehicleStatus !== 'pending'));
   if (needDriverEnhancedSelfie) return 'DriverEnhancedSelfie';
   if (needDriverDocumentUpload) return 'DriverUploadDocuments';
-  if (needVehicle) return 'DriverRegisterCar';
+  if (needVehicle) return getDriverVehicleRoute(driverMe, driverMe?.driverProfile?.driverKind);
   return 'DriverTabs';
 }
 

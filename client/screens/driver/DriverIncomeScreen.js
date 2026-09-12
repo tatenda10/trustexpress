@@ -271,10 +271,11 @@ const DriverIncomeScreen = () => {
                   <View className="flex-row items-start justify-between">
                     <View className="flex-1 pr-3">
                       <Text className="text-base font-semibold text-gray-900" numberOfLines={1}>
-                        {ride.pickupLabel || 'Pickup'}
+                        {ride.kind === 'hire' ? (ride.passengerName || 'Hire job') : (ride.pickupLabel || 'Pickup')}
                       </Text>
                       <Text className="mt-0.5 text-sm text-gray-500" numberOfLines={1}>
-                        to {ride.dropoffLabel || 'Drop-off'}
+                        {ride.kind === 'hire' ? 'Hire' : 'Ride'}
+                        {ride.dropoffLabel ? ` · to ${ride.dropoffLabel}` : ''}
                       </Text>
                       <Text className="mt-2 text-xs text-gray-400">{formatRideTime(ride.completedAt)}</Text>
                     </View>

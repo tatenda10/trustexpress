@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { submitDriverDocuments, uploadFile, resolveUploadedMediaUrl } from '../../api';
+import { applyDriverKindToStatus, getDriverVehicleRoute, normalizeDriverKind, readPendingDriverKind } from '../../constants/driverKind';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
@@ -67,14 +68,22 @@ function chooseImageSource({ title, message, allowCamera = true, allowGallery = 
   });
 }
 
-function nextRouteAfterDocumentsSubmit(driverMe) {
+function nextRouteAfterDocumentsSubmit(driverMe, fallbackKind = null) {
   const vehicleStatus = String(driverMe?.vehicle?.status || '').trim().toLowerCase();
   const hasVehicleSubmission =
     !!driverMe?.vehicle &&
     (vehicleStatus === 'approved' || vehicleStatus === 'verified' || vehicleStatus === 'pending');
-  if (!hasVehicleSubmission) return 'DriverRegisterCar';
+  if (!hasVehicleSubmission) return getDriverVehicleRoute(driverMe, fallbackKind);
   if (driverMe?.phoneVerified === true) return 'DriverTabs';
   return 'DriverVerifyPhone';
+}
+
+function vehicleRouteParams(target, driverMe, fallbackKind = null) {
+  const status = applyDriverKindToStatus(driverMe, fallbackKind);
+  if (target === 'DriverRegisterTruck') {
+    return { driverStatus: status, mode: 'truck' };
+  }
+  return { driverStatus: status };
 }
 
 function formatUploadErrorMessage(error, fallback) {
@@ -129,8 +138,8 @@ function toStoredUploadPath(uri) {
 
 export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { getToken } = useAuth();
-  const { driverStatus: contextDriverStatus, refetchDriverStatus } = useDriverStatus();
+  const { getToken, userId } = useAuth();
+  const { driverStatus: contextDriverStatus, refetchDriverStatus, patchDriverStatus } = useDriverStatus();
   const cameraRef = useRef(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const driverStatus = contextDriverStatus ?? route.params?.driverStatus ?? null;
@@ -161,6 +170,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const [capturingLockedSelfie, setCapturingLockedSelfie] = useState(false);
   /** True while showing post-submit alert so useLayoutEffect does not replace before the user taps Continue. */
   const pendingSubmitAlertRef = useRef(false);
+  const pendingRedirectRef = useRef(false);
+  const driverStatusRef = useRef(driverStatus);
+  driverStatusRef.current = driverStatus;
 
   const getExistingDocUrl = (key) => {
     if (key === 'driverLicence') return profile?.driverLicenceUrl || null;
@@ -222,12 +234,31 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     profile?.selfieWithIdCardUrl,
   ]);
 
-  // Pending review: leave upload screen — phone verify next if needed, otherwise tabs (matches App onboarding order).
+  // Pending review: leave upload screen once — do not re-replace when driverStatus refreshes.
   useLayoutEffect(() => {
     if (!isPending || enhancedSelfieOnly) return;
     if (pendingSubmitAlertRef.current) return;
-    navigation.replace(nextRouteAfterDocumentsSubmit(driverStatus));
-  }, [isPending, enhancedSelfieOnly, navigation, driverStatus]);
+    if (pendingRedirectRef.current) return;
+    pendingRedirectRef.current = true;
+    let cancelled = false;
+    (async () => {
+      const fallbackKind = normalizeDriverKind(profile?.driverKind || await readPendingDriverKind(userId));
+      if (cancelled) {
+        pendingRedirectRef.current = false;
+        return;
+      }
+      const latestStatus = driverStatusRef.current;
+      if (!fallbackKind && !latestStatus?.vehicle) {
+        navigation.replace('DriverTypeSelection');
+        return;
+      }
+      const target = nextRouteAfterDocumentsSubmit(latestStatus, fallbackKind);
+      navigation.replace(target, vehicleRouteParams(target, latestStatus, fallbackKind));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isPending, enhancedSelfieOnly, navigation, profile?.driverKind, userId]);
 
   const handleSkip = async () => {
     try {
@@ -401,11 +432,14 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     try {
       const token = await getToken({ skipCache: true });
       if (!token) throw new Error('Not signed in');
+      const driverKind = normalizeDriverKind(
+        profile?.driverKind || await readPendingDriverKind(userId)
+      );
 
       if (enhancedSelfieOnly) {
         const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
         try {
-          await submitDriverDocuments(token, { selfieWithIdCardUrl }, { suppressAuthErrorHandler: true });
+          await submitDriverDocuments(token, { selfieWithIdCardUrl, driverKind }, { suppressAuthErrorHandler: true });
         } catch (error) {
           console.log('[DriverUploadDocumentsScreen] submit documents failed', {
             mode: 'enhancedSelfieOnly',
@@ -432,6 +466,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               selfieWithIdCardUrl,
               nationalIdNumber: trimmedNationalIdNumber,
               driverLicenceNumber: trimmedDriverLicenceNumber,
+              driverKind,
             },
             { suppressAuthErrorHandler: true },
           );
@@ -455,8 +490,14 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       }
 
       pendingSubmitAlertRef.current = true;
-      const latest = await refetchDriverStatus();
-      const target = nextRouteAfterDocumentsSubmit(latest ?? driverStatus);
+      const fallbackKind = normalizeDriverKind(
+        driverKind || profile?.driverKind || await readPendingDriverKind(userId)
+      );
+      const latest = applyDriverKindToStatus(await refetchDriverStatus(), fallbackKind);
+      if (typeof patchDriverStatus === 'function' && latest) {
+        patchDriverStatus(latest);
+      }
+      const target = nextRouteAfterDocumentsSubmit(latest ?? driverStatus, fallbackKind);
       const needsPhone = latest?.phoneVerified !== true;
       let finishedAfterSubmit = false;
       const finishAfterSubmit = () => {
@@ -466,15 +507,15 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         if (enhancedSelfieOnly) {
           AsyncStorage.removeItem(DRIVER_SKIP_ENHANCED_SELFIE_KEY).catch(() => {});
         }
-        navigation.replace(target);
+        navigation.replace(target, vehicleRouteParams(target, latest ?? driverStatus, fallbackKind));
       };
 
       Alert.alert(
         enhancedSelfieOnly ? 'Submitted' : 'Documents under review',
         enhancedSelfieOnly
           ? 'Your selfie with national ID was submitted successfully.'
-          : target === 'DriverRegisterCar'
-            ? 'Documents saved. Continue by registering your car now so both checks can run in parallel.'
+          : target === 'DriverRegisterCar' || target === 'DriverRegisterTruck'
+            ? 'Documents saved. Continue by registering your vehicle now so both checks can run in parallel.'
             : needsPhone
               ? 'We are reviewing your documents. You will be notified when there is an update. Next, verify your phone number to continue.'
               : 'We are reviewing your documents. You will be notified when there is an update. Continue to your dashboard.',

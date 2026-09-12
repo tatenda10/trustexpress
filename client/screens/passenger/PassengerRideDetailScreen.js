@@ -237,7 +237,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         canPayCash: false,
         canChoosePaymentMethod: false,
       } : current);
-      Alert.alert('Payment complete', 'Online payment received and credited to the driver wallet. Platform commission is charged when the trip completes.');
+      Alert.alert('Payment complete', 'Online payment received. The service fee was withheld and the remaining amount was credited to the driver Trust Express wallet.');
     } catch (error) {
       Alert.alert('Payment failed', error?.message || 'Could not complete Smile&Pay payment.');
     } finally {
@@ -355,7 +355,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
               </Text>
             </View>
             <Text className="mt-2 text-sm text-gray-500">
-              Choose cash or pay online. Online payments credit the full fare to the driver wallet; commission is charged when the trip completes.
+              Choose cash or pay online. Online payments withhold the platform service fee and credit the remaining amount to the driver Trust Express wallet.
             </Text>
             {(canPayCash || canPayWithSmilePay) ? (
               <View className="mt-4 flex-row gap-3">

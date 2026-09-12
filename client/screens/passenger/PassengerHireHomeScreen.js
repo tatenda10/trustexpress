@@ -15,16 +15,8 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { browseHireFleet, listHireRequests, resolveUploadedMediaUrl } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
-
-const CATEGORY_FILTERS = [
-  { value: '', label: 'All' },
-  { value: 'truck', label: 'Truck' },
-  { value: 'moving_van', label: 'Moving' },
-  { value: 'pickup', label: 'Pickup' },
-  { value: 'van', label: 'Van' },
-  { value: 'bus', label: 'Bus' },
-  { value: 'suv', label: 'SUV' },
-];
+import { HIRE_CATEGORY_FILTERS, isLiveHireBooking } from '../../constants/hire';
+import { paymentMethodLabel } from '../../constants/payment';
 
 export default function PassengerHireHomeScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
@@ -162,7 +154,7 @@ export default function PassengerHireHomeScreen({ navigation, route }) {
               ) : null}
             </View>
             <View className="mt-3 flex-row flex-wrap gap-2">
-              {CATEGORY_FILTERS.map((item) => (
+              {HIRE_CATEGORY_FILTERS.map((item) => (
                 <TouchableOpacity
                   key={item.value || 'all'}
                   onPress={() => {
@@ -275,9 +267,16 @@ export default function PassengerHireHomeScreen({ navigation, route }) {
               </Text>
             </View>
           )}
-          renderItem={({ item }) => (
+          renderItem={({ item }) => {
+            const trackLive = item.status === 'booked' && (
+              !item.bookingStatus || isLiveHireBooking(item.bookingStatus)
+            );
+            return (
             <TouchableOpacity
-              onPress={() => navigation.navigate('PassengerHireDetail', { requestId: item.id })}
+              onPress={() => navigation.navigate(
+                trackLive ? 'PassengerHireTracking' : 'PassengerHireDetail',
+                { requestId: item.id },
+              )}
               className="mb-3 rounded-[24px] bg-white px-4 py-4"
             >
               <View className="flex-row items-center justify-between">
@@ -295,17 +294,22 @@ export default function PassengerHireHomeScreen({ navigation, route }) {
               ) : null}
               <Text className="mt-1 text-xs text-gray-500">
                 {item.startAt ? new Date(item.startAt).toLocaleString() : ''}
+                {item.tripType ? ` · ${item.tripType}` : ''}
+                {paymentMethodLabel(item.paymentMethod) ? ` · ${paymentMethodLabel(item.paymentMethod)}` : ''}
                 {item.quoteCount != null ? ` · ${item.quoteCount} quotes` : ''}
               </Text>
               {item.notes ? (
                 <Text className="mt-2 text-sm text-gray-600" numberOfLines={2}>{item.notes}</Text>
               ) : null}
               <View className="mt-3 flex-row items-center">
-                <Text className="text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>Open</Text>
+                <Text className="text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
+                  {trackLive ? 'Track hire' : 'Open'}
+                </Text>
                 <Ionicons name="chevron-forward" size={16} color={PRIMARY_BLUE} />
               </View>
             </TouchableOpacity>
-          )}
+            );
+          }}
         />
       )}
     </View>

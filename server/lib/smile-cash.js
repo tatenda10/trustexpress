@@ -32,6 +32,19 @@ function mapWalletError(data, fallbackStatus) {
     };
   }
 
+  if (
+    fallbackStatus === 403
+    || rawStatus === 'FORBIDDEN'
+    || normalizedMessage === 'forbidden'
+    || normalizedMessage.includes('not allowed')
+  ) {
+    return {
+      status: 403,
+      message: 'Smile Cash rejected this cash out. If the company Smile Cash number is linked, unlink it and use your personal Smile Cash number.',
+      code: 'SMILE_CASH_FORBIDDEN',
+    };
+  }
+
   return {
     status: fallbackStatus,
     message: rawMessage || `Smile Cash request failed with status ${fallbackStatus}`,
@@ -178,8 +191,18 @@ export async function createSmileCashSubscriber({
   };
 }
 
+export function getSmileCashSenderPhone() {
+  return normalizeZimMobile(process.env.SMILE_CASH_SENDER_PHONE || '');
+}
+
+export function isCompanySmileCashNumber(mobile) {
+  const sender = getSmileCashSenderPhone();
+  const receiver = normalizeZimMobile(mobile);
+  return !!(sender && receiver && sender === receiver);
+}
+
 function getSenderPhone() {
-  const sender = normalizeZimMobile(process.env.SMILE_CASH_SENDER_PHONE || '');
+  const sender = getSmileCashSenderPhone();
   if (!sender) {
     throw buildError('SMILE_CASH_SENDER_PHONE must be configured for payouts', 500);
   }
@@ -205,6 +228,12 @@ export async function executeSmileCashExternalCashout({
   const currencyCode = String(currency || 'USD').trim().toUpperCase();
 
   if (!mobile) throw buildError('Receiver Smile Cash mobile is required');
+  if (isCompanySmileCashNumber(mobile)) {
+    throw buildError(
+      'This Smile Cash number is the company payout account. Unlink it in Smile Cash and link your personal number.',
+      409
+    );
+  }
   if (!(money > 0)) throw buildError('Payout amount must be greater than zero');
   if (!['USD', 'ZWG', 'ZWL'].includes(currencyCode)) {
     throw buildError('Currency must be USD or ZWG');

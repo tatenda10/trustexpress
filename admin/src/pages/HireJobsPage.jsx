@@ -210,7 +210,11 @@ export default function HireJobsPage() {
                 <tr key={row.id} className="border-b border-slate-200 hover:bg-slate-50">
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-800">{row.title || row.publicId}</div>
-                    <div className="text-[11px] text-slate-500">{row.publicId}</div>
+                    <div className="text-[11px] text-slate-500">
+                      {row.publicId}
+                      {row.tripType ? ` · ${row.tripType}` : ''}
+                      {row.category ? ` · ${row.category}` : ''}
+                    </div>
                     <div className="text-[11px] text-slate-400">{formatDateTime(row.createdAt)}</div>
                   </td>
                   <td className="px-4 py-3 text-slate-700">

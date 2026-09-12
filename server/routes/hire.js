@@ -4,16 +4,21 @@ import { query, withTransaction } from '../db/connection.js';
 import { getClerkUserById, toAppUser, normalizeRole } from '../lib/clerk-user.js';
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
-import { emitHireQuoteToPassenger, emitHireRequestToDriver, emitToUser } from '../lib/realtime.js';
+import { emitHireBookingUpdated, emitHireQuoteToPassenger, emitHireRequestToDriver, emitToUser } from '../lib/realtime.js';
 import {
   createHirePublicId,
   estimateHireFare,
+  mapHireDriverStage,
+  mapHirePassengerStage,
   shapeHireBooking,
   shapeHireFleetVehicle,
   shapeHireQuote,
   shapeHireRequest,
   shapeHireVehicle,
 } from '../lib/hire.js';
+import { deductCommissionForCompletedHire } from '../lib/driver-wallet.js';
+import { getHireCommissionSettings, resolveHireTripType } from '../lib/hire-commission.js';
+import { normalizePaymentMethod, paymentMethodLabel } from '../lib/payment-method.js';
 import { normalizeUploadPath } from '../lib/driver-verification-mysql.js';
 
 const router = Router();
@@ -57,6 +62,76 @@ async function requirePassenger(req, res) {
 function parsePhotos(input) {
   const list = Array.isArray(input) ? input : [];
   return list.map((item) => normalizeUploadPath(item)).filter(Boolean).slice(0, 8);
+}
+
+function toCoordinate(lat, lng) {
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
+
+async function loadHireDriverSnapshot(driverUserId) {
+  if (!driverUserId) return null;
+  const [[userRow], [availability]] = await Promise.all([
+    query(
+      `SELECT first_name, last_name, phone_number
+       FROM users
+       WHERE clerk_user_id = ?
+       LIMIT 1`,
+      [driverUserId]
+    ),
+    query(
+      `SELECT current_lat, current_lng, last_seen_at, driver_name, phone_number,
+              vehicle_make, vehicle_model, number_plate, car_photo_url
+       FROM driver_availability
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [driverUserId]
+    ),
+  ]);
+  const name = [userRow?.first_name, userRow?.last_name].filter(Boolean).join(' ').trim()
+    || availability?.driver_name
+    || 'Driver';
+  return {
+    name,
+    phone: userRow?.phone_number || availability?.phone_number || null,
+    coordinate: toCoordinate(availability?.current_lat, availability?.current_lng),
+    lastSeenAt: availability?.last_seen_at ? new Date(availability.last_seen_at).toISOString() : null,
+    vehicle: {
+      make: availability?.vehicle_make || null,
+      model: availability?.vehicle_model || null,
+      numberPlate: availability?.number_plate || null,
+      photoUrl: availability?.car_photo_url || null,
+    },
+  };
+}
+
+function buildHireTrackingPayload({ request, booking, passenger, driver }) {
+  const bookingStatus = booking?.status || null;
+  return {
+    request,
+    booking,
+    passenger,
+    driver,
+    driverCoordinate: driver?.coordinate || null,
+    driverStage: mapHireDriverStage(bookingStatus),
+    passengerStage: mapHirePassengerStage(bookingStatus),
+  };
+}
+
+function emitHireBookingLive(booking, extras = {}) {
+  if (!booking) return;
+  const payload = {
+    hireBookingId: booking.id,
+    hireRequestId: booking.hireRequestId || booking.hire_request_id,
+    status: booking.status,
+    driverStage: mapHireDriverStage(booking.status),
+    passengerStage: mapHirePassengerStage(booking.status),
+    ...extras,
+  };
+  emitHireBookingUpdated(booking.passengerUserId || booking.passenger_user_id, payload);
+  emitHireBookingUpdated(booking.driverUserId || booking.driver_user_id, payload);
 }
 
 function buildHireRequestNotificationBody(request) {
@@ -143,6 +218,8 @@ async function notifyDriversAboutHireRequest(request, passengerName = 'Passenger
     category: String(request.category || ''),
     passengerOfferAmount: offerAmount ?? '',
     fareCurrency: String(currency),
+    paymentMethod: request?.paymentMethod || request?.payment_method || '',
+    paymentMethodLabel: paymentMethodLabel(request?.paymentMethod || request?.payment_method) || '',
   };
 
   destinations.forEach((driver) => {
@@ -500,7 +577,8 @@ router.get('/requests', requireAuth, async (req, res) => {
     if (!passenger) return;
     const rows = await query(
       `SELECT hr.*,
-              (SELECT COUNT(*) FROM hire_quotes hq WHERE hq.hire_request_id = hr.id) AS quote_count
+              (SELECT COUNT(*) FROM hire_quotes hq WHERE hq.hire_request_id = hr.id) AS quote_count,
+              (SELECT hb.status FROM hire_bookings hb WHERE hb.hire_request_id = hr.id ORDER BY hb.id DESC LIMIT 1) AS booking_status
        FROM hire_requests hr
        WHERE hr.passenger_user_id = ?
        ORDER BY hr.created_at DESC
@@ -539,6 +617,10 @@ router.post('/requests', requireAuth, async (req, res) => {
     const pickupLng = req.body?.pickupLng == null ? null : Number(req.body.pickupLng);
     const dropoffLat = req.body?.dropoffLat == null ? null : Number(req.body.dropoffLat);
     const dropoffLng = req.body?.dropoffLng == null ? null : Number(req.body.dropoffLng);
+    const estimatedDistanceKm = req.body?.estimatedDistanceKm == null || req.body?.estimatedDistanceKm === ''
+      ? null
+      : Number(req.body.estimatedDistanceKm);
+    const paymentMethod = normalizePaymentMethod(req.body?.paymentMethod);
 
     if (!title) return res.status(400).json({ error: 'Give this hire request a name' });
     if (title.length > 160) return res.status(400).json({ error: 'Request name is too long' });
@@ -558,6 +640,9 @@ router.post('/requests', requireAuth, async (req, res) => {
     if (passengerOfferAmount != null && (!Number.isFinite(passengerOfferAmount) || passengerOfferAmount <= 0)) {
       return res.status(400).json({ error: 'Enter a valid offer amount' });
     }
+    if (!paymentMethod) {
+      return res.status(400).json({ error: 'Choose cash or pay online' });
+    }
 
     let preferredVehicle = null;
     if (preferredHireVehicleId != null) {
@@ -576,6 +661,15 @@ router.post('/requests', requireAuth, async (req, res) => {
 
     const resolvedCategory = category
       || (preferredVehicle?.category ? String(preferredVehicle.category).toLowerCase() : null);
+    const hireCommissionSettings = await getHireCommissionSettings();
+    const resolvedTripType = resolveHireTripType({
+      tripType: req.body?.tripType,
+      distanceKm: estimatedDistanceKm,
+      intercityDistanceKm: hireCommissionSettings.intercityDistanceKm,
+    });
+    const resolvedDistanceKm = Number.isFinite(estimatedDistanceKm) && estimatedDistanceKm > 0
+      ? Math.round(estimatedDistanceKm * 100) / 100
+      : null;
 
     const publicId = createHirePublicId('TH');
     const fareEstimate = estimateHireFare({
@@ -586,15 +680,17 @@ router.post('/requests', requireAuth, async (req, res) => {
     });
     const result = await query(
       `INSERT INTO hire_requests (
-         public_id, passenger_user_id, category, title, pickup_label, pickup_lat, pickup_lng,
-         dropoff_label, dropoff_lat, dropoff_lng, start_at, end_at, passenger_count,
-         recommended_fare_min, recommended_fare_max, passenger_offer_amount, fare_currency,
-         notes, preferred_hire_vehicle_id, status
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+         public_id, passenger_user_id, category, trip_type, estimated_distance_km, title,
+         pickup_label, pickup_lat, pickup_lng, dropoff_label, dropoff_lat, dropoff_lng,
+         start_at, end_at, passenger_count, recommended_fare_min, recommended_fare_max,
+         passenger_offer_amount, fare_currency, payment_method, notes, preferred_hire_vehicle_id, status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       [
         publicId,
         req.userId,
         resolvedCategory,
+        resolvedTripType,
+        resolvedDistanceKm,
         title,
         pickupLabel,
         Number.isFinite(pickupLat) ? pickupLat : null,
@@ -609,6 +705,7 @@ router.post('/requests', requireAuth, async (req, res) => {
         fareEstimate.max,
         passengerOfferAmount,
         fareCurrency || fareEstimate.currency,
+        paymentMethod,
         notes,
         preferredVehicle ? preferredVehicle.id : null,
       ]
@@ -664,9 +761,70 @@ router.get('/requests/:id', requireAuth, async (req, res) => {
       [requestId]
     );
 
+    const [bookingRow] = await query(
+      `SELECT hb.*,
+              hr.public_id AS request_public_id,
+              hr.title AS request_title,
+              hr.pickup_label,
+              hr.pickup_lat,
+              hr.pickup_lng,
+              hr.dropoff_label,
+              hr.dropoff_lat,
+              hr.dropoff_lng,
+              hr.start_at,
+              hr.payment_method,
+              hr.notes,
+              hv.title AS vehicle_title,
+              hv.category AS vehicle_category,
+              hv.make AS vehicle_make,
+              hv.model AS vehicle_model,
+              hv.number_plate AS vehicle_number_plate,
+              hv.photo_urls AS vehicle_photo_urls
+       FROM hire_bookings hb
+       INNER JOIN hire_requests hr ON hr.id = hb.hire_request_id
+       INNER JOIN hire_vehicles hv ON hv.id = hb.hire_vehicle_id
+       WHERE hb.hire_request_id = ?
+       ORDER BY hb.id DESC
+       LIMIT 1`,
+      [requestId]
+    );
+
+    let passenger = null;
+    if (bookingRow && (isOwner || bookingRow.driver_user_id === req.userId)) {
+      const [passengerRow] = await query(
+        `SELECT first_name, last_name, phone_number
+         FROM users
+         WHERE clerk_user_id = ?
+         LIMIT 1`,
+        [row.passenger_user_id]
+      );
+      passenger = {
+        name: [passengerRow?.first_name, passengerRow?.last_name].filter(Boolean).join(' ').trim() || 'Passenger',
+        phone: passengerRow?.phone_number || null,
+      };
+    }
+
+    const booking = shapeHireBooking(bookingRow);
+    const driver = booking?.driverUserId ? await loadHireDriverSnapshot(booking.driverUserId) : null;
+    if (driver && booking?.vehicle) {
+      driver.vehicle = {
+        make: booking.vehicle.make || driver.vehicle?.make || null,
+        model: booking.vehicle.model || booking.vehicle.title || driver.vehicle?.model || null,
+        numberPlate: booking.vehicle.numberPlate || driver.vehicle?.numberPlate || null,
+        photoUrl: booking.vehicle.photoUrls?.[0] || driver.vehicle?.photoUrl || null,
+        title: booking.vehicle.title || null,
+      };
+    }
+
     return res.json({
       request: shapeHireRequest(row),
       quotes: quotes.map(shapeHireQuote),
+      ...buildHireTrackingPayload({
+        request: shapeHireRequest(row),
+        booking,
+        passenger,
+        driver,
+      }),
     });
   } catch (err) {
     console.error('GET /api/hire/requests/:id', err);
@@ -965,6 +1123,11 @@ router.post('/requests/:id/accept-passenger-offer', requireAuth, async (req, res
     const shapedBooking = shapeHireBooking(bookingResult.booking);
     const currency = bookingResult.booking.currency || 'USD';
     const amount = Number(bookingResult.booking.amount || 0).toFixed(2);
+    const acceptedDriver = await loadHireDriverSnapshot(bookingResult.booking.driver_user_id);
+    emitHireBookingLive(shapedBooking, {
+      driverCoordinate: acceptedDriver?.coordinate || null,
+      driverLocationUpdatedAt: acceptedDriver?.lastSeenAt || new Date().toISOString(),
+    });
     notifyAboutHireBooking({
       request: bookingResult.request,
       booking: bookingResult.booking,
@@ -1064,6 +1227,11 @@ router.patch('/quotes/:id/accept', requireAuth, async (req, res) => {
     const currency = bookingResult.booking.currency || 'USD';
     const amount = Number(bookingResult.booking.amount || 0).toFixed(2);
     const jobLabel = bookingResult.quote.request_title || bookingResult.quote.request_public_id || 'hire job';
+    const acceptedDriver = await loadHireDriverSnapshot(bookingResult.booking.driver_user_id);
+    emitHireBookingLive(shapedBooking, {
+      driverCoordinate: acceptedDriver?.coordinate || null,
+      driverLocationUpdatedAt: acceptedDriver?.lastSeenAt || new Date().toISOString(),
+    });
     notifyAboutHireBooking({
       request: {
         id: bookingResult.quote.hire_request_id,
@@ -1092,9 +1260,16 @@ router.get('/bookings', requireAuth, async (req, res) => {
     const rows = await query(
       `SELECT hb.*,
               hr.public_id AS request_public_id,
+              hr.title AS request_title,
               hr.pickup_label,
+              hr.pickup_lat,
+              hr.pickup_lng,
               hr.dropoff_label,
+              hr.dropoff_lat,
+              hr.dropoff_lng,
               hr.start_at,
+              hr.payment_method,
+              hr.notes,
               hv.title AS vehicle_title,
               hv.category AS vehicle_category,
               hv.photo_urls AS vehicle_photo_urls
@@ -1117,7 +1292,7 @@ router.patch('/bookings/:id/status', requireAuth, async (req, res) => {
   try {
     const bookingId = Number(req.params.id);
     const nextStatus = String(req.body?.status || '').trim().toLowerCase();
-    if (!['in_progress', 'completed', 'cancelled'].includes(nextStatus)) {
+    if (!['driver_arrived', 'in_progress', 'completed', 'cancelled'].includes(nextStatus)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
@@ -1127,23 +1302,116 @@ router.patch('/bookings/:id/status', requireAuth, async (req, res) => {
     const isDriver = booking.driver_user_id === req.userId;
     const isPassenger = booking.passenger_user_id === req.userId;
     if (!isDriver && !isPassenger) return res.status(403).json({ error: 'Not allowed' });
-    if (nextStatus === 'in_progress' && !isDriver) {
-      return res.status(403).json({ error: 'Only the driver can start the hire' });
+    if (['driver_arrived', 'in_progress', 'completed'].includes(nextStatus) && !isDriver) {
+      return res.status(403).json({ error: 'Only the driver can update this hire trip' });
     }
-    if (nextStatus === 'completed' && !isDriver) {
-      return res.status(403).json({ error: 'Only the driver can complete the hire' });
+
+    const currentStatus = String(booking.status || '').toLowerCase();
+    if (['completed', 'cancelled'].includes(currentStatus)) {
+      return res.status(409).json({ error: 'This hire trip is already finished' });
+    }
+    const allowedTransitions = {
+      confirmed: ['driver_arrived', 'cancelled'],
+      driver_arrived: ['in_progress', 'cancelled'],
+      in_progress: ['completed', 'cancelled'],
+    };
+    if (!allowedTransitions[currentStatus]?.includes(nextStatus)) {
+      return res.status(400).json({ error: 'This hire trip cannot move to that status yet' });
     }
 
     const sets = ['status = ?'];
     const params = [nextStatus];
+    if (nextStatus === 'driver_arrived') sets.push('arrived_at = CURRENT_TIMESTAMP');
     if (nextStatus === 'in_progress') sets.push('started_at = CURRENT_TIMESTAMP');
     if (nextStatus === 'completed') sets.push('completed_at = CURRENT_TIMESTAMP');
     if (nextStatus === 'cancelled') sets.push('cancelled_at = CURRENT_TIMESTAMP');
     params.push(bookingId);
 
     await query(`UPDATE hire_bookings SET ${sets.join(', ')} WHERE id = ?`, params);
+    if (nextStatus === 'cancelled') {
+      await query(
+        `UPDATE hire_requests SET status = 'cancelled' WHERE id = ? AND status = 'booked'`,
+        [booking.hire_request_id]
+      );
+    }
     const [row] = await query(`SELECT * FROM hire_bookings WHERE id = ? LIMIT 1`, [bookingId]);
-    return res.json({ booking: shapeHireBooking(row) });
+
+    let commission = null;
+    if (nextStatus === 'completed') {
+      try {
+        const [hireRow] = await query(
+          `SELECT hb.amount,
+                  hb.expenses_amount,
+                  hb.driver_user_id,
+                  hb.passenger_user_id,
+                  hb.hire_request_id,
+                  hr.category AS request_category,
+                  hr.trip_type,
+                  hr.estimated_distance_km,
+                  hv.category AS vehicle_category,
+                  TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) AS passenger_name
+           FROM hire_bookings hb
+           INNER JOIN hire_requests hr ON hr.id = hb.hire_request_id
+           INNER JOIN hire_vehicles hv ON hv.id = hb.hire_vehicle_id
+           LEFT JOIN users u ON BINARY u.clerk_user_id = BINARY hb.passenger_user_id
+           WHERE hb.id = ?
+           LIMIT 1`,
+          [bookingId]
+        );
+        if (hireRow) {
+          commission = await deductCommissionForCompletedHire({
+            driverUserId: hireRow.driver_user_id,
+            hireBookingId: bookingId,
+            hireRequestId: hireRow.hire_request_id,
+            transportAmount: hireRow.amount,
+            expensesAmount: hireRow.expenses_amount,
+            category: hireRow.vehicle_category || hireRow.request_category,
+            tripType: hireRow.trip_type,
+            distanceKm: hireRow.estimated_distance_km,
+            passengerUserId: hireRow.passenger_user_id,
+            passengerName: hireRow.passenger_name ? String(hireRow.passenger_name).trim() || null : null,
+          });
+        }
+      } catch (commissionError) {
+        console.error('PATCH /api/hire/bookings/:id/status commission', commissionError);
+        commission = {
+          charged: false,
+          skipped: true,
+          reason: 'commission_failed',
+          commissionAmount: 0,
+        };
+      }
+    }
+
+    const shapedBooking = shapeHireBooking(row);
+    const [requestRow] = await query(`SELECT * FROM hire_requests WHERE id = ? LIMIT 1`, [row.hire_request_id]);
+    const driver = await loadHireDriverSnapshot(row.driver_user_id);
+    emitHireBookingLive(shapedBooking, {
+      driverCoordinate: driver?.coordinate || null,
+      driverLocationUpdatedAt: driver?.lastSeenAt || new Date().toISOString(),
+    });
+
+    return res.json({
+      ...buildHireTrackingPayload({
+        request: shapeHireRequest(requestRow),
+        booking: shapedBooking,
+        passenger: null,
+        driver,
+      }),
+      booking: shapedBooking,
+      commission: commission
+        ? {
+            charged: !!commission.charged,
+            alreadyCharged: !!commission.alreadyCharged,
+            skipped: !!commission.skipped,
+            reason: commission.reason || null,
+            commissionAmount: Number(commission.commissionAmount || 0),
+            commissionRatePercent: Number(commission.commissionRatePercent || 0),
+            band: commission.preview?.band || null,
+            operatorReceives: commission.preview?.operatorReceives ?? null,
+          }
+        : undefined,
+    });
   } catch (err) {
     console.error('PATCH /api/hire/bookings/:id/status', err);
     return res.status(500).json({ error: 'Server error' });
