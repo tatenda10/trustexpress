@@ -134,42 +134,43 @@ const DriverAccountScreen = ({ navigation, route }) => {
     }
   }, [contextDriverStatus]);
 
-  useEffect(() => {
-    let cancelled = false;
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
 
-    const loadRatingSummary = async () => {
-      try {
-        const token = await getTokenRef.current();
-        if (!token) return;
-        const res = await fetch(getApiUrl('/api/drivers/history?page=1&limit=1'), {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) return;
-        const summary = data?.summary || {};
-        setAverageRating(
-          summary.averageRating === null || summary.averageRating === undefined
-            ? null
-            : Number(summary.averageRating)
-        );
-        setRatingCount(Number(summary.ratingCount || 0));
-        setCompletedRides(Number(summary.completedRides || 0));
-      } catch {
-        if (cancelled) return;
-        setAverageRating(null);
-        setRatingCount(0);
-        setCompletedRides(0);
-      }
-    };
+      const loadRatingSummary = async () => {
+        try {
+          const token = await getTokenRef.current();
+          if (!token) return;
+          const res = await fetch(getApiUrl('/api/drivers/history?page=1&limit=1'), {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || cancelled) return;
+          const summary = data?.summary || {};
+          setAverageRating(
+            summary.averageRating === null || summary.averageRating === undefined
+              ? null
+              : Number(summary.averageRating)
+          );
+          setRatingCount(Number(summary.ratingCount || 0));
+          setCompletedRides(Number(summary.completedRides || 0));
+        } catch {
+          if (cancelled) return;
+          setAverageRating(null);
+          setRatingCount(0);
+          setCompletedRides(0);
+        }
+      };
 
-    loadRatingSummary();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      loadRatingSummary();
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
 
   const handleDeleteAccount = () => {
     Alert.alert(
@@ -376,9 +377,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
         : vehicle.status === 'approved'
           ? approvedTierName
             ? `Verified · ${approvedTierName}`
-            : truckDriver
-              ? 'Verified · Tap to change truck'
-              : 'Verified · Tap to change car'
+            : 'Verified'
           : vehicle.status === 'pending'
             ? 'Under review'
             : 'Rejected',
@@ -412,10 +411,10 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const supportRows = [
     {
       key: 'smile-cash',
-      title: 'Smile Cash wallet',
+      title: 'Online wallet',
       subtitle: driverStatus?.driverProfile?.smileCashStatus === 'active'
-        ? `Active: ${driverStatus.driverProfile.smileCashMobile}`
-        : 'Open a Smile Cash account for Trust Express payouts',
+        ? driverStatus.driverProfile.smileCashMobile
+        : null,
       icon: 'wallet-outline',
       onPress: () => navigation.navigate('DriverSmileCash'),
       danger: false,
@@ -423,7 +422,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'hire-vehicles',
       title: 'Hire vehicles',
-      subtitle: 'List vehicles passengers can hire from you',
       icon: 'bus-outline',
       onPress: () => navigation.navigate('DriverHireVehicles'),
       danger: false,
@@ -431,15 +429,28 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'income',
       title: 'Income',
-      subtitle: 'Track earnings, goals and trip history',
       icon: 'stats-chart-outline',
       onPress: () => navigation.navigate('DriverIncomeStack'),
       danger: false,
     },
     {
+      key: 'ride-history',
+      title: 'Ride history',
+      icon: 'time-outline',
+      onPress: () => navigation.navigate('DriverRideHistory'),
+      danger: false,
+    },
+    {
+      key: 'discounts',
+      title: 'Discounts',
+      icon: 'cash-outline',
+      onPress: () => navigation.navigate('DriverDiscounts'),
+      danger: false,
+    },
+    {
       key: 'reviews',
       title: 'Reviews',
-      subtitle: ratingCount > 0 ? `${ratingCount} passenger review${ratingCount === 1 ? '' : 's'}` : 'See what passengers said about you',
+      subtitle: ratingCount > 0 ? `${ratingCount} review${ratingCount === 1 ? '' : 's'}` : null,
       icon: 'star-outline',
       onPress: () => navigation.navigate('DriverReviews'),
       danger: false,
@@ -447,7 +458,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'support',
       title: 'Support',
-      subtitle: 'Chat with the support team',
       icon: 'headset-outline',
       onPress: () => navigation.navigate('DriverSupportChat'),
       danger: false,
@@ -455,7 +465,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'privacy',
       title: 'Privacy policy',
-      subtitle: 'See how TrustCars handles your data',
       icon: 'shield-outline',
       onPress: () => navigation.navigate('DriverLegalDocument', { document: 'privacy' }),
       danger: false,
@@ -463,7 +472,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'terms',
       title: 'Terms of use',
-      subtitle: 'Review the rules for using the driver app',
       icon: 'document-text-outline',
       onPress: () => navigation.navigate('DriverLegalDocument', { document: 'terms' }),
       danger: false,
@@ -471,7 +479,6 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'delete',
       title: 'Delete account',
-      subtitle: 'Permanently remove your driver account',
       icon: 'trash-outline',
       onPress: handleDeleteAccount,
       danger: true,
@@ -482,21 +489,21 @@ const DriverAccountScreen = ({ navigation, route }) => {
     {
       key: 'police',
       title: 'Police emergency',
-      subtitle: 'Call 995 for urgent police assistance',
+      subtitle: '995',
       icon: 'shield-checkmark-outline',
       onPress: () => handleEmergencyCall('Police emergency', '995'),
     },
     {
       key: 'ambulance',
       title: 'Ambulance',
-      subtitle: 'Call 994 for medical emergency help',
+      subtitle: '994',
       icon: 'medkit-outline',
       onPress: () => handleEmergencyCall('Ambulance', '994'),
     },
     {
       key: 'fire',
       title: 'Fire brigade',
-      subtitle: 'Call 993 for fire emergencies',
+      subtitle: '993',
       icon: 'flame-outline',
       onPress: () => handleEmergencyCall('Fire brigade', '993'),
     },
@@ -659,9 +666,18 @@ const DriverAccountScreen = ({ navigation, route }) => {
         </View>
 
         <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Captain rewards</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white px-5 py-5">
+        <TouchableOpacity
+          className="mb-5 overflow-hidden rounded-[28px] bg-white px-5 py-5"
+          activeOpacity={0.75}
+          disabled={
+            (loadingCaptainStatus && !captainStatus)
+            || (captainStatusError && !captainStatus)
+            || captainStatus?.enabled === false
+          }
+          onPress={() => navigation.navigate('DriverCaptainRewards')}
+        >
           {loadingCaptainStatus && !captainStatus ? (
-            <View className="items-center py-4">
+            <View className="items-center py-2">
               <ActivityIndicator size="small" color={PRIMARY_BLUE} />
             </View>
           ) : captainStatusError && !captainStatus ? (
@@ -671,63 +687,21 @@ const DriverAccountScreen = ({ navigation, route }) => {
               {captainStatus?.unavailableMessage || 'Captain rewards are not active right now.'}
             </Text>
           ) : (
-            <>
-              <View className="flex-row items-center justify-between">
-                <View>
-                  <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-gray-500">Current tier</Text>
-                  <Text className="mt-1 text-lg font-bold text-gray-900">{captainStatus?.tierName || 'No tier yet'}</Text>
-                </View>
-                <View
-                  className="rounded-full px-3 py-1.5"
-                  style={{ backgroundColor: `${captainStatus?.badgeColor || PRIMARY_BLUE}22` }}
-                >
-                  <Text className="text-xs font-semibold" style={{ color: captainStatus?.badgeColor || PRIMARY_BLUE }}>
-                    {captainStatus?.rewardStatusLabel || 'In Progress'}
-                  </Text>
-                </View>
+            <View className="flex-row items-center">
+              <View
+                className="h-11 w-11 items-center justify-center rounded-full"
+                style={{ backgroundColor: `${captainStatus?.badgeColor || PRIMARY_BLUE}22` }}
+              >
+                <Ionicons name="ribbon-outline" size={22} color={captainStatus?.badgeColor || PRIMARY_BLUE} />
               </View>
-              <View className="mt-4">
-                <View className="mb-2 flex-row items-center justify-between">
-                  <Text className="text-sm text-gray-600">
-                    {captainStatus?.qualifyingRides || 0} qualifying ride{(captainStatus?.qualifyingRides || 0) === 1 ? '' : 's'} this cycle
-                  </Text>
-                  <Text className="text-sm font-semibold text-gray-800">
-                    {captainStatus?.cycle?.daysRemaining ?? '—'} day{(captainStatus?.cycle?.daysRemaining || 0) === 1 ? '' : 's'} left
-                  </Text>
-                </View>
-                <View className="h-2 overflow-hidden rounded-full bg-gray-100">
-                  <View
-                    className="h-full rounded-full"
-                    style={{
-                      width: `${Math.min(100, Number(captainStatus?.progressPercent || 0))}%`,
-                      backgroundColor: captainStatus?.badgeColor || PRIMARY_BLUE,
-                    }}
-                  />
-                </View>
-                {captainStatus?.nextTierName ? (
-                  <Text className="mt-2 text-xs text-gray-500">
-                    {Number(captainStatus?.ridesToNextTier || 0)} more ride{(Number(captainStatus?.ridesToNextTier || 0) === 1) ? '' : 's'} to reach {captainStatus.nextTierName}
-                  </Text>
-                ) : null}
+              <View className="ml-3 flex-1">
+                <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-gray-500">Current tier</Text>
+                <Text className="mt-0.5 text-[17px] font-bold text-gray-900">{captainStatus?.tierName || 'No tier yet'}</Text>
               </View>
-              <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-[#f8fafc] px-4 py-3">
-                <Text className="text-sm text-gray-600">Cycle reward (USD promo float)</Text>
-                <Text className="text-base font-bold text-gray-900">
-                  ${Number(captainStatus?.currentRewardUsd || 0).toFixed(2)}
-                </Text>
-              </View>
-              {captainStatus?.eligible === false ? (
-                <Text className="mt-3 text-xs text-amber-700">
-                  Complete verification and stay in good standing to earn Captain rewards.
-                </Text>
-              ) : (
-                <Text className="mt-3 text-xs text-gray-500">
-                  Rewards credit as promotional USD float at cycle end and apply to service fees first.
-                </Text>
-              )}
-            </>
+              <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            </View>
           )}
-        </View>
+        </TouchableOpacity>
 
         <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Verification</Text>
         <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
@@ -818,7 +792,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
               </View>
               <View className="ml-3 flex-1 pr-3">
                 <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
+                {row.subtitle ? (
+                  <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
+                ) : null}
               </View>
               <Ionicons name="call-outline" size={20} color="#9ca3af" />
               {index < safetyRows.length - 1 ? (
@@ -843,7 +819,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
               </View>
               <View className="ml-3 flex-1 pr-3">
                 <Text className={`text-[15px] font-medium ${row.danger ? 'text-red-600' : 'text-gray-900'}`}>{row.title}</Text>
-                <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
+                {row.subtitle ? (
+                  <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
+                ) : null}
               </View>
               {row.danger && deleting ? (
                 <ActivityIndicator size="small" color="#dc2626" />

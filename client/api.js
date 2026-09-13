@@ -223,6 +223,10 @@ export async function listHireRequests(token) {
   return apiFetch('/api/hire/requests', {}, token);
 }
 
+export async function getHireVehicleTypes(token) {
+  return apiFetch('/api/hire/vehicle-types', {}, token);
+}
+
 export async function getHireFareEstimate(token, params = {}) {
   const query = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -325,6 +329,7 @@ export async function getDriverRideHistory(token, options = {}) {
   const params = new URLSearchParams();
   if (options.page) params.set('page', String(options.page));
   if (options.limit) params.set('limit', String(options.limit));
+  if (options.reviewsOnly) params.set('reviewsOnly', '1');
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return apiFetch(`/api/drivers/history${suffix}`, {}, token);
 }

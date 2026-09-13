@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, FlatList, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, FlatList, TextInput, Keyboard, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/clerk-expo';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { connectRealtime } from '../../realtime';
 import { getRideMessages, sendRideMessage } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -34,11 +34,9 @@ function MessageBubble({ item, isMine }) {
 
 export default function RideChatScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const { user } = useUser();
   const getTokenRef = useRef(getToken);
-  const flatListRef = useRef(null);
   const { rideRequestId, chatTitle, role = 'passenger' } = route.params || {};
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -46,11 +44,22 @@ export default function RideChatScreen({ navigation, route }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
-  const composerBottomInset = Math.max(insets.bottom + tabBarHeight - 8, 18);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => setKeyboardOpen(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardOpen(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const title = chatTitle || (role === 'driver' ? 'Passenger chat' : 'Driver chat');
 
@@ -126,6 +135,8 @@ export default function RideChatScreen({ navigation, route }) {
     () => [...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     [messages],
   );
+  const listMessages = useMemo(() => [...sortedMessages].reverse(), [sortedMessages]);
+  const composerPaddingBottom = keyboardOpen ? 10 : Math.max(insets.bottom, 12);
 
   const handleSend = async () => {
     const message = String(draft || '').trim();
@@ -154,28 +165,24 @@ export default function RideChatScreen({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-      >
-        <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
-          <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
-            <Ionicons name="arrow-back" size={20} color="#111827" />
-          </TouchableOpacity>
-          <View className="flex-1">
-            <Text className="text-[18px] font-bold text-gray-900">{title}</Text>
-            <Text className="text-sm text-gray-500">Ride messages</Text>
-          </View>
+    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-white">
+      <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
+        <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
+          <Ionicons name="arrow-back" size={20} color="#111827" />
+        </TouchableOpacity>
+        <View className="flex-1">
+          <Text className="text-[18px] font-bold text-gray-900">{title}</Text>
+          <Text className="text-sm text-gray-500">Ride messages</Text>
         </View>
+      </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" keyboardVerticalOffset={0}>
         {loading ? (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="large" color={PRIMARY_BLUE} />
           </View>
         ) : (
-          <>
+          <View style={{ flex: 1 }}>
             {!!error && (
               <View className="mx-5 mt-4 rounded-xl bg-red-50 px-4 py-3">
                 <Text className="text-sm text-red-700">{error}</Text>
@@ -183,17 +190,21 @@ export default function RideChatScreen({ navigation, route }) {
             )}
 
             <FlatList
-              ref={flatListRef}
-              data={sortedMessages}
+              style={{ flex: 1 }}
+              inverted={listMessages.length > 0}
+              data={listMessages}
               keyExtractor={(item) => String(item.id)}
               renderItem={({ item }) => <MessageBubble item={item} isMine={String(item.senderUserId) === String(user?.id)} />}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 20, paddingBottom: composerBottomInset + 12 }}
+              contentContainerStyle={{
+                paddingHorizontal: 20,
+                paddingTop: 12,
+                paddingBottom: 16,
+                flexGrow: listMessages.length ? 0 : 1,
+              }}
               onRefresh={() => loadMessages(true)}
               refreshing={refreshing}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd?.({ animated: true })}
-              onLayout={() => flatListRef.current?.scrollToEnd?.({ animated: true })}
               ListEmptyComponent={
                 <View className="flex-1 items-center justify-center py-24">
                   <Ionicons name="chatbubble-ellipses-outline" size={36} color="#9ca3af" />
@@ -206,8 +217,8 @@ export default function RideChatScreen({ navigation, route }) {
             />
 
             <View
-              className="border-t border-gray-100 px-4 pt-3"
-              style={{ paddingBottom: composerBottomInset }}
+              className="border-t border-gray-100 bg-white px-4 pt-3"
+              style={{ paddingBottom: composerPaddingBottom }}
             >
               <View className="flex-row items-end rounded-2xl border border-gray-200 bg-white px-3 py-2">
                 <TextInput
@@ -233,7 +244,7 @@ export default function RideChatScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
             </View>
-          </>
+          </View>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>

@@ -246,6 +246,11 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
           <Text className="mt-1 text-sm text-gray-600">
             {request?.startAt ? new Date(request.startAt).toLocaleString() : ''}
           </Text>
+          {request?.recommendedFareMin != null && request?.recommendedFareMax != null ? (
+            <Text className="mt-2 text-sm text-gray-600">
+              Suggested range: {request?.fareCurrency || 'USD'} {Number(request.recommendedFareMin).toFixed(2)} – {Number(request.recommendedFareMax).toFixed(2)}
+            </Text>
+          ) : null}
           {request?.passengerOfferAmount ? (
             <Text className="mt-2 text-sm font-semibold text-gray-800">
               Your offer: {request?.fareCurrency || 'USD'} {Number(request.passengerOfferAmount).toFixed(2)}
@@ -268,9 +273,9 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
         </View>
 
         <View className="mt-3 rounded-[24px] bg-white px-4 py-4">
-          <Text className="text-xs font-bold uppercase tracking-wide text-gray-400">Description</Text>
+          <Text className="text-xs font-bold uppercase tracking-wide text-gray-400">Job details</Text>
           <Text className="mt-2 text-sm leading-5 text-gray-800">
-            {request?.notes?.trim() || 'No specs or notes added.'}
+            {request?.notes?.trim() || 'No job details selected.'}
           </Text>
         </View>
 
@@ -325,9 +330,9 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
           <TouchableOpacity
             onPress={handleCancel}
             disabled={!!busyId}
-            className="mt-4 mb-2 h-11 items-center justify-center rounded-2xl bg-rose-50"
+            className="mt-4 mb-2 h-16 items-center justify-center rounded-2xl bg-rose-50"
           >
-            <Text className="font-semibold text-rose-600">Cancel request</Text>
+            <Text className="text-base font-bold text-rose-600">Cancel request</Text>
           </TouchableOpacity>
         ) : null}
       </ScrollView>

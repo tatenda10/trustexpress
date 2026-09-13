@@ -86,6 +86,13 @@ function vehicleRouteParams(target, driverMe, fallbackKind = null) {
   return { driverStatus: status };
 }
 
+function isIsoDate(value) {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
+  const date = new Date(`${raw}T00:00:00`);
+  return !Number.isNaN(date.getTime());
+}
+
 function formatUploadErrorMessage(error, fallback) {
   const apiMessage = String(
     error?.response?.data?.error ||
@@ -165,6 +172,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const [driverLicenceNumber, setDriverLicenceNumber] = useState(
     () => String(profile?.driverLicenceNumber || '').trim()
   );
+  const [dateOfBirth, setDateOfBirth] = useState(
+    () => String(profile?.dateOfBirth || '').trim()
+  );
+  const [driverLicenceExpiresAt, setDriverLicenceExpiresAt] = useState(
+    () => String(profile?.driverLicenceExpiresAt || '').trim()
+  );
   const [loading, setLoading] = useState(false);
   const [lockedSelfieDocKey, setLockedSelfieDocKey] = useState(null);
   const [capturingLockedSelfie, setCapturingLockedSelfie] = useState(false);
@@ -213,9 +226,13 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   useEffect(() => {
     const nextNationalId = String(profile?.nationalIdNumber || '').trim();
     const nextLicence = String(profile?.driverLicenceNumber || '').trim();
+    const nextDob = String(profile?.dateOfBirth || '').trim();
+    const nextExpiry = String(profile?.driverLicenceExpiresAt || '').trim();
     if (nextNationalId) setNationalIdNumber((prev) => prev || nextNationalId);
     if (nextLicence) setDriverLicenceNumber((prev) => prev || nextLicence);
-  }, [profile?.nationalIdNumber, profile?.driverLicenceNumber]);
+    if (nextDob) setDateOfBirth((prev) => prev || nextDob);
+    if (nextExpiry) setDriverLicenceExpiresAt((prev) => prev || nextExpiry);
+  }, [profile?.nationalIdNumber, profile?.driverLicenceNumber, profile?.dateOfBirth, profile?.driverLicenceExpiresAt]);
 
   // Keep local state in sync with documents already saved on the server ("Already uploaded").
   useEffect(() => {
@@ -426,6 +443,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     } else if (!trimmedDriverLicenceNumber) {
       Alert.alert('Licence number required', 'Enter the driver licence number exactly as shown on your licence.');
       return;
+    } else if (!isIsoDate(dateOfBirth)) {
+      Alert.alert('Date of birth required', 'Enter your date of birth as YYYY-MM-DD.');
+      return;
+    } else if (!isIsoDate(driverLicenceExpiresAt)) {
+      Alert.alert('Licence expiration required', 'Enter the licence expiration date as YYYY-MM-DD.');
+      return;
     }
 
     setLoading(true);
@@ -466,6 +489,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               selfieWithIdCardUrl,
               nationalIdNumber: trimmedNationalIdNumber,
               driverLicenceNumber: trimmedDriverLicenceNumber,
+              dateOfBirth: String(dateOfBirth || '').trim(),
+              driverLicenceExpiresAt: String(driverLicenceExpiresAt || '').trim(),
               driverKind,
             },
             { suppressAuthErrorHandler: true },
@@ -734,8 +759,35 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               value={driverLicenceNumber}
               onChangeText={setDriverLicenceNumber}
             />
-            <Text className="mb-2 text-xs text-gray-500">
+            <Text className="mb-4 text-xs text-gray-500">
               These numbers must match your documents and cannot be reused on another account.
+            </Text>
+            <Text className="mb-2 text-sm font-medium text-gray-700">
+              Date of birth <Text className="text-red-500">*</Text>
+            </Text>
+            <TextInput
+              className="mb-4 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={dateOfBirth}
+              onChangeText={setDateOfBirth}
+            />
+            <Text className="mb-2 text-sm font-medium text-gray-700">
+              Licence expiration <Text className="text-red-500">*</Text>
+            </Text>
+            <TextInput
+              className="mb-1 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={driverLicenceExpiresAt}
+              onChangeText={setDriverLicenceExpiresAt}
+            />
+            <Text className="mb-2 text-xs text-gray-500">
+              Use the expiry date printed on your driver licence.
             </Text>
           </View>
         ) : null}

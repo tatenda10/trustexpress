@@ -417,7 +417,8 @@ export default function DriverDetailsPage() {
           <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
           <Field label="Smile Cash Mobile" value={driver.profile?.smileCashMobile || '-'} />
           <Field label="Smile Cash Status" value={driver.profile?.smileCashStatus || '-'} />
-          <Field label="Date of Birth" value={driver.profile?.dateOfBirth || '-'} />
+          <Field label="Date of Birth" value={driver.profile?.dateOfBirth || driver?.profileDocs?.dateOfBirth || '-'} />
+          <Field label="Licence Expiration" value={driver?.profileDocs?.driverLicenceExpiresAt || '-'} />
           <Field label="Gender" value={driver.profile?.gender || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
           <Field label="National ID Number" value={driver?.profileDocs?.nationalIdNumber || '-'} />

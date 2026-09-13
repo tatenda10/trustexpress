@@ -13,9 +13,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { browseHireFleet, listHireRequests, resolveUploadedMediaUrl } from '../../api';
+import { browseHireFleet, getHireVehicleTypes, listHireRequests, resolveUploadedMediaUrl } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { HIRE_CATEGORY_FILTERS, isLiveHireBooking } from '../../constants/hire';
+import { HIRE_CATEGORY_FILTERS, hireTypesToFilters, isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
 
 export default function PassengerHireHomeScreen({ navigation, route }) {
@@ -35,6 +35,23 @@ export default function PassengerHireHomeScreen({ navigation, route }) {
   const requestIdRef = useRef(0);
   const searchTimerRef = useRef(null);
   const lastRefreshAtRef = useRef(null);
+  const [categoryFilters, setCategoryFilters] = useState(HIRE_CATEGORY_FILTERS);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const token = await getTokenRef.current({ skipCache: true });
+        if (!token) return;
+        const data = await getHireVehicleTypes(token);
+        const nextFilters = hireTypesToFilters(data?.types);
+        if (active && nextFilters.length > 1) setCategoryFilters(nextFilters);
+      } catch {
+        /* keep fallback filters */
+      }
+    })();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const nextTab = route.params?.initialTab;
@@ -154,7 +171,7 @@ export default function PassengerHireHomeScreen({ navigation, route }) {
               ) : null}
             </View>
             <View className="mt-3 flex-row flex-wrap gap-2">
-              {HIRE_CATEGORY_FILTERS.map((item) => (
+              {categoryFilters.map((item) => (
                 <TouchableOpacity
                   key={item.value || 'all'}
                   onPress={() => {

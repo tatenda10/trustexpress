@@ -124,8 +124,19 @@ const DriverIncomeScreen = () => {
 
   return (
     <View className="flex-1 bg-[#f8fafc]">
-      <View className="border-b border-gray-100 bg-white px-5 pb-3" style={{ paddingTop: insets.top + 8 }}>
-        <Text className="text-center text-lg font-bold text-gray-900">Income</Text>
+      <View
+        className="flex-row items-center justify-between bg-[#f8fafc]"
+        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
+      >
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={() => navigation.goBack()}
+          className="h-10 w-10 items-center justify-center rounded-full bg-white"
+        >
+          <Ionicons name="chevron-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text className="text-[18px] font-bold text-gray-900">Income</Text>
+        <View className="h-10 w-10" />
       </View>
 
       {loading && !dashboard ? (
@@ -296,8 +307,7 @@ const DriverIncomeScreen = () => {
               <Ionicons name="clipboard-outline" size={20} color={PRIMARY_BLUE} />
             </View>
             <View className="ml-3 flex-1">
-              <Text className="text-base font-semibold text-gray-900">Trip history</Text>
-              <Text className="text-sm text-gray-500">All rides, receipts, and ratings</Text>
+              <Text className="text-base font-semibold text-gray-900">Ride history</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
           </TouchableOpacity>

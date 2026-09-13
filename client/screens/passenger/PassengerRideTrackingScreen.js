@@ -5,7 +5,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
-import { calculateDistanceKm, getHeadingAlongRoute } from '../../lib/mapVehicleHeading';
+import { calculateDistanceKm, getHeadingAlongRoute, normalizeCoordinate, normalizeCoordinates } from '../../lib/mapVehicleHeading';
 import * as Speech from 'expo-speech';
 import * as Location from 'expo-location';
 import * as ExpoLinking from 'expo-linking';
@@ -38,27 +38,6 @@ function mapRideStatusToStage(status) {
     default:
       return '';
   }
-}
-
-function toRadians(value) {
-  return (value * Math.PI) / 180;
-}
-
-function toDegrees(value) {
-  return (value * 180) / Math.PI;
-}
-
-function normalizeCoordinate(value) {
-  const latitude = Number(value?.latitude);
-  const longitude = Number(value?.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
-  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
-  return { latitude, longitude };
-}
-
-function normalizeCoordinates(values) {
-  if (!Array.isArray(values)) return [];
-  return values.map(normalizeCoordinate).filter(Boolean);
 }
 
 function findNearestRouteIndex(routeCoordinates, coordinate) {
@@ -113,18 +92,35 @@ function parseTimestampMs(value) {
 }
 
 function isValidCoordinate(value) {
-  return Number.isFinite(Number(value?.latitude)) && Number.isFinite(Number(value?.longitude));
+  return Boolean(normalizeCoordinate(value));
 }
 
-function buildTrackingRegion(driverCoordinate, pickupCoordinate, targetCoordinate, stage) {
-  const focusCoordinates = stage === 'on_trip'
-    ? [driverCoordinate, targetCoordinate]
-    : [driverCoordinate, pickupCoordinate];
-  const coordinates = focusCoordinates.filter(isValidCoordinate);
+function buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, targetCoordinate, stage) {
+  const driver = normalizeCoordinate(driverCoordinate);
+  const pickup = normalizeCoordinate(pickupCoordinate);
+  const dropoff = normalizeCoordinate(dropoffCoordinate);
+  const target = normalizeCoordinate(targetCoordinate);
+  const focusCoordinates = [];
+
+  if (driver) focusCoordinates.push(driver);
+  if (stage === 'on_trip') {
+    if (target) focusCoordinates.push(target);
+    else if (dropoff) focusCoordinates.push(dropoff);
+  } else if (pickup) {
+    focusCoordinates.push(pickup);
+  }
+  if (!driver && dropoff && !focusCoordinates.includes(dropoff)) {
+    focusCoordinates.push(dropoff);
+  }
+  if (focusCoordinates.length === 0) {
+    if (pickup) focusCoordinates.push(pickup);
+    if (dropoff && dropoff !== pickup) focusCoordinates.push(dropoff);
+  }
+
   // Math.min(...[]) is Infinity, which would make every field NaN and crash the native map.
-  if (coordinates.length === 0) return null;
-  const latitudes = coordinates.map((item) => Number(item.latitude));
-  const longitudes = coordinates.map((item) => Number(item.longitude));
+  if (focusCoordinates.length === 0) return null;
+  const latitudes = focusCoordinates.map((item) => item.latitude);
+  const longitudes = focusCoordinates.map((item) => item.longitude);
 
   return {
     latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
@@ -151,12 +147,15 @@ function normalizeVehicleImageUrl(url) {
 }
 
 async function fetchTrackingDirections(token, origin, destination, waypoints = []) {
-  if (!token || !origin || !destination) return null;
+  const safeOrigin = normalizeCoordinate(origin);
+  const safeDestination = normalizeCoordinate(destination);
+  const safeWaypoints = normalizeCoordinates(waypoints);
+  if (!token || !safeOrigin || !safeDestination) return null;
 
   const data = await getDirectionsRoute(token, {
-    origin,
-    destination,
-    waypoints,
+    origin: safeOrigin,
+    destination: safeDestination,
+    waypoints: safeWaypoints,
     cacheTtlSeconds: LIVE_DIRECTIONS_CACHE_TTL_SECONDS,
   });
   const route = data?.route || {};
@@ -265,18 +264,20 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     let requestId = 0;
 
     const preferFresherCoordinate = (currentCoordinate, nextCoordinate, nextSeenAt = null) => {
-      if (!nextCoordinate) return currentCoordinate || null;
-      if (!currentCoordinate) return nextCoordinate;
+      const current = normalizeCoordinate(currentCoordinate);
+      const next = normalizeCoordinate(nextCoordinate);
+      if (!next) return current;
+      if (!current) return next;
 
       const socketUpdatedAt = Number(lastDriverLocationAtRef.current || 0);
       const pollSeenAt = nextSeenAt ? new Date(nextSeenAt).getTime() : 0;
       // Keep a recent live socket fix unless the poll clearly has a newer timestamp.
       if (socketUpdatedAt > 0 && Date.now() - socketUpdatedAt < 10000) {
         if (!Number.isFinite(pollSeenAt) || pollSeenAt <= socketUpdatedAt) {
-          return currentCoordinate;
+          return current;
         }
       }
-      return nextCoordinate;
+      return next;
     };
 
     const loadStatus = async () => {
@@ -356,14 +357,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           const nextStatus = String(payload.status || '').toLowerCase();
           const isPickupConfirmation = nextStatus === 'passenger_confirmed';
           const nextStage = isPickupConfirmation ? '' : mapRideStatusToStage(nextStatus);
-          const nextDriverCoordinate = payload?.driverCoordinate &&
-            Number.isFinite(Number(payload.driverCoordinate.latitude)) &&
-            Number.isFinite(Number(payload.driverCoordinate.longitude))
-            ? {
-                latitude: Number(payload.driverCoordinate.latitude),
-                longitude: Number(payload.driverCoordinate.longitude),
-              }
-            : null;
+          const nextDriverCoordinate = normalizeCoordinate(payload?.driverCoordinate);
           const hasConfirmationUpdate = Boolean(payload?.confirmedAt);
           const hasSafetyPinUpdate = payload?.safetyPinVerified !== undefined
             || payload?.safetyPinAttempts !== undefined
@@ -436,8 +430,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     }
   }, [rideStatus?.status]);
 
-  const pickupCoordinate = rideStatus?.pickupCoordinate || initialPickupCoordinate;
-  const dropoffCoordinate = rideStatus?.dropoffCoordinate || initialDropoffCoordinate;
+  const pickupCoordinate = normalizeCoordinate(rideStatus?.pickupCoordinate || initialPickupCoordinate);
+  const dropoffCoordinate = normalizeCoordinate(rideStatus?.dropoffCoordinate || initialDropoffCoordinate);
   const pickupLabel = rideStatus?.pickupLabel || initialPickupLabel;
   const dropoffLabel = rideStatus?.dropoffLabel || initialDropoffLabel;
   const estimatedAmount = Number(rideStatus?.estimatedAmount || initialEstimatedAmount || 0);
@@ -462,8 +456,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const canPayWithSmilePay = Boolean(rideStatus?.canPayWithSmilePay) && paymentStatus !== 'paid' && paymentMethod !== 'cash';
   const canPayCash = Boolean(rideStatus?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash';
   const showPaymentCard = canChoosePayment || paymentStatus === 'paid' || paymentStatus === 'pending' || paymentMethod === 'cash';
-  const driverCoordinate = rideStatus?.driverCoordinate || driver?.coordinate || null;
-  const hasDriverCoordinate = !!driverCoordinate;
+  const driverCoordinate = normalizeCoordinate(rideStatus?.driverCoordinate || driver?.coordinate);
+  const hasDriverCoordinate = Boolean(driverCoordinate);
   const intermediateStops = Array.isArray(rideStatus?.intermediateStops)
     ? rideStatus.intermediateStops
     : Array.isArray(initialIntermediateStops)
@@ -475,9 +469,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const currentTargetLabel = rideStatus?.currentTargetLabel
     || currentIntermediateStop?.label
     || dropoffLabel;
-  const currentTargetCoordinate = rideStatus?.currentTargetCoordinate
+  const currentTargetCoordinate = normalizeCoordinate(
+    rideStatus?.currentTargetCoordinate
     || currentIntermediateStop?.coordinate
-    || dropoffCoordinate;
+    || dropoffCoordinate
+  );
   const activeTarget = stage === 'on_trip' ? currentTargetCoordinate : pickupCoordinate;
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
   const tipOptions = [1, 2, 5, 10];
@@ -524,7 +520,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [rideRequestId, stage]);
 
   useEffect(() => {
-    if (!driverCoordinate || !activeTarget || isCompleted) {
+    if (!hasDriverCoordinate || !activeTarget || isCompleted) {
       setRouteCoordinates([]);
       setRouteDistanceMeters(0);
       setRouteDurationSeconds(0);
@@ -569,7 +565,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
 
         setRouteCoordinates(Array.isArray(route?.coordinates) && route.coordinates.length > 1
-          ? route.coordinates
+          ? normalizeCoordinates(route.coordinates)
           : [driverCoordinate, activeTarget].filter(Boolean));
         setRouteDistanceMeters(route?.distanceMeters || 0);
         setRouteDurationSeconds(route?.durationSeconds || 0);
@@ -593,7 +589,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [activeTarget, driverCoordinate, isCompleted]);
+  }, [activeTarget, driverCoordinate, hasDriverCoordinate, isCompleted]);
 
   useEffect(() => {
     if (!pickupCoordinate || !dropoffCoordinate || isCompleted) {
@@ -612,12 +608,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           token,
           pickupCoordinate,
           dropoffCoordinate,
-          intermediateStops.map((stop) => stop.coordinate).filter(Boolean),
+          intermediateStops.map((stop) => normalizeCoordinate(stop?.coordinate)).filter(Boolean),
         );
         if (cancelled) return;
         setTripRouteCoordinates(
           Array.isArray(route?.coordinates) && route.coordinates.length > 1
-            ? route.coordinates
+            ? normalizeCoordinates(route.coordinates)
             : [pickupCoordinate, dropoffCoordinate].filter(Boolean)
         );
         setTripDistanceMeters(Number(route?.distanceMeters || 0));
@@ -669,17 +665,32 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return estimated > 0 ? estimated : 0;
   }, [rideStatus?.estimatedMinutes, tripDurationSeconds]);
   const hasRoadDistance = routeDistanceMeters > 0;
-  const liveEtaText = hasDriverCoordinate ? `${liveEtaMinutes} min` : 'Locating';
-  const liveDistanceText = hasDriverCoordinate ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Waiting for driver location';
+  const liveEtaText = hasDriverCoordinate ? `${liveEtaMinutes} min` : 'Finding driver';
+  const liveDistanceText = hasDriverCoordinate ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Finding driver';
+  const tripLineCoordinates = useMemo(() => {
+    const routed = normalizeCoordinates(tripRouteCoordinates);
+    if (routed.length > 1) return routed;
+    const points = [
+      pickupCoordinate,
+      ...intermediateStops.map((stop) => normalizeCoordinate(stop?.coordinate)),
+      dropoffCoordinate,
+    ].filter(Boolean);
+    return points.length > 1 ? points : [];
+  }, [dropoffCoordinate, intermediateStops, pickupCoordinate, tripRouteCoordinates]);
+  const liveRouteCoordinates = useMemo(() => {
+    const routed = normalizeCoordinates(routeCoordinates);
+    if (routed.length > 1) return routed;
+    if (driverCoordinate && activeTarget) return [driverCoordinate, activeTarget];
+    return [];
+  }, [activeTarget, driverCoordinate, routeCoordinates]);
   const activeRouteCoordinates = useMemo(() => {
-    if (stage === 'on_trip') {
-      if (routeCoordinates.length > 1) return routeCoordinates;
-      if (tripRouteCoordinates.length > 1) return tripRouteCoordinates;
-      return [driverCoordinate, activeTarget].filter(Boolean);
-    }
-    if (routeCoordinates.length > 1) return routeCoordinates;
-    return [driverCoordinate, pickupCoordinate].filter(Boolean);
-  }, [activeTarget, driverCoordinate, pickupCoordinate, routeCoordinates, stage, tripRouteCoordinates]);
+    if (liveRouteCoordinates.length > 1) return liveRouteCoordinates;
+    return tripLineCoordinates;
+  }, [liveRouteCoordinates, tripLineCoordinates]);
+  const vehicleSummary = [driver?.carName, driver?.plate]
+    .map((part) => String(part || '').trim())
+    .filter((part) => part && part !== '-')
+    .join(' · ');
 
   const vehicleHeadingDegrees = useMemo(
     () => getHeadingAlongRoute(
@@ -700,8 +711,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
   const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
   const trackingRegion = useMemo(
-    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, activeTarget, stage),
-    [activeTarget, driverCoordinate, pickupCoordinate, stage]
+    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, activeTarget, stage),
+    [activeTarget, driverCoordinate, dropoffCoordinate, pickupCoordinate, stage]
   );
   const tripTimelineLabels = useMemo(
     () => [
@@ -732,15 +743,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   };
 
   useEffect(() => {
-    if (!mapRef.current || activeRouteCoordinates.length < 2) return undefined;
-    const stageChanged = lastAutoFitStageRef.current !== String(stage || '');
-    if (hasAutoFitMapRef.current && !stageChanged) return undefined;
+    const fitCoordinates = [
+      ...activeRouteCoordinates,
+      driverCoordinate,
+      pickupCoordinate,
+      dropoffCoordinate,
+    ].filter(isValidCoordinate);
+    if (!mapRef.current || fitCoordinates.length < 2) return undefined;
+
+    const fitKey = `${stage || ''}|${hasDriverCoordinate ? 'driver' : 'trip'}`;
+    if (lastAutoFitStageRef.current === fitKey) return undefined;
+    lastAutoFitStageRef.current = fitKey;
     hasAutoFitMapRef.current = true;
-    lastAutoFitStageRef.current = String(stage || '');
 
     const timeout = setTimeout(() => {
       try {
-        mapRef.current?.fitToCoordinates(activeRouteCoordinates, {
+        mapRef.current?.fitToCoordinates(fitCoordinates, {
           edgePadding: { top: 90, right: 28, bottom: 220, left: 28 },
           animated: true,
         });
@@ -750,7 +768,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     }, 250);
 
     return () => clearTimeout(timeout);
-  }, [activeRouteCoordinates, stage]);
+  }, [activeRouteCoordinates, driverCoordinate, dropoffCoordinate, hasDriverCoordinate, pickupCoordinate, stage]);
 
   const handleCancelRide = () => {
     setShowCancelReasonModal(true);
@@ -1044,34 +1062,45 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           rotateEnabled={false}
           pitchEnabled={false}
         >
-          {isValidCoordinate(driverCoordinate) ? (
+          {driverCoordinate ? (
             <DriverVehicleMapMarker
               coordinate={driverCoordinate}
               headingDegrees={vehicleHeadingDegrees}
+              etaLabel={hasDriverCoordinate && stage !== 'on_trip' && stage !== 'waiting_at_pickup' ? liveEtaText : null}
             />
           ) : null}
-          {isValidCoordinate(pickupCoordinate) ? (
+          {pickupCoordinate ? (
             <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
           ) : null}
-          {intermediateStops.map((stop, index) => (
-            isValidCoordinate(stop?.coordinate) ? (
+          {intermediateStops.map((stop, index) => {
+            const stopCoordinate = normalizeCoordinate(stop?.coordinate);
+            return stopCoordinate ? (
               <Marker
                 key={`passenger-stop-${index}`}
-                coordinate={stop.coordinate}
+                coordinate={stopCoordinate}
                 title={stop.label || `Stop ${index + 1}`}
                 pinColor={index < currentStopIndex ? '#94a3b8' : '#f97316'}
                 tracksViewChanges={false}
               />
-            ) : null
-          ))}
-          {isValidCoordinate(dropoffCoordinate) ? (
+            ) : null;
+          })}
+          {dropoffCoordinate ? (
             <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
           ) : null}
-          <Polyline
-            coordinates={activeRouteCoordinates}
-            strokeColor={PRIMARY_BLUE}
-            strokeWidth={5}
-          />
+          {tripLineCoordinates.length > 1 ? (
+            <Polyline
+              coordinates={tripLineCoordinates}
+              strokeColor="#94a3b8"
+              strokeWidth={4}
+            />
+          ) : null}
+          {liveRouteCoordinates.length > 1 ? (
+            <Polyline
+              coordinates={liveRouteCoordinates}
+              strokeColor={PRIMARY_BLUE}
+              strokeWidth={5}
+            />
+          ) : null}
         </MapView>
 
         <View pointerEvents="none" className="absolute inset-0" />
@@ -1137,8 +1166,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     : stage === 'on_trip'
                       ? (currentTargetLabel || dropoffLabel || 'Heading to your destination')
                     : hasDriverCoordinate
-                      ? `${liveEtaText} away - ${liveDistanceText}`
-                      : liveDistanceText}
+                      ? `${liveEtaText} away · ${liveDistanceText}`
+                      : 'Finding your driver on the map'}
               </Text>
             </View>
           </View>
@@ -1193,11 +1222,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 <View className="mt-4 rounded-[22px] border border-indigo-200 bg-indigo-50 px-4 py-4">
                   <View className="flex-row items-center">
                     <Ionicons name="moon" size={20} color="#4338ca" />
-                    <Text className="ml-2 text-xs font-bold uppercase tracking-[1px] text-indigo-700">
+                    <Text className="ml-2 text-xs font-bold uppercase text-indigo-700">
                       Night safety PIN
                     </Text>
                   </View>
-                  <Text className="mt-3 text-4xl font-extrabold tracking-[8px] text-indigo-950">
+                  <Text className="mt-3 text-4xl font-extrabold text-indigo-950" style={{ letterSpacing: 6 }}>
                     {safetyPinValue}
                   </Text>
                   <Text className="mt-3 text-sm leading-6 text-indigo-900">
@@ -1215,9 +1244,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 </View>
               ) : null}
 
-              {stage !== 'on_trip' ? (
+              {stage !== 'on_trip' && rideSheetCollapsed ? (
                 <View className="mt-4 rounded-[22px] bg-white px-4 py-3">
-                  <Text className="text-xs font-semibold uppercase tracking-[1px] text-gray-400">
+                  <Text className="text-xs font-semibold uppercase text-gray-400">
                     {stage === 'waiting_at_pickup' ? 'Pickup status' : 'Driver status'}
                   </Text>
                   <Text className="mt-1 text-base font-bold text-gray-900">
@@ -1226,8 +1255,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         ? 'Pickup wait time ended'
                         : `${pickupWaitCountdownText} at pickup`
                       : hasDriverCoordinate
-                        ? `${liveEtaText} away - ${liveDistanceText}`
-                        : liveDistanceText}
+                        ? `${liveEtaText} away · ${liveDistanceText}`
+                        : 'Finding your driver'}
                   </Text>
                 </View>
               ) : null}
@@ -1253,7 +1282,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 <>
                   {stage === 'waiting_at_pickup' ? (
                     <View className="mt-4 rounded-[22px] border border-amber-200 bg-[#fff7ed] px-4 py-3">
-                      <Text className="text-xs font-semibold uppercase tracking-[2px] text-amber-600">
+                      <Text className="text-xs font-semibold uppercase text-amber-600">
                         Pickup timer
                       </Text>
                       <Text className="mt-1 text-3xl font-bold text-gray-900">{pickupWaitCountdownText}</Text>
@@ -1270,7 +1299,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   {stage !== 'on_trip' ? (
                     <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
                       <View className="flex-row items-center justify-between">
-                        <Text className="text-xs font-semibold uppercase tracking-[1px] text-gray-400">
+                        <Text className="text-xs font-semibold uppercase text-gray-400">
                           Trip status
                         </Text>
                         {routeLoading ? <ActivityIndicator size="small" color={PRIMARY_BLUE} /> : null}
@@ -1282,8 +1311,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       </Text>
                       <Text className="mt-1 text-sm text-gray-500">
                         {hasDriverCoordinate
-                          ? `${liveEtaText} - ${liveDistanceText} ${hasRoadDistance ? 'road distance' : 'estimated distance'}`
-                          : liveDistanceText}
+                          ? `${liveEtaText} · ${liveDistanceText} ${hasRoadDistance ? 'road distance' : 'estimated distance'}`
+                          : 'Live location will appear as soon as your driver is on the move.'}
                       </Text>
                       <Text className="mt-1 text-xs text-gray-400">
                         Road distance refreshes about every 30 seconds or sooner if the car changes direction.
@@ -1316,10 +1345,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         <Text className="text-xl font-bold text-gray-900">{driver?.driverName || 'Driver'}</Text>
                         <View className="mt-1 flex-row items-center">
                           <Ionicons name="star" size={16} color="#f59e0b" />
-                          <Text className="ml-2 text-sm text-gray-500">{driver?.rating?.toFixed?.(2) || '4.90'} rating</Text>
+                          <Text className="ml-2 text-sm text-gray-500">
+                            {Number.isFinite(Number(driver?.rating))
+                              ? `${Number(driver.rating).toFixed(2)} rating`
+                              : 'New driver'}
+                          </Text>
                         </View>
                         <Text className="mt-2 text-sm text-gray-500">
-                          {driver?.carName} - {String(driver?.plate || '').toUpperCase()}
+                          {vehicleSummary || 'Vehicle details incoming'}
                         </Text>
                         <Text className="mt-1 text-sm font-medium" style={{ color: PRIMARY_BLUE }}>
                           {driver?.phoneNumber || 'Phone not shared'}
@@ -1328,38 +1361,46 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     </View>
 
                     <View className="mt-5 rounded-[22px] border border-[#dbeafe] bg-white px-4 py-4">
-                      <View className={stage === 'on_trip' ? 'items-center' : 'flex-row items-center justify-between'}>
-                        {stage === 'on_trip' ? (
-                          <>
+                      {stage === 'on_trip' ? (
+                        <View className="items-center">
+                          <Text className="text-sm font-medium text-gray-500">
+                            {currentIntermediateStop
+                              ? (hasRoadDistance ? 'Distance to next stop' : 'Estimated distance to next stop')
+                              : (hasRoadDistance ? 'Distance to destination' : 'Estimated distance to destination')}
+                          </Text>
+                          <Text className="mt-1 text-3xl font-bold text-gray-900">{liveDistanceText}</Text>
+                          <Text className="mt-2 text-sm text-gray-500">
+                            {tripDistanceKm > 0
+                              ? `Trip route ${tripDistanceKm.toFixed(1)} km${tripEtaMinutes > 0 ? ` • ${tripEtaMinutes} min` : ''}`
+                              : 'Trip route details updating...'}
+                          </Text>
+                        </View>
+                      ) : hasDriverCoordinate ? (
+                        <View className="flex-row items-start">
+                          <View className="min-w-0 flex-1 pr-3">
                             <Text className="text-sm font-medium text-gray-500">
-                              {currentIntermediateStop
-                                ? (hasRoadDistance ? 'Distance to next stop' : 'Estimated distance to next stop')
-                                : (hasRoadDistance ? 'Distance to destination' : 'Estimated distance to destination')}
+                              {stage === 'waiting_at_pickup' ? 'Live arrival' : 'Driver arrival'}
                             </Text>
-                            <Text className="mt-1 text-3xl font-bold text-gray-900">{liveDistanceText}</Text>
-                            <Text className="mt-2 text-sm text-gray-500">
-                              {tripDistanceKm > 0
-                                ? `Trip route ${tripDistanceKm.toFixed(1)} km${tripEtaMinutes > 0 ? ` • ${tripEtaMinutes} min` : ''}`
-                                : 'Trip route details updating...'}
+                            <Text className="mt-1 text-2xl font-bold text-gray-900">
+                              {stage === 'waiting_at_pickup' ? 'Arrived' : liveEtaText}
                             </Text>
-                          </>
-                        ) : (
-                          <>
-                            <View>
-                              <Text className="text-sm font-medium text-gray-500">{stage === 'waiting_at_pickup' ? 'Live arrival' : 'Driver arrival'}</Text>
-                              <Text className="mt-1 text-2xl font-bold text-gray-900">
-                                {stage === 'waiting_at_pickup' ? 'Arrived' : liveEtaText}
-                              </Text>
-                            </View>
-                            <View className="items-end">
-                              <Text className="text-sm font-medium text-gray-500">
-                                {hasRoadDistance ? 'Road distance' : 'Estimated distance'}
-                              </Text>
-                              <Text className="mt-1 text-2xl font-bold text-gray-900">{liveDistanceText}</Text>
-                            </View>
-                          </>
-                        )}
-                      </View>
+                          </View>
+                          <View className="min-w-0 flex-1 items-end">
+                            <Text className="text-sm font-medium text-gray-500">
+                              {hasRoadDistance ? 'Road distance' : 'Distance'}
+                            </Text>
+                            <Text className="mt-1 text-2xl font-bold text-gray-900">{liveDistanceText}</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <View>
+                          <Text className="text-sm font-medium text-gray-500">Driver location</Text>
+                          <Text className="mt-1 text-xl font-bold text-gray-900">Finding your driver</Text>
+                          <Text className="mt-1 text-sm text-gray-500">
+                            Directions will appear when their live location arrives.
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
                     {stage === 'on_trip' ? (
@@ -1755,7 +1796,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 ) : null}
                 {((rideStatus?.canTipDriver && paymentStatus !== 'paid') || tipAmount > 0) ? (
                   <View className={`${shouldPromptForRating ? 'mt-4' : 'mt-5'} rounded-[22px] bg-[#f8fafc] px-4 py-4`}>
-                    <Text className="text-sm font-semibold uppercase tracking-[1px] text-gray-500">Optional tip</Text>
+                    <Text className="text-sm font-semibold uppercase text-gray-500">Optional tip</Text>
                     {tipAmount > 0 ? (
                       <Text className="mt-2 text-base font-bold text-green-600">
                         Tip added: ${tipAmount.toFixed(2)}

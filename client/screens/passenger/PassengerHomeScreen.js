@@ -1140,7 +1140,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                 className="ml-2 text-sm font-bold"
                 style={{ color: tripMode === 'hire' ? '#fff' : '#111827' }}
               >
-                Hire a truck
+                Vehicle hire
               </Text>
             </TouchableOpacity>
           </View>
@@ -1156,7 +1156,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                 </Text>
                 {tripMode === 'hire' ? (
                   <Text className="mt-1 text-sm text-gray-500">
-                    Next: add truck specs, notes and your offer fee.
+                    Next: add vehicle specs, notes and your offer fee.
                   </Text>
                 ) : null}
               </View>
@@ -1189,7 +1189,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
             <View className="pb-5">
               <Text className="mt-3 text-sm text-gray-500">
                 {tripMode === 'hire'
-                  ? 'Choose pickup and drop-off on the map, then continue your truck hire request.'
+                  ? 'Choose pickup and drop-off on the map, then continue your vehicle hire request.'
                   : 'Choose a destination to request a normal ride.'}
               </Text>
               {recentTrips.length ? (

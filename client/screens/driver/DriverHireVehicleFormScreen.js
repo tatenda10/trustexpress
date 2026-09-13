@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -13,10 +13,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { createHireVehicle, resolveUploadedMediaUrl, updateHireVehicle, uploadFile } from '../../api';
+import { createHireVehicle, getHireVehicleTypes, resolveUploadedMediaUrl, updateHireVehicle, uploadFile } from '../../api';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { HIRE_VEHICLE_CATEGORIES } from '../../constants/hire';
+import { HIRE_VEHICLE_CATEGORIES, hireTypesToCategories } from '../../constants/hire';
 
 export default function DriverHireVehicleFormScreen({ navigation, route }) {
   const existing = route.params?.vehicle || null;
@@ -35,8 +35,29 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
   const [photoUrls, setPhotoUrls] = useState(Array.isArray(existing?.photoUrls) ? existing.photoUrls : []);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [vehicleTypes, setVehicleTypes] = useState(HIRE_VEHICLE_CATEGORIES);
 
   const heading = useMemo(() => (existing ? 'Edit hire vehicle' : 'Add hire vehicle'), [existing]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const token = await getToken({ skipCache: true });
+        if (!token) return;
+        const data = await getHireVehicleTypes(token);
+        const nextTypes = hireTypesToCategories(data?.types);
+        if (!active || !nextTypes.length) return;
+        setVehicleTypes(nextTypes);
+        if (!nextTypes.some((item) => item.value === category)) {
+          setCategory(nextTypes[0].value);
+        }
+      } catch {
+        /* keep fallback types */
+      }
+    })();
+    return () => { active = false; };
+  }, [getToken]);
 
   const pickPhoto = async () => {
     try {
@@ -151,7 +172,7 @@ export default function DriverHireVehicleFormScreen({ navigation, route }) {
           <Field label="Title" value={title} onChangeText={setTitle} placeholder="e.g. Toyota Quantum for hire" />
           <Text className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Category</Text>
           <View className="flex-row flex-wrap gap-2">
-            {HIRE_VEHICLE_CATEGORIES.map((item) => (
+            {vehicleTypes.map((item) => (
               <TouchableOpacity
                 key={item.value}
                 onPress={() => setCategory(item.value)}

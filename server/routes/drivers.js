@@ -1185,7 +1185,9 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
     const [driverStatsRow] = await query(
       `SELECT
          COUNT(*) AS total_rides,
-         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides,
+         AVG(CASE WHEN passenger_driver_rating IS NOT NULL THEN passenger_driver_rating END) AS avg_rating,
+         COUNT(passenger_driver_rating) AS rating_count
        FROM ride_requests
        WHERE driver_user_id = ?`,
       [req.userId]
@@ -1206,7 +1208,10 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       etaMinutes: driverEtaMinutes,
       driverDistanceKm,
       amount: Number(ride.estimated_amount || 0),
-      rating: 4.9,
+      rating: Number(driverStatsRow?.rating_count || 0) > 0 && Number.isFinite(Number(driverStatsRow?.avg_rating))
+        ? Math.round(Number(driverStatsRow.avg_rating) * 1000) / 1000
+        : null,
+      ratingCount: Number(driverStatsRow?.rating_count || 0),
       trips: Number(driverStatsRow?.completed_rides || driverStatsRow?.total_rides || 0),
       phoneNumber: availability.phone_number || null,
       coordinate: {
@@ -1999,16 +2004,22 @@ router.get('/history', requireAuth, async (req, res) => {
 
     const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
     const requestedLimit = Number.parseInt(String(req.query?.limit || '10'), 10);
+    const reviewsOnly = ['1', 'true', 'yes'].includes(String(req.query?.reviewsOnly || '').trim().toLowerCase());
     const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const limit = Number.isInteger(requestedLimit) && requestedLimit > 0
-      ? Math.min(requestedLimit, 50)
+      ? Math.min(requestedLimit, 100)
       : 10;
     const offset = (page - 1) * limit;
+    const reviewFilterSql = `
+      AND (
+        passenger_driver_rating IS NOT NULL
+        OR TRIM(COALESCE(passenger_driver_review, '')) <> ''
+      )`;
 
     const [countRow] = await query(
       `SELECT COUNT(*) AS total
        FROM ride_requests
-       WHERE driver_user_id = ?`,
+       WHERE driver_user_id = ?${reviewsOnly ? reviewFilterSql : ''}`,
       [req.userId]
     );
     const total = Number(countRow?.total || 0);
@@ -2030,6 +2041,7 @@ router.get('/history', requireAuth, async (req, res) => {
          driver_reimbursement_amount,
          discount_code,
          tip_amount,
+         payment_method,
          driver_distance_km,
          driver_eta_minutes,
          passenger_driver_rating,
@@ -2043,8 +2055,8 @@ router.get('/history', requireAuth, async (req, res) => {
          completed_at,
          cancelled_at
        FROM ride_requests
-       WHERE driver_user_id = ?
-       ORDER BY COALESCE(completed_at, cancelled_at, arrived_at, assigned_at, requested_at) DESC, id DESC
+       WHERE driver_user_id = ?${reviewsOnly ? reviewFilterSql : ''}
+       ORDER BY COALESCE(passenger_driver_rated_at, completed_at, cancelled_at, arrived_at, assigned_at, requested_at) DESC, id DESC
        LIMIT ${limit} OFFSET ${offset}`,
       [req.userId]
     );
@@ -2060,7 +2072,12 @@ router.get('/history', requireAuth, async (req, res) => {
            ELSE 0
          END), 0) AS today_earnings,
          AVG(CASE WHEN passenger_driver_rating IS NOT NULL THEN passenger_driver_rating END) AS avg_rating,
-         COUNT(passenger_driver_rating) AS rating_count
+         COUNT(passenger_driver_rating) AS rating_count,
+         SUM(CASE
+           WHEN passenger_driver_rating IS NOT NULL
+             OR TRIM(COALESCE(passenger_driver_review, '')) <> ''
+           THEN 1 ELSE 0
+         END) AS review_count
        FROM ride_requests
        WHERE driver_user_id = ?`,
       [req.userId]
@@ -2104,6 +2121,7 @@ router.get('/history', requireAuth, async (req, res) => {
         driverReimbursementAmount: Number(row.driver_reimbursement_amount || 0),
         discountCode: row.discount_code || null,
         tipAmount: Number(row.tip_amount || 0),
+        paymentMethod: row.payment_method || null,
         totalEarned: Number(row.original_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0),
         driverDistanceKm: row.driver_distance_km === null ? null : Number(row.driver_distance_km),
         driverEtaMinutes: row.driver_eta_minutes === null ? null : Number(row.driver_eta_minutes),
@@ -2122,7 +2140,8 @@ router.get('/history', requireAuth, async (req, res) => {
         totalEarnings: Number(summaryRow?.total_earnings || 0),
         todayEarnings: Number(summaryRow?.today_earnings || 0),
         averageRating: summaryRow?.avg_rating === null ? null : Number(summaryRow.avg_rating),
-        ratingCount: Number(summaryRow?.rating_count || 0),
+        ratingCount: Number(summaryRow?.review_count || summaryRow?.rating_count || 0),
+        starRatingCount: Number(summaryRow?.rating_count || 0),
       },
       pagination: {
         page,
@@ -2232,6 +2251,7 @@ router.get('/ride-requests/:rideRequestId/receipt-pdf', requireAuth, async (req,
          driver_reimbursement_amount,
          discount_code,
          tip_amount,
+         payment_method,
          status,
          requested_at,
          completed_at
@@ -2284,6 +2304,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       selfieWithIdCardUrl,
       nationalIdNumber,
       driverLicenceNumber,
+      dateOfBirth,
+      driverLicenceExpiresAt,
       driverKind: rawDriverKind,
     } = req.body || {};
     const driverKind = normalizeDriverKind(rawDriverKind || existing.driverProfile?.driverKind);
@@ -2296,6 +2318,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       selfieWithIdCardUrl: currentProfile?.selfieWithIdCardUrl || null,
       nationalIdNumber: currentProfile?.nationalIdNumber || null,
       driverLicenceNumber: currentProfile?.driverLicenceNumber || null,
+      dateOfBirth: currentProfile?.dateOfBirth || null,
+      driverLicenceExpiresAt: currentProfile?.driverLicenceExpiresAt || null,
     };
     const nextValues = {
       nationalIdFrontUrl: nationalIdFrontUrl || currentValues.nationalIdFrontUrl,
@@ -2305,6 +2329,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       selfieWithIdCardUrl: selfieWithIdCardUrl || currentValues.selfieWithIdCardUrl,
       nationalIdNumber: normalizeIdentityValue(nationalIdNumber || currentValues.nationalIdNumber),
       driverLicenceNumber: normalizeIdentityValue(driverLicenceNumber || currentValues.driverLicenceNumber),
+      dateOfBirth: normalizeDateOfBirth(dateOfBirth || currentValues.dateOfBirth),
+      driverLicenceExpiresAt: normalizeDateOfBirth(driverLicenceExpiresAt || currentValues.driverLicenceExpiresAt),
     };
 
     const providedCount = [
@@ -2327,6 +2353,26 @@ router.post('/documents', requireAuth, async (req, res) => {
     }
     if (isFullIdentitySubmit && !nextValues.driverLicenceNumber) {
       return res.status(400).json({ error: 'Driver licence number is required' });
+    }
+    if (isFullIdentitySubmit && !nextValues.dateOfBirth) {
+      return res.status(400).json({ error: 'Date of birth is required' });
+    }
+    if (isFullIdentitySubmit && !nextValues.driverLicenceExpiresAt) {
+      return res.status(400).json({ error: 'Licence expiration date is required' });
+    }
+    if (nextValues.dateOfBirth) {
+      const dob = new Date(`${nextValues.dateOfBirth}T00:00:00Z`);
+      const adultCutoff = new Date();
+      adultCutoff.setUTCFullYear(adultCutoff.getUTCFullYear() - 18);
+      if (Number.isNaN(dob.getTime()) || dob.getTime() > adultCutoff.getTime()) {
+        return res.status(400).json({ error: 'Enter a valid date of birth. Drivers must be at least 18.' });
+      }
+    }
+    if (nextValues.driverLicenceExpiresAt) {
+      const expiry = new Date(`${nextValues.driverLicenceExpiresAt}T00:00:00Z`);
+      if (Number.isNaN(expiry.getTime())) {
+        return res.status(400).json({ error: 'Enter a valid licence expiration date' });
+      }
     }
 
     if (nextValues.nationalIdNumber) {
@@ -2366,9 +2412,9 @@ router.post('/documents', requireAuth, async (req, res) => {
       await query(
         `INSERT INTO driver_identity (
           driver_user_id, driver_kind, national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
-          national_id_number, driver_licence_number,
+          national_id_number, driver_licence_number, date_of_birth, driver_licence_expires_at,
           profile_status, profile_submitted_at, profile_rejection_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
         ON DUPLICATE KEY UPDATE
           driver_kind = COALESCE(VALUES(driver_kind), driver_identity.driver_kind),
           national_id_front_url = VALUES(national_id_front_url),
@@ -2378,6 +2424,8 @@ router.post('/documents', requireAuth, async (req, res) => {
           selfie_with_id_card_url = VALUES(selfie_with_id_card_url),
           national_id_number = COALESCE(VALUES(national_id_number), driver_identity.national_id_number),
           driver_licence_number = COALESCE(VALUES(driver_licence_number), driver_identity.driver_licence_number),
+          date_of_birth = COALESCE(VALUES(date_of_birth), driver_identity.date_of_birth),
+          driver_licence_expires_at = COALESCE(VALUES(driver_licence_expires_at), driver_identity.driver_licence_expires_at),
           profile_status = 'pending',
           profile_submitted_at = COALESCE(driver_identity.profile_submitted_at, VALUES(profile_submitted_at)),
           profile_reviewed_at = NULL,
@@ -2393,6 +2441,8 @@ router.post('/documents', requireAuth, async (req, res) => {
           nextValues.selfieWithIdCardUrl,
           nextValues.nationalIdNumber || null,
           nextValues.driverLicenceNumber || null,
+          nextValues.dateOfBirth || null,
+          nextValues.driverLicenceExpiresAt || null,
           submittedAt,
         ]
       );
@@ -2415,6 +2465,10 @@ router.post('/documents', requireAuth, async (req, res) => {
       selfieWithIdCardUrl: row.selfie_with_id_card_url || null,
       nationalIdNumber: row.national_id_number || null,
       driverLicenceNumber: row.driver_licence_number || null,
+      dateOfBirth: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
+      driverLicenceExpiresAt: row.driver_licence_expires_at
+        ? String(row.driver_licence_expires_at).slice(0, 10)
+        : null,
     };
     return res.status(201).json(driverProfile);
   } catch (err) {

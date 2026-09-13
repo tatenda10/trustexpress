@@ -6,6 +6,7 @@ import {
   FlatList,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -13,13 +14,20 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { listHireBookings, listOpenHireRequests } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import {
+  DRIVER_VERIFICATION_REQUIRED_MESSAGE,
+  isDriverVerifiedForTrips,
+} from '../../constants/driverKind';
 import { isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
+import { useDriverStatus } from '../../context/DriverStatusContext';
 import { connectRealtime } from '../../realtime';
 
 export default function DriverHireOpenRequestsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const { driverStatus } = useDriverStatus() || {};
+  const canAcceptTrips = isDriverVerifiedForTrips(driverStatus);
   const getTokenRef = useRef(getToken);
   const lastNotificationTsRef = useRef(null);
   const [loading, setLoading] = useState(true);
@@ -202,7 +210,13 @@ export default function DriverHireOpenRequestsScreen({ navigation, route }) {
 
             return (
             <TouchableOpacity
-              onPress={() => navigation.navigate('DriverHireDetail', { requestId: item.id })}
+              onPress={() => {
+                if (!canAcceptTrips) {
+                  Alert.alert('Not verified', DRIVER_VERIFICATION_REQUIRED_MESSAGE);
+                  return;
+                }
+                navigation.navigate('DriverHireDetail', { requestId: item.id });
+              }}
               className="mb-3 rounded-[24px] bg-white px-4 py-4"
               activeOpacity={0.85}
             >

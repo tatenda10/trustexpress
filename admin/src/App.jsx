@@ -38,6 +38,7 @@ import DiscountCodesPage from './pages/DiscountCodesPage'
 import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursementsPage'
 import DriverWalletSettingsPage from './pages/DriverWalletSettingsPage'
 import HireCommissionSettingsPage from './pages/HireCommissionSettingsPage'
+import HireVehicleTypesPage from './pages/HireVehicleTypesPage'
 import { getDefaultDashboardPath } from './utils/dashboardHome'
 
 function ProtectedRoute({ children }) {
@@ -218,6 +219,10 @@ function AppRoutes() {
         <Route
           path="hire-commission"
           element={<PermissionRoute permission="payouts.read"><HireCommissionSettingsPage /></PermissionRoute>}
+        />
+        <Route
+          path="hire-types"
+          element={<PermissionRoute permission="pricing.read"><HireVehicleTypesPage /></PermissionRoute>}
         />
         <Route
           path="promotions"

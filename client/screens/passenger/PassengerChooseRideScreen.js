@@ -547,11 +547,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             );
           })}
         </View>
-        <Text style={styles.peopleHint}>
-          {passengerCount
-            ? (passengerCount === 1 ? '1 person confirmed. Required before requesting.' : `We are ${passengerCount} people. Required before requesting.`)
-            : 'Tap the number of people riding. This is required.'}
-        </Text>
 
         <Text style={styles.sectionLabel}>Available options</Text>
 
@@ -597,14 +592,6 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
           { paddingBottom: Math.max(tabBarHeight + insets.bottom + 8, 36) },
         ]}
       >
-        {/* Promo / info pill */}
-        {selectedTier && !loadingTiers && (
-          <View style={styles.infoPill}>
-            <Ionicons name="shield-checkmark-outline" size={13} color={PRIMARY_BLUE} />
-            <Text style={styles.infoPillText}>Price locked in • No surge pricing</Text>
-          </View>
-        )}
-
         <Text style={styles.paymentTitle}>How will you pay?</Text>
         <View style={styles.paymentRow}>
           {[
@@ -632,27 +619,29 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
           })}
         </View>
 
-        <TouchableOpacity
-          onPress={handleFindRide}
-          disabled={isDisabled}
-          style={[styles.ctaBtn, isDisabled && styles.ctaBtnDisabled]}
-          activeOpacity={0.88}
-        >
-          {isSubmittingRide ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <View style={styles.ctaInner}>
-              <Text style={styles.ctaText}>
-                {selectedTier ? `Request ${selectedTier.tierName}` : 'Find a driver'}
-              </Text>
-              {selectedTier && !isDisabled && (
-                <View style={styles.ctaChevron}>
-                  <Ionicons name="arrow-forward" size={18} color={PRIMARY_BLUE} />
-                </View>
-              )}
-            </View>
-          )}
-        </TouchableOpacity>
+        {paymentMethod ? (
+          <TouchableOpacity
+            onPress={handleFindRide}
+            disabled={isDisabled}
+            style={[styles.ctaBtn, isDisabled && styles.ctaBtnDisabled]}
+            activeOpacity={0.88}
+          >
+            {isSubmittingRide ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <View style={styles.ctaInner}>
+                <Text style={styles.ctaText}>
+                  {selectedTier ? `Request ${selectedTier.tierName}` : 'Find a driver'}
+                </Text>
+                {selectedTier && !isDisabled && (
+                  <View style={styles.ctaChevron}>
+                    <Ionicons name="arrow-forward" size={18} color={PRIMARY_BLUE} />
+                  </View>
+                )}
+              </View>
+            )}
+          </TouchableOpacity>
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -801,7 +790,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 8,
+    marginBottom: 16,
   },
   peopleChip: {
     minWidth: 44,
@@ -825,12 +814,6 @@ const styles = StyleSheet.create({
   },
   peopleChipTextSelected: {
     color: PRIMARY_BLUE,
-  },
-  peopleHint: {
-    fontSize: 13,
-    color: '#6b7280',
-    marginBottom: 16,
-    marginLeft: 4,
   },
   tierList: {
     paddingBottom: 8,
@@ -993,18 +976,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f2f2f7',
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
-  },
-  infoPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    marginBottom: 10,
-  },
-  infoPillText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: PRIMARY_BLUE,
   },
   discountCard: {
     marginBottom: 14,

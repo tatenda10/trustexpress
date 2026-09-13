@@ -18,7 +18,7 @@ const CAR_MAP_MARKER_IMAGE = require('../../assets/trust express.jpeg');
 const CAR_IMAGE_NATIVE_HEADING = 100;
 
 function isValidCoordinate(value) {
-  return Number.isFinite(Number(value?.latitude)) && Number.isFinite(Number(value?.longitude));
+  return Boolean(normalizeCoordinate(value));
 }
 
 /**
@@ -64,13 +64,14 @@ export default function DriverVehicleMapMarker({
     return () => clearTimeout(timer);
   }, [etaLabel, renderHeading]);
 
-  if (!isValidCoordinate(coordinate)) return null;
+  const safeCoordinate = normalizeCoordinate(coordinate);
+  if (!safeCoordinate) return null;
 
   const rotation = renderHeading - CAR_IMAGE_NATIVE_HEADING;
 
   return (
     <Marker
-      coordinate={coordinate}
+      coordinate={safeCoordinate}
       title="Driver"
       anchor={{ x: 0.5, y: 0.5 }}
       flat

@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getDriverRideHistory } from '../../api';
 import { downloadReceiptPdf } from '../../services/receiptPrint';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { receiptPaymentMethodLabel } from '../../constants/payment';
 
 function getStatusColors(status) {
   if (status === 'Completed') {
@@ -323,6 +324,11 @@ const DriverActivityScreen = () => {
           <View className="flex-1 pr-3">
             <Text className="text-sm text-gray-500">{formatDate(ride.completedAt || ride.assignedAt || ride.requestedAt)}</Text>
             <Text className="mt-1 text-sm text-gray-500">{ride.passengerName || 'Passenger'}</Text>
+            {receiptPaymentMethodLabel(ride.paymentMethod) ? (
+              <Text className="mt-1 text-sm font-semibold text-gray-700">
+                {receiptPaymentMethodLabel(ride.paymentMethod)}
+              </Text>
+            ) : null}
           </View>
           {canDownloadReceipt ? (
             <TouchableOpacity
@@ -350,19 +356,19 @@ const DriverActivityScreen = () => {
 
   return (
     <View className="flex-1 bg-white">
-      <View className="border-b border-gray-100 bg-white px-5 pb-3" style={{ paddingTop: insets.top }}>
-        <View className="flex-row items-center">
-          <TouchableOpacity
-            onPress={() => {
-              if (navigation.canGoBack()) navigation.goBack();
-            }}
-            className="mr-2 h-9 w-9 items-center justify-center rounded-full bg-gray-50"
-            accessibilityLabel="Back"
-          >
-            <Ionicons name="chevron-back" size={22} color="#111827" />
-          </TouchableOpacity>
-          <Text className="text-lg font-bold text-gray-900">Trip history</Text>
-        </View>
+      <View
+        className="flex-row items-center justify-between bg-white"
+        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
+      >
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={() => navigation.goBack()}
+          className="h-10 w-10 items-center justify-center rounded-full bg-gray-50"
+        >
+          <Ionicons name="chevron-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text className="text-[18px] font-bold text-gray-900">Ride history</Text>
+        <View className="h-10 w-10" />
       </View>
 
       {loading ? (

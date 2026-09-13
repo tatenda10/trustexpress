@@ -18,6 +18,7 @@ import {
 } from '../lib/hire.js';
 import { deductCommissionForCompletedHire } from '../lib/driver-wallet.js';
 import { getHireCommissionSettings, resolveHireTripType } from '../lib/hire-commission.js';
+import { listHireVehicleTypes } from '../lib/hire-vehicle-types.js';
 import { normalizePaymentMethod, paymentMethodLabel } from '../lib/payment-method.js';
 import { normalizeUploadPath } from '../lib/driver-verification-mysql.js';
 
@@ -412,13 +413,25 @@ router.get('/vehicles', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/vehicle-types', requireAuth, async (_req, res) => {
+  try {
+    const types = await listHireVehicleTypes({ activeOnly: true });
+    return res.json({ types });
+  } catch (err) {
+    console.error('GET /api/hire/vehicle-types', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/fare-estimate', requireAuth, async (req, res) => {
   try {
-    const category = String(req.query?.category || 'other').trim().toLowerCase() || 'other';
-    const passengerCount = Number(req.query?.passengerCount || 1);
-    const startAt = String(req.query?.startAt || '').trim() || null;
-    const endAt = String(req.query?.endAt || '').trim() || null;
-    const estimate = estimateHireFare({ category, passengerCount, startAt, endAt });
+    const category = String(req.query?.category || req.query?.typeKey || 'other').trim().toLowerCase() || 'other';
+    const distanceKm = Number(req.query?.distanceKm);
+    const estimate = await estimateHireFare({
+      category,
+      typeKey: category,
+      distanceKm: Number.isFinite(distanceKm) ? distanceKm : null,
+    });
     return res.json({ estimate });
   } catch (err) {
     console.error('GET /api/hire/fare-estimate', err);
@@ -620,7 +633,7 @@ router.post('/requests', requireAuth, async (req, res) => {
     const estimatedDistanceKm = req.body?.estimatedDistanceKm == null || req.body?.estimatedDistanceKm === ''
       ? null
       : Number(req.body.estimatedDistanceKm);
-    const paymentMethod = normalizePaymentMethod(req.body?.paymentMethod);
+    const paymentMethod = normalizePaymentMethod(req.body?.paymentMethod, 'online');
 
     if (!title) return res.status(400).json({ error: 'Give this hire request a name' });
     if (title.length > 160) return res.status(400).json({ error: 'Request name is too long' });
@@ -672,11 +685,10 @@ router.post('/requests', requireAuth, async (req, res) => {
       : null;
 
     const publicId = createHirePublicId('TH');
-    const fareEstimate = estimateHireFare({
+    const fareEstimate = await estimateHireFare({
       category: resolvedCategory,
-      passengerCount,
-      startAt,
-      endAt,
+      typeKey: resolvedCategory,
+      distanceKm: resolvedDistanceKm,
     });
     const result = await query(
       `INSERT INTO hire_requests (

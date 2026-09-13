@@ -24,13 +24,20 @@ import {
 } from '../../api';
 import HireRouteOverview from '../../components/hire/HireRouteOverview';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import {
+  DRIVER_VERIFICATION_REQUIRED_MESSAGE,
+  isDriverVerifiedForTrips,
+} from '../../constants/driverKind';
 import { isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
+import { useDriverStatus } from '../../context/DriverStatusContext';
 
 export default function DriverHireDetailScreen({ navigation, route }) {
   const requestId = route.params?.requestId;
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const { driverStatus } = useDriverStatus() || {};
+  const canAcceptTrips = isDriverVerifiedForTrips(driverStatus);
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
 
@@ -93,6 +100,10 @@ export default function DriverHireDetailScreen({ navigation, route }) {
 
   const submitQuote = async () => {
     try {
+      if (!canAcceptTrips) {
+        Alert.alert('Not verified', DRIVER_VERIFICATION_REQUIRED_MESSAGE);
+        return;
+      }
       if (!vehicleId) {
         Alert.alert('Vehicle required', 'Add and get an approved hire vehicle first.');
         return;
@@ -122,6 +133,10 @@ export default function DriverHireDetailScreen({ navigation, route }) {
 
   const acceptPassengerOffer = async () => {
     try {
+      if (!canAcceptTrips) {
+        Alert.alert('Not verified', DRIVER_VERIFICATION_REQUIRED_MESSAGE);
+        return;
+      }
       if (!vehicleId) {
         Alert.alert('Vehicle required', 'Add and get an approved hire vehicle first.');
         return;
@@ -209,9 +224,9 @@ export default function DriverHireDetailScreen({ navigation, route }) {
         </View>
 
         <View className="mt-3 rounded-[24px] bg-white px-4 py-4">
-          <Text className="text-xs font-bold uppercase tracking-wide text-gray-400">Description</Text>
+          <Text className="text-xs font-bold uppercase tracking-wide text-gray-400">Job details</Text>
           <Text className="mt-2 text-sm leading-5 text-gray-800">
-            {request?.notes?.trim() || 'No specs or notes added.'}
+            {request?.notes?.trim() || 'No job details selected.'}
           </Text>
         </View>
 

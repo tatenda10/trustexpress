@@ -15,8 +15,11 @@ function getOsrmBaseUrl() {
 }
 
 function normalizeCoordinate(coordinate) {
-  const latitude = Number(coordinate?.latitude);
-  const longitude = Number(coordinate?.longitude);
+  const rawLat = coordinate?.latitude ?? coordinate?.lat;
+  const rawLng = coordinate?.longitude ?? coordinate?.lng ?? coordinate?.lon;
+  if (rawLat == null || rawLng == null || rawLat === '' || rawLng === '') return null;
+  const latitude = Number(rawLat);
+  const longitude = Number(rawLng);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
   return { latitude, longitude };

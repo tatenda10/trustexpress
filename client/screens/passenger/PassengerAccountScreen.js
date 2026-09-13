@@ -205,10 +205,10 @@ const PassengerAccountScreen = ({ navigation }) => {
     },
     {
       key: 'smile-cash',
-      title: 'Smile Cash wallet',
+      title: 'Online wallet',
       subtitle: profile?.passengerIdentity?.smileCashStatus === 'active'
-        ? `Active: ${profile.passengerIdentity.smileCashMobile}`
-        : 'Open a Smile Cash account for wallet payments',
+        ? profile.passengerIdentity.smileCashMobile
+        : null,
       icon: 'wallet-outline',
       onPress: () => navigation.navigate('PassengerSmileCash'),
     },

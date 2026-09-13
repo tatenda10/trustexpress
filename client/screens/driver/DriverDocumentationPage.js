@@ -129,9 +129,9 @@ export default function DriverDocumentationPage({ navigation, route }) {
           </Text>
         </View>
 
-        {(profile?.nationalIdNumber || profile?.driverLicenceNumber) ? (
+        {(profile?.nationalIdNumber || profile?.driverLicenceNumber || profile?.dateOfBirth || profile?.driverLicenceExpiresAt) ? (
           <View className="mb-6 rounded-[20px] border border-gray-200 bg-white p-4">
-            <Text className="mb-3 text-sm font-semibold text-gray-900">Registered identity numbers</Text>
+            <Text className="mb-3 text-sm font-semibold text-gray-900">Registered identity details</Text>
             {profile?.nationalIdNumber ? (
               <View className="mb-2">
                 <Text className="text-xs text-gray-500">National ID number</Text>
@@ -139,9 +139,21 @@ export default function DriverDocumentationPage({ navigation, route }) {
               </View>
             ) : null}
             {profile?.driverLicenceNumber ? (
-              <View>
+              <View className="mb-2">
                 <Text className="text-xs text-gray-500">Driver licence number</Text>
                 <Text className="mt-0.5 text-base font-medium text-gray-900">{profile.driverLicenceNumber}</Text>
+              </View>
+            ) : null}
+            {profile?.dateOfBirth ? (
+              <View className="mb-2">
+                <Text className="text-xs text-gray-500">Date of birth</Text>
+                <Text className="mt-0.5 text-base font-medium text-gray-900">{profile.dateOfBirth}</Text>
+              </View>
+            ) : null}
+            {profile?.driverLicenceExpiresAt ? (
+              <View>
+                <Text className="text-xs text-gray-500">Licence expiration</Text>
+                <Text className="mt-0.5 text-base font-medium text-gray-900">{profile.driverLicenceExpiresAt}</Text>
               </View>
             ) : null}
           </View>

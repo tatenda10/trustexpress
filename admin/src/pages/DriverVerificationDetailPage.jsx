@@ -548,6 +548,8 @@ export default function DriverVerificationDetailPage() {
               <Field label="Current Status" value={verificationStatusLabel} />
               <Field label="National ID Number" value={profileDocs.nationalIdNumber || '-'} />
               <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
+              <Field label="Licence Expiration" value={profileDocs.driverLicenceExpiresAt || '-'} />
+              <Field label="Date of Birth" value={profileDocs.dateOfBirth || driver.profile?.dateOfBirth || '-'} />
               <Field
                 label="Referred By Agent"
                 value={

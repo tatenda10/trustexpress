@@ -17,6 +17,7 @@ const HIDDEN_TAB_BAR_ROUTES = new Set([
   'PassengerRideTracking',
   'PassengerHireTracking',
   'RideChat',
+  'PassengerSupportChat',
 ]);
 
 function TabLabel({ label, focused, color }) {
@@ -94,7 +95,7 @@ export default function PassengerTabNavigator() {
         component={PassengerHireStack}
         options={({ route }) => ({
           title: 'Hiring',
-          tabBarIcon: ({ color }) => <Ionicons name="briefcase-outline" size={20} color={color} />,
+          tabBarIcon: ({ color }) => <Ionicons name="bus-outline" size={20} color={color} />,
           tabBarLabel: ({ focused, color }) => <TabLabel label="Hiring" focused={focused} color={color} />,
           tabBarStyle: shouldHideTabBar(route)
             ? { display: 'none' }
@@ -113,11 +114,14 @@ export default function PassengerTabNavigator() {
       <Tab.Screen
         name="PassengerAccount"
         component={PassengerAccountStack}
-        options={{
+        options={({ route }) => ({
           title: 'Account',
           tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={20} color={color} />,
           tabBarLabel: ({ focused, color }) => <TabLabel label="Account" focused={focused} color={color} />,
-        }}
+          tabBarStyle: shouldHideTabBar(route)
+            ? { display: 'none' }
+            : baseTabBarStyle,
+        })}
       />
     </Tab.Navigator>
   );

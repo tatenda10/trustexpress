@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
-import { normalizePaymentMethod } from '../lib/payment-method.js';
+import { normalizePaymentMethod, receiptPaymentMethodLabel } from '../lib/payment-method.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
@@ -43,6 +43,15 @@ const router = Router();
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
+}
+
+function toMapCoordinate(lat, lng) {
+  if (lat == null || lng == null || lat === '' || lng === '') return null;
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
 }
 
 function calculateDistanceKm(start, end) {
@@ -162,16 +171,16 @@ function calculateTierFare(tier, distanceKm) {
   return Math.ceil(Math.max(baseFare + (Number(distanceKm || 0) * pricePerKm), minimumFare));
 }
 
+function toDriverAverageRating(row) {
+  const count = Number(row?.rating_count || 0);
+  const rating = Number(row?.avg_rating);
+  if (!(count > 0) || !Number.isFinite(rating)) return null;
+  return Math.round(rating * 1000) / 1000;
+}
+
 function mapDriverAvailability(row, pickupCoordinate) {
-  const lat = Number(row.current_lat);
-  const lng = Number(row.current_lng);
-  const hasCoordinate = Number.isFinite(lat) && Number.isFinite(lng);
-  const coordinate = hasCoordinate
-    ? {
-        latitude: lat,
-        longitude: lng,
-      }
-    : null;
+  const coordinate = toMapCoordinate(row.current_lat, row.current_lng);
+  const hasCoordinate = Boolean(coordinate);
   const driverDistanceKm = hasCoordinate ? calculateDistanceKm(pickupCoordinate, coordinate) : null;
   const plate = String(row.number_plate || 'Unknown plate').trim().toUpperCase() || 'Unknown plate';
   // Prefer the dedicated front photo so passengers never see a rear-only fallback first.
@@ -185,7 +194,8 @@ function mapDriverAvailability(row, pickupCoordinate) {
     etaMinutes: hasCoordinate ? Math.max(1, Math.round(driverDistanceKm * 4)) : null,
     driverDistanceKm,
     amount: Number(row.estimated_amount || 0),
-    rating: 4.9,
+    rating: toDriverAverageRating(row),
+    ratingCount: Number(row.rating_count || 0),
     trips: Number(row.completed_rides || row.total_rides || 0),
     phoneNumber: row.phone_number || null,
     coordinate,
@@ -199,11 +209,7 @@ function mapDriverAvailability(row, pickupCoordinate) {
 }
 
 function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
-  const lat = Number(row.current_lat);
-  const lng = Number(row.current_lng);
-  const coordinate = Number.isFinite(lat) && Number.isFinite(lng)
-    ? { latitude: lat, longitude: lng }
-    : null;
+  const coordinate = toMapCoordinate(row.current_lat, row.current_lng);
   const driverDistanceKm = coordinate ? calculateDistanceKm(pickupCoordinate, coordinate) : null;
   const remainingSeconds = Number.isFinite(Number(row.offer_remaining_seconds))
     ? Math.max(0, Number(row.offer_remaining_seconds))
@@ -225,7 +231,8 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     etaMinutes: coordinate ? Math.max(1, Math.round(driverDistanceKm * 4)) : null,
     driverDistanceKm,
     amount: Number(estimatedAmount || 0),
-    rating: 4.9,
+    rating: toDriverAverageRating(row),
+    ratingCount: Number(row.rating_count || 0),
     trips: Number(row.completed_rides || row.total_rides || 0),
     phoneNumber: row.phone_number || null,
     coordinate,
@@ -253,7 +260,9 @@ async function loadDriverRideStats(driverUserIds = []) {
     `SELECT
        driver_user_id,
        COUNT(*) AS total_rides,
-       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides
+       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_rides,
+       AVG(CASE WHEN passenger_driver_rating IS NOT NULL THEN passenger_driver_rating END) AS avg_rating,
+       COUNT(passenger_driver_rating) AS rating_count
      FROM ride_requests
      WHERE driver_user_id IN (${placeholders})
      GROUP BY driver_user_id`,
@@ -266,6 +275,8 @@ async function loadDriverRideStats(driverUserIds = []) {
       {
         totalRides: Number(row.total_rides || 0),
         completedRides: Number(row.completed_rides || 0),
+        averageRating: row.avg_rating === null || row.avg_rating === undefined ? null : Number(row.avg_rating),
+        ratingCount: Number(row.rating_count || 0),
       },
     ])
   );
@@ -277,6 +288,8 @@ function attachDriverRideStats(row, driverStatsMap) {
     ...row,
     total_rides: stats?.totalRides || 0,
     completed_rides: stats?.completedRides || 0,
+    avg_rating: stats?.averageRating ?? null,
+    rating_count: stats?.ratingCount || 0,
   };
 }
 
@@ -340,6 +353,7 @@ function formatRideReceiptText(ride) {
     `Drop-off: ${ride.dropoff_label || '-'}`,
     '',
     `Tier: ${ride.requested_tier_name || 'Ride'}`,
+    `Payment: ${receiptPaymentMethodLabel(ride.payment_method || ride.paymentMethod) || '-'}`,
     `Original Fare: $${originalFareAmount.toFixed(2)}`,
     `Discount: -$${discountAmount.toFixed(2)}`,
     `Fare: $${fareAmount.toFixed(2)}`,
@@ -440,8 +454,12 @@ async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKe
      ORDER BY da.updated_at DESC`
   );
 
+  const driverStatsMap = await loadDriverRideStats(availabilityRows.map((row) => row.driver_user_id));
   const eligibleDrivers = availabilityRows
-    .map((row) => mapDriverAvailability({ ...row, estimated_amount: estimatedAmount }, pickupPoint))
+    .map((row) => mapDriverAvailability(
+      attachDriverRideStats({ ...row, estimated_amount: estimatedAmount }, driverStatsMap),
+      pickupPoint
+    ))
     .filter((item) => item.driverDistanceKm <= DRIVER_REQUEST_RADIUS_KM)
     .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
     .slice(0, MAX_DRIVER_OFFERS);
@@ -1257,7 +1275,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
       [ride.driver_user_id]
     );
 
-    const assignedDriver = driverAvailability
+    let assignedDriver = driverAvailability
       ? mapDriverAvailability(
           attachDriverRideStats({
             ...driverAvailability,
@@ -1271,6 +1289,27 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
             ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || null
             : null
         );
+    if (ride.driver_user_id && !assignedDriver?.coordinate) {
+      const [liveLocation] = await query(
+        `SELECT current_lat, current_lng, last_seen_at, driver_name, phone_number
+         FROM driver_availability
+         WHERE driver_user_id = ?
+         LIMIT 1`,
+        [ride.driver_user_id]
+      );
+      const liveCoordinate = toMapCoordinate(liveLocation?.current_lat, liveLocation?.current_lng);
+      if (liveCoordinate) {
+        assignedDriver = {
+          ...(assignedDriver || {
+            id: ride.driver_user_id,
+            driverName: liveLocation.driver_name || ride.driver_name || 'Driver',
+          }),
+          coordinate: liveCoordinate,
+          lastSeenAt: liveLocation.last_seen_at || assignedDriver?.lastSeenAt || null,
+          phoneNumber: assignedDriver?.phoneNumber || liveLocation.phone_number || null,
+        };
+      }
+    }
 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
@@ -1408,7 +1447,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
       }))
     );
 
-    const assignedDriver = ride.driver_user_id
+    let assignedDriver = ride.driver_user_id
       ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || (() => {
           const selectedRow = respondingDrivers.find((item) => item.driver_user_id === ride.driver_user_id);
           if (!selectedRow) return null;
@@ -1418,6 +1457,27 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
           }, driverStatsMap), pickupCoordinate);
         })()
       : null;
+    if (ride.driver_user_id && !assignedDriver?.coordinate) {
+      const [liveLocation] = await query(
+        `SELECT current_lat, current_lng, last_seen_at, driver_name, phone_number
+         FROM driver_availability
+         WHERE driver_user_id = ?
+         LIMIT 1`,
+        [ride.driver_user_id]
+      );
+      const liveCoordinate = toMapCoordinate(liveLocation?.current_lat, liveLocation?.current_lng);
+      if (liveCoordinate) {
+        assignedDriver = {
+          ...(assignedDriver || {
+            id: ride.driver_user_id,
+            driverName: liveLocation.driver_name || ride.driver_name || 'Driver',
+          }),
+          coordinate: liveCoordinate,
+          lastSeenAt: liveLocation.last_seen_at || assignedDriver?.lastSeenAt || null,
+          phoneNumber: assignedDriver?.phoneNumber || liveLocation.phone_number || null,
+        };
+      }
+    }
     const assignedDriverProfileImageUrl = ride.driver_user_id
       ? await getUserProfileImageUrl(ride.driver_user_id)
       : null;
@@ -1563,6 +1623,7 @@ router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) =>
          discount_amount,
          final_estimated_amount,
          tip_amount,
+         payment_method,
          status,
          requested_at,
          completed_at
@@ -1610,6 +1671,7 @@ router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res
          discount_amount,
          final_estimated_amount,
          tip_amount,
+         payment_method,
          status,
          requested_at,
          completed_at

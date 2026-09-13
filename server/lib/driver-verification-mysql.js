@@ -67,6 +67,9 @@ function shapeProfileFromRow(row) {
     selfieWithIdCardUrl: normalizeUploadPath(row.selfie_with_id_card_url),
     nationalIdNumber: row.national_id_number || null,
     driverLicenceNumber: row.driver_licence_number || null,
+    driverLicenceExpiresAt: row.driver_licence_expires_at
+      ? String(row.driver_licence_expires_at).slice(0, 10)
+      : null,
     ecocashNumber: row.ecocash_number || null,
     ecocashRegisteredName: row.ecocash_registered_name || null,
     dateOfBirth: row.date_of_birth

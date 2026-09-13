@@ -277,6 +277,7 @@ export function buildDisabledCaptainStatus(message = 'Captain rewards are not av
     currentRewardUsd: 0,
     rewardStatus: 'disabled',
     rewardStatusLabel: 'Unavailable',
+    tiers: [],
   };
 }
 
@@ -519,6 +520,7 @@ export async function buildCaptainStatusForDriver(driverUserId) {
       ridesToNextTier,
       progressPercent,
       currentRewardUsd: normalizeMoney(driverRow?.rewardAmountUsd || currentTier?.rewardAmountUsd || 0),
+      tiers: (tiers || []).filter((tier) => tier.isActive !== false),
       rewardStatus,
       rewardStatusLabel: rewardStatus === 'credited'
         ? 'Credited'

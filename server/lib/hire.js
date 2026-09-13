@@ -101,48 +101,7 @@ export function shapeHireRequest(row) {
   };
 }
 
-const HIRE_FARE_PROFILES = {
-  delivery: { min: 15, max: 35 },
-  sedan: { min: 25, max: 45 },
-  suv: { min: 35, max: 65 },
-  van: { min: 45, max: 80 },
-  moving_van: { min: 60, max: 110 },
-  pickup: { min: 50, max: 95 },
-  truck: { min: 90, max: 180 },
-  lorry: { min: 120, max: 240 },
-  iveco: { min: 90, max: 170 },
-  sprinter: { min: 85, max: 160 },
-  hiace: { min: 70, max: 130 },
-  caravan: { min: 70, max: 130 },
-  bus: { min: 120, max: 260 },
-  eighteen_seater_plus: { min: 140, max: 300 },
-  other: { min: 45, max: 100 },
-};
-
-function roundFare(value) {
-  return Math.max(5, Math.round(Number(value || 0) / 5) * 5);
-}
-
-export function estimateHireFare({ category, passengerCount = 1, startAt = null, endAt = null } = {}) {
-  const profile = HIRE_FARE_PROFILES[String(category || 'other').toLowerCase()] || HIRE_FARE_PROFILES.other;
-  const passengers = Number(passengerCount);
-  const passengerMultiplier = Number.isFinite(passengers) && passengers > 8
-    ? 1 + Math.min((passengers - 8) * 0.025, 0.35)
-    : 1;
-  const startTime = startAt ? new Date(startAt).getTime() : NaN;
-  const endTime = endAt ? new Date(endAt).getTime() : NaN;
-  const hours = Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
-    ? Math.min(Math.max((endTime - startTime) / 3600000, 1), 24)
-    : 1;
-  const durationMultiplier = hours > 4 ? 1 + Math.min((hours - 4) * 0.08, 0.8) : 1;
-  const min = roundFare(profile.min * passengerMultiplier * durationMultiplier);
-  const max = roundFare(profile.max * passengerMultiplier * durationMultiplier);
-  return {
-    min,
-    max: Math.max(max, min + 10),
-    currency: 'USD',
-  };
-}
+export { estimateHireFare } from './hire-vehicle-types.js';
 
 export function shapeHireQuote(row) {
   if (!row) return null;

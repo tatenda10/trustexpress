@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { receiptPaymentMethodLabel } from './payment-method.js';
 import { buildRideStopsPayload } from './ride-stops.js';
 
 const BLUE = '#114D7E';
@@ -101,6 +102,7 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   const driverName = shortName(ride.driver_name, 'Driver');
   const passengerInitials = passengerName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'P';
   const driverInitials = driverName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'D';
+  const paymentLabel = receiptPaymentMethodLabel(ride.payment_method || ride.paymentMethod);
   const intermediateStops = buildRideStopsPayload(ride).intermediateStops;
   const routeRows = [
     { label: 'PICKUP', value: ride.pickup_label, color: BLUE },
@@ -193,10 +195,15 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
     width: 46,
     align: 'right',
   });
-  divider(doc, fareY + 120);
+  doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Payment', 24, fareY + 120);
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(paymentLabel || '-', 200, fareY + 120, {
+    width: 76,
+    align: 'right',
+  });
+  divider(doc, fareY + 144);
 
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, fareY + 136);
-  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, fareY + 131, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, fareY + 160);
+  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, fareY + 155, {
     width: 66,
     align: 'right',
   });

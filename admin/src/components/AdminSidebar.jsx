@@ -40,6 +40,7 @@ const navSections = [
       { id: 'smile-cash-payouts', label: 'Smile Cash Payouts', icon: ComponentsIcon, to: '/dashboard/smile-cash-payouts', permission: 'payouts.read' },
       { id: 'driver-wallet-settings', label: 'Driver Wallet', icon: ComponentsIcon, to: '/dashboard/driver-wallet-settings', permission: 'payouts.read' },
       { id: 'hire-commission', label: 'Hire Commission', icon: ComponentsIcon, to: '/dashboard/hire-commission', permission: 'payouts.read' },
+      { id: 'hire-types', label: 'Hire Vehicle Types', icon: ComponentsIcon, to: '/dashboard/hire-types', permission: 'pricing.read' },
       { id: 'promotions', label: 'Promotions', icon: NetworkIcon, to: '/dashboard/promotions', permission: 'pricing.read' },
       { id: 'reports', label: 'Reports', icon: ClusterIcon, to: '/dashboard/reports', permission: 'reports.read' },
     ],

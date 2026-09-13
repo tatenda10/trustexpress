@@ -11,3 +11,10 @@ export function paymentMethodLabel(value) {
   if (method === 'online') return 'Pay online';
   return null;
 }
+
+export function receiptPaymentMethodLabel(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'cash') return 'Cash';
+  return 'Online payment';
+}

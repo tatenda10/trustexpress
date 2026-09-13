@@ -7,7 +7,7 @@ import {
   FlatList,
   TextInput,
   Platform,
-  KeyboardAvoidingView,
+  Keyboard,
   Image,
   Alert,
   ActionSheetIOS,
@@ -25,6 +25,7 @@ import {
   uploadFile,
   resolveUploadedMediaUrl,
 } from '../../api';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 const CHAT_REFRESH_MS = 5000;
@@ -92,11 +93,23 @@ export default function SupportChatScreen({ navigation, route }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [threadId, setThreadId] = useState(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const lastIncomingAdminMessageIdRef = useRef(null);
 
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => setKeyboardOpen(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardOpen(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const getAuthToken = useCallback(async () => {
     const getTokenFn = getTokenRef.current;
@@ -217,6 +230,7 @@ export default function SupportChatScreen({ navigation, route }) {
     () => [...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     [messages],
   );
+  const listMessages = useMemo(() => [...sortedMessages].reverse(), [sortedMessages]);
 
   const postMessage = async ({ message = '', attachmentUrl = null } = {}) => {
     const token = await getAuthToken();
@@ -340,8 +354,10 @@ export default function SupportChatScreen({ navigation, route }) {
 
   const canSendText = Boolean(String(draft || '').trim()) && !sending;
 
+  const composerPaddingBottom = keyboardOpen ? 10 : Math.max(insets.bottom, 12);
+
   return (
-    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} className="flex-1 bg-white">
+    <SafeAreaView edges={['top', 'left', 'right']} className="flex-1 bg-white">
       <View className="flex-row items-center px-5 py-4 border-b border-gray-100">
         <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
           <Ionicons name="arrow-back" size={20} color="#111827" />
@@ -354,94 +370,91 @@ export default function SupportChatScreen({ navigation, route }) {
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" keyboardVerticalOffset={0}>
         {loading ? (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="large" color={PRIMARY_BLUE} />
           </View>
         ) : (
-          <View className="flex-1">
-          {!!error && (
-            <View className="mx-5 mt-4 rounded-xl bg-red-50 px-4 py-3">
-              <Text className="text-sm text-red-700">{error}</Text>
-            </View>
-          )}
-
-          <FlatList
-            style={{ flex: 1 }}
-            data={sortedMessages}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={({ item }) => (
-              <MessageBubble
-                item={item}
-                isMine={String(item.senderUserId) === String(user?.id) && item.senderType !== 'admin'}
-              />
-            )}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            contentContainerStyle={{
-              paddingHorizontal: 20,
-              paddingTop: 20,
-              paddingBottom: Math.max(insets.bottom + 104, 132),
-              flexGrow: sortedMessages.length ? 0 : 1,
-            }}
-            onRefresh={() => loadMessages({ showRefreshing: true })}
-            refreshing={refreshing}
-            ListEmptyComponent={
-              <View className="flex-1 items-center justify-center py-24">
-                <Ionicons name="headset-outline" size={36} color="#9ca3af" />
-                <Text className="mt-4 text-lg font-semibold text-gray-900">Start a support chat</Text>
-                <Text className="mt-2 px-8 text-center text-sm leading-6 text-gray-500">
-                  Message support or attach a photo (ID / selfie) for account recovery verification.
-                </Text>
+          <View style={{ flex: 1 }}>
+            {!!error && (
+              <View className="mx-5 mt-4 rounded-xl bg-red-50 px-4 py-3">
+                <Text className="text-sm text-red-700">{error}</Text>
               </View>
-            }
-          />
+            )}
 
-          <View
-            className="border-t border-gray-100 bg-white px-4 pt-3"
-            style={{ paddingBottom: Math.max(insets.bottom, 10) }}
-          >
-            <View className="flex-row items-end rounded-[26px] border border-blue-100 bg-[#eff6ff] px-2 py-2">
-              <TouchableOpacity
-                onPress={handleAttachPhoto}
-                disabled={sending}
-                className="mb-1 h-11 w-11 items-center justify-center rounded-full"
-                accessibilityLabel="Attach photo"
-              >
-                <Ionicons name="image-outline" size={22} color={sending ? '#93c5fd' : PRIMARY_BLUE} />
-              </TouchableOpacity>
-              <TextInput
-                className="flex-1 px-2 py-3 text-[15px] text-gray-900"
-                placeholder="Message or caption for photo"
-                placeholderTextColor="#9ca3af"
-                multiline
-                value={draft}
-                onChangeText={setDraft}
-                maxLength={1000}
-                textAlignVertical="top"
-                style={{ minHeight: 48, maxHeight: 120 }}
-              />
-              <TouchableOpacity
-                onPress={handleSend}
-                disabled={!canSendText}
-                className="mb-1 ml-1 h-11 w-11 items-center justify-center rounded-full"
-                style={{ backgroundColor: canSendText ? PRIMARY_BLUE : '#93c5fd' }}
-              >
-                {sending ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons name="send" size={18} color="#fff" />
-                )}
-              </TouchableOpacity>
+            <FlatList
+              style={{ flex: 1 }}
+              inverted={listMessages.length > 0}
+              data={listMessages}
+              keyExtractor={(item) => String(item.id)}
+              renderItem={({ item }) => (
+                <MessageBubble
+                  item={item}
+                  isMine={String(item.senderUserId) === String(user?.id) && item.senderType !== 'admin'}
+                />
+              )}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              contentContainerStyle={{
+                paddingHorizontal: 20,
+                paddingTop: 12,
+                paddingBottom: 16,
+                flexGrow: listMessages.length ? 0 : 1,
+              }}
+              onRefresh={() => loadMessages({ showRefreshing: true })}
+              refreshing={refreshing}
+              ListEmptyComponent={
+                <View className="flex-1 items-center justify-center py-24">
+                  <Ionicons name="headset-outline" size={36} color="#9ca3af" />
+                  <Text className="mt-4 text-lg font-semibold text-gray-900">Start a support chat</Text>
+                  <Text className="mt-2 px-8 text-center text-sm leading-6 text-gray-500">
+                    Message support or attach a photo (ID / selfie) for account recovery verification.
+                  </Text>
+                </View>
+              }
+            />
+
+            <View
+              className="border-t border-gray-100 bg-white px-4 pt-3"
+              style={{ paddingBottom: composerPaddingBottom }}
+            >
+              <View className="flex-row items-end rounded-[26px] border border-blue-100 bg-[#eff6ff] px-2 py-2">
+                <TouchableOpacity
+                  onPress={handleAttachPhoto}
+                  disabled={sending}
+                  className="mb-1 h-11 w-11 items-center justify-center rounded-full"
+                  accessibilityLabel="Attach photo"
+                >
+                  <Ionicons name="image-outline" size={22} color={sending ? '#93c5fd' : PRIMARY_BLUE} />
+                </TouchableOpacity>
+                <TextInput
+                  className="flex-1 px-2 py-3 text-[15px] text-gray-900"
+                  placeholder="Message or caption for photo"
+                  placeholderTextColor="#9ca3af"
+                  multiline
+                  value={draft}
+                  onChangeText={setDraft}
+                  maxLength={1000}
+                  textAlignVertical="top"
+                  style={{ minHeight: 48, maxHeight: 120 }}
+                />
+                <TouchableOpacity
+                  onPress={handleSend}
+                  disabled={!canSendText}
+                  className="mb-1 ml-1 h-11 w-11 items-center justify-center rounded-full"
+                  style={{ backgroundColor: canSendText ? PRIMARY_BLUE : '#93c5fd' }}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="send" size={18} color="#fff" />
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
-      )}
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

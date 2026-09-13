@@ -7,8 +7,12 @@ function toDegrees(value) {
 }
 
 export function normalizeCoordinate(value) {
-  const latitude = Number(value?.latitude);
-  const longitude = Number(value?.longitude);
+  if (value == null || typeof value !== 'object') return null;
+  const rawLat = value.latitude ?? value.lat;
+  const rawLng = value.longitude ?? value.lng ?? value.lon;
+  if (rawLat == null || rawLng == null || rawLat === '' || rawLng === '') return null;
+  const latitude = Number(rawLat);
+  const longitude = Number(rawLng);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
   return { latitude, longitude };

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useIsFocused } from '@react-navigation/native';
@@ -44,7 +44,7 @@ function getStatusColors(status) {
   };
 }
 
-export default function DriverDiscountReimbursementsScreen() {
+export default function DriverDiscountReimbursementsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -107,12 +107,18 @@ export default function DriverDiscountReimbursementsScreen() {
   return (
     <View className="flex-1 bg-gray-50">
       <View
-        className="flex-row items-center justify-between border-b border-gray-100 bg-white"
-        style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}
+        className="flex-row items-center justify-between bg-gray-50"
+        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
       >
-        <View className="w-10" />
-        <Text className="text-lg font-bold text-gray-900">Reimbursements</Text>
-        <View className="w-10" />
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={() => navigation.goBack()}
+          className="h-10 w-10 items-center justify-center rounded-full bg-white"
+        >
+          <Ionicons name="chevron-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text className="text-[18px] font-bold text-gray-900">Discounts</Text>
+        <View className="h-10 w-10" />
       </View>
 
       {loading ? (

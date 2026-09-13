@@ -2,16 +2,19 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
   Image,
   Alert,
   Modal,
+  Animated,
+  Dimensions,
+  PanResponder,
+  Vibration,
 } from 'react-native';
+import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import { useAuth } from '@clerk/clerk-expo';
@@ -26,9 +29,11 @@ import {
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
+import { paymentMethodLabel } from '../../constants/payment';
 import { connectRealtime } from '../../realtime';
 
 const REQUEST_EXPIRY_POLL_MS = 1000;
+const SCREEN_HEIGHT = Dimensions.get('window').height;
 const EMPTY_ROUTE_COORDINATES = [];
 
 function normalizeRouteCoordinate(value) {
@@ -72,35 +77,6 @@ function normalizeDriverProfileImageUrl(url) {
   }
 }
 
-function DriverFacePreview({ driver, size = 34 }) {
-  const imageUri = normalizeDriverProfileImageUrl(driver?.profileImageUrl);
-  const initials = String(driver?.driverName || 'D')
-    .trim()
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase() || 'D';
-
-  if (imageUri) {
-    return (
-      <Image
-        source={{ uri: imageUri }}
-        style={{ width: size, height: size, borderRadius: size / 2, marginRight: 8, borderWidth: 2, borderColor: '#fff' }}
-      />
-    );
-  }
-
-  return (
-    <View
-      className="items-center justify-center rounded-full bg-blue-100"
-      style={{ width: size, height: size, marginRight: 8, borderWidth: 2, borderColor: '#fff' }}
-    >
-      <Text className="text-[11px] font-bold text-blue-700">{initials}</Text>
-    </View>
-  );
-}
-
 async function fetchRouteCoordinates(token, origin, destination) {
   if (!token || !origin || !destination) return null;
   const data = await getDirectionsRoute(token, { origin, destination, cacheTtlSeconds: 1800 });
@@ -130,8 +106,66 @@ function formatCountdown(totalSeconds) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-function formatCurrency(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+function formatOfferPrice(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return '$0';
+  return Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`;
+}
+
+function SearchProgressBar() {
+  const progress = useRef(new Animated.Value(0.12)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(progress, { toValue: 1, duration: 1600, useNativeDriver: false }),
+        Animated.timing(progress, { toValue: 0.12, duration: 0, useNativeDriver: false }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [progress]);
+
+  const width = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['8%', '100%'],
+  });
+
+  return (
+    <View className="mt-3 h-[3px] overflow-hidden rounded-full bg-gray-100">
+      <Animated.View style={{ height: 3, width, backgroundColor: '#111827', borderRadius: 99 }} />
+    </View>
+  );
+}
+
+function ViewingAvatar({ driver, size = 32, overlap = false }) {
+  const imageUri = normalizeDriverProfileImageUrl(driver?.profileImageUrl);
+  const initials = String(driver?.driverName || 'D')
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'D';
+
+  return (
+    <View
+      className="items-center justify-center overflow-hidden rounded-full bg-gray-200"
+      style={{
+        width: size,
+        height: size,
+        marginLeft: overlap ? -10 : 0,
+        borderWidth: 2,
+        borderColor: '#fff',
+      }}
+    >
+      {imageUri ? (
+        <Image source={{ uri: imageUri }} style={{ width: size, height: size }} />
+      ) : (
+        <Text className="text-[10px] font-bold text-gray-600">{initials}</Text>
+      )}
+    </View>
+  );
 }
 
 // ── Driver card ──────────────────────────────────────────────────────────────
@@ -186,7 +220,7 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
             <View className="mt-1.5 flex-row items-center gap-1">
               <Ionicons name="star" size={12} color="#f59e0b" />
               <Text className="text-[11px] font-semibold text-gray-600">
-                {driver.rating?.toFixed(2)} · {driver.trips} rides
+                {Number.isFinite(Number(driver.rating)) ? Number(driver.rating).toFixed(2) : 'New'} · {driver.trips} rides
               </Text>
             </View>
           </View>
@@ -238,7 +272,6 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   const navigatedToTrackingRef = useRef(false);
@@ -256,6 +289,9 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [nowTick, setNowTick] = useState(Date.now());
   const [realtimeSignal, setRealtimeSignal] = useState(0);
+  const seenAcceptedDriverIdsRef = useRef(new Set());
+  const acceptSoundRef = useRef(null);
+  const acceptAlertInFlightRef = useRef(false);
 
   const {
     pickupCoordinate,
@@ -382,6 +418,73 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     return () => { active = false; localSocket?.__cleanup?.(); };
   }, [refreshRideStatus, rideRequest?.id]);
 
+  const playDriverAcceptedAlert = useCallback(async () => {
+    if (acceptAlertInFlightRef.current) return;
+    acceptAlertInFlightRef.current = true;
+    try {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+      } catch {
+        // Keep the request flow working even if audio mode cannot change.
+      }
+      if (!acceptSoundRef.current) {
+        const { sound } = await Audio.Sound.createAsync(
+          require('../../assets/notificationaudio.mpeg'),
+          { shouldPlay: false, volume: 1.0, isLooping: false },
+        );
+        acceptSoundRef.current = sound;
+      }
+      const sound = acceptSoundRef.current;
+      if (sound) {
+        await sound.setVolumeAsync(1.0);
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (!status?.didJustFinish) return;
+          sound.setOnPlaybackStatusUpdate(null);
+          if (acceptSoundRef.current !== sound) {
+            sound.unloadAsync().catch(() => {});
+          }
+        });
+        await sound.replayAsync();
+      }
+      Vibration.vibrate(400);
+    } catch {
+      // Keep waiting UI working if sound cannot play.
+    } finally {
+      acceptAlertInFlightRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    const ids = acceptedDrivers.map((driver) => String(driver?.id || '')).filter(Boolean);
+    const assignedId = assignedDriver?.id ? String(assignedDriver.id) : '';
+    const incomingIds = assignedId ? [...new Set([...ids, assignedId])] : ids;
+    const newIds = incomingIds.filter((id) => !seenAcceptedDriverIdsRef.current.has(id));
+    newIds.forEach((id) => seenAcceptedDriverIdsRef.current.add(id));
+    if (newIds.length) {
+      playDriverAcceptedAlert();
+    }
+  }, [acceptedDrivers, assignedDriver, playDriverAcceptedAlert]);
+
+  useEffect(() => () => {
+    const sound = acceptSoundRef.current;
+    acceptSoundRef.current = null;
+    if (!sound) return;
+    sound.getStatusAsync()
+      .then((status) => {
+        if (!status?.isLoaded || !status?.isPlaying) {
+          return sound.unloadAsync();
+        }
+        return null;
+      })
+      .catch(() => sound.unloadAsync?.().catch(() => {}));
+  }, []);
+
   // ── Navigate to tracking when driver assigned ──
   useEffect(() => {
     if (!rideRequest?.id || !assignedDriver || navigatedToTrackingRef.current) return;
@@ -432,7 +535,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     [nowTick, rideExpiresAt, rideRequest?.remainingSeconds, rideRequest?.remainingSecondsCapturedAt, rideStatus?.remainingSeconds, rideStatus?.remainingSecondsCapturedAt],
   );
 
-  const isWaitingForDrivers = !assignedDriver && ['requested', 'driver_found', ''].includes(rideStatusValue);
   const shouldForceAcceptedRefresh = !assignedDriver && rideStatusValue === 'driver_found' && acceptedDrivers.length === 0;
 
   useEffect(() => {
@@ -536,9 +638,67 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   };
 
   const hasDrivers = acceptedDrivers.length > 0 && !assignedDriver;
+  const paymentLabel = paymentMethodLabel(rideStatus?.paymentMethod || rideRequest?.paymentMethod) || 'Cash';
+  const availableDriversCount = Math.max(driversViewingCount, acceptedDrivers.length);
+  const bottomSafeInset = Math.max(insets.bottom, 12);
+  const collapsedSheetHeight = Math.round(Math.min(430, SCREEN_HEIGHT * 0.5) + bottomSafeInset);
+  const expandedSheetHeight = Math.round(SCREEN_HEIGHT * 0.92);
+  const sheetHeight = useRef(new Animated.Value(collapsedSheetHeight)).current;
+  const sheetHeightValue = useRef(collapsedSheetHeight);
+  const sheetDragStart = useRef(collapsedSheetHeight);
+  const sheetScrollOffsetRef = useRef(0);
+  const [sheetExpanded, setSheetExpanded] = useState(false);
+
+  useEffect(() => {
+    const listener = sheetHeight.addListener(({ value }) => {
+      sheetHeightValue.current = value;
+    });
+    return () => sheetHeight.removeListener(listener);
+  }, [sheetHeight]);
+
+  const snapSheet = useCallback((expand) => {
+    setSheetExpanded(!!expand);
+    Animated.spring(sheetHeight, {
+      toValue: expand ? expandedSheetHeight : collapsedSheetHeight,
+      useNativeDriver: false,
+      bounciness: 2,
+      speed: 16,
+    }).start();
+  }, [collapsedSheetHeight, expandedSheetHeight, sheetHeight]);
+
+  const sheetPan = useMemo(() => {
+    const isSheetDrag = (_event, gesture) => {
+      const vertical = Math.abs(gesture.dy) > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+      if (!vertical) return false;
+      if (sheetHeightValue.current < expandedSheetHeight - 12) return true;
+      if (gesture.dy > 0 && sheetScrollOffsetRef.current <= 2) return true;
+      return false;
+    };
+
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: isSheetDrag,
+      onMoveShouldSetPanResponderCapture: isSheetDrag,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        sheetDragStart.current = sheetHeightValue.current;
+      },
+      onPanResponderMove: (_event, gesture) => {
+        const next = Math.min(
+          expandedSheetHeight,
+          Math.max(collapsedSheetHeight, sheetDragStart.current - gesture.dy)
+        );
+        sheetHeight.setValue(next);
+      },
+      onPanResponderRelease: (_event, gesture) => {
+        const mid = (collapsedSheetHeight + expandedSheetHeight) / 2;
+        snapSheet(gesture.vy < -0.7 || sheetHeightValue.current > mid);
+      },
+    });
+  }, [collapsedSheetHeight, expandedSheetHeight, sheetHeight, snapSheet]);
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <View className="flex-1 bg-white">
       <View className="flex-1">
         {/* ── Map ── */}
         <MapView
@@ -569,96 +729,71 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           ))}
         </MapView>
 
-        {/* dim overlay when drivers appear */}
-        {hasDrivers && (
-          <View
-            pointerEvents="none"
-            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' }}
-          />
-        )}
-
-        {/* ── Top header pill ── */}
-        <View className="absolute left-0 right-0 px-4" style={{ top: insets.top + 8 }}>
-          <View className="flex-row items-center rounded-2xl border border-gray-100 bg-white px-3 py-3">
-            <TouchableOpacity
-              onPress={() => navigation.goBack()}
-              className="mr-3 h-10 w-10 items-center justify-center rounded-xl bg-gray-100"
-            >
-              <Ionicons name="chevron-back" size={22} color="#111827" />
-            </TouchableOpacity>
-
-            <View className="flex-1">
-              <Text className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Your trip</Text>
-              <Text className="mt-0.5 text-sm font-bold text-gray-900" numberOfLines={1}>{pickupLabel}</Text>
-              <Text className="mt-0.5 text-xs text-gray-500" numberOfLines={1}>{dropoffLabel}</Text>
-            </View>
-
-            {/* Trip meta */}
-            <View className="ml-3 items-end gap-0.5">
-              <Text className="text-[13px] font-extrabold tracking-tight text-gray-900">
-                {formatCurrency(finalEstimatedAmount)}
-              </Text>
-              <Text className="text-[11px] text-gray-400">
-                {distanceKm?.toFixed(1)} km · {estimatedMinutes} min
-              </Text>
-            </View>
-
-            {/* Countdown badge removed — open requests no longer auto-expire */}
-          </View>
-
-          {isWaitingForDrivers ? (
-            <>
-              <View className="mt-3 flex-row items-center justify-between rounded-2xl border border-blue-100 bg-white/95 px-4 py-3">
-                <View className="flex-1 flex-row items-center">
-                  <View className="h-9 w-9 items-center justify-center rounded-full bg-blue-50">
-                    <Ionicons name="people-outline" size={18} color={PRIMARY_BLUE} />
-                  </View>
-                  <View className="ml-3 flex-1">
-                    <Text className="text-[11px] font-bold uppercase tracking-[1.2px] text-blue-600">
-                      Request visibility
-                    </Text>
-                    <Text className="mt-0.5 text-sm font-semibold text-gray-900">
-                      {driversViewingCount > 0
-                        ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} viewed your request`
-                        : 'Waiting for nearby drivers to view your request'}
-                    </Text>
-                    {visibleDriversPreview.length ? (
-                      <View className="mt-2 flex-row items-center">
-                        {visibleDriversPreview.slice(0, 4).map((driver) => (
-                          <DriverFacePreview key={driver.id} driver={driver} />
-                        ))}
-                      </View>
-                    ) : null}
-                  </View>
-                </View>
-                <View className="rounded-full bg-blue-50 px-3 py-2">
-                  <Text className="text-base font-extrabold text-blue-700">{driversViewingCount}</Text>
-                </View>
-              </View>
-            </>
-          ) : null}
+        <View className="absolute left-4" style={{ top: insets.top + 8 }}>
+          <TouchableOpacity
+            onPress={handleCancelRequest}
+            className="h-11 w-11 items-center justify-center rounded-full bg-white"
+            style={{ elevation: 3, shadowColor: '#0f172a', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } }}
+          >
+            <Ionicons name="chevron-back" size={22} color="#111827" />
+          </TouchableOpacity>
         </View>
 
-        {/* ── Accepted drivers overlay list ── */}
-        {hasDrivers && (
-          <View
-            className="absolute left-0 right-0 px-4"
-            style={{ top: insets.top + 96, maxHeight: '70%', zIndex: 50 }}
-            pointerEvents="box-none"
-          >
-            <View className="rounded-2xl border border-gray-100 bg-white px-3 pt-3 pb-1">
-              {/* Section header */}
-              <View className="mb-2.5 flex-row items-center justify-between px-1">
-                <Text className="text-[11px] font-bold uppercase tracking-widest text-gray-400">
-                  {acceptedDrivers.length} driver{acceptedDrivers.length !== 1 ? 's' : ''} accepted
-                </Text>
-                <Text className="text-[11px] text-gray-400">Scroll to see more</Text>
+        <Animated.View
+          className="absolute left-0 right-0 overflow-hidden rounded-t-[28px] bg-white"
+          style={{ bottom: 0, height: sheetHeight }}
+          {...sheetPan.panHandlers}
+        >
+          <View className="px-5 pt-3">
+            <View className="items-center py-2">
+              <View className="h-1.5 w-12 rounded-full bg-gray-200" />
+            </View>
+            <View className="flex-row items-center justify-between">
+              <Text className="flex-1 pr-3 text-[15px] text-gray-800">
+                {driversViewingCount > 0
+                  ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} viewed your request`
+                  : 'Drivers will see your request nearby'}
+              </Text>
+              <View className="flex-row items-center">
+                {visibleDriversPreview.slice(0, 3).map((driver, index) => (
+                  <ViewingAvatar key={driver.id} driver={driver} overlap={index > 0} />
+                ))}
+                {Math.max(0, driversViewingCount - Math.min(visibleDriversPreview.length, 3)) > 0 ? (
+                  <View
+                    className="h-8 items-center justify-center rounded-full bg-gray-100 px-2"
+                    style={{ marginLeft: visibleDriversPreview.length ? -8 : 0 }}
+                  >
+                    <Text className="text-xs font-semibold text-gray-700">
+                      +{Math.max(0, driversViewingCount - Math.min(visibleDriversPreview.length, 3))}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 6 }}
-                keyboardShouldPersistTaps="handled"
-              >
+            </View>
+          </View>
+
+          <ScrollView
+            className="flex-1 px-5"
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+            scrollEnabled={sheetExpanded}
+            contentContainerStyle={{ paddingBottom: 16 }}
+            onScroll={(event) => {
+              sheetScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+            }}
+            scrollEventThrottle={16}
+          >
+            <Text className="text-[28px] font-semibold leading-8 text-gray-900">Searching for drivers</Text>
+            <Text className="mt-1 text-[16px] text-gray-500">
+              {availableDriversCount > 0
+                ? `${availableDriversCount} driver${availableDriversCount === 1 ? '' : 's'} are available`
+                : 'Drivers see your request'}
+            </Text>
+            <SearchProgressBar />
+
+            {hasDrivers ? (
+              <View className="mt-5">
                 {acceptedDrivers.map((driver) => (
                   <DriverCard
                     key={driver.id}
@@ -674,57 +809,75 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                     isSubmitting={isSubmittingDriverId === driver.id}
                   />
                 ))}
-              </ScrollView>
-            </View>
-          </View>
-        )}
-
-        {/* ── Bottom sheet ── */}
-        <View
-          className="absolute left-0 right-0 rounded-t-3xl border-t border-gray-100 bg-white px-5 pt-3"
-          style={{ bottom: tabBarHeight, paddingBottom: Math.max(insets.bottom + 16, 28) }}
-        >
-          {/* Handle */}
-          <View className="mb-4 items-center">
-            <View className="h-1 w-12 rounded-full bg-gray-200" />
-          </View>
-
-          {!hasDrivers && (
-            <View className="items-center">
-              {/* Animated waiting state */}
-              <View className="mb-4 h-16 w-16 items-center justify-center rounded-full bg-blue-50">
-                <Ionicons name="car-sport-outline" size={30} color={PRIMARY_BLUE} />
               </View>
+            ) : null}
 
-              <Text className="text-xl font-bold text-gray-900">Finding your driver</Text>
-              <Text className="mt-1.5 text-center text-sm text-gray-400">
-                Nearby drivers have been notified.{'\n'}Accepted offers will appear here. Your request stays active until you cancel or choose a driver.
+            <View className="mt-5 flex-row items-center">
+              <View className="h-2 w-2 rounded-full bg-gray-900" />
+              <Text className="ml-3 text-[16px] font-medium text-gray-900">
+                {formatOfferPrice(finalEstimatedAmount)} {paymentLabel}
               </Text>
-
-              {/* Cancel */}
-              <TouchableOpacity
-                onPress={handleCancelRequest}
-                className="mt-3 rounded-xl border border-gray-200 px-6 py-3"
-                activeOpacity={0.75}
-              >
-                <Text className="text-sm font-semibold text-red-500">Cancel request</Text>
-              </TouchableOpacity>
             </View>
-          )}
 
-          {/* Collapsed status when drivers shown */}
-          {hasDrivers && (
-            <View className="flex-row items-center justify-between">
-              <View className="flex-row items-center gap-2">
-                <View className="h-2 w-2 rounded-full bg-green-500" />
-                <Text className="text-sm font-semibold text-gray-700">Review driver offers above</Text>
+            <View className="mt-4 flex-row items-start">
+              <Ionicons name="person-outline" size={18} color="#111827" style={{ marginTop: 2 }} />
+              <Text className="ml-3 flex-1 text-[16px] text-gray-900">{pickupLabel}</Text>
+            </View>
+            <View className="mt-3 flex-row items-start">
+              <Ionicons name="flag-outline" size={18} color="#111827" style={{ marginTop: 2 }} />
+              <Text className="ml-3 flex-1 text-[16px] text-gray-900">{dropoffLabel}</Text>
+            </View>
+
+            {sheetExpanded ? (
+              <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
+                <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">
+                  Extra details
+                </Text>
+                {Array.isArray(intermediateStops) && intermediateStops.length ? (
+                  intermediateStops.map((stop, index) => (
+                    <View key={`${stop?.label || 'stop'}-${index}`} className="mt-3 flex-row items-start">
+                      <Ionicons name="ellipse-outline" size={16} color="#64748b" style={{ marginTop: 3 }} />
+                      <View className="ml-3 flex-1">
+                        <Text className="text-xs text-gray-500">Stop {index + 1}</Text>
+                        <Text className="mt-0.5 text-[16px] text-gray-900">{stop?.label || 'Stop'}</Text>
+                      </View>
+                    </View>
+                  ))
+                ) : null}
+                <View className="mt-3 flex-row flex-wrap">
+                  {Number(distanceKm) > 0 ? (
+                    <Text className="mr-4 mt-1 text-[15px] text-gray-700">
+                      {Number(distanceKm).toFixed(1)} km
+                    </Text>
+                  ) : null}
+                  {Number(estimatedMinutes) > 0 ? (
+                    <Text className="mr-4 mt-1 text-[15px] text-gray-700">
+                      ~{Math.round(Number(estimatedMinutes))} min
+                    </Text>
+                  ) : null}
+                  {selectedTier ? (
+                    <Text className="mr-4 mt-1 text-[15px] capitalize text-gray-700">
+                      {String(selectedTier).replace(/_/g, ' ')}
+                    </Text>
+                  ) : null}
+                </View>
               </View>
-              <TouchableOpacity onPress={handleCancelRequest}>
-                <Text className="text-sm font-semibold text-red-500">Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
+            ) : null}
+          </ScrollView>
+
+          <View
+            className="border-t border-gray-100 bg-white px-5 pt-3"
+            style={{ paddingBottom: bottomSafeInset }}
+          >
+            <TouchableOpacity
+              onPress={handleCancelRequest}
+              className="h-20 items-center justify-center rounded-[24px] bg-[#e5e7eb]"
+              activeOpacity={0.75}
+            >
+              <Text className="text-[20px] font-bold text-gray-800">Cancel request</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
       </View>
 
       {/* ── Cancel reason modal ── */}
@@ -793,6 +946,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }

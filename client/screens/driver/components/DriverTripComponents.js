@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, TextInput,
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline } from '../../../components/maps/MapViewCompat';
 import DriverVehicleMapMarker from '../../../components/maps/DriverVehicleMapMarker';
+import { receiptPaymentMethodLabel } from '../../../constants/payment';
 
 export function DriverTripLoadingState({ color }) {
   return (
@@ -100,6 +101,12 @@ export function DriverTripReceiptView({
             <Text className="text-sm text-gray-500">Passenger tip</Text>
             <Text className={`text-base font-bold ${Number(tipAmount || 0) > 0 ? 'text-green-600' : 'text-gray-900'}`}>
               {formatCurrency(tipAmount)}
+            </Text>
+          </View>
+          <View className="mt-3 flex-row items-center justify-between">
+            <Text className="text-sm text-gray-500">Payment</Text>
+            <Text className="text-base font-bold text-gray-900">
+              {receiptPaymentMethodLabel(ratingRide.paymentMethod) || '-'}
             </Text>
           </View>
           <View className="mt-4 border-t border-gray-100 pt-4 flex-row items-center justify-between">

@@ -71,6 +71,17 @@ export function isTruckDriver(driverMe, fallback = null) {
   return resolveDriverKind(driverMe, fallback) === DRIVER_KIND_TRUCK;
 }
 
+export const DRIVER_VERIFICATION_REQUIRED_MESSAGE =
+  'You need to be verified before you can accept trips.';
+
+export function isDriverVerifiedForTrips(driverMe) {
+  const profileStatus = String(driverMe?.driverProfile?.status || '').trim().toLowerCase();
+  const vehicleStatus = String(driverMe?.vehicle?.status || '').trim().toLowerCase();
+  const profileApproved = profileStatus === 'approved' || profileStatus === 'verified';
+  const vehicleApproved = vehicleStatus === 'approved' || vehicleStatus === 'verified';
+  return profileApproved && vehicleApproved;
+}
+
 export function getDriverVehicleRoute(driverMe, fallback = null) {
   return isTruckDriver(driverMe, fallback) ? 'DriverRegisterTruck' : 'DriverRegisterCar';
 }

@@ -56,6 +56,10 @@ function mapIdentityProfileDocs(row) {
     selfieWithIdCardUrl: normalizeUploadPath(row.selfie_with_id_card_url),
     nationalIdNumber: row.national_id_number || null,
     driverLicenceNumber: row.driver_licence_number || null,
+    dateOfBirth: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
+    driverLicenceExpiresAt: row.driver_licence_expires_at
+      ? String(row.driver_licence_expires_at).slice(0, 10)
+      : null,
   };
 }
 

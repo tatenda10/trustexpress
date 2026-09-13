@@ -25,7 +25,11 @@ import {
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { paymentMethodLabel } from '../../constants/payment';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
-import { isTruckDriver } from '../../constants/driverKind';
+import {
+  DRIVER_VERIFICATION_REQUIRED_MESSAGE,
+  isDriverVerifiedForTrips,
+  isTruckDriver,
+} from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import {
   canUseTripOverlay,
@@ -228,6 +232,9 @@ function getAvailabilityErrorMessage(nextOnline, error) {
     return nextOnline
       ? 'We could not put you online right now. Please try again.'
       : 'We could not update your availability right now. Please try again.';
+  }
+  if (nextOnline && /approv|verif/i.test(rawMessage)) {
+    return DRIVER_VERIFICATION_REQUIRED_MESSAGE;
   }
   return rawMessage;
 }
@@ -1344,15 +1351,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
   }, [ensureDisplayOverlayReady, isFocused, isOnline]);
 
   const handleGoOnline = async () => {
+    if (!isDriverVerifiedForTrips(driverStatus)) {
+      Alert.alert('Not verified', DRIVER_VERIFICATION_REQUIRED_MESSAGE);
+      return;
+    }
     if (truckDriver) {
-      Alert.alert(
-        'Hiring jobs only',
-        'Truck drivers take hire jobs from the Hiring tab. Ride requests are for normal drivers.',
-        [
-          { text: 'Open Hiring', onPress: () => navigation.navigate('DriverHireJobs') },
-          { text: 'OK', style: 'cancel' },
-        ],
-      );
+      navigation.navigate('DriverHireJobs');
       return;
     }
     if (availabilityActionPending || isOnline) return;
@@ -1848,23 +1852,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
             </View>
 
             {!isOnline ? (
-              truckDriver ? (
-                <>
-                  <View className="mt-12 h-64 w-64 items-center justify-center rounded-full bg-[#2f73c9]">
-                    <Ionicons name="bus-outline" size={62} color="#fff" />
-                    <Text className="mt-4 text-3xl font-bold text-white">HIRING</Text>
-                  </View>
-                  <Text className="mt-14 text-center text-2xl font-medium leading-10 text-[#4a4d55]">
-                    Truck drivers take hire jobs, not ride requests. Open the Hiring tab to find work.
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => navigation.navigate('DriverHireJobs')}
-                    className="mt-8 rounded-full bg-[#2f73c9] px-8 py-4"
-                  >
-                    <Text className="text-base font-bold uppercase text-white">Open Hiring</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
               <>
                 {walletStatus.paymentsEnabled && !walletStatus.sufficientBalance && walletStatus.lowBalanceMessage ? (
                   <View className="mt-6 rounded-[20px] bg-amber-50 px-5 py-4">
@@ -1901,7 +1888,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   Ready to earn? Tap the button to start receiving requests in Zimbabwe.
                 </Text>
               </>
-              )
             ) : (
               <>
                 <View className="mt-12 h-64 w-64 items-center justify-center">

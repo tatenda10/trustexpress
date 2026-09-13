@@ -1,5 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, Alert, TextInput } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
+  TextInput,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useIsFocused } from '@react-navigation/native';
@@ -8,53 +21,16 @@ import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { cashOutDriverWallet, getDriverWallet, initiateDriverWalletTopup, verifyDriverWalletTopup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import {
+  formatTransactionTypeLabel,
+  formatWalletCurrency as formatCurrency,
+  formatWalletDate as formatDate,
+  getTransactionMeta,
+} from './walletTransactionMeta';
 
 WebBrowser.maybeCompleteAuthSession();
 
-function formatCurrency(value, currency = 'ZAR') {
-  return `${String(currency || 'ZAR').toUpperCase()} ${Number(value || 0).toFixed(2)}`;
-}
-
-function formatDate(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString('en-ZW', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function getTransactionMeta(transaction) {
-  if (transaction.transactionType === 'top_up_credit') {
-    return {
-      icon: 'cash-outline',
-      iconBg: '#DCFCE7',
-      amountColor: 'text-green-600',
-      amountPrefix: '+',
-      title: transaction.paymentMethod
-        ? `Top-up via ${String(transaction.paymentMethod).replace(/_/g, ' ')}`
-        : 'Wallet top-up',
-    };
-  }
-  return {
-    icon: 'remove-circle-outline',
-    iconBg: '#FEE2E2',
-    amountColor: 'text-red-600',
-    amountPrefix: '-',
-    title: transaction.tripId ? `Trip #${transaction.tripId} service fee` : 'Service fee debit',
-  };
-}
-
-function formatTransactionTypeLabel(transactionType) {
-  const type = String(transactionType || '').trim().toLowerCase();
-  if (type === 'commission_debit') return 'SERVICE FEE';
-  return String(transactionType || '').replace(/_/g, ' ').toUpperCase();
-}
-
-const DriverWalletScreen = () => {
+const DriverWalletScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -76,14 +52,11 @@ const DriverWalletScreen = () => {
     smileCashMobile: null,
   });
   const providerLabel = wallet.paymentProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack';
-  const [summary, setSummary] = useState({
-    totalTopups: 0,
-    totalCommissionPaid: 0,
-  });
   const [pendingTopups, setPendingTopups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [topupAmount, setTopupAmount] = useState('5');
+  const [topupModalVisible, setTopupModalVisible] = useState(false);
   const [startingTopup, setStartingTopup] = useState(false);
   const [cashingOut, setCashingOut] = useState(false);
   const [error, setError] = useState('');
@@ -131,10 +104,6 @@ const DriverWalletScreen = () => {
         withdrawableBalance: Number(data?.wallet?.withdrawableBalance || 0),
         smileCashMobile: data?.wallet?.smileCashMobile || null,
       });
-      setSummary({
-        totalTopups: Number(data?.summary?.totalTopups || 0),
-        totalCommissionPaid: Number(data?.summary?.totalCommissionPaid || 0),
-      });
     } catch (loadError) {
       setError(loadError?.message || 'Could not load wallet activity.');
       setTransactions([]);
@@ -153,14 +122,24 @@ const DriverWalletScreen = () => {
         lowBalanceMessage: '',
         withdrawableBalance: 0,
       });
-      setSummary({
-        totalTopups: 0,
-        totalCommissionPaid: 0,
-      });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
+  };
+
+  const openTopupModal = () => {
+    if (!wallet.paymentsEnabled) {
+      Alert.alert('Top-ups unavailable', wallet.paymentsUnavailableMessage || 'Wallet top-ups are not available yet. Please check back soon.');
+      return;
+    }
+    setTopupAmount(String(wallet.topupMinAmount || 5));
+    setTopupModalVisible(true);
+  };
+
+  const closeTopupModal = () => {
+    if (startingTopup) return;
+    setTopupModalVisible(false);
   };
 
   const handleTopup = async () => {
@@ -209,6 +188,7 @@ const DriverWalletScreen = () => {
         }
       }
 
+      setTopupModalVisible(false);
       await loadWallet(false, references);
       Alert.alert('Payment check complete', 'Your wallet has been refreshed. If payment succeeded, the balance will update immediately.');
     } catch (topupError) {
@@ -280,28 +260,29 @@ const DriverWalletScreen = () => {
             style={{ backgroundColor: '#f9fafb' }}
           >
             <View className="mb-5 rounded-2xl p-5" style={{ backgroundColor: PRIMARY_BLUE }}>
-              <Text className="mb-1 text-sm font-medium text-white/90">Current Wallet Balance</Text>
-              <Text className="text-3xl font-bold text-white">{formatCurrency(wallet.availableBalance, wallet.currency)}</Text>
-              <Text className="mt-1 text-sm text-white/80">
-                Minimum required to receive requests: {formatCurrency(wallet.minimumRequiredBalance, wallet.currency)}
+              <Text className="mb-1 text-sm font-medium text-white/90">Balance</Text>
+              <Text className="text-3xl font-bold text-white">
+                {formatCurrency(wallet.availableBalance, wallet.currency)}
               </Text>
-              <View className="mt-4 flex-row items-center justify-between border-t border-white/20 pt-3">
-                <Text className="text-xs text-white/80">Top-ups: {formatCurrency(summary.totalTopups, wallet.currency)}</Text>
-                <Text className="text-xs text-white/80">Service fee paid: {formatCurrency(summary.totalCommissionPaid, wallet.currency)}</Text>
+              <View className="mt-4 flex-row gap-3">
+                <TouchableOpacity
+                  onPress={openTopupModal}
+                  disabled={startingTopup}
+                  className="h-12 flex-1 items-center justify-center rounded-2xl bg-white"
+                >
+                  <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>Top up</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleCashOut}
+                  disabled={cashingOut || Number(wallet.withdrawableBalance || 0) <= 0}
+                  className="h-12 flex-1 items-center justify-center rounded-2xl bg-white/15"
+                  style={{ opacity: cashingOut || Number(wallet.withdrawableBalance || 0) <= 0 ? 0.65 : 1 }}
+                >
+                  <Text className="text-base font-bold text-white">
+                    {cashingOut ? 'Cashing out...' : 'Cash out'}
+                  </Text>
+                </TouchableOpacity>
               </View>
-              <Text className="mt-3 text-sm text-white/80">
-                Withdrawable passenger payments: {formatCurrency(wallet.withdrawableBalance, wallet.currency)}
-              </Text>
-              <TouchableOpacity
-                onPress={handleCashOut}
-                disabled={cashingOut || Number(wallet.withdrawableBalance || 0) <= 0}
-                className="mt-4 h-12 items-center justify-center rounded-2xl bg-white"
-                style={{ opacity: cashingOut || Number(wallet.withdrawableBalance || 0) <= 0 ? 0.65 : 1 }}
-              >
-                <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
-                  {cashingOut ? 'Cashing out...' : 'Cash out'}
-                </Text>
-              </TouchableOpacity>
             </View>
           </View>
 
@@ -311,85 +292,6 @@ const DriverWalletScreen = () => {
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadWallet(true)} tintColor={PRIMARY_BLUE} />}
             showsVerticalScrollIndicator={false}
           >
-            {!wallet.sufficientBalance && wallet.lowBalanceMessage ? (
-              <View className="mb-4 rounded-[20px] bg-amber-50 px-4 py-4">
-                <Text className="text-sm font-semibold text-amber-700">{wallet.lowBalanceMessage}</Text>
-              </View>
-            ) : null}
-
-            {!wallet.paymentsEnabled && wallet.paymentsUnavailableMessage ? (
-              <View className="mb-4 rounded-[20px] bg-blue-50 px-4 py-4">
-                <Text className="text-sm font-semibold text-[#1d4ed8]">{wallet.paymentsUnavailableMessage}</Text>
-              </View>
-            ) : null}
-
-            <View className="mb-5 rounded-2xl border border-gray-100 bg-white p-4">
-              <Text className="text-base font-bold text-gray-900">Top up wallet</Text>
-              <Text className="mt-1 text-sm text-gray-500">
-                {wallet.paymentsEnabled
-                  ? `Enter the amount to add (${formatCurrency(wallet.topupMinAmount, wallet.currency)} – ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}). Cash trips deduct the ${Number(wallet.commissionRatePercent || 9.5).toFixed(1)}% service fee on complete. Online passenger payments withhold that fee first and credit the remainder.`
-                  : 'Wallet top-ups are not available yet. You can still view your balance and transaction history here.'}
-              </Text>
-              {wallet.paymentsEnabled ? (
-                <>
-              <View className="mt-4 flex-row items-center rounded-2xl border border-gray-200 bg-gray-50 px-4">
-                <Text className="mr-2 text-sm font-semibold text-gray-900">{wallet.currency}</Text>
-                <TextInput
-                  value={topupAmount}
-                  onChangeText={setTopupAmount}
-                  keyboardType="decimal-pad"
-                  placeholder="5.00"
-                  className="flex-1 py-4 text-base text-gray-900"
-                />
-              </View>
-              <View className="mt-3 flex-row flex-wrap">
-                {[wallet.topupMinAmount, 10, 20]
-                  .map((value) => Number(value))
-                  .filter((value, index, list) => Number.isFinite(value) && value > 0 && list.indexOf(value) === index)
-                  .filter((value) => value <= Number(wallet.topupMaxAmount || 500))
-                  .slice(0, 3)
-                  .map((preset) => (
-                  <TouchableOpacity
-                    key={preset}
-                    onPress={() => setTopupAmount(String(preset))}
-                    className="mr-2 mt-2 rounded-full bg-[#eff6ff] px-4 py-2"
-                  >
-                    <Text className="text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
-                      {formatCurrency(preset, wallet.currency)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <TouchableOpacity
-                onPress={handleTopup}
-                disabled={startingTopup}
-                className="mt-4 h-12 items-center justify-center rounded-2xl"
-                style={{ backgroundColor: startingTopup ? '#93c5fd' : PRIMARY_BLUE }}
-              >
-                <Text className="text-base font-bold text-white">
-                  {startingTopup ? `Opening ${providerLabel}...` : 'Top Up'}
-                </Text>
-              </TouchableOpacity>
-                </>
-              ) : null}
-            </View>
-
-            <View className="mb-8 flex-row justify-between">
-              {[
-                { key: 'balance', label: 'Balance', value: formatCurrency(wallet.availableBalance, wallet.currency), icon: 'wallet-outline' },
-                { key: 'topups', label: 'Top-ups', value: formatCurrency(summary.totalTopups, wallet.currency), icon: 'add-circle-outline' },
-                { key: 'commission', label: 'Service fee', value: formatCurrency(summary.totalCommissionPaid, wallet.currency), icon: 'remove-circle-outline' },
-              ].map(({ key, label, value, icon }) => (
-                <View key={key} className="items-center">
-                  <View className="mb-2 h-14 w-14 items-center justify-center rounded-full" style={{ backgroundColor: '#EFF6FF' }}>
-                    <Ionicons name={icon} size={24} color={PRIMARY_BLUE} />
-                  </View>
-                  <Text className="text-sm font-semibold text-gray-900">{value}</Text>
-                  <Text className="text-sm text-gray-500">{label}</Text>
-                </View>
-              ))}
-            </View>
-
             {pendingTopups.length ? (
               <View className="mb-4 rounded-2xl border border-[#dbeafe] bg-[#eff6ff] px-4 py-4">
                 <Text className="text-sm font-semibold text-[#1d4ed8]">Pending top-ups</Text>
@@ -398,6 +300,20 @@ const DriverWalletScreen = () => {
                 </Text>
               </View>
             ) : null}
+
+            <TouchableOpacity
+              onPress={() => navigation.navigate('DriverRideHistory')}
+              className="mb-4 flex-row items-center rounded-2xl border border-gray-100 bg-white px-4 py-4"
+              activeOpacity={0.8}
+            >
+              <View className="h-10 w-10 items-center justify-center rounded-xl bg-[#eff6ff]">
+                <Ionicons name="time-outline" size={20} color={PRIMARY_BLUE} />
+              </View>
+              <View className="ml-3 flex-1">
+                <Text className="text-base font-semibold text-gray-900">Ride history</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            </TouchableOpacity>
 
             <View className="mb-4 flex-row items-center justify-between">
               <Text className="text-lg font-bold text-gray-900">Transaction History</Text>
@@ -418,8 +334,13 @@ const DriverWalletScreen = () => {
                 transactions.map((transaction, index) => {
                   const meta = getTransactionMeta(transaction);
                   return (
-                    <View
+                    <TouchableOpacity
                       key={transaction.id}
+                      activeOpacity={0.75}
+                      onPress={() => navigation.navigate('DriverWalletTransactionDetail', {
+                        transaction,
+                        currency: wallet.currency,
+                      })}
                       className="flex-row items-center px-4 py-4"
                       style={index < transactions.length - 1 ? { borderBottomWidth: 1, borderBottomColor: '#f9fafb' } : undefined}
                     >
@@ -431,24 +352,6 @@ const DriverWalletScreen = () => {
                         <Text className="text-sm text-gray-500">
                           {formatDate(transaction.createdAt)}
                         </Text>
-                        {transaction.tripId ? (
-                          <Text className="mt-1 text-xs font-semibold text-gray-500">
-                            Passenger: {transaction.passengerName || 'Passenger'} | Fare: {formatCurrency(transaction.tripFareAmount, transaction.currency || wallet.currency)}
-                          </Text>
-                        ) : null}
-                        {transaction.paymentMethod ? (
-                          <Text className="mt-1 text-xs font-semibold text-green-600">
-                            Payment method: {String(transaction.paymentMethod).replace(/_/g, ' ')}
-                          </Text>
-                        ) : null}
-                        <Text className="mt-1 text-xs text-gray-400">
-                          Balance: {formatCurrency(transaction.balanceBefore, transaction.currency || wallet.currency)} → {formatCurrency(transaction.balanceAfter, transaction.currency || wallet.currency)}
-                        </Text>
-                        {transaction.commissionRatePercent ? (
-                          <Text className="mt-1 text-xs font-semibold text-amber-600">
-                            Service fee: {Number(transaction.commissionRatePercent).toFixed(1)}%
-                          </Text>
-                        ) : null}
                       </View>
                       <View className="items-end">
                         <Text className={`text-base font-semibold ${meta.amountColor}`}>
@@ -458,7 +361,7 @@ const DriverWalletScreen = () => {
                           {formatTransactionTypeLabel(transaction.transactionType)}
                         </Text>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })
               )}
@@ -466,6 +369,79 @@ const DriverWalletScreen = () => {
           </ScrollView>
         </View>
       )}
+
+      <Modal
+        visible={topupModalVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeTopupModal}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View className="flex-1 items-center justify-center bg-black/50 px-6">
+            <Pressable
+              style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+              onPress={closeTopupModal}
+            />
+            <View className="w-full max-w-[360px] rounded-[24px] bg-white px-5 py-5">
+              <Text className="text-center text-lg font-bold text-gray-900">Top up</Text>
+              <Text className="mb-2 mt-4 text-xs font-semibold uppercase text-gray-500">
+                Amount ({wallet.currency})
+              </Text>
+              <TextInput
+                value={topupAmount}
+                onChangeText={setTopupAmount}
+                keyboardType="decimal-pad"
+                placeholder={String(wallet.topupMinAmount || 5)}
+                autoFocus
+                className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-center text-base"
+              />
+              <View className="mt-3 flex-row flex-wrap justify-center">
+                {[wallet.topupMinAmount, 10, 20]
+                  .map((value) => Number(value))
+                  .filter((value, index, list) => Number.isFinite(value) && value > 0 && list.indexOf(value) === index)
+                  .filter((value) => value <= Number(wallet.topupMaxAmount || 500))
+                  .slice(0, 3)
+                  .map((preset) => (
+                    <TouchableOpacity
+                      key={preset}
+                      onPress={() => setTopupAmount(String(preset))}
+                      className="mx-1 mt-2 rounded-full bg-[#eff6ff] px-4 py-2"
+                    >
+                      <Text className="text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
+                        {formatCurrency(preset, wallet.currency)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+              </View>
+              <View className="mt-5 flex-row gap-3">
+                <TouchableOpacity
+                  onPress={closeTopupModal}
+                  disabled={startingTopup}
+                  className="h-12 flex-1 items-center justify-center rounded-2xl bg-slate-100"
+                >
+                  <Text className="font-semibold text-gray-700">Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleTopup}
+                  disabled={startingTopup}
+                  className="h-12 flex-1 items-center justify-center rounded-2xl"
+                  style={{ backgroundColor: PRIMARY_BLUE, opacity: startingTopup ? 0.7 : 1 }}
+                >
+                  {startingTopup ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text className="font-semibold text-white">Continue</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 };
