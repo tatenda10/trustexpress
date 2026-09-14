@@ -7,6 +7,7 @@ import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
 import { getDirectionsRoute, getHireRequest } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { hireContactHref, isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
 import { connectRealtime } from '../../realtime';
 
@@ -51,6 +52,7 @@ export default function PassengerHireTrackingScreen({ navigation, route }) {
   const pickupCoordinate = toCoordinate(request?.pickupLat, request?.pickupLng);
   const dropoffCoordinate = toCoordinate(request?.dropoffLat, request?.dropoffLng);
   const onTrip = passengerStage === 'on_trip';
+  const canContactDriver = isLiveHireBooking(booking?.status) && !!driver?.phone;
   const targetCoordinate = onTrip ? dropoffCoordinate : pickupCoordinate;
   const targetLabel = onTrip ? (request?.dropoffLabel || 'Drop-off') : (request?.pickupLabel || 'Pickup');
 
@@ -211,13 +213,27 @@ export default function PassengerHireTrackingScreen({ navigation, route }) {
                 .join(' · ') || 'Assigned hire driver'}
             </Text>
           </View>
-          {driver?.phone ? (
-            <TouchableOpacity
-              onPress={() => Linking.openURL(`tel:${driver.phone}`)}
-              className="h-11 w-11 items-center justify-center rounded-full bg-green-50"
-            >
-              <Ionicons name="call-outline" size={20} color="#15803d" />
-            </TouchableOpacity>
+          {canContactDriver ? (
+            <View className="ml-2 flex-row">
+              <TouchableOpacity
+                onPress={() => {
+                  const href = hireContactHref(driver.phone, 'tel');
+                  if (href) Linking.openURL(href);
+                }}
+                className="h-11 w-11 items-center justify-center rounded-full bg-green-50"
+              >
+                <Ionicons name="call-outline" size={20} color="#15803d" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  const href = hireContactHref(driver.phone, 'sms');
+                  if (href) Linking.openURL(href);
+                }}
+                className="ml-2 h-11 w-11 items-center justify-center rounded-full bg-slate-100"
+              >
+                <Ionicons name="chatbubble-ellipses-outline" size={20} color="#111827" />
+              </TouchableOpacity>
+            </View>
           ) : null}
         </View>
         {booking?.amount != null ? (

@@ -107,16 +107,6 @@ function formatCountdown(totalSeconds) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-function buildRequestStopTimeline(request) {
-  return [
-    request?.pickup,
-    ...(Array.isArray(request?.intermediateStops)
-      ? request.intermediateStops.map((stop) => stop?.label).filter(Boolean)
-      : []),
-    request?.dropoff,
-  ].filter(Boolean);
-}
-
 function getRequestNotificationBody(request) {
   const stopCount = Array.isArray(request?.intermediateStops) ? request.intermediateStops.length : 0;
   const pickup = String(request?.pickupLabel || request?.pickup || 'Pickup').trim();
@@ -127,38 +117,81 @@ function getRequestNotificationBody(request) {
   return `${pickup} to ${dropoff}`;
 }
 
-function RequestStopsPreview({ request }) {
-  const stopTimeline = buildRequestStopTimeline(request);
-  const stopCount = Array.isArray(request?.intermediateStops) ? request.intermediateStops.length : 0;
+function stopLetterAt(index) {
+  return String.fromCharCode(65 + (index % 26));
+}
 
-  if (stopTimeline.length <= 2 || stopCount <= 0) return null;
+function buildLetteredRideStops(request) {
+  const intermediate = Array.isArray(request?.intermediateStops) ? request.intermediateStops : [];
+  const points = [
+    {
+      letter: 'A',
+      kind: 'pickup',
+      title: 'Pickup',
+      label: request?.pickup || request?.pickupLabel || 'Pickup',
+      color: '#2f73c9',
+    },
+    ...intermediate.map((stop, index) => ({
+      letter: stopLetterAt(index + 1),
+      kind: 'stop',
+      title: `Stop ${index + 1}`,
+      label: stop?.label || stop?.address || `Stop ${index + 1}`,
+      color: '#f97316',
+    })),
+  ];
+  points.push({
+    letter: stopLetterAt(points.length),
+    kind: 'dropoff',
+    title: 'Drop-off',
+    label: request?.dropoff || request?.dropoffLabel || 'Drop-off',
+    color: '#111827',
+  });
+  return points;
+}
+
+function RideStopLettersList({ request }) {
+  const stops = buildLetteredRideStops(request);
+  return (
+    <View className="mt-4 rounded-[20px] border border-[#d7dfec] bg-[#f8fafc] px-4 py-3">
+      {stops.map((stop, index) => (
+        <View key={`${stop.letter}-${index}`} className="flex-row">
+          <View className="mr-3 items-center" style={{ width: 24 }}>
+            <View
+              className="h-6 w-6 items-center justify-center rounded-full"
+              style={{ backgroundColor: stop.color }}
+            >
+              <Text className="text-[11px] font-extrabold text-white">{stop.letter}</Text>
+            </View>
+            {index < stops.length - 1 ? (
+              <View className="my-1 w-[2px] flex-1 rounded-full bg-[#cbd5e1]" style={{ minHeight: 18 }} />
+            ) : null}
+          </View>
+          <View className={`flex-1 ${index < stops.length - 1 ? 'pb-3' : 'pb-0.5'}`}>
+            <Text className="text-[11px] font-bold uppercase tracking-[1px]" style={{ color: stop.color }}>
+              {stop.letter} · {stop.title}
+            </Text>
+            <Text className="mt-0.5 text-[15px] font-semibold text-[#111111]" numberOfLines={2}>
+              {stop.label}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function RequestStopsPreview({ request }) {
+  const stopCount = Array.isArray(request?.intermediateStops) ? request.intermediateStops.length : 0;
+  if (stopCount <= 0) return null;
 
   return (
-    <View className="mt-4 rounded-[18px] border border-orange-100 bg-orange-50 px-4 py-3">
+    <View className="mt-3 rounded-[18px] border border-orange-100 bg-orange-50 px-4 py-3">
       <Text className="text-[11px] font-bold uppercase tracking-[1px] text-orange-700">
         This is a multi-stop trip
       </Text>
       <Text className="mt-1 text-sm font-medium text-orange-900">
         {stopCount} stop{stopCount === 1 ? '' : 's'} before the final destination
       </Text>
-      <View className="mt-3">
-        {stopTimeline.map((label, index) => {
-          const isPickup = index === 0;
-          const isDropoff = index === stopTimeline.length - 1;
-          const dotColor = isPickup ? '#2563eb' : isDropoff ? '#111827' : '#f97316';
-          return (
-            <View key={`${label}-${index}`} className="mb-2 flex-row items-start">
-              <View className="mr-3 mt-1 h-3 w-3 rounded-full" style={{ backgroundColor: dotColor }} />
-              <View className="flex-1">
-                <Text className="text-sm font-semibold text-gray-900">
-                  {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${index}`}
-                </Text>
-                <Text className="mt-0.5 text-sm text-gray-600">{label}</Text>
-              </View>
-            </View>
-          );
-        })}
-      </View>
     </View>
   );
 }
@@ -1914,14 +1947,10 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 </View>
                 </View>
 
-                <Text className="mt-12 text-center text-2xl font-medium leading-10 text-[#4a4d55]">
-                  You are online and available for incoming ride requests.
-                </Text>
-
                 <TouchableOpacity
                   onPress={handleGoOffline}
                   disabled={availabilityActionPending}
-                  className="mt-8 h-14 items-center justify-center rounded-[18px] border border-[#d7d9df] bg-white px-8"
+                  className="mt-12 h-14 items-center justify-center rounded-[18px] border border-[#d7d9df] bg-white px-8"
                   style={{ opacity: availabilityActionPending ? 0.65 : 1 }}
                 >
                   {availabilityActionPending ? (
@@ -1965,7 +1994,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             </View>
           </View>
-        ) : primaryIncomingRequest ? (
+        ) : !showRideRequestModal && primaryIncomingRequest ? (
           <View
             className="absolute left-0 right-0 justify-end"
             style={{ top: insets.top + 118, bottom: insets.bottom + 88, paddingHorizontal: 16 }}
@@ -2022,6 +2051,17 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       {primaryIncomingRequest.passengerName || 'Passenger'}
                     </Text>
                   </View>
+                  {String(primaryIncomingRequest.passengerPhone || '').trim() ? (
+                    <TouchableOpacity
+                      onPress={() => Linking.openURL(`tel:${String(primaryIncomingRequest.passengerPhone).trim()}`)}
+                      className="mt-2 flex-row items-center self-start"
+                    >
+                      <Ionicons name="call" size={15} color="#15803d" />
+                      <Text className="ml-1.5 text-sm font-semibold text-[#15803d]">
+                        {String(primaryIncomingRequest.passengerPhone).trim()}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
                   <View className="mt-2 flex-row flex-wrap items-center gap-2">
                     <View className="self-start rounded-full bg-[#e3e9f2] px-3 py-1">
                       <Text className="text-xs font-bold uppercase text-[#2f73c9]">{primaryIncomingRequest.tierName || 'Ride'}</Text>
@@ -2053,22 +2093,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 </View>
               </View>
 
-              <View className="mt-3 rounded-[20px] bg-[#f8fafc] px-4 py-3">
-                <View className="flex-row">
-                  <View className="mr-4 items-center pt-1">
-                    <View className="h-3.5 w-3.5 rounded-full bg-[#2f73c9]" />
-                    <View className="my-2 h-10 w-[2px] rounded-full bg-[#cbd5e1]" />
-                    <View className="h-3.5 w-3.5 rounded-full bg-[#111827]" />
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
-                    <Text className="mt-1 text-base font-semibold text-[#111111]">{primaryIncomingRequest.pickup}</Text>
-                    <Text className="mt-4 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
-                    <Text className="mt-1 text-base font-semibold text-[#111111]">{primaryIncomingRequest.dropoff}</Text>
-                  </View>
-                </View>
-              </View>
-
+              <RideStopLettersList request={primaryIncomingRequest} />
               <RequestStopsPreview request={primaryIncomingRequest} />
 
               <View className="mt-3 flex-row items-center gap-5">
@@ -2165,11 +2190,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
         onRequestClose={() => setShowIncomingRideOverlay(false)}
       >
         <View className="flex-1 bg-black/55">
-          <SafeAreaView className="flex-1 bg-transparent">
-            <View className="flex-1 justify-end px-3 pb-3">
+          <View
+            className="flex-1 justify-end px-3"
+            style={{
+              paddingTop: insets.top + 8,
+              paddingBottom: Math.max(insets.bottom, 16) + 28,
+            }}
+          >
               <View
                 className="overflow-hidden rounded-[28px] bg-white"
-                style={{ maxHeight: '94%' }}
+                style={{ maxHeight: '90%' }}
               >
                 <View className="relative">
                   <IncomingRidePreviewMap
@@ -2212,7 +2242,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 <ScrollView
                   showsVerticalScrollIndicator={false}
                   bounces={false}
-                  contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 18 }}
+                  contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 8 }}
                 >
                   <View className="flex-row items-start justify-between">
                     <View className="flex-1 flex-row items-center pr-3">
@@ -2230,6 +2260,17 @@ const DriverHomeScreen = ({ navigation, route }) => {
                         <Text className="text-lg font-bold text-[#111111]" numberOfLines={1}>
                           {primaryIncomingRequest?.passengerName || 'Passenger'}
                         </Text>
+                        {String(primaryIncomingRequest?.passengerPhone || '').trim() ? (
+                          <TouchableOpacity
+                            onPress={() => Linking.openURL(`tel:${String(primaryIncomingRequest.passengerPhone).trim()}`)}
+                            className="mt-1 flex-row items-center self-start"
+                          >
+                            <Ionicons name="call" size={14} color="#15803d" />
+                            <Text className="ml-1 text-sm font-semibold text-[#15803d]">
+                              {String(primaryIncomingRequest.passengerPhone).trim()}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
                         <Text className="mt-0.5 text-sm font-semibold text-[#2f73c9]">
                           {primaryIncomingRequest?.tierName || 'Trust Express'}
                           {` · ${Number(primaryIncomingRequest?.passengerCount || 1) === 1 ? '1 person' : `${Number(primaryIncomingRequest?.passengerCount || 1)} people`}`}
@@ -2278,26 +2319,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     </View>
                   </View>
 
-                  <View className="mt-4 rounded-[20px] border border-[#d7dfec] bg-[#f8fafc] px-4 py-3">
-                    <View className="flex-row">
-                      <View className="mr-3 items-center pt-1">
-                        <View className="h-3 w-3 rounded-full bg-[#2f73c9]" />
-                        <View className="my-1.5 h-8 w-[2px] rounded-full bg-[#cbd5e1]" />
-                        <View className="h-3 w-3 rounded-full bg-[#111827]" />
-                      </View>
-                      <View className="flex-1">
-                        <Text className="text-[11px] font-bold uppercase tracking-[1px] text-[#2f73c9]">Pickup</Text>
-                        <Text className="mt-0.5 text-[15px] font-semibold text-[#111111]" numberOfLines={2}>
-                          {primaryIncomingRequest?.pickup}
-                        </Text>
-                        <Text className="mt-3 text-[11px] font-bold uppercase tracking-[1px] text-[#5a6474]">Drop-off</Text>
-                        <Text className="mt-0.5 text-[15px] font-semibold text-[#111111]" numberOfLines={2}>
-                          {primaryIncomingRequest?.dropoff}
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-
+                  <RideStopLettersList request={primaryIncomingRequest} />
                   <RequestStopsPreview request={primaryIncomingRequest} />
 
                   {Number(primaryIncomingRequest?.discountAmount || 0) > 0 ? (
@@ -2332,14 +2354,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       </View>
                     </View>
                   ) : null}
+                </ScrollView>
 
+                <View className="border-t border-[#eef2f7] px-[18px] pb-3 pt-3">
                   <TouchableOpacity
                     onPress={() => {
                       if (!primaryIncomingRequest?.id || acceptingRideId) return;
                       handleAcceptRequest(primaryIncomingRequest);
                     }}
                     disabled={!primaryIncomingRequest?.id || acceptingRideId === primaryIncomingRequest?.id}
-                    className="mt-5 h-14 items-center justify-center rounded-[20px] bg-[#2f73c9]"
+                    className="h-14 items-center justify-center rounded-[20px] bg-[#2f73c9]"
                   >
                     {acceptingRideId === primaryIncomingRequest?.id ? (
                       <ActivityIndicator size="small" color="#fff" />
@@ -2359,10 +2383,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   >
                     <Text className="text-sm font-bold uppercase text-[#5d6470]">Decline</Text>
                   </TouchableOpacity>
-                </ScrollView>
+                </View>
               </View>
             </View>
-          </SafeAreaView>
         </View>
       </Modal>
 

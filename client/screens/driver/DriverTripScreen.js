@@ -24,6 +24,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { paymentMethodLabel } from '../../constants/payment';
 import { getHeadingAlongRoute } from '../../lib/mapVehicleHeading';
 import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
+import { buildRatingReviewText, toggleRatingTag } from '../../constants/rideRatingTags';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
 import { connectRealtime } from '../../realtime';
 import {
@@ -344,6 +345,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const [completedRideSnapshot, setCompletedRideSnapshot] = useState(null);
   const [passengerRating, setPassengerRating] = useState(0);
   const [passengerReview, setPassengerReview] = useState('');
+  const [selectedPassengerTags, setSelectedPassengerTags] = useState([]);
   const [submittingRating, setSubmittingRating] = useState(false);
   const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -360,6 +362,7 @@ export default function DriverTripScreen({ navigation, route }) {
     setCompletedRideSnapshot(null);
     setPassengerRating(0);
     setPassengerReview('');
+    setSelectedPassengerTags([]);
 
     const parentNavigator = navigation.getParent?.();
     if (parentNavigator) {
@@ -486,9 +489,16 @@ export default function DriverTripScreen({ navigation, route }) {
         realtimeSocketRef.current = localSocket;
         console.log(TRIP_DEBUG_PREFIX, 'realtime connected');
 
-        const handleRideUpdate = () => {
+        const handleRideUpdate = (payload = {}) => {
           if (!active) return;
           console.log(TRIP_DEBUG_PREFIX, 'realtime driver_ride:updated');
+          if (payload?.confirmedAt) {
+            setRide((current) => (
+              current && Number(current.id || 0) === Number(payload.rideRequestId || current.id || 0)
+                ? { ...current, passengerConfirmedAt: payload.confirmedAt }
+                : current
+            ));
+          }
           setRealtimeSignal((current) => current + 1);
         };
 
@@ -1142,7 +1152,11 @@ export default function DriverTripScreen({ navigation, route }) {
       setSubmittingRating(true);
       const token = await getTokenRef.current();
       if (!token || !completedRideId) throw new Error('Not signed in');
-      await submitDriverPassengerRating(token, completedRideId, { rating: passengerRating, review: passengerReview.trim() || undefined });
+      await submitDriverPassengerRating(token, completedRideId, {
+        rating: passengerRating,
+        review: buildRatingReviewText(selectedPassengerTags, passengerReview) || undefined,
+        feedbackTags: selectedPassengerTags,
+      });
       exitPassengerRatingFlow();
     } catch (error) {
       Alert.alert('Rating failed', error?.message || 'Could not submit rating.');
@@ -1264,9 +1278,11 @@ export default function DriverTripScreen({ navigation, route }) {
         totalAmount={totalAmount}
         passengerRating={passengerRating}
         passengerReview={passengerReview}
+        selectedRatingTags={selectedPassengerTags}
         submittingRating={submittingRating}
         onSetPassengerRating={setPassengerRating}
         onSetPassengerReview={setPassengerReview}
+        onTogglePassengerTag={(tag) => setSelectedPassengerTags((current) => toggleRatingTag(current, tag))}
         onSubmit={handleSubmitPassengerRating}
         onSkip={handleSkipPassengerRating}
         formatCurrency={formatCurrency}
@@ -1390,7 +1406,7 @@ export default function DriverTripScreen({ navigation, route }) {
       targetLabel={targetLabel}
       voiceGuidanceEnabled={voiceGuidanceEnabled}
       onToggleVoiceGuidance={handleToggleVoiceGuidance}
-      showCallPassenger={ride.stage === 'waiting_for_customer'}
+      showCallPassenger={Boolean(String(ride?.passengerPhone || '').trim()) && ride.stage !== 'on_trip'}
       onCallPassenger={handleCallPassenger}
       onSendPanicAlert={handleSendPanicAlert}
       onOpenChat={() => navigation.navigate('RideChat', {

@@ -18,6 +18,7 @@ export default function DriverSmileCashScreen({ navigation }) {
   const profile = driverStatus?.driverProfile || {};
 
   const [mobile, setMobile] = useState('');
+  const [idNumber, setIdNumber] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [gender, setGender] = useState('');
   const [saving, setSaving] = useState(false);
@@ -27,18 +28,25 @@ export default function DriverSmileCashScreen({ navigation }) {
 
   useEffect(() => {
     setMobile(String(profile.smileCashMobile || user?.primaryPhoneNumber?.phoneNumber || '').trim());
+    setIdNumber(String(profile.nationalIdNumber || '').trim());
     setDateOfBirth(String(profile.dateOfBirth || '').trim());
     setGender(String(profile.gender || '').trim().toUpperCase());
-  }, [profile.smileCashMobile, profile.dateOfBirth, profile.gender, user?.primaryPhoneNumber?.phoneNumber]);
+  }, [
+    profile.smileCashMobile,
+    profile.nationalIdNumber,
+    profile.dateOfBirth,
+    profile.gender,
+    user?.primaryPhoneNumber?.phoneNumber,
+  ]);
 
   const isActive = String(profile.smileCashStatus || '').toLowerCase() === 'active';
 
   const handleOpen = async () => {
     const payload = {
       mobile,
+      idNumber,
       dateOfBirth,
       gender,
-      idNumber: profile.nationalIdNumber || undefined,
     };
     try {
       setSaving(true);
@@ -163,6 +171,18 @@ export default function DriverSmileCashScreen({ navigation }) {
             />
           </View>
 
+          <View className="mt-4">
+            <Text className="mb-2 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">National ID number</Text>
+            <TextInput
+              value={idNumber}
+              onChangeText={setIdNumber}
+              placeholder="Enter national ID"
+              autoCapitalize="characters"
+              editable={!isActive}
+              className="h-12 rounded-[18px] border border-gray-200 bg-white px-4 text-base text-gray-900"
+            />
+          </View>
+
           <SmileCashIdentityFields
             dateOfBirth={dateOfBirth}
             gender={gender}
@@ -170,13 +190,6 @@ export default function DriverSmileCashScreen({ navigation }) {
             onDateOfBirthChange={setDateOfBirth}
             onGenderChange={setGender}
           />
-
-          <View className="mt-4 rounded-[18px] bg-amber-50 px-4 py-3">
-            <Text className="text-sm text-amber-800">
-              Name and national ID must match your Trust Express verification. National ID on file:{' '}
-              {profile.nationalIdNumber || 'not submitted yet'}.
-            </Text>
-          </View>
 
           {isActive ? (
             <TouchableOpacity

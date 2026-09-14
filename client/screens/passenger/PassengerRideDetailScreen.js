@@ -7,8 +7,13 @@ import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { getPassengerRideDetails, choosePassengerRideCashPayment, initiatePassengerRideSmilePay, reportLostItem, submitPassengerDriverRating, tipDriver, verifyPassengerRideSmilePay } from '../../api';
 import { downloadReceiptPdf, printReceiptPdf } from '../../services/receiptPrint';
+import RideRatingTagPicker from '../../components/ride/RideRatingTagPicker';
 import { PRIMARY_BLUE } from '../../constants/colors';
-import { PASSENGER_DRIVER_RATING_TAGS, isPassengerDriverReviewTagSelected, togglePassengerDriverReviewTag } from '../../constants/rideRatingTags';
+import {
+  PASSENGER_DRIVER_RATING_GROUPS,
+  buildRatingReviewText,
+  toggleRatingTag,
+} from '../../constants/rideRatingTags';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -51,6 +56,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const [startingPayment, setStartingPayment] = useState(false);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
+  const [selectedRatingTags, setSelectedRatingTags] = useState([]);
   const [lostItemDescription, setLostItemDescription] = useState('');
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
   const tipOptions = [1, 2, 5, 10];
@@ -66,6 +72,9 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         if (!active) return;
         setRide(data?.ride || null);
         setRating(Number(data?.ride?.passengerDriverRating || 0));
+        setSelectedRatingTags(
+          Array.isArray(data?.ride?.passengerDriverFeedbackTags) ? data.ride.passengerDriverFeedbackTags : []
+        );
         setReview(String(data?.ride?.passengerDriverReview || ''));
       } catch (error) {
         if (!active) return;
@@ -90,10 +99,11 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
       setSubmitting(true);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      const reviewText = String(review || '').trim();
+      const reviewText = buildRatingReviewText(selectedRatingTags, review);
       await submitPassengerDriverRating(token, rideRequestId, {
         rating,
         review: reviewText,
+        feedbackTags: selectedRatingTags,
       });
       setRide((current) => current ? {
         ...current,
@@ -288,8 +298,9 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const { originalFare, fareAfterDiscount, tipAmount, totalAmount } = getFareBreakdown(ride);
   const paymentStatus = String(ride?.paymentStatus || 'unpaid').toLowerCase();
   const paymentMethod = String(ride?.paymentMethod || '').toLowerCase();
-  const canPayWithSmilePay = Boolean(ride?.canPayWithSmilePay) && paymentStatus !== 'paid' && paymentMethod !== 'cash';
-  const canPayCash = Boolean(ride?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash';
+  const isRefundedPayment = paymentStatus === 'refunded' || paymentStatus === 'refund_pending';
+  const canPayWithSmilePay = Boolean(ride?.canPayWithSmilePay) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
+  const canPayCash = Boolean(ride?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
 
   return (
     <View className="flex-1 bg-white">
@@ -346,12 +357,14 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
               <Text className={`text-xs font-bold uppercase ${
                 paymentStatus === 'paid'
                   ? 'text-emerald-700'
+                  : isRefundedPayment
+                    ? 'text-slate-700'
                   : paymentMethod === 'cash'
                     ? 'text-blue-700'
                     : 'text-amber-700'
               }`}
               >
-                {paymentStatus === 'paid' ? 'Paid online' : paymentMethod === 'cash' ? 'Cash' : 'Unpaid'}
+                {paymentStatus === 'paid' ? 'Paid online' : paymentStatus === 'refunded' ? 'Refunded' : paymentStatus === 'refund_pending' ? 'Refunding' : paymentMethod === 'cash' ? 'Cash' : 'Unpaid'}
               </Text>
             </View>
             <Text className="mt-2 text-sm text-gray-500">
@@ -421,41 +434,16 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
 
         {ride.canRateDriver ? (
           <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
-            <Text className="text-xl font-bold text-gray-900">Rate Driver</Text>
-            <Text className="mt-2 text-sm text-gray-500">How was your trip with {ride.driverName || 'your driver'}?</Text>
-
-            <View className="mt-5 flex-row items-center justify-between">
-              {[1, 2, 3, 4, 5].map((value) => (
-                <TouchableOpacity key={value} onPress={() => setRating(value)} className="h-12 w-12 items-center justify-center rounded-full bg-[#f8fafc]">
-                  <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color={value <= rating ? '#f59e0b' : '#9ca3af'} />
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View className="mt-5 flex-row flex-wrap">
-              {PASSENGER_DRIVER_RATING_TAGS.map((tag) => {
-                const selected = isPassengerDriverReviewTagSelected(review, tag);
-                return (
-                  <TouchableOpacity
-                    key={tag}
-                    onPress={() => {
-                      setReview((current) => togglePassengerDriverReviewTag(current, tag));
-                    }}
-                    className={`mb-2 mr-2 rounded-full border px-4 py-2 ${selected ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}
-                  >
-                    <Text className={`text-sm font-semibold ${selected ? 'text-blue-700' : 'text-gray-600'}`}>{tag}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <TextInput
-              value={review}
-              onChangeText={setReview}
-              placeholder="Write optional feedback"
-              multiline
-              textAlignVertical="top"
-              className="mt-4 min-h-[120px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
+            <RideRatingTagPicker
+              rating={rating}
+              onChangeRating={setRating}
+              groups={PASSENGER_DRIVER_RATING_GROUPS}
+              selectedTags={selectedRatingTags}
+              onToggleTag={(tag) => setSelectedRatingTags((current) => toggleRatingTag(current, tag))}
+              review={review}
+              onChangeReview={setReview}
+              title="Please rate your Trust Express Captain"
+              subtitle={`How was your trip with ${ride.driverName || 'your driver'}?`}
             />
 
             <TouchableOpacity

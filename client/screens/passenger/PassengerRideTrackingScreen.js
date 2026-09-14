@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Pressable, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Dimensions, PanResponder, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,9 +11,14 @@ import * as Location from 'expo-location';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, choosePassengerRideCashPayment, initiatePassengerRideSmilePay, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup, verifyPassengerRideSmilePay } from '../../api';
+import RideRatingTagPicker from '../../components/ride/RideRatingTagPicker';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
-import { PASSENGER_DRIVER_RATING_TAGS, isPassengerDriverReviewTagSelected, togglePassengerDriverReviewTag } from '../../constants/rideRatingTags';
+import {
+  PASSENGER_DRIVER_RATING_GROUPS,
+  buildRatingReviewText,
+  toggleRatingTag,
+} from '../../constants/rideRatingTags';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { showLocalRideNotification } from '../../notifications';
@@ -26,6 +31,27 @@ const PICKUP_WAIT_SECONDS = 5 * 60;
 const ROUTE_REFRESH_DISTANCE_METERS = 10;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
 const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
+const RIDE_STATUS_LOAD_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(`${label} timed out`);
+      error.status = 0;
+      reject(error);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 function mapRideStatusToStage(status) {
   switch (String(status || '').toLowerCase()) {
@@ -192,17 +218,37 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     driver: initialDriver,
     rideRequestId,
   } = route.params || {};
+  const initialDriverRef = useRef(initialDriver || null);
+  initialDriverRef.current = initialDriver || null;
 
-  const [loading, setLoading] = useState(true);
-  const [rideStatus, setRideStatus] = useState(null);
+  const [loading, setLoading] = useState(() => !rideRequestId);
+  const [loadError, setLoadError] = useState('');
+  const [rideStatus, setRideStatus] = useState(() => (
+    rideRequestId
+      ? {
+          id: rideRequestId,
+          stage: 'driver_on_the_way',
+          pickupCoordinate: initialPickupCoordinate || null,
+          dropoffCoordinate: initialDropoffCoordinate || null,
+          pickupLabel: initialPickupLabel || null,
+          dropoffLabel: initialDropoffLabel || null,
+          intermediateStops: Array.isArray(initialIntermediateStops) ? initialIntermediateStops : [],
+          estimatedAmount: Number(initialEstimatedAmount || 0),
+          totalAmount: Number(initialEstimatedAmount || 0),
+          driverCoordinate: initialDriver?.coordinate || null,
+        }
+      : null
+  ));
   const [driver, setDriver] = useState(initialDriver || null);
   const [rating, setRating] = useState(0);
   const [review, setReview] = useState('');
+  const [selectedRatingTags, setSelectedRatingTags] = useState([]);
   const [submittingRating, setSubmittingRating] = useState(false);
   const [submittingTip, setSubmittingTip] = useState(false);
   const [startingPayment, setStartingPayment] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
+  const driverCancelHandledRef = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
   const [rideSheetCollapsed, setRideSheetCollapsed] = useState(true);
@@ -228,6 +274,20 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const bottomActionInset = Math.max(insets.bottom + 16, 24);
   const collapsedSheetHeight = Math.min(Math.max(260, bottomActionInset + 200), Math.round(windowHeight * 0.42));
   const expandedSheetMaxHeight = Math.round(windowHeight * 0.58);
+  const sheetPan = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gesture) => (
+      Math.abs(gesture.dy) > 10 && Math.abs(gesture.dy) > Math.abs(gesture.dx)
+    ),
+    onPanResponderRelease: (_event, gesture) => {
+      if (gesture.dy > 36 || gesture.vy > 0.8) {
+        setRideSheetCollapsed(true);
+        return;
+      }
+      if (gesture.dy < -36 || gesture.vy < -0.8) {
+        setRideSheetCollapsed(false);
+      }
+    },
+  }), []);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -259,7 +319,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   };
 
   useEffect(() => {
-    if (!rideRequestId) return undefined;
+    if (!rideRequestId) {
+      console.warn('[smilepay] rideStatus.missing_ride_id');
+      setLoading(false);
+      return undefined;
+    }
     let active = true;
     let requestId = 0;
 
@@ -282,11 +346,28 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
     const loadStatus = async () => {
       const currentRequestId = ++requestId;
+      console.log('[smilepay] rideStatus.load.start', { rideRequestId, currentRequestId });
       try {
-        const token = await getTokenRef.current();
+        const token = await withTimeout(
+          getTokenRef.current(),
+          RIDE_STATUS_LOAD_TIMEOUT_MS,
+          'Auth token'
+        );
         if (!token) throw new Error('Not signed in');
-        const data = await getPassengerRideRequestStatus(token, rideRequestId);
-        if (!active || currentRequestId !== requestId) return;
+        const data = await withTimeout(
+          getPassengerRideRequestStatus(token, rideRequestId),
+          RIDE_STATUS_LOAD_TIMEOUT_MS,
+          'Ride status'
+        );
+        if (!active) return;
+        setLoadError('');
+        console.log('[smilepay] rideStatus.load.ok', {
+          rideRequestId,
+          status: data?.rideRequest?.status || null,
+          paymentStatus: data?.rideRequest?.paymentStatus || null,
+          paymentMethod: data?.rideRequest?.paymentMethod || null,
+          paymentReference: data?.rideRequest?.paymentReference || null,
+        });
         setRideStatus((current) => {
           const next = data?.rideRequest || null;
           if (!next) return current;
@@ -302,7 +383,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           };
         });
         setDriver((current) => {
-          const next = data?.assignedDriver || initialDriver || null;
+          const next = data?.assignedDriver || initialDriverRef.current || null;
           if (!next) return current;
           if (!current) return next;
           const mergedCoordinate = preferFresherCoordinate(
@@ -326,8 +407,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         }
       } catch (error) {
         if (!active) return;
+        console.error('[smilepay] rideStatus.load.error', {
+          rideRequestId,
+          message: error?.message || String(error),
+          status: error?.status || null,
+        });
+        setLoadError(error?.message || 'Could not load ride status.');
       } finally {
-        if (active && currentRequestId === requestId) setLoading(false);
+        setLoading(false);
       }
     };
 
@@ -338,7 +425,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       active = false;
       clearInterval(interval);
     };
-  }, [initialDriver, rideRequestId]);
+  }, [rideRequestId]);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -391,6 +478,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 } : {}),
                 ...(payload?.safetyPinAttempts !== undefined ? { safetyPinAttempts: Number(payload.safetyPinAttempts || 0) } : {}),
                 ...(payload?.safetyPinLocked !== undefined ? { safetyPinLocked: Boolean(payload.safetyPinLocked) } : {}),
+                ...(payload?.paymentStatus ? { paymentStatus: payload.paymentStatus } : {}),
               };
             });
             if (nextDriverCoordinate) {
@@ -425,10 +513,28 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [rideRequestId]);
 
   useEffect(() => {
-    if (rideStatus?.status === 'cancelled') {
-      exitToPassengerHome();
+    if (rideStatus?.status !== 'cancelled') return;
+    if (driverCancelHandledRef.current) return;
+    driverCancelHandledRef.current = true;
+    const cancelledPaymentStatus = String(rideStatus?.paymentStatus || '').toLowerCase();
+    if (cancelledPaymentStatus === 'refunded') {
+      Alert.alert(
+        'Ride cancelled',
+        'Your Captain cancelled before the trip started. Your online payment has been refunded.',
+        [{ text: 'OK', onPress: exitToPassengerHome }]
+      );
+      return;
     }
-  }, [rideStatus?.status]);
+    if (cancelledPaymentStatus === 'refund_pending') {
+      Alert.alert(
+        'Ride cancelled',
+        'Your Captain cancelled before the trip started. Your online payment is being refunded.',
+        [{ text: 'OK', onPress: exitToPassengerHome }]
+      );
+      return;
+    }
+    exitToPassengerHome();
+  }, [rideStatus?.status, rideStatus?.paymentStatus]);
 
   const pickupCoordinate = normalizeCoordinate(rideStatus?.pickupCoordinate || initialPickupCoordinate);
   const dropoffCoordinate = normalizeCoordinate(rideStatus?.dropoffCoordinate || initialDropoffCoordinate);
@@ -447,15 +553,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const hasPassengerDriverRating = Number(rideStatus?.passengerDriverRating || 0) > 0;
   const paymentStatus = String(rideStatus?.paymentStatus || 'unpaid').toLowerCase();
   const paymentMethod = String(rideStatus?.paymentMethod || '').toLowerCase();
+  const isRefundedPayment = paymentStatus === 'refunded' || paymentStatus === 'refund_pending';
   const canPromptForTip = Boolean(rideStatus?.canTipDriver) && tipAmount <= 0 && paymentStatus !== 'paid';
   const shouldPromptForRating = isCompleted && !hasPassengerDriverRating;
   const shouldPromptForPostTrip = isCompleted && (shouldPromptForRating || canPromptForTip);
-  const canChoosePayment = Boolean(rideStatus?.canChoosePaymentMethod)
-    || Boolean(rideStatus?.canPayWithSmilePay)
-    || Boolean(rideStatus?.canPayCash);
-  const canPayWithSmilePay = Boolean(rideStatus?.canPayWithSmilePay) && paymentStatus !== 'paid' && paymentMethod !== 'cash';
-  const canPayCash = Boolean(rideStatus?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash';
-  const showPaymentCard = canChoosePayment || paymentStatus === 'paid' || paymentStatus === 'pending' || paymentMethod === 'cash';
+  const canPayWithSmilePay = Boolean(rideStatus?.canPayWithSmilePay) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
+  const canPayCash = Boolean(rideStatus?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
+  const showPaymentCard = canPayCash || canPayWithSmilePay || paymentStatus === 'paid' || paymentStatus === 'pending' || isRefundedPayment;
+  const driverHasArrived = stage === 'waiting_at_pickup';
   const driverCoordinate = normalizeCoordinate(rideStatus?.driverCoordinate || driver?.coordinate);
   const hasDriverCoordinate = Boolean(driverCoordinate);
   const intermediateStops = Array.isArray(rideStatus?.intermediateStops)
@@ -711,7 +816,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const pickupWaitCountdownText = pickupWaitRemainingSeconds === null ? '' : formatCountdown(pickupWaitRemainingSeconds);
   const pickupWaitExpired = pickupWaitRemainingSeconds === 0;
   const trackingRegion = useMemo(
-    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, activeTarget, stage),
+    () => buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, activeTarget, stage)
+      || { latitude: -20.1535, longitude: 28.5870, latitudeDelta: 0.05, longitudeDelta: 0.05 },
     [activeTarget, driverCoordinate, dropoffCoordinate, pickupCoordinate, stage]
   );
   const tripTimelineLabels = useMemo(
@@ -798,8 +904,20 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     exitToPassengerHome();
   };
 
+  const handleCallDriver = () => {
+    const phone = String(driver?.phoneNumber || '').trim();
+    if (!phone) {
+      Alert.alert('Call driver', 'No driver phone number is available for this ride.');
+      return;
+    }
+    const url = phone.startsWith('tel:') ? phone : `tel:${phone}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Call driver', 'Could not open the phone app.');
+    });
+  };
+
   const handleConfirmPickup = async () => {
-    if (confirmingPickup || rideStatus?.passengerConfirmedAt) return;
+    if (confirmingPickup || rideStatus?.passengerConfirmedAt || stage !== 'waiting_at_pickup') return;
     setConfirmingPickup(true);
     try {
       const token = await getToken();
@@ -827,10 +945,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       setSubmittingRating(true);
       const token = await getToken();
       if (!token || !rideRequestId) throw new Error('Not signed in');
-      const reviewText = String(review || '').trim();
+      const reviewText = buildRatingReviewText(selectedRatingTags, review);
       await submitPassengerDriverRating(token, rideRequestId, {
         rating,
         review: reviewText,
+        feedbackTags: selectedRatingTags,
       });
       ratingDraftTouchedRef.current = false;
       setRideStatus((current) => current ? {
@@ -901,16 +1020,30 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       if (!token || !rideRequestId) throw new Error('Not signed in');
 
       const callbackUrl = ExpoLinking.createURL('passenger-ride-payment');
+      console.log('[smilepay] client.initiate.start', { rideRequestId, callbackUrl });
       const result = await initiatePassengerRideSmilePay(token, rideRequestId, { callbackUrl });
       const payment = result?.payment || {};
+      console.log('[smilepay] client.initiate.result', {
+        rideRequestId,
+        reference: payment.reference || null,
+        amount: payment.amount || null,
+        authorizationUrl: payment.authorizationUrl || null,
+        status: payment.status || null,
+      });
       if (!payment.authorizationUrl) {
         throw new Error('Could not start Smile&Pay checkout.');
       }
 
       const authResult = await WebBrowser.openAuthSessionAsync(payment.authorizationUrl, callbackUrl);
+      console.log('[smilepay] client.browser.result', {
+        type: authResult?.type || null,
+        url: authResult?.url || null,
+        message: authResult?.message || null,
+      });
       const references = [payment.reference].filter(Boolean);
       if (authResult?.type === 'success' && authResult?.url) {
         const parsed = ExpoLinking.parse(authResult.url);
+        console.log('[smilepay] client.browser.query', parsed?.queryParams || {});
         const returnedReference =
           parsed?.queryParams?.reference
           || parsed?.queryParams?.orderReference
@@ -920,9 +1053,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         }
       }
 
+      console.log('[smilepay] client.verify.references', references);
       let verifiedPayment = null;
       for (const reference of references) {
         const verifyResult = await verifyPassengerRideSmilePay(token, rideRequestId, reference);
+        console.log('[smilepay] client.verify.result', {
+          reference,
+          status: verifyResult?.payment?.status || null,
+          alreadyVerified: verifyResult?.alreadyVerified || false,
+          payment: verifyResult?.payment || null,
+        });
         verifiedPayment = verifyResult?.payment || verifiedPayment;
       }
       const verifiedStatus = String(verifiedPayment?.status || '').toLowerCase();
@@ -949,6 +1089,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       } : current);
       Alert.alert('Payment complete', 'Online payment received. The service fee was withheld and the remaining amount was credited to the driver Trust Express wallet.');
     } catch (error) {
+      console.error('[smilepay] client.payment.error', {
+        rideRequestId,
+        message: error?.message || String(error),
+        status: error?.status || null,
+      });
       Alert.alert('Payment failed', error?.message || 'Could not complete Smile&Pay payment.');
     } finally {
       setStartingPayment(false);
@@ -1037,11 +1182,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     );
   };
 
-  if (loading) {
+  if (loading && !rideStatus) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
         <ActivityIndicator size="large" color={PRIMARY_BLUE} />
         <Text className="mt-4 text-base text-gray-500">Loading ride status...</Text>
+        {loadError ? (
+          <Text className="mt-3 text-center text-sm text-rose-600">{loadError}</Text>
+        ) : null}
       </View>
     );
   }
@@ -1203,6 +1351,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 onPress={() => setRideSheetCollapsed((current) => !current)}
                 activeOpacity={0.8}
                 className="items-center"
+                {...sheetPan.panHandlers}
               >
                 <View className="h-2 w-16 rounded-full bg-gray-300" />
                 <View className="mt-3 flex-row items-center">
@@ -1487,14 +1636,15 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
                       <View className="flex-row items-center justify-between">
                         <View className="flex-1 pr-3">
-                          <Text className="text-xl font-bold text-gray-900">Pay for this ride</Text>
-                          <Text className="mt-2 text-sm text-gray-500">
-                            Choose cash or pay online. Online payments withhold the platform service fee and credit the remaining amount to the driver Trust Express wallet.
+                          <Text className="text-xl font-bold text-gray-900">
+                            {paymentStatus === 'paid' ? 'Paid' : paymentStatus === 'refunded' ? 'Refunded' : paymentStatus === 'refund_pending' ? 'Refund in progress' : paymentStatus === 'pending' ? 'Payment pending' : 'Fare'}
                           </Text>
                         </View>
                         <View className={`rounded-full px-3 py-1 ${
                           paymentStatus === 'paid'
                             ? 'bg-emerald-50'
+                            : isRefundedPayment
+                              ? 'bg-slate-100'
                             : paymentMethod === 'cash'
                               ? 'bg-blue-50'
                               : 'bg-amber-50'
@@ -1503,12 +1653,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                           <Text className={`text-xs font-bold uppercase ${
                             paymentStatus === 'paid'
                               ? 'text-emerald-700'
+                              : isRefundedPayment
+                                ? 'text-slate-700'
                               : paymentMethod === 'cash'
                                 ? 'text-blue-700'
                                 : 'text-amber-700'
                           }`}
                           >
-                            {paymentStatus === 'paid' ? 'Paid online' : paymentMethod === 'cash' ? 'Cash' : paymentStatus === 'pending' ? 'Pending' : 'Unpaid'}
+                            {paymentStatus === 'paid' ? 'Paid online' : paymentStatus === 'refunded' ? 'Refunded' : paymentStatus === 'refund_pending' ? 'Refunding' : paymentMethod === 'cash' ? 'Cash' : paymentStatus === 'pending' ? 'Pending' : 'Unpaid'}
                           </Text>
                         </View>
                       </View>
@@ -1643,10 +1795,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
                       </TouchableOpacity>
                     </View>
-                  ) : stage !== 'on_trip' ? (
+                  ) : (
                     <View>
                       <View className="flex-row items-center gap-3">
-                        {!rideStatus?.passengerConfirmedAt ? (
+                        {driverHasArrived && !rideStatus?.passengerConfirmedAt ? (
                           <TouchableOpacity
                             onPress={handleConfirmPickup}
                             disabled={confirmingPickup}
@@ -1659,10 +1811,17 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                               <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
                             )}
                           </TouchableOpacity>
-                        ) : (
+                        ) : driverHasArrived && rideStatus?.passengerConfirmedAt ? (
                           <View className="flex-1 h-14 rounded-[22px] items-center justify-center border border-green-200 bg-green-50 px-3">
                             <Text className="text-base font-bold text-green-700">You're on your way</Text>
                           </View>
+                        ) : (
+                          <TouchableOpacity
+                            onPress={handleCancelRide}
+                            className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                          >
+                            <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                          </TouchableOpacity>
                         )}
                         <TouchableOpacity
                           onPress={() => navigation.navigate('RideChat', {
@@ -1675,14 +1834,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                           <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
                         </TouchableOpacity>
                         <TouchableOpacity
-                          onPress={() => Alert.alert('Call driver', driver?.phoneNumber || 'Phone not shared')}
+                          onPress={handleCallDriver}
                           className="h-14 w-14 rounded-[22px] items-center justify-center"
                           style={{ backgroundColor: PRIMARY_BLUE }}
                         >
                           <Ionicons name="call" size={22} color="#fff" />
                         </TouchableOpacity>
                       </View>
-                      {rideStatus?.passengerConfirmedAt ? (
+                      {driverHasArrived ? (
                         <TouchableOpacity
                           onPress={handleCancelRide}
                           className="mt-3 h-12 rounded-[22px] border border-red-200 items-center justify-center bg-white"
@@ -1691,14 +1850,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         </TouchableOpacity>
                       ) : null}
                     </View>
-                  ) : null}
+                  )}
                 </View>
               ) : null}
           </View>
         </KeyboardAvoidingView>
       </View>
 
-      <Modal visible={showCancelReasonModal} transparent animationType="fade">
+      <Modal visible={showCancelReasonModal} transparent animationType="slide">
         <TouchableOpacity
           activeOpacity={1}
           onPress={() => setShowCancelReasonModal(false)}
@@ -1747,52 +1906,28 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     : 'Add an optional thank-you tip for your driver, or finish your trip now.'}
                 </Text>
                 {shouldPromptForRating ? (
-                  <>
-                    <View className="mt-5 flex-row items-center justify-between">
-                      {[1, 2, 3, 4, 5].map((value) => (
-                        <Pressable
-                          key={value}
-                          onPress={() => {
-                            ratingDraftTouchedRef.current = true;
-                            setRating(value);
-                          }}
-                          hitSlop={8}
-                          className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
-                          style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
-                        >
-                          <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color={value <= rating ? '#f59e0b' : '#9ca3af'} />
-                        </Pressable>
-                      ))}
-                    </View>
-                    <View className="mt-4 flex-row flex-wrap">
-                      {PASSENGER_DRIVER_RATING_TAGS.map((tag) => {
-                        const selected = isPassengerDriverReviewTagSelected(review, tag);
-                        return (
-                          <TouchableOpacity
-                            key={tag}
-                            onPress={() => {
-                              ratingDraftTouchedRef.current = true;
-                              setReview((current) => togglePassengerDriverReviewTag(current, tag));
-                            }}
-                            className={`mb-2 mr-2 rounded-full border px-4 py-2 ${selected ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}
-                          >
-                            <Text className={`text-sm font-semibold ${selected ? 'text-blue-700' : 'text-gray-600'}`}>{tag}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                    <TextInput
-                      value={review}
-                      onChangeText={(value) => {
+                  <View className="mt-4">
+                    <RideRatingTagPicker
+                      rating={rating}
+                      onChangeRating={(value) => {
+                        ratingDraftTouchedRef.current = true;
+                        setRating(value);
+                      }}
+                      groups={PASSENGER_DRIVER_RATING_GROUPS}
+                      selectedTags={selectedRatingTags}
+                      onToggleTag={(tag) => {
+                        ratingDraftTouchedRef.current = true;
+                        setSelectedRatingTags((current) => toggleRatingTag(current, tag));
+                      }}
+                      review={review}
+                      onChangeReview={(value) => {
                         ratingDraftTouchedRef.current = true;
                         setReview(value);
                       }}
-                      placeholder="Write optional feedback"
-                      multiline
-                      textAlignVertical="top"
-                      className="mt-4 min-h-[110px] rounded-[22px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
+                      title="Please rate your Trust Express Captain"
+                      subtitle="Tell us how this trip went. You can select every option that applies."
                     />
-                  </>
+                  </View>
                 ) : null}
                 {((rideStatus?.canTipDriver && paymentStatus !== 'paid') || tipAmount > 0) ? (
                   <View className={`${shouldPromptForRating ? 'mt-4' : 'mt-5'} rounded-[22px] bg-[#f8fafc] px-4 py-4`}>

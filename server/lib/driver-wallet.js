@@ -115,7 +115,7 @@ async function getDriverWithdrawableBalance(driverUserId, connection = null) {
           AND source_type IN ('passenger_ride_payment', 'driver_wallet_cashout_refund')
          THEN amount
          WHEN transaction_type = 'manual_debit'
-          AND source_type = 'driver_wallet_cashout'
+          AND source_type IN ('driver_wallet_cashout', 'passenger_ride_payment_reversal')
          THEN -amount
          ELSE 0
        END), 0) AS withdrawable_balance

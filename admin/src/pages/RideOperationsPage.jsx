@@ -90,8 +90,19 @@ export default function RideOperationsPage() {
   return (
     <section className="space-y-3">
       <div className="border border-slate-300 bg-white px-4 py-3">
-        <h1 className="text-sm font-semibold text-slate-800">Ride Operations</h1>
-        <p className="text-xs text-slate-500">Monitor requested rides, assigned drivers, completions, and cancellations.</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-sm font-semibold text-slate-800">Ride Operations</h1>
+            <p className="text-xs text-slate-500">Monitor requested rides, assigned drivers, completions, and cancellations.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard/ride-operations/new')}
+            className="h-9 bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-500"
+          >
+            Book for passenger
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">

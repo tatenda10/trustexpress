@@ -59,6 +59,8 @@
     "db:migrate:hire-payment-method": "node scripts/run-migration.js sql/migrations/073_add_hire_payment_method.sql",
     "db:migrate:hire-booking-arrived": "node scripts/run-migration.js sql/migrations/074_add_hire_booking_arrived.sql",
     "db:migrate:driver-licence-expiry": "node scripts/run-migration.js sql/migrations/076_add_driver_licence_expiry.sql",
+    "db:migrate:admin-ride-dispatch": "node scripts/run-migration.js sql/migrations/077_add_admin_ride_dispatch.sql",
+    "db:migrate:passenger-ride-refunds": "node scripts/run-migration.js sql/migrations/078_add_passenger_ride_payment_refunds.sql",
     "db:verify:captain-rewards": "node scripts/verify-captain-rewards-db.js",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
     "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",

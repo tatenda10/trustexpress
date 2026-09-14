@@ -7,6 +7,7 @@ import DriverVerificationPage from './pages/DriverVerificationPage'
 import DriverVerificationDetailPage from './pages/DriverVerificationDetailPage'
 import RideOperationsPage from './pages/RideOperationsPage'
 import RideOperationDetailPage from './pages/RideOperationDetailPage'
+import DispatchRidePage from './pages/DispatchRidePage'
 import PanicAlertsPage from './pages/PanicAlertsPage'
 import LostItemsPage from './pages/LostItemsPage'
 import RideSafetyPinSettingsPage from './pages/RideSafetyPinSettingsPage'
@@ -111,6 +112,10 @@ function AppRoutes() {
         <Route
           path="ride-operations"
           element={<PermissionRoute permission="ride_ops.read"><RideOperationsPage /></PermissionRoute>}
+        />
+        <Route
+          path="ride-operations/new"
+          element={<PermissionRoute permission="ride_ops.read"><DispatchRidePage /></PermissionRoute>}
         />
         <Route
           path="ride-operations/:rideId"

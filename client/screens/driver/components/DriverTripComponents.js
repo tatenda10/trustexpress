@@ -1,9 +1,14 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, TextInput, Image } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline } from '../../../components/maps/MapViewCompat';
 import DriverVehicleMapMarker from '../../../components/maps/DriverVehicleMapMarker';
 import { receiptPaymentMethodLabel } from '../../../constants/payment';
+import RideRatingTagPicker from '../../../components/ride/RideRatingTagPicker';
+import {
+  DRIVER_PASSENGER_RATING_GROUPS,
+  DRIVER_PASSENGER_RATING_SAFETY_NOTE,
+} from '../../../constants/rideRatingTags';
 
 export function DriverTripLoadingState({ color }) {
   return (
@@ -41,9 +46,11 @@ export function DriverTripReceiptView({
   totalAmount,
   passengerRating,
   passengerReview,
+  selectedRatingTags = [],
   submittingRating,
   onSetPassengerRating,
   onSetPassengerReview,
+  onTogglePassengerTag,
   onSubmit,
   onSkip,
   formatCurrency,
@@ -119,32 +126,17 @@ export function DriverTripReceiptView({
         </Text>
       </View>
 
-      <Text className="mt-7 text-xl font-bold text-gray-900">Rate your passenger</Text>
-      <Text className="mt-1 text-base text-gray-500">{ratingRide.passengerName}</Text>
-      <View className="mt-6 flex-row items-center justify-between">
-        {[1, 2, 3, 4, 5].map((value) => (
-          <TouchableOpacity
-            key={value}
-            onPress={() => onSetPassengerRating(value)}
-            activeOpacity={0.8}
-            className="h-14 w-14 items-center justify-center rounded-full bg-[#f8fafc]"
-          >
-            <Ionicons
-              name={value <= passengerRating ? 'star' : 'star-outline'}
-              size={30}
-              color={value <= passengerRating ? '#f59e0b' : '#9ca3af'}
-            />
-          </TouchableOpacity>
-        ))}
-      </View>
-      <TextInput
-        className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-4 text-base text-gray-900"
-        placeholder="Optional review"
-        placeholderTextColor="#9ca3af"
-        value={passengerReview}
-        onChangeText={onSetPassengerReview}
-        multiline
-        numberOfLines={3}
+      <RideRatingTagPicker
+        rating={passengerRating}
+        onChangeRating={onSetPassengerRating}
+        groups={DRIVER_PASSENGER_RATING_GROUPS}
+        selectedTags={selectedRatingTags}
+        onToggleTag={onTogglePassengerTag}
+        review={passengerReview}
+        onChangeReview={onSetPassengerReview}
+        title="Please rate your Trust Express Passenger"
+        subtitle={ratingRide.passengerName || 'Passenger'}
+        safetyNote={DRIVER_PASSENGER_RATING_SAFETY_NOTE}
       />
       <TouchableOpacity
         onPress={onSubmit}

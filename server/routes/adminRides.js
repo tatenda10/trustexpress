@@ -20,6 +20,14 @@ import {
   serializeAdminShareLink,
 } from '../lib/admin-ride-share.js';
 import { expireAbandonedOpenRideRequests } from '../lib/ride-offer-expiry.js';
+import {
+  createDispatchRide,
+  listDispatchRideOptions,
+  loadDispatchPlaceDetails,
+  lookupDispatchPassenger,
+  quoteDispatchRide,
+  searchDispatchPlaces,
+} from '../lib/admin-ride-dispatch.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
@@ -180,6 +188,91 @@ function normalizePanicFollowUpStatus(value) {
 function normalizePanicCasePriority(value) {
   return String(value || '').trim().toLowerCase();
 }
+
+router.get('/dispatch/options', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    return res.json(await listDispatchRideOptions());
+  } catch (err) {
+    console.error('GET /api/admin/rides/dispatch/options', err);
+    return res.status(500).json({ error: err?.message || 'Could not load booking options' });
+  }
+});
+
+router.get('/dispatch/places', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const suggestions = await searchDispatchPlaces(req.query?.query, {
+      latitude: req.query?.latitude,
+      longitude: req.query?.longitude,
+    });
+    return res.json({ suggestions });
+  } catch (err) {
+    console.error('GET /api/admin/rides/dispatch/places', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Could not search places' });
+  }
+});
+
+router.post('/dispatch/place-details', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const place = await loadDispatchPlaceDetails(req.body?.placeId);
+    if (!place) {
+      return res.status(404).json({ error: 'Place not found' });
+    }
+    return res.json({ place });
+  } catch (err) {
+    console.error('POST /api/admin/rides/dispatch/place-details', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Could not load that place' });
+  }
+});
+
+router.get('/dispatch/passenger', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    return res.json(await lookupDispatchPassenger(req.query?.phone));
+  } catch (err) {
+    console.error('GET /api/admin/rides/dispatch/passenger', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Could not look up passenger' });
+  }
+});
+
+router.post('/dispatch/quote', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const quote = await quoteDispatchRide({
+      pickupCoordinate: req.body?.pickupCoordinate,
+      dropoffCoordinate: req.body?.dropoffCoordinate,
+      pickupLabel: req.body?.pickupLabel,
+      dropoffLabel: req.body?.dropoffLabel,
+      intermediateStops: req.body?.intermediateStops,
+      selectedTierKey: req.body?.selectedTierKey || req.body?.tierKey,
+      passengerCount: req.body?.passengerCount,
+      paymentMethod: req.body?.paymentMethod,
+    });
+    return res.json({ quote });
+  } catch (err) {
+    console.error('POST /api/admin/rides/dispatch/quote', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Could not estimate this ride' });
+  }
+});
+
+router.post('/dispatch', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const data = await createDispatchRide({
+      passengerName: req.body?.passengerName,
+      passengerPhone: req.body?.passengerPhone,
+      pickupCoordinate: req.body?.pickupCoordinate,
+      dropoffCoordinate: req.body?.dropoffCoordinate,
+      pickupLabel: req.body?.pickupLabel,
+      dropoffLabel: req.body?.dropoffLabel,
+      intermediateStops: req.body?.intermediateStops,
+      selectedTierKey: req.body?.selectedTierKey || req.body?.tierKey,
+      passengerCount: req.body?.passengerCount,
+      paymentMethod: req.body?.paymentMethod,
+      adminUserId: req.admin?.id,
+    });
+    return res.status(201).json(data);
+  } catch (err) {
+    console.error('POST /api/admin/rides/dispatch', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Could not request this ride' });
+  }
+});
 
 router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
   try {

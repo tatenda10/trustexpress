@@ -610,6 +610,16 @@ export default function RideOperationDetailPage() {
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
               <DetailField label="Rider" value={ride.rider} />
               <DetailField
+                label="Rider phone"
+                value={
+                  ride.riderPhone ? (
+                    <a href={`tel:${ride.riderPhone}`} className="text-indigo-700 hover:underline">
+                      {ride.riderPhone}
+                    </a>
+                  ) : 'Not shared'
+                }
+              />
+              <DetailField
                 label="People on trip"
                 value={
                   Number(ride.passengerCount || 0) === 1

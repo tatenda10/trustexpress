@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getDirectionsRoute, getHireRequest, updateDriverAvailability, updateHireBookingStatus } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { hireContactHref, isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
 import { connectRealtime } from '../../realtime';
 import { DriverTripEmptyState, DriverTripLoadingState, DriverTripMapPanel } from './components/DriverTripComponents';
@@ -59,6 +60,7 @@ export default function DriverHireTripScreen({ navigation, route }) {
   const bookingStatus = String(booking?.status || '').toLowerCase();
   const onTrip = bookingStatus === 'in_progress';
   const waiting = bookingStatus === 'driver_arrived';
+  const canContactPassenger = isLiveHireBooking(bookingStatus) && !!passenger?.phone;
   const targetCoordinate = onTrip ? dropoffCoordinate : pickupCoordinate;
   const targetLabel = onTrip
     ? (request?.dropoffLabel || 'Drop-off')
@@ -244,10 +246,16 @@ export default function DriverHireTripScreen({ navigation, route }) {
         targetLabel={targetLabel}
         voiceGuidanceEnabled={false}
         onToggleVoiceGuidance={() => {}}
-        showCallPassenger={!!passenger?.phone}
-        onCallPassenger={() => passenger?.phone && Linking.openURL(`tel:${passenger.phone}`)}
+        showCallPassenger={canContactPassenger}
+        onCallPassenger={() => {
+          const href = hireContactHref(passenger?.phone, 'tel');
+          if (href) Linking.openURL(href);
+        }}
         onSendPanicAlert={() => Alert.alert('Support', 'Use Account → Support if you need help on this hire job.')}
-        onOpenChat={() => Alert.alert('Chat', 'Hire chat is not available yet. Call the passenger instead.')}
+        onOpenChat={() => {
+          const href = hireContactHref(passenger?.phone, 'sms');
+          if (href) Linking.openURL(href);
+        }}
         onOpenExternalNavigation={() => {
           if (!targetCoordinate) return;
           Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${targetCoordinate.latitude},${targetCoordinate.longitude}`);
@@ -269,7 +277,7 @@ export default function DriverHireTripScreen({ navigation, route }) {
         passengerName={passenger?.name || 'Passenger'}
         passengerSubtitle={[
           paymentMethodLabel(request?.paymentMethod),
-          passenger?.phone,
+          canContactPassenger ? passenger?.phone : null,
         ].filter(Boolean).join(' · ') || 'Hire passenger'}
         passengerConfirmationText={null}
         safetyPinReminderText={null}

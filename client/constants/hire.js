@@ -104,6 +104,12 @@ export function isLiveHireBooking(status) {
   return LIVE_HIRE_BOOKING_STATUSES.includes(String(status || '').toLowerCase());
 }
 
+export function hireContactHref(phone, scheme = 'tel') {
+  const cleaned = String(phone || '').replace(/[^\d+]/g, '');
+  if (!cleaned) return null;
+  return `${scheme}:${cleaned}`;
+}
+
 export function inferHireTripType(distanceKm, thresholdKm = DEFAULT_INTERCITY_DISTANCE_KM) {
   const distance = Number(distanceKm);
   const threshold = Number(thresholdKm) > 0 ? Number(thresholdKm) : DEFAULT_INTERCITY_DISTANCE_KM;

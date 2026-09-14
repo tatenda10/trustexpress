@@ -28,7 +28,7 @@ import {
   DRIVER_VERIFICATION_REQUIRED_MESSAGE,
   isDriverVerifiedForTrips,
 } from '../../constants/driverKind';
-import { isLiveHireBooking } from '../../constants/hire';
+import { isLiveHireBooking, hireContactHref } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
@@ -95,8 +95,19 @@ export default function DriverHireDetailScreen({ navigation, route }) {
   );
 
   const canRespond = ['open', 'quoted'].includes(request?.status);
+  const canContactPassenger = isLiveHireBooking(booking?.status);
   const passengerOffer = Number(request?.passengerOfferAmount);
   const hasPassengerOffer = Number.isFinite(passengerOffer) && passengerOffer > 0;
+
+  const openPassengerContact = async (scheme) => {
+    const href = hireContactHref(passenger?.phone, scheme);
+    if (!href) return;
+    try {
+      await Linking.openURL(href);
+    } catch {
+      Alert.alert('Could not open', scheme === 'sms' ? 'Could not open messages.' : 'Could not start the call.');
+    }
+  };
 
   const submitQuote = async () => {
     try {
@@ -233,30 +244,38 @@ export default function DriverHireDetailScreen({ navigation, route }) {
         {!canRespond ? (
           <View className="mt-4 rounded-[24px] bg-white px-4 py-5">
             <Text className="text-base font-bold text-gray-900">
-              {booking ? 'Your booked job' : 'Job closed'}
+              {canContactPassenger ? 'Your booked job' : 'Job closed'}
             </Text>
             <Text className="mt-1 text-sm text-gray-500">
-              {booking
+              {canContactPassenger
                 ? 'Open the live map to follow directions to the passenger, start the ride, and complete the job.'
                 : 'This hire request is no longer open for quotes.'}
             </Text>
-            {paymentMethodLabel(request?.paymentMethod) ? (
+            {canContactPassenger && paymentMethodLabel(request?.paymentMethod) ? (
               <Text className="mt-3 text-sm font-semibold text-gray-900">
                 Payment: {paymentMethodLabel(request.paymentMethod)}
               </Text>
             ) : null}
-            {passenger?.name ? (
+            {canContactPassenger && passenger?.name ? (
               <Text className="mt-1 text-sm text-gray-700">Passenger: {passenger.name}</Text>
             ) : null}
-            {passenger?.phone ? (
-              <TouchableOpacity
-                onPress={() => Linking.openURL(`tel:${passenger.phone}`)}
-                className="mt-3 h-12 items-center justify-center rounded-2xl bg-slate-100"
-              >
-                <Text className="font-semibold text-gray-900">Call passenger</Text>
-              </TouchableOpacity>
+            {canContactPassenger && passenger?.phone ? (
+              <View className="mt-3 flex-row gap-3">
+                <TouchableOpacity
+                  onPress={() => openPassengerContact('tel')}
+                  className="h-12 flex-1 items-center justify-center rounded-2xl bg-slate-100"
+                >
+                  <Text className="font-semibold text-gray-900">Call passenger</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => openPassengerContact('sms')}
+                  className="h-12 flex-1 items-center justify-center rounded-2xl bg-slate-100"
+                >
+                  <Text className="font-semibold text-gray-900">Message</Text>
+                </TouchableOpacity>
+              </View>
             ) : null}
-            {isLiveHireBooking(booking?.status) ? (
+            {canContactPassenger ? (
               <TouchableOpacity
                 onPress={() => navigation.navigate('DriverHireTrip', { requestId })}
                 className="mt-3 h-12 items-center justify-center rounded-2xl"

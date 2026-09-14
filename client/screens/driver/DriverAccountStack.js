@@ -11,7 +11,7 @@ import DriverHireOpenRequestsScreen from './DriverHireOpenRequestsScreen';
 import DriverHireDetailScreen from './DriverHireDetailScreen';
 import DriverActivityStack from './DriverActivityStack';
 import DriverActivityScreen from './DriverActivityScreen';
-import DriverDiscountReimbursementsScreen from './DriverDiscountReimbursementsScreen';
+// import DriverDiscountReimbursementsScreen from './DriverDiscountReimbursementsScreen';
 import DriverCaptainRewardsScreen from './DriverCaptainRewardsScreen';
 import SupportChatScreen from '../shared/SupportChatScreen';
 import LegalDocumentScreen from '../shared/LegalDocumentScreen';
@@ -56,7 +56,7 @@ export default function DriverAccountStack({ route }) {
       <Stack.Screen name="DriverHireDetail" component={DriverHireDetailScreen} />
       <Stack.Screen name="DriverIncomeStack" component={DriverActivityStack} />
       <Stack.Screen name="DriverRideHistory" component={DriverActivityScreen} />
-      <Stack.Screen name="DriverDiscounts" component={DriverDiscountReimbursementsScreen} />
+      {/* <Stack.Screen name="DriverDiscounts" component={DriverDiscountReimbursementsScreen} /> */}
       <Stack.Screen name="DriverCaptainRewards" component={DriverCaptainRewardsScreen} />
       <Stack.Screen
         name="DriverSupportChat"

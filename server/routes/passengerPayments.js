@@ -88,6 +88,11 @@ router.post('/rides/:rideRequestId/smilepay/initiate', requireAuth, async (req, 
     if (!Number.isInteger(rideRequestId)) {
       return res.status(400).json({ error: 'Invalid rideRequestId' });
     }
+    console.log('[smilepay] route.initiate', {
+      rideRequestId,
+      passengerUserId: req.userId,
+      callbackUrl: req.body?.callbackUrl || null,
+    });
     const payment = await initializePassengerRidePayment({
       passengerUserId: req.userId,
       passenger: passenger.user,
@@ -105,6 +110,11 @@ router.post('/rides/:rideRequestId/smilepay/verify', requireAuth, async (req, re
   try {
     const passenger = await requirePassenger(req, res);
     if (!passenger) return;
+    console.log('[smilepay] route.verify', {
+      rideRequestId: req.params.rideRequestId,
+      passengerUserId: req.userId,
+      reference: req.body?.reference || null,
+    });
     const result = await verifyPassengerRidePayment({
       passengerUserId: req.userId,
       rideRequestId: Number(req.params.rideRequestId),
@@ -119,6 +129,13 @@ router.post('/rides/:rideRequestId/smilepay/verify', requireAuth, async (req, re
 
 router.post('/webhooks/smilepay', async (req, res) => {
   try {
+    console.log('[smilepay] route.webhook', {
+      headers: {
+        contentType: req.headers['content-type'] || null,
+        userAgent: req.headers['user-agent'] || null,
+      },
+      body: req.body || {},
+    });
     const result = await handlePassengerSmilePayWebhook(req.body || {});
     return res.status(200).json({ ok: true, alreadyVerified: !!result.alreadyVerified });
   } catch (err) {

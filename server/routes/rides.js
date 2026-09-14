@@ -69,7 +69,7 @@ function calculateDistanceKm(start, end) {
   return earthRadiusKm * c;
 }
 
-function createPublicRideId() {
+export function createPublicRideId() {
   return `TR-${crypto.randomInt(100000, 999999)}`;
 }
 
@@ -99,7 +99,8 @@ function buildRidePaymentPayload(ride) {
   const rideStatus = String(ride?.status || '').trim().toLowerCase();
   const payableStatuses = new Set(['driver_assigned', 'driver_arrived', 'in_progress', 'completed']);
   const isPayable = payableStatuses.has(rideStatus);
-  const isPaid = paymentStatus === 'paid' || Boolean(ride?.paid_at);
+  const isRefunded = paymentStatus === 'refunded' || paymentStatus === 'refund_pending' || paymentStatus === 'cancelled';
+  const isPaid = !isRefunded && (paymentStatus === 'paid' || Boolean(ride?.paid_at));
   const choseCash = paymentMethod === 'cash';
   const choseOnline = paymentMethod === 'online';
   return {
@@ -108,9 +109,9 @@ function buildRidePaymentPayload(ride) {
     paymentReference: ride?.payment_reference || null,
     paymentMethod,
     paidAt: toIsoOrNull(ride?.paid_at),
-    canChoosePaymentMethod: isPayable && !isPaid && !choseCash && !choseOnline,
-    canPayCash: isPayable && !isPaid && !choseCash && !choseOnline,
-    canPayWithSmilePay: isPayable && !isPaid && !choseCash,
+    canChoosePaymentMethod: isPayable && !isPaid && !isRefunded && !choseCash && !choseOnline,
+    canPayCash: isPayable && !isPaid && !isRefunded && !choseCash && !choseOnline,
+    canPayWithSmilePay: isPayable && !isPaid && !isRefunded && !choseCash,
   };
 }
 
@@ -131,7 +132,7 @@ async function requirePassenger(req, res) {
   return user;
 }
 
-async function loadPassengerTier(selectedTierKey) {
+export async function loadPassengerTier(selectedTierKey) {
   const normalizedTierKey = String(selectedTierKey || '').trim().toLowerCase();
   const rows = await query(
     `SELECT
@@ -164,7 +165,7 @@ async function loadPassengerTier(selectedTierKey) {
   };
 }
 
-function calculateTierFare(tier, distanceKm) {
+export function calculateTierFare(tier, distanceKm) {
   const baseFare = Number(tier?.base_fare || 0);
   const pricePerKm = Number(tier?.price_per_km || 0);
   const minimumFare = Number(tier?.minimum_fare || 0);
@@ -384,7 +385,7 @@ function buildRideDiscountPayload(ride) {
 }
 
 async function getUserProfileImageUrl(userId) {
-  if (!userId) return null;
+  if (!userId || String(userId).startsWith('dispatch:')) return null;
   try {
     const user = await getClerkUserById(userId);
     return toAppUser(user)?.image_url || null;
@@ -432,7 +433,7 @@ async function refreshOpenRideRequestState(rideId) {
   await refreshOpenRideOffers(rideId);
 }
 
-async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKey }) {
+export async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKey }) {
   const availabilityRows = await query(
     `SELECT da.*
      FROM driver_availability da
@@ -482,7 +483,7 @@ async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKe
   return eligibleDrivers;
 }
 
-async function createPendingDriverOffers(rideRequestId, drivers) {
+export async function createPendingDriverOffers(rideRequestId, drivers) {
   if (!rideRequestId || !Array.isArray(drivers) || !drivers.length) return;
 
   const placeholders = drivers.map(() => '(?, ?, \'pending\', CURRENT_TIMESTAMP)').join(', ');
@@ -511,7 +512,7 @@ function buildDriverRideRequestNotificationBody({ pickupLabel, dropoffLabel, int
   return `${peoplePrefix}${pickupLabel} to ${dropoffLabel}`;
 }
 
-async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, intermediateStops = [], rideRequestId, publicId, tierName, passengerCount }) {
+export async function notifyDriversAboutRideRequest({ drivers, passengerName, pickupLabel, dropoffLabel, intermediateStops = [], rideRequestId, publicId, tierName, passengerCount }) {
   if (!Array.isArray(drivers) || !drivers.length) return;
   const stopCount = Array.isArray(intermediateStops) ? intermediateStops.length : 0;
   const notificationBody = buildDriverRideRequestNotificationBody({
@@ -2420,7 +2421,7 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
        SET passenger_confirmed_at = COALESCE(passenger_confirmed_at, CURRENT_TIMESTAMP)
        WHERE id = ?
          AND passenger_user_id = ?
-         AND status IN ('driver_assigned', 'driver_arrived')
+         AND status = 'driver_arrived'
          AND passenger_confirmed_at IS NULL`,
       [rideRequestId, req.userId]
     );
@@ -2439,23 +2440,33 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
 
     const confirmedAt = toIsoOrNull(ride.passenger_confirmed_at);
     if (!confirmedAt) {
-      return res.status(409).json({ error: 'This ride is not ready for pickup confirmation yet.' });
+      return res.status(409).json({ error: 'Wait until your driver has arrived at pickup before confirming.' });
     }
 
     if (ride?.driver_user_id) {
       try {
         const driverUser = await getClerkUserById(ride.driver_user_id);
         const pushToken = String(driverUser?.privateMetadata?.pushToken || '').trim();
+        const fcmToken = String(driverUser?.privateMetadata?.fcmToken || '').trim();
+        const pushPayload = {
+          title: 'Passenger is coming',
+          body: 'Your passenger confirmed they are on their way to the pickup point.',
+          data: {
+            type: 'passenger_confirmed',
+            rideRequestId: String(rideRequestId),
+            confirmedAt,
+          },
+        };
         if (pushToken) {
           await sendExpoPushNotifications({
             to: pushToken,
-            title: 'Passenger is coming',
-            body: 'Your passenger confirmed they are on their way to the pickup point.',
-            data: {
-              type: 'passenger_confirmed',
-              rideRequestId,
-              confirmedAt,
-            },
+            ...pushPayload,
+          });
+        }
+        if (fcmToken) {
+          await sendFcmNotifications({
+            to: fcmToken,
+            ...pushPayload,
           });
         }
       } catch (pushError) {
@@ -2463,6 +2474,7 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
       }
       emitRideStatusToDriver(ride.driver_user_id, {
         rideRequestId,
+        status: 'passenger_confirmed',
         confirmedAt,
         passengerUserId: req.userId,
       });

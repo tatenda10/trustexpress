@@ -440,13 +440,13 @@ const DriverAccountScreen = ({ navigation, route }) => {
       onPress: () => navigation.navigate('DriverRideHistory'),
       danger: false,
     },
-    {
-      key: 'discounts',
-      title: 'Discounts',
-      icon: 'cash-outline',
-      onPress: () => navigation.navigate('DriverDiscounts'),
-      danger: false,
-    },
+    // {
+    //   key: 'discounts',
+    //   title: 'Discounts',
+    //   icon: 'cash-outline',
+    //   onPress: () => navigation.navigate('DriverDiscounts'),
+    //   danger: false,
+    // },
     {
       key: 'reviews',
       title: 'Reviews',

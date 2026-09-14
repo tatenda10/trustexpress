@@ -268,7 +268,7 @@ export default function IncomingRidePreviewMap({
         {pickup ? (
           <Marker
             coordinate={pickup}
-            title="Pickup"
+            title="A · Pickup"
             tracksViewChanges={tracksViewChanges}
             anchor={{ x: 0.5, y: 1 }}
           >
@@ -276,26 +276,29 @@ export default function IncomingRidePreviewMap({
           </Marker>
         ) : null}
 
-        {stops.map((stop, index) => (
-          <Marker
-            key={`incoming-preview-stop-${index}`}
-            coordinate={stop}
-            title={`Stop ${index + 1}`}
-            tracksViewChanges={tracksViewChanges}
-            anchor={{ x: 0.5, y: 1 }}
-          >
-            <LetterMarker letter={String(index + 1)} color="#f97316" />
-          </Marker>
-        ))}
+        {stops.map((stop, index) => {
+          const letter = String.fromCharCode(66 + index);
+          return (
+            <Marker
+              key={`incoming-preview-stop-${index}`}
+              coordinate={stop}
+              title={`${letter} · Stop ${index + 1}`}
+              tracksViewChanges={tracksViewChanges}
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <LetterMarker letter={letter} color="#f97316" />
+            </Marker>
+          );
+        })}
 
         {dropoff ? (
           <Marker
             coordinate={dropoff}
-            title="Drop-off"
+            title={`${String.fromCharCode(65 + 1 + stops.length)} · Drop-off`}
             tracksViewChanges={tracksViewChanges}
             anchor={{ x: 0.5, y: 1 }}
           >
-            <LetterMarker letter="B" color="#111827" label={tripEtaLabel} />
+            <LetterMarker letter={String.fromCharCode(65 + 1 + stops.length)} color="#111827" label={tripEtaLabel} />
           </Marker>
         ) : null}
       </MapView>

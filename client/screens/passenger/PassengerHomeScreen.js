@@ -1187,11 +1187,11 @@ export default function PassengerHomeScreen({ navigation, route }) {
             </View>
           ) : (
             <View className="pb-5">
-              <Text className="mt-3 text-sm text-gray-500">
-                {tripMode === 'hire'
-                  ? 'Choose pickup and drop-off on the map, then continue your vehicle hire request.'
-                  : 'Choose a destination to request a normal ride.'}
-              </Text>
+              {tripMode === 'hire' ? (
+                <Text className="mt-3 text-sm text-gray-500">
+                  Choose pickup and drop-off on the map, then continue your vehicle hire request.
+                </Text>
+              ) : null}
               {recentTrips.length ? (
                 <View className="mt-4 rounded-[20px] bg-white px-4 py-4">
                   <Text className="text-sm font-semibold text-gray-700">Recent trips</Text>

@@ -22,7 +22,54 @@ import { listHireVehicleTypes } from '../lib/hire-vehicle-types.js';
 import { normalizePaymentMethod, paymentMethodLabel } from '../lib/payment-method.js';
 import { normalizeUploadPath } from '../lib/driver-verification-mysql.js';
 
+const LIVE_HIRE_CONTACT_STATUSES = new Set(['confirmed', 'driver_arrived', 'in_progress']);
+
 const router = Router();
+
+function canShareHireContact(booking) {
+  return !!(booking && LIVE_HIRE_CONTACT_STATUSES.has(String(booking.status || '').toLowerCase()));
+}
+
+async function loadHirePassengerContact(passengerUserId) {
+  const [passengerRow] = await query(
+    `SELECT first_name, last_name, phone_number
+     FROM users
+     WHERE clerk_user_id = ?
+     LIMIT 1`,
+    [passengerUserId]
+  );
+  return {
+    name: [passengerRow?.first_name, passengerRow?.last_name].filter(Boolean).join(' ').trim() || 'Passenger',
+    phone: passengerRow?.phone_number || null,
+  };
+}
+
+async function chargeCommissionForAcceptedHire({ booking, request, vehicle }) {
+  if (!booking?.id) return null;
+  const contact = await loadHirePassengerContact(booking.passenger_user_id);
+  try {
+    return await deductCommissionForCompletedHire({
+      driverUserId: booking.driver_user_id,
+      hireBookingId: booking.id,
+      hireRequestId: booking.hire_request_id || request?.id,
+      transportAmount: booking.amount,
+      expensesAmount: booking.expenses_amount,
+      category: vehicle?.category || request?.category,
+      tripType: request?.trip_type,
+      distanceKm: request?.estimated_distance_km,
+      passengerUserId: booking.passenger_user_id,
+      passengerName: contact.name,
+    });
+  } catch (commissionError) {
+    console.error('hire commission at booking accept', commissionError);
+    return {
+      charged: false,
+      skipped: true,
+      reason: 'commission_failed',
+      commissionAmount: 0,
+    };
+  }
+}
 
 async function requireDriver(req, res) {
   const user = await getClerkUserById(req.userId);
@@ -802,22 +849,18 @@ router.get('/requests/:id', requireAuth, async (req, res) => {
     );
 
     let passenger = null;
-    if (bookingRow && (isOwner || bookingRow.driver_user_id === req.userId)) {
-      const [passengerRow] = await query(
-        `SELECT first_name, last_name, phone_number
-         FROM users
-         WHERE clerk_user_id = ?
-         LIMIT 1`,
-        [row.passenger_user_id]
-      );
-      passenger = {
-        name: [passengerRow?.first_name, passengerRow?.last_name].filter(Boolean).join(' ').trim() || 'Passenger',
-        phone: passengerRow?.phone_number || null,
-      };
+    if (
+      canShareHireContact(bookingRow)
+      && bookingRow.driver_user_id === req.userId
+    ) {
+      passenger = await loadHirePassengerContact(row.passenger_user_id);
     }
 
     const booking = shapeHireBooking(bookingRow);
     const driver = booking?.driverUserId ? await loadHireDriverSnapshot(booking.driverUserId) : null;
+    if (driver && !canShareHireContact(bookingRow)) {
+      driver.phone = null;
+    }
     if (driver && booking?.vehicle) {
       driver.vehicle = {
         make: booking.vehicle.make || driver.vehicle?.make || null,
@@ -1150,9 +1193,24 @@ router.post('/requests/:id/accept-passenger-offer', requireAuth, async (req, res
       console.error('POST accept-passenger-offer notify passenger', notifyError);
     });
 
+    const commission = await chargeCommissionForAcceptedHire({
+      booking: bookingResult.booking,
+      request: bookingResult.request,
+      vehicle: bookingResult.vehicle,
+    });
+
     return res.status(201).json({
       booking: shapedBooking,
       request: shapeHireRequest({ ...bookingResult.request, status: 'booked' }),
+      commission: commission
+        ? {
+            charged: !!commission.charged,
+            alreadyCharged: !!commission.alreadyCharged,
+            skipped: !!commission.skipped,
+            reason: commission.reason || null,
+            commissionAmount: Number(commission.commissionAmount || 0),
+          }
+        : undefined,
     });
   } catch (err) {
     console.error('POST /api/hire/requests/:id/accept-passenger-offer', err);
@@ -1257,9 +1315,32 @@ router.patch('/quotes/:id/accept', requireAuth, async (req, res) => {
       console.error('PATCH /api/hire/quotes/:id/accept notify driver', notifyError);
     });
 
+    const [acceptedRequest] = await query(
+      `SELECT * FROM hire_requests WHERE id = ? LIMIT 1`,
+      [bookingResult.booking.hire_request_id]
+    );
+    const [acceptedVehicle] = await query(
+      `SELECT * FROM hire_vehicles WHERE id = ? LIMIT 1`,
+      [bookingResult.booking.hire_vehicle_id]
+    );
+    const commission = await chargeCommissionForAcceptedHire({
+      booking: bookingResult.booking,
+      request: acceptedRequest,
+      vehicle: acceptedVehicle,
+    });
+
     return res.json({
       booking: shapedBooking,
       requestStatus: 'booked',
+      commission: commission
+        ? {
+            charged: !!commission.charged,
+            alreadyCharged: !!commission.alreadyCharged,
+            skipped: !!commission.skipped,
+            reason: commission.reason || null,
+            commissionAmount: Number(commission.commissionAmount || 0),
+          }
+        : undefined,
     });
   } catch (err) {
     console.error('PATCH /api/hire/quotes/:id/accept', err);

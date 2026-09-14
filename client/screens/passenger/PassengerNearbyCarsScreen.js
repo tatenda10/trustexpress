@@ -855,9 +855,9 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                       ~{Math.round(Number(estimatedMinutes))} min
                     </Text>
                   ) : null}
-                  {selectedTier ? (
-                    <Text className="mr-4 mt-1 text-[15px] capitalize text-gray-700">
-                      {String(selectedTier).replace(/_/g, ' ')}
+                  {selectedTier?.tierName || selectedTier?.tierKey ? (
+                    <Text className="mr-4 mt-1 text-[15px] text-gray-700">
+                      {String(selectedTier.tierName || selectedTier.tierKey).replace(/_/g, ' ')}
                     </Text>
                   ) : null}
                 </View>

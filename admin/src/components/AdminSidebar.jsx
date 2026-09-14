@@ -13,6 +13,7 @@ const navSections = [
       { id: 'hire-vehicles', label: 'Hire Vehicles', icon: FolderIcon, to: '/dashboard/hire-vehicles', permission: 'verification.read' },
       { id: 'hire-jobs', label: 'Hire Jobs', icon: BriefcaseIcon, to: '/dashboard/hire-jobs', permission: 'ride_ops.read' },
       { id: 'rides', label: 'Ride Operations', icon: BriefcaseIcon, to: '/dashboard/ride-operations', permission: 'ride_ops.read' },
+      { id: 'dispatch-ride', label: 'Book for passenger', icon: BriefcaseIcon, to: '/dashboard/ride-operations/new', permission: 'ride_ops.read' },
       { id: 'push-notifications', label: 'Push Notifications', icon: BriefcaseIcon, to: '/dashboard/push-notifications', permission: 'notifications.manage' },
       { id: 'live-map', label: 'Live Map', icon: CatalogIcon, to: '/dashboard/live-map', permission: 'live_map.read' },
     ],

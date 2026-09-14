@@ -19,7 +19,7 @@ export async function loadMondayOnlinePayoutCandidates() {
             AND t.source_type IN ('passenger_ride_payment', 'driver_wallet_cashout_refund')
            THEN t.amount
            WHEN t.transaction_type = 'manual_debit'
-            AND t.source_type = 'driver_wallet_cashout'
+            AND t.source_type IN ('driver_wallet_cashout', 'passenger_ride_payment_reversal')
            THEN -t.amount
            ELSE 0
          END), 0)

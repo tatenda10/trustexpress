@@ -10,6 +10,7 @@ import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql
 import { buildRideStopsPayload } from '../lib/ride-stops.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
+import { DRIVER_PASSENGER_RATING_TAGS, normalizeRatingTags } from '../lib/ride-rating-tags.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideStatusToDriver,
@@ -22,6 +23,10 @@ import {
   DRIVER_ACCEPT_OFFER_TTL_SECONDS,
   refreshOpenRideOffers,
 } from '../lib/ride-offer-expiry.js';
+import {
+  assignAcceptedDriverToRide,
+  isAdminDispatchedRide,
+} from '../lib/assign-ride-driver.js';
 import {
   assertSafetyPinVerifiedForStart,
   buildDriverSafetyPinPayload,
@@ -47,6 +52,7 @@ import {
   normalizeGender,
   normalizeZimMobile,
 } from '../lib/smile-cash.js';
+import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger-payments.js';
 import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
 import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
 
@@ -113,7 +119,7 @@ function getPassengerDisplayName(value) {
 }
 
 async function notifyPassengerRideStatus(passengerUserId, { title, body, data = {} } = {}) {
-  if (!passengerUserId || !title || !body) return;
+  if (!passengerUserId || String(passengerUserId).startsWith('dispatch:') || !title || !body) return;
   try {
     const passengerUser = await getClerkUserById(passengerUserId);
     const pushToken = String(passengerUser?.privateMetadata?.pushToken || '').trim();
@@ -362,7 +368,7 @@ router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
 
     const firstName = String(appUser.first_name || user?.firstName || '').trim();
     const lastName = String(appUser.last_name || user?.lastName || '').trim();
-    const idNumber = String(req.body?.idNumber || profile.nationalIdNumber || '').trim();
+    const idNumber = String(req.body?.idNumber || '').trim().toUpperCase();
     const dateOfBirth = String(req.body?.dateOfBirth || profile.dateOfBirth || '').trim();
     const gender = String(req.body?.gender || profile.gender || '').trim();
     const mobile = String(
@@ -373,8 +379,8 @@ router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
       || ''
     ).trim();
 
-    if (!profile.nationalIdNumber && !idNumber) {
-      return res.status(400).json({ error: 'Complete national ID verification before opening Smile Cash' });
+    if (!idNumber) {
+      return res.status(400).json({ error: 'National ID number is required' });
     }
 
     const normalizedDob = normalizeDateOfBirth(dateOfBirth);
@@ -462,7 +468,7 @@ router.post('/me/smile-cash/link', requireAuth, async (req, res) => {
     const appUser = toAppUser(user);
     const verification = await getDriverVerificationFromMysql(req.userId, user);
     const profile = verification?.driverProfile || {};
-    const idNumber = String(req.body?.idNumber || profile.nationalIdNumber || '').trim();
+    const idNumber = String(req.body?.idNumber || '').trim().toUpperCase();
     const dateOfBirth = String(req.body?.dateOfBirth || profile.dateOfBirth || '').trim();
     const gender = String(req.body?.gender || profile.gender || '').trim();
     const mobile = String(
@@ -473,8 +479,8 @@ router.post('/me/smile-cash/link', requireAuth, async (req, res) => {
       || ''
     ).trim();
 
-    if (!profile.nationalIdNumber && !idNumber) {
-      return res.status(400).json({ error: 'Complete national ID verification before linking Smile Cash' });
+    if (!idNumber) {
+      return res.status(400).json({ error: 'National ID number is required' });
     }
 
     const normalizedDob = normalizeDateOfBirth(dateOfBirth);
@@ -1297,6 +1303,23 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       passengerUserId: ride.passenger_user_id,
     });
 
+    if (isAdminDispatchedRide(ride)) {
+      const assignment = await assignAcceptedDriverToRide({
+        ride,
+        driverUserId: req.userId,
+        driverAvailability: availability,
+      });
+      return res.json({
+        rideRequest: {
+          id: rideRequestId,
+          status: 'driver_assigned',
+          driverDistanceKm: assignment.driverDistanceKm,
+          driverEtaMinutes: assignment.driverEtaMinutes,
+          awaitingPassengerSelection: false,
+        },
+      });
+    }
+
     return res.json({
       rideRequest: {
         id: rideRequestId,
@@ -1820,6 +1843,7 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
     const rideRequestId = Number(req.params.rideRequestId);
     const rating = Number(req.body?.rating);
     const review = String(req.body?.review || '').trim();
+    const feedbackTags = normalizeRatingTags(req.body?.feedbackTags, DRIVER_PASSENGER_RATING_TAGS);
     if (!Number.isInteger(rideRequestId)) {
       return res.status(400).json({ error: 'Invalid rideRequestId' });
     }
@@ -1843,9 +1867,10 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
       `UPDATE ride_requests
        SET driver_passenger_rating = ?,
            driver_passenger_review = ?,
+           driver_passenger_feedback_tags = ?,
            driver_passenger_rated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND driver_user_id = ?`,
-      [rating, review || null, rideRequestId, req.userId]
+      [rating, review || null, JSON.stringify(feedbackTags), rideRequestId, req.userId]
     );
 
     try {
@@ -1860,6 +1885,7 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
             type: 'passenger_rating',
             rating,
             review,
+            feedbackTags,
             rideRequestId,
           },
         });
@@ -1872,6 +1898,7 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
       rideRequestId,
       rating,
       review,
+      feedbackTags,
       from: 'driver',
     });
 
@@ -1881,7 +1908,7 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
       });
     });
 
-    return res.json({ ok: true, rating, review });
+    return res.json({ ok: true, rating, review, feedbackTags });
   } catch (err) {
     console.error('POST /api/drivers/ride-requests/:rideRequestId/rate-passenger', err);
     return res.status(500).json({ error: 'Server error' });
@@ -1900,6 +1927,24 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
 
     const reason = String(req.body?.reason || 'Driver cancelled').trim();
 
+    const [rideBefore] = await query(
+      `SELECT id, status, started_at, payment_status, passenger_user_id
+       FROM ride_requests
+       WHERE id = ?
+         AND driver_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!rideBefore) {
+      return res.status(404).json({ error: 'Ride request not found' });
+    }
+
+    const previousStatus = String(rideBefore.status || '').trim().toLowerCase();
+    const cancellableStatuses = new Set(['driver_assigned', 'driver_arrived', 'in_progress']);
+    if (!cancellableStatuses.has(previousStatus)) {
+      return res.status(409).json({ error: 'This ride cannot be cancelled in its current state.' });
+    }
+
     await queryWithDeadlockRetry(
       `UPDATE ride_requests
        SET status = 'cancelled',
@@ -1913,23 +1958,52 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
     );
 
     const [ride] = await query(
-      'SELECT passenger_user_id FROM ride_requests WHERE id = ? AND driver_user_id = ? LIMIT 1',
+      `SELECT passenger_user_id, started_at, payment_status
+       FROM ride_requests
+       WHERE id = ? AND driver_user_id = ?
+       LIMIT 1`,
       [rideRequestId, req.userId]
     );
+
+    const cancelledBeforeStart = previousStatus === 'driver_assigned' || previousStatus === 'driver_arrived';
+    let refund = null;
+    if (cancelledBeforeStart) {
+      try {
+        refund = await refundOnlinePaymentsForDriverCancelBeforeStart({ rideRequestId });
+      } catch (refundError) {
+        console.error('[smilepay] refund.driver_cancel_failed', {
+          rideRequestId,
+          message: refundError?.message || String(refundError),
+        });
+      }
+    }
+
+    const paymentStatus = String(refund?.paymentStatus || ride?.payment_status || rideBefore.payment_status || 'unpaid').toLowerCase();
+    const passengerRefunded = Boolean(refund?.passengerRefunded);
+    const refundPending = paymentStatus === 'refund_pending';
+    let passengerBody = 'Your driver cancelled the trip.';
+    if (cancelledBeforeStart && passengerRefunded && paymentStatus === 'refunded') {
+      passengerBody = 'Your Captain cancelled before the trip started. Your online payment has been refunded.';
+    } else if (cancelledBeforeStart && (passengerRefunded || refundPending || refund?.walletReversed)) {
+      passengerBody = 'Your Captain cancelled before the trip started. Your online payment is being refunded.';
+    }
+
     if (ride?.passenger_user_id) {
       emitRideStatusToPassenger(ride.passenger_user_id, {
         rideRequestId,
         status: 'cancelled',
         driverUserId: req.userId,
+        paymentStatus,
       });
       await notifyPassengerRideStatus(ride.passenger_user_id, {
         title: 'Ride cancelled',
-        body: 'Your driver cancelled the trip.',
+        body: passengerBody,
         data: {
           type: 'ride_status',
           status: 'cancelled',
           rideRequestId,
           driverUserId: req.userId,
+          paymentStatus,
         },
       });
     }
@@ -1942,7 +2016,18 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
       status: 'cancelled',
     });
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      paymentStatus,
+      refund: refund
+        ? {
+            attempted: refund.attempted,
+            passengerRefunded: refund.passengerRefunded,
+            walletReversed: refund.walletReversed,
+            paymentStatus: refund.paymentStatus || paymentStatus,
+          }
+        : null,
+    });
   } catch (err) {
     console.error('PATCH /api/drivers/current-ride/:rideRequestId/cancel', err);
     return res.status(500).json({ error: 'Server error' });
