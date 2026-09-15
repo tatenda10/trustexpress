@@ -384,7 +384,7 @@ function buildRideDiscountPayload(ride) {
   };
 }
 
-async function getUserProfileImageUrl(userId) {
+export async function getUserProfileImageUrl(userId) {
   if (!userId || String(userId).startsWith('dispatch:')) return null;
   try {
     const user = await getClerkUserById(userId);

@@ -3,6 +3,8 @@ import axios from 'axios'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
+import GeoPlotMap from '../components/GeoPlotMap'
+import { DEFAULT_BULAWAYO_CENTER } from '../lib/osmMap'
 
 const LOCAL_PHONE_REGEX = /^07\d{8}$/
 
@@ -151,6 +153,57 @@ export default function DispatchRidePage() {
   const selectedTier = options.tiers.find((tier) => tier.tierKey === tierKey) || options.tiers[0]
   const maxPeople = Number(selectedTier?.maxPassengerCount || 4)
 
+  const mapMarkers = useMemo(() => {
+    const markers = []
+    if (pickupCoordinate?.latitude != null && pickupCoordinate?.longitude != null) {
+      markers.push({
+        id: 'pickup',
+        lat: Number(pickupCoordinate.latitude),
+        lng: Number(pickupCoordinate.longitude),
+        label: 'A · Pickup',
+        title: pickupLabel || 'Pickup',
+        color: '#2563eb',
+        size: 16,
+      })
+    }
+    if (dropoffCoordinate?.latitude != null && dropoffCoordinate?.longitude != null) {
+      markers.push({
+        id: 'dropoff',
+        lat: Number(dropoffCoordinate.latitude),
+        lng: Number(dropoffCoordinate.longitude),
+        label: 'B · Drop-off',
+        title: dropoffLabel || 'Drop-off',
+        color: '#111827',
+        size: 16,
+      })
+    }
+    if (!markers.length) {
+      const center = options.centerCoordinate || DEFAULT_BULAWAYO_CENTER
+      markers.push({
+        id: 'service-center',
+        lat: Number(center.latitude ?? center.lat),
+        lng: Number(center.longitude ?? center.lng),
+        label: 'Bulawayo',
+        title: 'Service area center',
+        color: '#94a3b8',
+        size: 10,
+      })
+    }
+    return markers
+  }, [dropoffCoordinate, dropoffLabel, options.centerCoordinate, pickupCoordinate, pickupLabel])
+
+  const mapPaths = useMemo(() => {
+    if (!pickupCoordinate || !dropoffCoordinate) return []
+    return [{
+      id: 'dispatch-preview',
+      color: '#2563eb',
+      points: [
+        { lat: Number(pickupCoordinate.latitude), lng: Number(pickupCoordinate.longitude) },
+        { lat: Number(dropoffCoordinate.latitude), lng: Number(dropoffCoordinate.longitude) },
+      ],
+    }]
+  }, [dropoffCoordinate, pickupCoordinate])
+
   useEffect(() => {
     if (!token) return undefined
     let active = true
@@ -160,6 +213,7 @@ export default function DispatchRidePage() {
         setOptions(data || { tiers: [] })
         setTierKey(data?.tiers?.[0]?.tierKey || '')
         setPaymentMethod(data?.defaultPaymentMethod || 'cash')
+        setError('')
       })
       .catch((err) => {
         if (!active) return
@@ -341,62 +395,82 @@ export default function DispatchRidePage() {
 
         <div className="border border-slate-300 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-800">Trip</h2>
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <PlaceSearchField
-              label="Pickup"
-              value={pickupLabel}
-              origin={options.centerCoordinate}
-              onChange={setPickupLabel}
-              onSelect={(place) => {
-                setPickupLabel(place.label)
-                setPickupCoordinate(place.coordinate)
-              }}
-            />
-            <PlaceSearchField
-              label="Drop-off"
-              value={dropoffLabel}
-              origin={pickupCoordinate || options.centerCoordinate}
-              onChange={setDropoffLabel}
-              onSelect={(place) => {
-                setDropoffLabel(place.label)
-                setDropoffCoordinate(place.coordinate)
-              }}
-            />
-            <label>
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ride type</span>
-              <select
-                value={tierKey}
-                onChange={(event) => setTierKey(event.target.value)}
-                className="h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500"
-              >
-                {options.tiers.map((tier) => (
-                  <option key={tier.tierKey} value={tier.tierKey}>{tier.tierName}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">People</span>
-              <select
-                value={passengerCount}
-                onChange={(event) => setPassengerCount(Number(event.target.value))}
-                className="h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500"
-              >
-                {Array.from({ length: maxPeople }, (_, index) => index + 1).map((count) => (
-                  <option key={count} value={count}>{count === 1 ? '1 person' : `${count} people`}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</span>
-              <select
-                value={paymentMethod}
-                onChange={(event) => setPaymentMethod(event.target.value)}
-                className="h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500"
-              >
-                <option value="cash">Cash</option>
-                <option value="online">Pay online</option>
-              </select>
-            </label>
+          <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_1.15fr]">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+              <PlaceSearchField
+                label="Pickup"
+                value={pickupLabel}
+                origin={options.centerCoordinate}
+                onChange={setPickupLabel}
+                onSelect={(place) => {
+                  setPickupLabel(place.label)
+                  setPickupCoordinate(place.coordinate)
+                }}
+              />
+              <PlaceSearchField
+                label="Drop-off"
+                value={dropoffLabel}
+                origin={pickupCoordinate || options.centerCoordinate}
+                onChange={setDropoffLabel}
+                onSelect={(place) => {
+                  setDropoffLabel(place.label)
+                  setDropoffCoordinate(place.coordinate)
+                }}
+              />
+              <label>
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ride type</span>
+                <select
+                  value={tierKey}
+                  onChange={(event) => setTierKey(event.target.value)}
+                  className="h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                >
+                  {options.tiers.map((tier) => (
+                    <option key={tier.tierKey} value={tier.tierKey}>{tier.tierName}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">People</span>
+                <select
+                  value={passengerCount}
+                  onChange={(event) => setPassengerCount(Number(event.target.value))}
+                  className="h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                >
+                  {Array.from({ length: maxPeople }, (_, index) => index + 1).map((count) => (
+                    <option key={count} value={count}>{count === 1 ? '1 person' : `${count} people`}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment</span>
+                <select
+                  value={paymentMethod}
+                  onChange={(event) => setPaymentMethod(event.target.value)}
+                  className="h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="online">Pay online</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="overflow-hidden border border-slate-200 bg-slate-100">
+              <div className="border-b border-slate-200 bg-white px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">Trip map</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  {pickupCoordinate && dropoffCoordinate
+                    ? 'Blue = pickup (A), black = drop-off (B).'
+                    : 'Search pickup and drop-off to plot the trip.'}
+                </p>
+              </div>
+              <div className="h-[320px] min-h-[260px] md:h-[420px]">
+                <GeoPlotMap
+                  markers={mapMarkers}
+                  paths={mapPaths}
+                  emptyMessage="Search pickup and drop-off to see them on the map."
+                />
+              </div>
+            </div>
           </div>
         </div>
 
