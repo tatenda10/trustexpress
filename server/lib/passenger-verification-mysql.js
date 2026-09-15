@@ -1,5 +1,6 @@
 import { query } from '../db/connection.js';
 import { normalizeUploadPath } from './driver-verification-mysql.js';
+import { toIsoDateOnly } from './smile-cash.js';
 
 export async function getPassengerIdentity(passengerUserId) {
   const [row] = await query(
@@ -38,7 +39,7 @@ export function shapePassengerIdentityFromRow(row) {
     nationalIdFrontUrl: normalizeUploadPath(row.national_id_front_url),
     nationalIdBackUrl: normalizeUploadPath(row.national_id_back_url),
     selfieUrl: normalizeUploadPath(row.selfie_url),
-    dateOfBirth: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
+    dateOfBirth: toIsoDateOnly(row.date_of_birth),
     gender: row.gender || null,
     nationalIdNumber: row.national_id_number || null,
     smileCashMobile: row.smile_cash_mobile || null,

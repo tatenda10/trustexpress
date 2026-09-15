@@ -31,8 +31,14 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { paymentMethodLabel } from '../../constants/payment';
 import { connectRealtime } from '../../realtime';
+import {
+  PASSENGER_RIDE_MAP_BOOKING_MAX_DELTA,
+  PASSENGER_RIDE_MAP_MIN_DELTA,
+  buildPassengerRideMapRegion,
+  sampleCoordinatesForFit,
+} from '../../lib/passengerRideMap';
 
-const REQUEST_EXPIRY_POLL_MS = 1000;
+const REQUEST_EXPIRY_POLL_MS = 2500;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const EMPTY_ROUTE_COORDINATES = [];
 
@@ -292,6 +298,8 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const seenAcceptedDriverIdsRef = useRef(new Set());
   const acceptSoundRef = useRef(null);
   const acceptAlertInFlightRef = useRef(false);
+  const mapRef = useRef(null);
+  const hasAutoFitMapRef = useRef(false);
 
   const {
     pickupCoordinate,
@@ -373,6 +381,60 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     })();
     return () => { cancelled = true; };
   }, [dropoffCoordinate, initialRouteCoordinates, pickupCoordinate]);
+
+  const mapRegion = useMemo(
+    () => buildPassengerRideMapRegion(
+      [
+        pickupCoordinate,
+        dropoffCoordinate,
+        ...sampleCoordinatesForFit(routeCoordinates),
+        ...acceptedDrivers.map((driver) => driver?.coordinate),
+      ],
+      {
+        minDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+        maxDelta: PASSENGER_RIDE_MAP_BOOKING_MAX_DELTA,
+        fallback: pickupCoordinate
+          ? {
+            latitude: pickupCoordinate.latitude,
+            longitude: pickupCoordinate.longitude,
+            latitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+            longitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+          }
+          : null,
+      }
+    ),
+    [acceptedDrivers, dropoffCoordinate, pickupCoordinate, routeCoordinates]
+  );
+
+  useEffect(() => {
+    if (!mapRef.current || !mapRegion) return undefined;
+    const fitCoordinates = [
+      pickupCoordinate,
+      dropoffCoordinate,
+      ...sampleCoordinatesForFit(routeCoordinates),
+      ...acceptedDrivers.map((driver) => driver?.coordinate),
+    ].filter(Boolean);
+    if (fitCoordinates.length < 1) return undefined;
+
+    const timeout = setTimeout(() => {
+      try {
+        if (fitCoordinates.length >= 2 && mapRef.current?.fitToCoordinates) {
+          mapRef.current.fitToCoordinates(fitCoordinates, {
+            edgePadding: { top: 100, right: 36, bottom: 280, left: 36 },
+            animated: !hasAutoFitMapRef.current,
+          });
+          hasAutoFitMapRef.current = true;
+          return;
+        }
+        mapRef.current?.animateToRegion?.(mapRegion, hasAutoFitMapRef.current ? 250 : 400);
+        hasAutoFitMapRef.current = true;
+      } catch {
+        // Keep nearby-cars map resilient if a fit request fails.
+      }
+    }, 200);
+
+    return () => clearTimeout(timeout);
+  }, [acceptedDrivers, dropoffCoordinate, mapRegion, pickupCoordinate, routeCoordinates]);
 
   // ── Poll ride status ──
   useEffect(() => {
@@ -702,12 +764,13 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       <View className="flex-1">
         {/* ── Map ── */}
         <MapView
+          ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-          initialRegion={{
+          initialRegion={mapRegion || {
             latitude: pickupCoordinate.latitude,
             longitude: pickupCoordinate.longitude,
-            latitudeDelta: 0.08,
-            longitudeDelta: 0.08,
+            latitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+            longitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
           }}
           maxBounds={BULAWAYO_GEO_LOCK_ENABLED ? BULAWAYO_SERVICE_BOUNDS_ARRAY : undefined}
           showsCompass={false}

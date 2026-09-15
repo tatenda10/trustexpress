@@ -107,12 +107,29 @@ export function normalizeGender(value) {
   return '';
 }
 
+/**
+ * Normalize MySQL DATE / ISO date values to YYYY-MM-DD.
+ * Avoid String(date).slice(0, 10) — that turns Date objects into "Sun Dec 29".
+ */
+export function toIsoDateOnly(value) {
+  if (value == null || value === '') return null;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const year = value.getUTCFullYear();
+    const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  const raw = String(value).trim();
+  const matched = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (matched) return matched[1];
+  return null;
+}
+
 export function normalizeDateOfBirth(value) {
-  const raw = String(value || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return '';
-  const date = new Date(`${raw}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return '';
-  return raw;
+  return toIsoDateOnly(value) || '';
 }
 
 async function walletRequest(path, { method = 'POST', body } = {}) {

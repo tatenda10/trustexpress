@@ -10,6 +10,12 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { hireContactHref, isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
 import { connectRealtime } from '../../realtime';
+import {
+  PASSENGER_RIDE_MAP_MAX_DELTA,
+  PASSENGER_RIDE_MAP_MIN_DELTA,
+  buildPassengerRideMapRegion,
+  getPassengerTrackingFitCoordinates,
+} from '../../lib/passengerRideMap';
 
 const FALLBACK_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 
@@ -138,19 +144,55 @@ export default function PassengerHireTrackingScreen({ navigation, route }) {
     };
   }, [driverCoordinate?.latitude, driverCoordinate?.longitude, targetCoordinate?.latitude, targetCoordinate?.longitude]);
 
-  const mapRegion = useMemo(() => {
-    const center = driverCoordinate || pickupCoordinate || FALLBACK_COORDINATE;
-    return { ...center, latitudeDelta: 0.05, longitudeDelta: 0.05 };
-  }, [driverCoordinate, pickupCoordinate]);
+  const mapRegion = useMemo(
+    () => buildPassengerRideMapRegion(
+      [driverCoordinate, targetCoordinate || pickupCoordinate],
+      {
+        minDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+        maxDelta: PASSENGER_RIDE_MAP_MAX_DELTA,
+        fallback: {
+          ...FALLBACK_COORDINATE,
+          latitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+          longitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+        },
+      }
+    ),
+    [driverCoordinate, pickupCoordinate, targetCoordinate]
+  );
 
   useEffect(() => {
-    if (!driverCoordinate) return;
-    mapRef.current?.animateToRegion?.({
-      ...driverCoordinate,
-      latitudeDelta: 0.02,
-      longitudeDelta: 0.02,
-    }, 400);
-  }, [driverCoordinate?.latitude, driverCoordinate?.longitude]);
+    const fitCoordinates = getPassengerTrackingFitCoordinates(
+      routeCoordinates,
+      driverCoordinate,
+      targetCoordinate || pickupCoordinate
+    );
+    if (!mapRef.current || fitCoordinates.length < 1) return undefined;
+
+    const timeout = setTimeout(() => {
+      try {
+        if (fitCoordinates.length >= 2 && mapRef.current?.fitToCoordinates) {
+          mapRef.current.fitToCoordinates(fitCoordinates, {
+            edgePadding: { top: 100, right: 36, bottom: 220, left: 36 },
+            animated: true,
+          });
+          return;
+        }
+        mapRef.current?.animateToRegion?.(mapRegion, 350);
+      } catch {
+        // Keep hire tracking resilient if the map rejects a fit request.
+      }
+    }, 200);
+
+    return () => clearTimeout(timeout);
+  }, [
+    driverCoordinate?.latitude,
+    driverCoordinate?.longitude,
+    mapRegion,
+    pickupCoordinate,
+    routeCoordinates,
+    targetCoordinate?.latitude,
+    targetCoordinate?.longitude,
+  ]);
 
   if (loading) {
     return (

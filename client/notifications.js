@@ -171,6 +171,7 @@ export async function registerForPushNotificationsAsync() {
   } catch (error) {
     // Handle network connectivity issues gracefully
     if (error.message?.includes('Network error') || 
+        error.message?.includes('Could not reach Trust Express') ||
         error.message?.includes('connect') || 
         error.message?.includes('timeout') ||
         error.message?.includes('503') ||

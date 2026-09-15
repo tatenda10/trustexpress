@@ -8,6 +8,7 @@ import { getDriverProfileImageReview, getPrimaryEmail, getPrimaryPhone, mergePri
 import { evaluateVehicleAgainstTiers, loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { query } from '../db/connection.js';
 import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib/driver-verification-mysql.js';
+import { toIsoDateOnly } from '../lib/smile-cash.js';
 import { getDriverWalletStatus, getDriverWalletSummariesByUserIds, getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
 import { getAccountStatusFromUser, getDriverRatingPerformanceSummary } from '../lib/rating-performance.js';
 import {
@@ -56,10 +57,8 @@ function mapIdentityProfileDocs(row) {
     selfieWithIdCardUrl: normalizeUploadPath(row.selfie_with_id_card_url),
     nationalIdNumber: row.national_id_number || null,
     driverLicenceNumber: row.driver_licence_number || null,
-    dateOfBirth: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
-    driverLicenceExpiresAt: row.driver_licence_expires_at
-      ? String(row.driver_licence_expires_at).slice(0, 10)
-      : null,
+    dateOfBirth: toIsoDateOnly(row.date_of_birth),
+    driverLicenceExpiresAt: toIsoDateOnly(row.driver_licence_expires_at),
   };
 }
 
@@ -144,9 +143,7 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
         rejectionReason: identityRow.profile_rejection_reason || null,
         ecocashNumber: identityRow.ecocash_number || null,
         ecocashRegisteredName: identityRow.ecocash_registered_name || null,
-        dateOfBirth: identityRow.date_of_birth
-          ? String(identityRow.date_of_birth).slice(0, 10)
-          : null,
+        dateOfBirth: toIsoDateOnly(identityRow.date_of_birth),
         gender: identityRow.gender || null,
         smileCashMobile: identityRow.smile_cash_mobile || null,
         smileCashStatus: identityRow.smile_cash_status || null,

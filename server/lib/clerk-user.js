@@ -92,6 +92,10 @@ export function toAppUser(user) {
  * @param {{ skipCache?: boolean }} [opts] - skipCache: true to always fetch from Clerk (e.g. for driver /me so approval status is fresh)
  */
 export async function getClerkUserById(userId, opts = {}) {
+  // Admin book-for-passenger rides store synthetic passenger IDs — never hit Clerk for them.
+  if (!userId || String(userId).startsWith('dispatch:')) {
+    return null;
+  }
   const skipCache = opts.skipCache === true;
   const cached = clerkUserCache.get(userId);
   if (!skipCache && cached && (Date.now() - cached.cachedAt) < USER_CACHE_TTL_MS) {

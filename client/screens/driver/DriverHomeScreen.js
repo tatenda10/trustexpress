@@ -2051,17 +2051,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
                       {primaryIncomingRequest.passengerName || 'Passenger'}
                     </Text>
                   </View>
-                  {String(primaryIncomingRequest.passengerPhone || '').trim() ? (
-                    <TouchableOpacity
-                      onPress={() => Linking.openURL(`tel:${String(primaryIncomingRequest.passengerPhone).trim()}`)}
-                      className="mt-2 flex-row items-center self-start"
-                    >
-                      <Ionicons name="call" size={15} color="#15803d" />
-                      <Text className="ml-1.5 text-sm font-semibold text-[#15803d]">
-                        {String(primaryIncomingRequest.passengerPhone).trim()}
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
                   <View className="mt-2 flex-row flex-wrap items-center gap-2">
                     <View className="self-start rounded-full bg-[#e3e9f2] px-3 py-1">
                       <Text className="text-xs font-bold uppercase text-[#2f73c9]">{primaryIncomingRequest.tierName || 'Ride'}</Text>
@@ -2260,17 +2249,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
                         <Text className="text-lg font-bold text-[#111111]" numberOfLines={1}>
                           {primaryIncomingRequest?.passengerName || 'Passenger'}
                         </Text>
-                        {String(primaryIncomingRequest?.passengerPhone || '').trim() ? (
-                          <TouchableOpacity
-                            onPress={() => Linking.openURL(`tel:${String(primaryIncomingRequest.passengerPhone).trim()}`)}
-                            className="mt-1 flex-row items-center self-start"
-                          >
-                            <Ionicons name="call" size={14} color="#15803d" />
-                            <Text className="ml-1 text-sm font-semibold text-[#15803d]">
-                              {String(primaryIncomingRequest.passengerPhone).trim()}
-                            </Text>
-                          </TouchableOpacity>
-                        ) : null}
                         <Text className="mt-0.5 text-sm font-semibold text-[#2f73c9]">
                           {primaryIncomingRequest?.tierName || 'Trust Express'}
                           {` · ${Number(primaryIncomingRequest?.passengerCount || 1) === 1 ? '1 person' : `${Number(primaryIncomingRequest?.passengerCount || 1)} people`}`}

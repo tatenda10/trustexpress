@@ -70,7 +70,7 @@ export async function apiFetch(path, options = {}, token) {
     res = await fetch(url, { ...fetchOptions, headers });
     data = await res.json().catch(() => ({}));
   } catch (error) {
-    const err = new Error('Network error. Please check your connection and try again.');
+    const err = new Error('Could not reach Trust Express right now. Please try again.');
     err.status = 0;
     err.cause = error;
     throw err;

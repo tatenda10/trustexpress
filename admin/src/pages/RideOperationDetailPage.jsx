@@ -31,13 +31,21 @@ function formatTagList(tags) {
   return Array.isArray(tags) && tags.length ? tags.join(', ') : '-'
 }
 
-function formatDriverResponseStatus(status) {
+function formatDriverResponseStatus(status, { isAdminDispatch = false } = {}) {
   const normalized = String(status || '').trim().toLowerCase()
-  if (normalized === 'selected') return 'Selected by passenger'
+  if (normalized === 'selected') return isAdminDispatch ? 'Assigned' : 'Selected by passenger'
   if (normalized === 'accepted') return 'Accepted'
   if (normalized === 'declined') return 'Declined'
   if (normalized === 'expired') return 'Expired'
-  return 'Pending'
+  return 'Pending / offered'
+}
+
+function driverResponseBadgeClass(status) {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (normalized === 'selected') return 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+  if (normalized === 'accepted') return 'bg-indigo-50 text-indigo-700 ring-indigo-200'
+  if (normalized === 'declined' || normalized === 'expired') return 'bg-slate-100 text-slate-600 ring-slate-200'
+  return 'bg-amber-50 text-amber-700 ring-amber-200'
 }
 
 function coalesceNumber(...values) {
@@ -147,10 +155,18 @@ export default function RideOperationDetailPage() {
   const [shareMessage, setShareMessage] = useState('')
   const [cancelReason, setCancelReason] = useState('')
   const [cancelling, setCancelling] = useState(false)
+  const [assigningDriverId, setAssigningDriverId] = useState('')
   const [actionMessage, setActionMessage] = useState('')
   const fromDriverId = location.state?.fromDriverId || ''
   const fromDriverName = location.state?.fromDriverName || 'driver'
   const canCancelRide = admin?.role === 'super_admin' || can('ride_ops.read')
+  const acceptedDrivers = Array.isArray(ride?.acceptedDrivers)
+    ? ride.acceptedDrivers
+    : (Array.isArray(ride?.driverResponses)
+      ? ride.driverResponses.filter((item) => ['accepted', 'selected'].includes(String(item.status || '').toLowerCase()))
+      : [])
+  const isAdminDispatch = Boolean(ride?.isAdminDispatch || ride?.bookingSource === 'admin_dispatch')
+  const canAssignAcceptedDriver = Boolean(ride?.canAssignAcceptedDriver)
 
   const refreshRideDetails = async () => {
     const { data } = await axios.get(`${BASE_URL}/api/admin/rides/${rideId}`, {
@@ -294,6 +310,29 @@ export default function RideOperationDetailPage() {
       setError(err?.response?.data?.error || err?.message || 'Failed to cancel ride')
     } finally {
       setCancelling(false)
+    }
+  }
+
+  const assignAcceptedDriver = async (driverUserId, driverName) => {
+    if (!token || !rideId || !driverUserId || !canAssignAcceptedDriver) return
+    const confirmed = window.confirm(`Assign ${driverName || 'this driver'} to the passenger ride?`)
+    if (!confirmed) return
+
+    setAssigningDriverId(driverUserId)
+    setError('')
+    setActionMessage('')
+    try {
+      await axios.patch(
+        `${BASE_URL}/api/admin/rides/${rideId}/assign-driver`,
+        { driverUserId },
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      setActionMessage(`${driverName || 'Driver'} assigned to this ride.`)
+      await refreshRideDetails()
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to assign driver')
+    } finally {
+      setAssigningDriverId('')
     }
   }
 
@@ -717,6 +756,59 @@ export default function RideOperationDetailPage() {
               </div>
             ) : null}
 
+            <div className="border border-indigo-200 bg-indigo-50 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-800">
+                    Drivers who accepted
+                  </p>
+                  <p className="mt-1 text-xs text-indigo-900/80">
+                    {isAdminDispatch
+                      ? 'Admin-booked rides auto-assign the first accept. You can also assign manually if needed.'
+                      : 'These drivers accepted and are waiting for passenger selection.'}
+                  </p>
+                </div>
+                <span className="text-sm font-semibold text-indigo-800">{acceptedDrivers.length}</span>
+              </div>
+              {acceptedDrivers.length ? (
+                <div className="mt-3 space-y-3">
+                  {acceptedDrivers.map((item) => (
+                    <div key={`accepted-${item.id}`} className="border border-indigo-200 bg-white px-3 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{item.driverName || 'Driver'}</p>
+                          <p className="mt-1 text-xs text-slate-500">Phone: {item.driverPhone || '-'}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {[item.tierName, item.vehicleLabel].filter(Boolean).join(' · ') || 'Vehicle details pending'}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">Accepted: {formatDateTime(item.respondedAt)}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${driverResponseBadgeClass(item.status)}`}>
+                            {formatDriverResponseStatus(item.status, { isAdminDispatch })}
+                          </span>
+                          {canAssignAcceptedDriver && item.status === 'accepted' ? (
+                            <button
+                              type="button"
+                              disabled={Boolean(assigningDriverId)}
+                              onClick={() => assignAcceptedDriver(item.driverUserId, item.driverName)}
+                              className="rounded-md bg-indigo-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                            >
+                              {assigningDriverId === item.driverUserId ? 'Assigning...' : 'Assign driver'}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-indigo-900/70">
+                  No accepts yet. Nearby drivers still have the request open.
+                </p>
+              )}
+            </div>
+
             <div className="border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] uppercase tracking-wide text-slate-500">Driver Request Timeline</p>
@@ -728,12 +820,14 @@ export default function RideOperationDetailPage() {
                     <div key={item.id} className="border border-slate-200 bg-white px-3 py-3">
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-sm font-semibold text-slate-900">{item.driverName || 'Driver'}</p>
-                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
-                          {formatDriverResponseStatus(item.status)}
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${driverResponseBadgeClass(item.status)}`}>
+                          {formatDriverResponseStatus(item.status, { isAdminDispatch })}
                         </span>
                       </div>
-                      <p className="mt-1 text-xs text-slate-500">Driver ID: {item.driverUserId || '-'}</p>
                       <p className="mt-1 text-xs text-slate-500">Phone: {item.driverPhone || '-'}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {[item.tierName, item.vehicleLabel].filter(Boolean).join(' · ') || 'Vehicle details pending'}
+                      </p>
                       <div className="mt-2 grid gap-2 md:grid-cols-2">
                         <p className="text-xs text-slate-500">Viewed: {formatDateTime(item.viewedAt)}</p>
                         <p className="text-xs text-slate-500">Responded: {formatDateTime(item.respondedAt)}</p>

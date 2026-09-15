@@ -51,8 +51,10 @@ import {
   normalizeDateOfBirth,
   normalizeGender,
   normalizeZimMobile,
+  toIsoDateOnly,
 } from '../lib/smile-cash.js';
 import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger-payments.js';
+import { upsertDriverPushTokens } from '../lib/driver-push-tokens.js';
 import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
 import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
 
@@ -804,6 +806,15 @@ router.post('/push-token', requireAuth, async (req, res) => {
       pushToken,
     });
 
+    try {
+      await upsertDriverPushTokens({
+        driverUserId: req.userId,
+        expoPushToken: nextMeta.pushToken || pushToken,
+      });
+    } catch (cacheError) {
+      console.error('[drivers.push-token] mysql cache failed', cacheError);
+    }
+
     console.log('[drivers.push-token] saved', {
       driverUserId: req.userId,
       hasToken: !!(nextMeta.pushToken || pushToken),
@@ -830,6 +841,15 @@ router.post('/fcm-token', requireAuth, async (req, res) => {
     const nextMeta = await mergePrivateMetadata(req.userId, {
       fcmToken,
     });
+
+    try {
+      await upsertDriverPushTokens({
+        driverUserId: req.userId,
+        fcmToken: nextMeta.fcmToken || fcmToken,
+      });
+    } catch (cacheError) {
+      console.error('[drivers.fcm-token] mysql cache failed', cacheError);
+    }
 
     console.log('[drivers.fcm-token] saved', {
       driverUserId: req.userId,
@@ -1773,6 +1793,19 @@ router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, r
       [rideRequestId, req.userId]
     );
 
+    // Tell the passenger immediately — do not wait on wallet/push work.
+    if (rideBeforeComplete?.passenger_user_id) {
+      emitRideStatusToPassenger(rideBeforeComplete.passenger_user_id, {
+        rideRequestId,
+        status: 'completed',
+        driverUserId: req.userId,
+      });
+    }
+    emitRideStatusToDriver(req.userId, {
+      rideRequestId,
+      status: 'completed',
+    });
+
     const commissionResult = await deductCommissionForCompletedRide({
       driverUserId: req.userId,
       rideRequestId,
@@ -1793,31 +1826,22 @@ router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, r
       console.error('recordCaptainQualifyingRide', captainErr);
     });
 
-    const [ride] = await query(
-      'SELECT passenger_user_id FROM ride_requests WHERE id = ? AND driver_user_id = ? LIMIT 1',
-      [rideRequestId, req.userId]
-    );
-    if (ride?.passenger_user_id) {
-      emitRideStatusToPassenger(ride.passenger_user_id, {
-        rideRequestId,
-        status: 'completed',
-        driverUserId: req.userId,
-      });
-      await notifyPassengerRideStatus(ride.passenger_user_id, {
-        title: 'Ride completed',
-        body: 'Your trip has been completed. Please rate your driver.',
-        data: {
-          type: 'ride_status',
-          status: 'completed',
-          rideRequestId,
-          driverUserId: req.userId,
-        },
+    if (rideBeforeComplete?.passenger_user_id) {
+      setImmediate(() => {
+        notifyPassengerRideStatus(rideBeforeComplete.passenger_user_id, {
+          title: 'Ride completed',
+          body: 'Your trip has been completed. Please rate your driver.',
+          data: {
+            type: 'ride_status',
+            status: 'completed',
+            rideRequestId,
+            driverUserId: req.userId,
+          },
+        }).catch((notifyError) => {
+          console.error('Failed to send passenger ride completed notification', notifyError);
+        });
       });
     }
-    emitRideStatusToDriver(req.userId, {
-      rideRequestId,
-      status: 'completed',
-    });
 
     return res.json({
       ok: true,
@@ -2550,10 +2574,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       selfieWithIdCardUrl: row.selfie_with_id_card_url || null,
       nationalIdNumber: row.national_id_number || null,
       driverLicenceNumber: row.driver_licence_number || null,
-      dateOfBirth: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
-      driverLicenceExpiresAt: row.driver_licence_expires_at
-        ? String(row.driver_licence_expires_at).slice(0, 10)
-        : null,
+      dateOfBirth: toIsoDateOnly(row.date_of_birth),
+      driverLicenceExpiresAt: toIsoDateOnly(row.driver_licence_expires_at),
     };
     return res.status(201).json(driverProfile);
   } catch (err) {

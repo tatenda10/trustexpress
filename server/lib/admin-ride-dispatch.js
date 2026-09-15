@@ -14,7 +14,6 @@ import {
   calculateTierFare,
   createPendingDriverOffers,
   createPublicRideId,
-  getUserProfileImageUrl,
   loadEligibleDriversForRide,
   loadPassengerTier,
   notifyDriversAboutRideRequest,
@@ -417,26 +416,13 @@ export async function createDispatchRide({
     estimatedAmount: quote.estimatedAmount,
     tierKey: quote.tier.tier_key,
   });
-  const nearbyDrivers = await Promise.all(
-    nearbyDriversBase.map(async (driver) => ({
-      ...driver,
-      amount: quote.estimatedAmount,
-      profileImageUrl: await getUserProfileImageUrl(driver.id),
-    }))
-  );
+  const nearbyDrivers = nearbyDriversBase.map((driver) => ({
+    ...driver,
+    amount: quote.estimatedAmount,
+    profileImageUrl: null,
+  }));
 
   await createPendingDriverOffers(rideRequestId, nearbyDrivers);
-  await notifyDriversAboutRideRequest({
-    drivers: nearbyDrivers,
-    passengerName: name,
-    pickupLabel: quote.pickupLabel,
-    dropoffLabel: quote.dropoffLabel,
-    intermediateStops: quote.normalizedIntermediateStops,
-    rideRequestId,
-    publicId,
-    tierName: quote.tier.tier_name,
-    passengerCount: quote.partySize,
-  });
 
   nearbyDrivers.forEach((driver) => {
     emitRideRequestToDriver(driver.id, {
@@ -451,6 +437,25 @@ export async function createDispatchRide({
       requestedTierName: quote.tier.tier_name,
       passengerCount: quote.partySize,
       paymentMethod: quote.paymentMethod,
+    });
+  });
+
+  setImmediate(() => {
+    notifyDriversAboutRideRequest({
+      drivers: nearbyDrivers,
+      passengerName: name,
+      pickupLabel: quote.pickupLabel,
+      dropoffLabel: quote.dropoffLabel,
+      intermediateStops: quote.normalizedIntermediateStops,
+      rideRequestId,
+      publicId,
+      tierName: quote.tier.tier_name,
+      passengerCount: quote.partySize,
+    }).catch((error) => {
+      console.error('[admin.dispatch] background notify failed', {
+        rideRequestId,
+        message: error?.message || String(error),
+      });
     });
   });
 

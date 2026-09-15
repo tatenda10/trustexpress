@@ -38,6 +38,11 @@ import {
 } from '../../api';
 import { connectRealtime } from '../../realtime';
 import RideTierCarIcon from '../../components/RideTierCarIcon';
+import {
+  PASSENGER_RIDE_MAP_BOOKING_MAX_DELTA,
+  PASSENGER_RIDE_MAP_MIN_DELTA,
+  buildPassengerRideMapRegion,
+} from '../../lib/passengerRideMap';
 
 const HARARE_FALLBACK = BULAWAYO_DEFAULT_REGION;
 
@@ -111,17 +116,15 @@ function normalizeRouteCoordinates(values) {
   return values.map(normalizeRouteCoordinate).filter(Boolean);
 }
 
-function buildRouteRegion(start, end) {
-  if (!start && !end) return HARARE_FALLBACK;
-  if (!start) return { ...end, latitudeDelta: 0.08, longitudeDelta: 0.08 };
-  if (!end) return { ...start, latitudeDelta: 0.08, longitudeDelta: 0.08 };
-
-  return {
-    latitude: (start.latitude + end.latitude) / 2,
-    longitude: (start.longitude + end.longitude) / 2,
-    latitudeDelta: Math.max(Math.abs(start.latitude - end.latitude) * 1.8, 0.05),
-    longitudeDelta: Math.max(Math.abs(start.longitude - end.longitude) * 1.8, 0.05),
-  };
+function buildRouteRegion(start, end, extraCoordinates = []) {
+  return buildPassengerRideMapRegion(
+    [start, end, ...extraCoordinates],
+    {
+      minDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+      maxDelta: PASSENGER_RIDE_MAP_BOOKING_MAX_DELTA,
+      fallback: HARARE_FALLBACK,
+    }
+  );
 }
 
 function formatCoordinateLabel(prefix, coordinate) {
@@ -650,6 +653,23 @@ export default function PassengerHomeScreen({ navigation, route }) {
       cancelled = true;
     };
   }, [dropoffCoordinate, intermediateStops, pickupCoordinate]);
+
+  useEffect(() => {
+    if (!pickupCoordinate || !dropoffCoordinate) return undefined;
+    const nextRegion = buildRouteRegion(
+      pickupCoordinate,
+      dropoffCoordinate,
+      [
+        ...intermediateStops.map((stop) => stop?.coordinate),
+        ...(Array.isArray(routeCoordinates) ? routeCoordinates : []),
+      ]
+    );
+    setMapRegion(nextRegion);
+    const timeout = setTimeout(() => {
+      mapRef.current?.animateToRegion?.(nextRegion, 400);
+    }, 50);
+    return () => clearTimeout(timeout);
+  }, [dropoffCoordinate, intermediateStops, pickupCoordinate, routeCoordinates]);
 
   useEffect(() => {
     const stopMatch = /^stop-(\d+)$/.exec(String(activeField || ''));

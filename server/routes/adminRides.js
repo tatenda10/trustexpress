@@ -28,13 +28,18 @@ import {
   quoteDispatchRide,
   searchDispatchPlaces,
 } from '../lib/admin-ride-dispatch.js';
+import {
+  assignAcceptedDriverToRide,
+  isAdminDispatchedRide,
+} from '../lib/assign-ride-driver.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
 const ADMIN_CANCELLABLE_STATUSES = ['requested', 'driver_found', 'driver_assigned', 'driver_arrived', 'in_progress'];
 
 async function notifyUserPush(userId, { title, body, data = {} }) {
-  if (!userId) return;
+  // Admin book-for-passenger rides use synthetic dispatch:* passenger IDs — not Clerk users.
+  if (!userId || String(userId).startsWith('dispatch:')) return;
   try {
     const user = await getClerkUserById(userId);
     const pushToken = user?.privateMetadata?.pushToken;
@@ -1083,7 +1088,9 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         ride_requests.driver_passenger_rating,
         ride_requests.driver_passenger_review,
         ride_requests.driver_passenger_feedback_tags,
-        ride_requests.driver_passenger_rated_at
+        ride_requests.driver_passenger_rated_at,
+        ride_requests.booking_source,
+        ride_requests.dispatched_by_admin_id
       FROM ride_requests
       LEFT JOIN driver_availability da ON da.driver_user_id = ride_requests.driver_user_id
       WHERE ride_requests.public_id = ? OR ride_requests.id = ?
@@ -1159,13 +1166,24 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
          rr.created_at,
          rr.updated_at,
          da.driver_name,
-         da.phone_number
+         da.phone_number,
+         da.vehicle_make,
+         da.vehicle_model,
+         da.vehicle_tier_name,
+         da.number_plate
        FROM ride_request_driver_responses rr
        LEFT JOIN driver_availability da
          ON da.driver_user_id = rr.driver_user_id
        WHERE rr.ride_request_id = ?
        ORDER BY
-         COALESCE(rr.viewed_at, rr.responded_at, rr.created_at) ASC,
+         CASE rr.status
+           WHEN 'selected' THEN 0
+           WHEN 'accepted' THEN 1
+           WHEN 'pending' THEN 2
+           WHEN 'declined' THEN 3
+           ELSE 4
+         END,
+         COALESCE(rr.responded_at, rr.viewed_at, rr.created_at) ASC,
          rr.id ASC`,
       [Number(row.id)]
     );
@@ -1241,6 +1259,47 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
           }
         })(),
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
+        bookingSource: String(row.booking_source || 'app').trim().toLowerCase() || 'app',
+        isAdminDispatch: isAdminDispatchedRide(row),
+        canAssignAcceptedDriver: isAdminDispatchedRide(row)
+          && ['requested', 'driver_found'].includes(String(row.status || '').trim().toLowerCase())
+          && !row.driver_user_id,
+        acceptedDrivers: (driverResponses || [])
+          .map((responseRow) => ({
+            id: responseRow.id,
+            driverUserId: responseRow.driver_user_id,
+            driverName: responseRow.driver_name || 'Driver',
+            driverPhone: responseRow.phone_number || null,
+            vehicleLabel: [responseRow.vehicle_make, responseRow.vehicle_model, responseRow.number_plate]
+              .filter(Boolean)
+              .join(' ')
+              .trim() || null,
+            tierName: responseRow.vehicle_tier_name || null,
+            status: String(responseRow.status || '').trim().toLowerCase() || 'pending',
+            viewedAt: responseRow.viewed_at || null,
+            respondedAt: responseRow.responded_at || null,
+            selectedAt: responseRow.selected_at || null,
+            createdAt: responseRow.created_at || null,
+            updatedAt: responseRow.updated_at || null,
+          }))
+          .filter((item) => item.status === 'accepted' || item.status === 'selected'),
+        driverResponses: (driverResponses || []).map((responseRow) => ({
+          id: responseRow.id,
+          driverUserId: responseRow.driver_user_id,
+          driverName: responseRow.driver_name || 'Driver',
+          driverPhone: responseRow.phone_number || null,
+          vehicleLabel: [responseRow.vehicle_make, responseRow.vehicle_model, responseRow.number_plate]
+            .filter(Boolean)
+            .join(' ')
+            .trim() || null,
+          tierName: responseRow.vehicle_tier_name || null,
+          status: String(responseRow.status || '').trim().toLowerCase() || 'pending',
+          viewedAt: responseRow.viewed_at || null,
+          respondedAt: responseRow.responded_at || null,
+          selectedAt: responseRow.selected_at || null,
+          createdAt: responseRow.created_at || null,
+          updatedAt: responseRow.updated_at || null,
+        })),
       },
       lostItems: (lostItems || []).map((item) => ({
         id: item.id,
@@ -1282,22 +1341,84 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         createdAt: alert.created_at || null,
         updatedAt: alert.updated_at || null,
       })),
-      driverResponses: (driverResponses || []).map((responseRow) => ({
-        id: responseRow.id,
-        driverUserId: responseRow.driver_user_id,
-        driverName: responseRow.driver_name || 'Driver',
-        driverPhone: responseRow.phone_number || null,
-        status: String(responseRow.status || '').trim().toLowerCase() || 'pending',
-        viewedAt: responseRow.viewed_at || null,
-        respondedAt: responseRow.responded_at || null,
-        selectedAt: responseRow.selected_at || null,
-        createdAt: responseRow.created_at || null,
-        updatedAt: responseRow.updated_at || null,
-      })),
     });
   } catch (err) {
     console.error('GET /api/admin/rides/:rideId', err);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/:rideId/assign-driver', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const rideId = String(req.params.rideId || '').trim();
+    const driverUserId = String(req.body?.driverUserId || '').trim();
+    if (!rideId) {
+      return res.status(400).json({ error: 'Invalid ride id' });
+    }
+    if (!driverUserId) {
+      return res.status(400).json({ error: 'Choose a driver to assign' });
+    }
+
+    const [ride] = await query(
+      `SELECT *
+       FROM ride_requests
+       WHERE public_id = ? OR id = ?
+       LIMIT 1`,
+      [rideId, Number(rideId) || -1]
+    );
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+    if (!isAdminDispatchedRide(ride)) {
+      return res.status(409).json({ error: 'Only admin-booked passenger rides can be assigned from here' });
+    }
+    if (!['requested', 'driver_found'].includes(String(ride.status || '')) || ride.driver_user_id) {
+      return res.status(409).json({ error: 'This ride already has a driver or is no longer open' });
+    }
+
+    const [acceptedOffer] = await query(
+      `SELECT id, status
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ?
+         AND driver_user_id = ?
+         AND status = 'accepted'
+       LIMIT 1`,
+      [ride.id, driverUserId]
+    );
+    if (!acceptedOffer) {
+      return res.status(409).json({ error: 'That driver has not accepted this ride yet' });
+    }
+
+    const [availability] = await query(
+      `SELECT *
+       FROM driver_availability
+       WHERE driver_user_id = ?
+       LIMIT 1`,
+      [driverUserId]
+    );
+    if (!availability) {
+      return res.status(404).json({ error: 'Driver availability record not found' });
+    }
+
+    const assignment = await assignAcceptedDriverToRide({
+      ride,
+      driverUserId,
+      driverAvailability: availability,
+    });
+
+    return res.json({
+      ok: true,
+      rideRequest: {
+        id: ride.id,
+        status: 'driver_assigned',
+        driverUserId,
+        driverDistanceKm: assignment.driverDistanceKm,
+        driverEtaMinutes: assignment.driverEtaMinutes,
+      },
+    });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/:rideId/assign-driver', err);
+    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
   }
 });
 

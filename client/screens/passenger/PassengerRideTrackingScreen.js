@@ -23,10 +23,19 @@ import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { showLocalRideNotification } from '../../notifications';
 import { connectRealtime } from '../../realtime';
+import {
+  PASSENGER_RIDE_MAP_MAX_DELTA,
+  PASSENGER_RIDE_MAP_MIN_DELTA,
+  PASSENGER_RIDE_MAP_REFIT_MOVE_METERS,
+  buildPassengerRideMapRegion,
+  getPassengerTrackingFitCoordinates,
+} from '../../lib/passengerRideMap';
+import { isTransientNetworkError, withNetworkRetry } from '../../lib/networkRetry';
 
 WebBrowser.maybeCompleteAuthSession();
 
 const TRACKING_STATUS_REFRESH_MS = 3000;
+const TRACKING_STATUS_REFRESH_ON_TRIP_MS = 1500;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const ROUTE_REFRESH_DISTANCE_METERS = 10;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
@@ -64,6 +73,11 @@ function mapRideStatusToStage(status) {
     default:
       return '';
   }
+}
+
+function isTerminalRideStatus(status) {
+  const normalized = String(status || '').toLowerCase();
+  return normalized === 'completed' || normalized === 'cancelled';
 }
 
 function findNearestRouteIndex(routeCoordinates, coordinate) {
@@ -117,10 +131,6 @@ function parseTimestampMs(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function isValidCoordinate(value) {
-  return Boolean(normalizeCoordinate(value));
-}
-
 function buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordinate, targetCoordinate, stage) {
   const driver = normalizeCoordinate(driverCoordinate);
   const pickup = normalizeCoordinate(pickupCoordinate);
@@ -135,7 +145,7 @@ function buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordina
   } else if (pickup) {
     focusCoordinates.push(pickup);
   }
-  if (!driver && dropoff && !focusCoordinates.includes(dropoff)) {
+  if (!driver && dropoff && focusCoordinates.every((item) => item !== dropoff)) {
     focusCoordinates.push(dropoff);
   }
   if (focusCoordinates.length === 0) {
@@ -143,17 +153,10 @@ function buildTrackingRegion(driverCoordinate, pickupCoordinate, dropoffCoordina
     if (dropoff && dropoff !== pickup) focusCoordinates.push(dropoff);
   }
 
-  // Math.min(...[]) is Infinity, which would make every field NaN and crash the native map.
-  if (focusCoordinates.length === 0) return null;
-  const latitudes = focusCoordinates.map((item) => item.latitude);
-  const longitudes = focusCoordinates.map((item) => item.longitude);
-
-  return {
-    latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
-    longitude: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
-    latitudeDelta: Math.max((Math.max(...latitudes) - Math.min(...latitudes)) * 1.6, 0.03),
-    longitudeDelta: Math.max((Math.max(...longitudes) - Math.min(...longitudes)) * 1.6, 0.03),
-  };
+  return buildPassengerRideMapRegion(focusCoordinates, {
+    minDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
+    maxDelta: PASSENGER_RIDE_MAP_MAX_DELTA,
+  });
 }
 
 function normalizeVehicleImageUrl(url) {
@@ -248,6 +251,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [startingPayment, setStartingPayment] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
+  const [tipDraft, setTipDraft] = useState('');
   const driverCancelHandledRef = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
@@ -348,18 +352,20 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       const currentRequestId = ++requestId;
       console.log('[smilepay] rideStatus.load.start', { rideRequestId, currentRequestId });
       try {
-        const token = await withTimeout(
-          getTokenRef.current(),
-          RIDE_STATUS_LOAD_TIMEOUT_MS,
-          'Auth token'
-        );
-        if (!token) throw new Error('Not signed in');
-        const data = await withTimeout(
-          getPassengerRideRequestStatus(token, rideRequestId),
-          RIDE_STATUS_LOAD_TIMEOUT_MS,
-          'Ride status'
-        );
-        if (!active) return;
+        const data = await withNetworkRetry(async () => {
+          const token = await withTimeout(
+            getTokenRef.current(),
+            RIDE_STATUS_LOAD_TIMEOUT_MS,
+            'Auth token'
+          );
+          if (!token) throw new Error('Not signed in');
+          return withTimeout(
+            getPassengerRideRequestStatus(token, rideRequestId),
+            RIDE_STATUS_LOAD_TIMEOUT_MS,
+            'Ride status'
+          );
+        }, { retries: 1, delayMs: 500 });
+        if (!active || currentRequestId !== requestId) return;
         setLoadError('');
         console.log('[smilepay] rideStatus.load.ok', {
           rideRequestId,
@@ -377,6 +383,15 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             next.driverCoordinate,
             data?.assignedDriver?.lastSeenAt || next.driverLocationUpdatedAt
           );
+          // A slow poll started before complete must not wipe the socket's terminal state.
+          if (isTerminalRideStatus(current.status) && !isTerminalRideStatus(next.status)) {
+            return {
+              ...next,
+              status: current.status,
+              stage: current.stage || mapRideStatusToStage(current.status) || next.stage,
+              driverCoordinate: mergedCoordinate,
+            };
+          }
           return {
             ...next,
             driverCoordinate: mergedCoordinate,
@@ -406,26 +421,34 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           }
         }
       } catch (error) {
-        if (!active) return;
+        if (!active || currentRequestId !== requestId) return;
         console.error('[smilepay] rideStatus.load.error', {
           rideRequestId,
           message: error?.message || String(error),
           status: error?.status || null,
         });
-        setLoadError(error?.message || 'Could not load ride status.');
+        // Trip UI is already seeded from navigation params / sockets — stay quiet on blips.
+        if (isTransientNetworkError(error)) {
+          setLoadError('');
+        } else {
+          setLoadError(error?.message || 'Could not load ride status.');
+        }
       } finally {
         setLoading(false);
       }
     };
 
     loadStatus();
-    const interval = setInterval(loadStatus, TRACKING_STATUS_REFRESH_MS);
+    const refreshMs = rideStatus?.stage === 'on_trip'
+      ? TRACKING_STATUS_REFRESH_ON_TRIP_MS
+      : TRACKING_STATUS_REFRESH_MS;
+    const interval = setInterval(loadStatus, refreshMs);
 
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, [rideRequestId]);
+  }, [rideRequestId, realtimeSignal, rideStatus?.stage]);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -581,7 +604,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   );
   const activeTarget = stage === 'on_trip' ? currentTargetCoordinate : pickupCoordinate;
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
-  const tipOptions = [1, 2, 5, 10];
 
   useEffect(() => {
     if (stage !== 'waiting_at_pickup') return undefined;
@@ -790,8 +812,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [activeTarget, driverCoordinate, routeCoordinates]);
   const activeRouteCoordinates = useMemo(() => {
     if (liveRouteCoordinates.length > 1) return liveRouteCoordinates;
-    return tripLineCoordinates;
-  }, [liveRouteCoordinates, tripLineCoordinates]);
+    if (driverCoordinate && activeTarget) return [driverCoordinate, activeTarget];
+    return [];
+  }, [activeTarget, driverCoordinate, liveRouteCoordinates]);
   const vehicleSummary = [driver?.carName, driver?.plate]
     .map((part) => String(part || '').trim())
     .filter((part) => part && part !== '-')
@@ -829,6 +852,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     [dropoffLabel, intermediateStops, pickupLabel],
   );
   const currentMapRegionRef = useRef(trackingRegion);
+  const lastFitDriverRef = useRef(null);
 
   const handleMapRegionChangeComplete = (nextRegion) => {
     currentMapRegionRef.current = nextRegion;
@@ -849,32 +873,72 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   };
 
   useEffect(() => {
-    const fitCoordinates = [
-      ...activeRouteCoordinates,
-      driverCoordinate,
-      pickupCoordinate,
-      dropoffCoordinate,
-    ].filter(isValidCoordinate);
-    if (!mapRef.current || fitCoordinates.length < 2) return undefined;
+    if (isCompleted) return undefined;
 
-    const fitKey = `${stage || ''}|${hasDriverCoordinate ? 'driver' : 'trip'}`;
-    if (lastAutoFitStageRef.current === fitKey) return undefined;
-    lastAutoFitStageRef.current = fitKey;
+    const focusTarget = stage === 'on_trip' ? activeTarget : pickupCoordinate;
+    const fitCoordinates = getPassengerTrackingFitCoordinates(
+      liveRouteCoordinates,
+      driverCoordinate,
+      focusTarget
+    );
+    if (!mapRef.current || fitCoordinates.length < 1) return undefined;
+
+    const stageKey = `${stage || ''}|${hasDriverCoordinate ? 'driver' : 'waiting'}`;
+    const stageChanged = lastAutoFitStageRef.current !== stageKey;
+    const previousFitDriver = lastFitDriverRef.current;
+    const movedMeters = previousFitDriver && driverCoordinate
+      ? calculateDistanceKm(previousFitDriver, driverCoordinate) * 1000
+      : 0;
+    const shouldFit = stageChanged
+      || !hasAutoFitMapRef.current
+      || (!previousFitDriver && Boolean(driverCoordinate))
+      || movedMeters >= PASSENGER_RIDE_MAP_REFIT_MOVE_METERS;
+
+    if (!shouldFit) return undefined;
+
+    lastAutoFitStageRef.current = stageKey;
     hasAutoFitMapRef.current = true;
+    if (driverCoordinate) {
+      lastFitDriverRef.current = driverCoordinate;
+    }
 
     const timeout = setTimeout(() => {
       try {
-        mapRef.current?.fitToCoordinates(fitCoordinates, {
-          edgePadding: { top: 90, right: 28, bottom: 220, left: 28 },
-          animated: true,
-        });
+        if (fitCoordinates.length >= 2 && mapRef.current?.fitToCoordinates) {
+          mapRef.current.fitToCoordinates(fitCoordinates, {
+            edgePadding: { top: 110, right: 36, bottom: 240, left: 36 },
+            animated: true,
+          });
+          return;
+        }
+
+        const fallbackRegion = buildTrackingRegion(
+          driverCoordinate,
+          pickupCoordinate,
+          dropoffCoordinate,
+          focusTarget,
+          stage
+        );
+        if (fallbackRegion && mapRef.current?.animateToRegion) {
+          currentMapRegionRef.current = fallbackRegion;
+          mapRef.current.animateToRegion(fallbackRegion, 350);
+        }
       } catch {
         // Keep tracking UI resilient if the map rejects a fit request.
       }
-    }, 250);
+    }, 200);
 
     return () => clearTimeout(timeout);
-  }, [activeRouteCoordinates, driverCoordinate, dropoffCoordinate, hasDriverCoordinate, pickupCoordinate, stage]);
+  }, [
+    activeTarget,
+    driverCoordinate,
+    dropoffCoordinate,
+    hasDriverCoordinate,
+    isCompleted,
+    liveRouteCoordinates,
+    pickupCoordinate,
+    stage,
+  ]);
 
   const handleCancelRide = () => {
     setShowCancelReasonModal(true);
@@ -970,19 +1034,30 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     }
   };
 
-  const handleSendTip = async (amount) => {
+  const handleSendTip = async () => {
+    const amount = Number(String(tipDraft || '').trim());
+    if (!Number.isFinite(amount) || amount <= 0) {
+      Alert.alert('Tip amount', 'Enter how much you want to tip (for example 0.50).');
+      return;
+    }
+    if (amount > 200) {
+      Alert.alert('Tip amount', 'Tip amount must be $200.00 or less.');
+      return;
+    }
+    const normalizedAmount = Number(amount.toFixed(2));
     try {
       setSubmittingTip(true);
       const token = await getToken();
       if (!token || !rideRequestId) throw new Error('Not signed in');
-      await tipDriver(token, rideRequestId, amount);
+      await tipDriver(token, rideRequestId, normalizedAmount);
       setRideStatus((current) => current ? {
         ...current,
-        tipAmount: Number(amount),
-        totalAmount: Number(current.estimatedAmount || 0) + Number(amount),
+        tipAmount: normalizedAmount,
+        totalAmount: Number(current.estimatedAmount || 0) + normalizedAmount,
         canTipDriver: false,
       } : current);
-      Alert.alert('Tip sent', `Your $${Number(amount).toFixed(2)} tip was added.`);
+      setTipDraft('');
+      Alert.alert('Tip sent', `Your $${normalizedAmount.toFixed(2)} tip was added.`);
     } catch (error) {
       Alert.alert('Tip failed', error?.message || 'Could not send your tip.');
     } finally {
@@ -1473,24 +1548,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   ) : null}
 
                   <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
-                    <View className="flex-row items-center">
-                      <View className="items-center">
-                        {driverProfileImageUrl ? (
-                          <Image
-                            source={{ uri: driverProfileImageUrl }}
-                            style={{ width: 62, height: 62, borderRadius: 31 }}
-                          />
-                        ) : (
-                          <View className="h-[62px] w-[62px] items-center justify-center rounded-full bg-[#e0e7ff]">
-                            <Ionicons name="person" size={26} color={PRIMARY_BLUE} />
-                          </View>
-                        )}
-                        <Image
-                          source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80' }}
-                          style={{ marginTop: 10, width: 96, height: 72, borderRadius: 18 }}
-                        />
-                      </View>
-                      <View className="ml-4 flex-1">
+                    <View className="mb-2 flex-row items-center pb-3">
+                      <View className="mr-4 min-w-0 flex-1">
                         <Text className="text-xl font-bold text-gray-900">{driver?.driverName || 'Driver'}</Text>
                         <View className="mt-1 flex-row items-center">
                           <Ionicons name="star" size={16} color="#f59e0b" />
@@ -1506,6 +1565,26 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         <Text className="mt-1 text-sm font-medium" style={{ color: PRIMARY_BLUE }}>
                           {driver?.phoneNumber || 'Phone not shared'}
                         </Text>
+                      </View>
+                      <View className="relative">
+                        <Image
+                          source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=800&q=80' }}
+                          style={{ width: 148, height: 108, borderRadius: 20 }}
+                          resizeMode="cover"
+                        />
+                        <View
+                          className="absolute items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#e0e7ff]"
+                          style={{ width: 52, height: 52, borderRadius: 26, right: -6, bottom: -10 }}
+                        >
+                          {driverProfileImageUrl ? (
+                            <Image
+                              source={{ uri: driverProfileImageUrl }}
+                              style={{ width: 52, height: 52, borderRadius: 26 }}
+                            />
+                          ) : (
+                            <Ionicons name="person" size={22} color={PRIMARY_BLUE} />
+                          )}
+                        </View>
                       </View>
                     </View>
 
@@ -1707,19 +1786,29 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                           {tipAmount > 0 ? (
                             <Text className="mt-4 text-2xl font-bold text-green-600">${tipAmount.toFixed(2)} added</Text>
                           ) : (
-                            <View className="mt-5 flex-row flex-wrap">
-                              {tipOptions.map((amount) => (
+                            <View className="mt-5">
+                              <Text className="mb-2 text-sm text-gray-500">
+                                Type any amount (e.g. 0.50).
+                              </Text>
+                              <View className="flex-row items-center">
+                                <Text className="mr-2 text-xl font-bold text-gray-900">$</Text>
+                                <TextInput
+                                  value={tipDraft}
+                                  onChangeText={setTipDraft}
+                                  placeholder="0.00"
+                                  keyboardType="decimal-pad"
+                                  editable={!submittingTip}
+                                  className="h-12 flex-1 rounded-[18px] bg-[#f8fafc] px-4 text-base text-gray-900"
+                                />
                                 <TouchableOpacity
-                                  key={amount}
-                                  onPress={() => handleSendTip(amount)}
+                                  onPress={handleSendTip}
                                   disabled={submittingTip}
-                                  className="mb-3 mr-3 h-12 min-w-[72px] items-center justify-center rounded-full border border-blue-200 bg-[#eff6ff] px-4"
+                                  className="ml-3 h-12 items-center justify-center rounded-[18px] px-5"
+                                  style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingTip ? 0.7 : 1 }}
                                 >
-                                  <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
-                                    ${amount.toFixed(2)}
-                                  </Text>
+                                  <Text className="text-sm font-bold text-white">Send</Text>
                                 </TouchableOpacity>
-                              ))}
+                              </View>
                             </View>
                           )}
                           {submittingTip ? (
@@ -1937,19 +2026,29 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         Tip added: ${tipAmount.toFixed(2)}
                       </Text>
                     ) : (
-                      <View className="mt-3 flex-row flex-wrap">
-                        {tipOptions.map((amount) => (
+                      <View className="mt-3">
+                        <Text className="mb-2 text-xs text-gray-500">
+                          Type any amount (e.g. 0.50).
+                        </Text>
+                        <View className="flex-row items-center">
+                          <Text className="mr-2 text-base font-bold text-gray-900">$</Text>
+                          <TextInput
+                            value={tipDraft}
+                            onChangeText={setTipDraft}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                            editable={!submittingTip}
+                            className="h-11 flex-1 rounded-[16px] bg-white px-3 text-base text-gray-900"
+                          />
                           <TouchableOpacity
-                            key={amount}
-                            onPress={() => handleSendTip(amount)}
+                            onPress={handleSendTip}
                             disabled={submittingTip}
-                            className="mb-2 mr-2 rounded-full border border-blue-200 bg-white px-4 py-2"
+                            className="ml-2 h-11 items-center justify-center rounded-[16px] px-4"
+                            style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingTip ? 0.7 : 1 }}
                           >
-                            <Text className="text-sm font-bold" style={{ color: PRIMARY_BLUE }}>
-                              ${amount.toFixed(2)}
-                            </Text>
+                            <Text className="text-sm font-bold text-white">Send</Text>
                           </TouchableOpacity>
-                        ))}
+                        </View>
                       </View>
                     )}
                     {submittingTip ? (

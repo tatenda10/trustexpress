@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, TextInput, Alert, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
@@ -14,6 +14,7 @@ import {
   buildRatingReviewText,
   toggleRatingTag,
 } from '../../constants/rideRatingTags';
+import { isTransientNetworkError, withNetworkRetry } from '../../lib/networkRetry';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -46,49 +47,64 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const rideRequestId = route.params?.rideRequestId;
-  const [ride, setRide] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const initialRide = route.params?.initialRide || null;
+  const [ride, setRide] = useState(initialRide);
+  const [loading, setLoading] = useState(!initialRide);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [downloadingReceipt, setDownloadingReceipt] = useState(false);
   const [printingReceipt, setPrintingReceipt] = useState(false);
   const [submittingLostItem, setSubmittingLostItem] = useState(false);
   const [submittingTip, setSubmittingTip] = useState(false);
   const [startingPayment, setStartingPayment] = useState(false);
-  const [rating, setRating] = useState(0);
-  const [review, setReview] = useState('');
-  const [selectedRatingTags, setSelectedRatingTags] = useState([]);
+  const [rating, setRating] = useState(Number(initialRide?.passengerDriverRating || 0));
+  const [review, setReview] = useState(String(initialRide?.passengerDriverReview || ''));
+  const [selectedRatingTags, setSelectedRatingTags] = useState(
+    Array.isArray(initialRide?.passengerDriverFeedbackTags) ? initialRide.passengerDriverFeedbackTags : []
+  );
   const [lostItemDescription, setLostItemDescription] = useState('');
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
-  const tipOptions = [1, 2, 5, 10];
+  const [tipDraft, setTipDraft] = useState('');
 
-  useEffect(() => {
-    let active = true;
+  const loadRide = useCallback(async ({ silent = false } = {}) => {
+    if (!rideRequestId) {
+      setLoadError('Missing ride id.');
+      setLoading(false);
+      return;
+    }
+    if (silent) setRefreshing(true);
+    else setLoading(true);
 
-    const loadRide = async () => {
-      try {
+    try {
+      const data = await withNetworkRetry(async () => {
         const token = await getToken();
         if (!token) throw new Error('Not signed in');
-        const data = await getPassengerRideDetails(token, rideRequestId);
-        if (!active) return;
-        setRide(data?.ride || null);
-        setRating(Number(data?.ride?.passengerDriverRating || 0));
-        setSelectedRatingTags(
-          Array.isArray(data?.ride?.passengerDriverFeedbackTags) ? data.ride.passengerDriverFeedbackTags : []
-        );
-        setReview(String(data?.ride?.passengerDriverReview || ''));
-      } catch (error) {
-        if (!active) return;
-        Alert.alert('Ride details unavailable', error?.message || 'Could not load this ride.');
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
+        return getPassengerRideDetails(token, rideRequestId);
+      }, { retries: 2, delayMs: 700 });
 
-    loadRide();
-    return () => {
-      active = false;
-    };
+      setRide(data?.ride || null);
+      setRating(Number(data?.ride?.passengerDriverRating || 0));
+      setSelectedRatingTags(
+        Array.isArray(data?.ride?.passengerDriverFeedbackTags) ? data.ride.passengerDriverFeedbackTags : []
+      );
+      setReview(String(data?.ride?.passengerDriverReview || ''));
+      setLoadError('');
+    } catch (error) {
+      const message = isTransientNetworkError(error)
+        ? 'Could not reach Trust Express right now. Tap Try again when you are ready.'
+        : (error?.message || 'Could not load this ride.');
+      setLoadError(message);
+      // Keep any seeded/cached ride visible — never block the user with an alert popup.
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [getToken, rideRequestId]);
+
+  useEffect(() => {
+    loadRide({ silent: Boolean(initialRide) });
+  }, [initialRide, loadRide]);
 
   const handleSubmitRating = async () => {
     try {
@@ -174,20 +190,31 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     }
   };
 
-  const handleSendTip = async (amount) => {
+  const handleSendTip = async () => {
+    const amount = Number(String(tipDraft || '').trim());
+    if (!Number.isFinite(amount) || amount <= 0) {
+      Alert.alert('Tip amount', 'Enter how much you want to tip (for example 0.50).');
+      return;
+    }
+    if (amount > 200) {
+      Alert.alert('Tip amount', 'Tip amount must be $200.00 or less.');
+      return;
+    }
+    const normalizedAmount = Number(amount.toFixed(2));
     try {
       if (!rideRequestId) return;
       setSubmittingTip(true);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await tipDriver(token, rideRequestId, amount);
+      await tipDriver(token, rideRequestId, normalizedAmount);
       setRide((current) => current ? {
         ...current,
-        tipAmount: Number(amount),
-        totalAmount: Number(current.finalEstimatedAmount ?? current.estimatedAmount ?? 0) + Number(amount),
+        tipAmount: normalizedAmount,
+        totalAmount: Number(current.finalEstimatedAmount ?? current.estimatedAmount ?? 0) + normalizedAmount,
         canTipDriver: false,
       } : current);
-      Alert.alert('Tip sent', `Your $${Number(amount).toFixed(2)} tip was added for ${ride.driverName || 'your driver'}.`);
+      setTipDraft('');
+      Alert.alert('Tip sent', `Your $${normalizedAmount.toFixed(2)} tip was added for ${ride.driverName || 'your driver'}.`);
     } catch (error) {
       Alert.alert('Tip failed', error?.message || 'Could not send your tip right now.');
     } finally {
@@ -278,7 +305,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
     }
   };
 
-  if (loading) {
+  if (loading && !ride) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
         <ActivityIndicator size="large" color={PRIMARY_BLUE} />
@@ -290,7 +317,25 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   if (!ride) {
     return (
       <View className="flex-1 items-center justify-center bg-white px-5">
-        <Text className="text-xl font-bold text-gray-900">Ride not found</Text>
+        <Text className="text-xl font-bold text-gray-900">Ride details unavailable</Text>
+        <Text className="mt-3 text-center text-sm text-gray-500">
+          {loadError || 'Could not load this ride right now.'}
+        </Text>
+        <TouchableOpacity
+          onPress={() => loadRide()}
+          disabled={refreshing}
+          className="mt-6 h-12 min-w-[160px] items-center justify-center rounded-[18px] px-5"
+          style={{ backgroundColor: PRIMARY_BLUE, opacity: refreshing ? 0.7 : 1 }}
+        >
+          {refreshing ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text className="text-sm font-bold text-white">Try again</Text>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.goBack()} className="mt-4 px-4 py-2">
+          <Text className="text-sm font-semibold text-gray-500">Go back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -319,6 +364,25 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
+        {loadError ? (
+          <View className="mb-4 flex-row items-center rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3">
+            <View className="min-w-0 flex-1 pr-3">
+              <Text className="text-sm font-semibold text-amber-900">Could not refresh details</Text>
+              <Text className="mt-1 text-xs text-amber-800">{loadError}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => loadRide({ silent: true })}
+              disabled={refreshing}
+              className="rounded-full bg-white px-3 py-2"
+            >
+              {refreshing ? (
+                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+              ) : (
+                <Text className="text-xs font-bold" style={{ color: PRIMARY_BLUE }}>Retry</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : null}
         <View className="rounded-[28px] border border-gray-100 bg-white px-5 py-5">
           <Text className="text-lg font-bold text-gray-900">{ride.pickupLabel}</Text>
           <Text className="mt-1 text-sm text-gray-500">to {ride.dropoffLabel}</Text>
@@ -473,21 +537,26 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
           <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
             <Text className="text-xl font-bold text-gray-900">Tip Driver</Text>
             <Text className="mt-2 text-sm text-gray-500">
-              Add an optional thank-you tip for {ride.driverName || 'your driver'}.
+              Add an optional thank-you tip for {ride.driverName || 'your driver'}. Type any amount (e.g. 0.50).
             </Text>
-            <View className="mt-5 flex-row flex-wrap">
-              {tipOptions.map((amount) => (
-                <TouchableOpacity
-                  key={amount}
-                  onPress={() => handleSendTip(amount)}
-                  disabled={submittingTip}
-                  className="mb-3 mr-3 h-12 min-w-[72px] items-center justify-center rounded-full border border-blue-200 bg-[#eff6ff] px-4"
-                >
-                  <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>
-                    {formatCurrency(amount)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <View className="mt-5 flex-row items-center">
+              <Text className="mr-2 text-xl font-bold text-gray-900">$</Text>
+              <TextInput
+                value={tipDraft}
+                onChangeText={setTipDraft}
+                placeholder="0.00"
+                keyboardType="decimal-pad"
+                editable={!submittingTip}
+                className="h-12 flex-1 rounded-[18px] bg-[#f8fafc] px-4 text-base text-gray-900"
+              />
+              <TouchableOpacity
+                onPress={handleSendTip}
+                disabled={submittingTip}
+                className="ml-3 h-12 items-center justify-center rounded-[18px] px-5"
+                style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingTip ? 0.7 : 1 }}
+              >
+                <Text className="text-sm font-bold text-white">Send</Text>
+              </TouchableOpacity>
             </View>
             {submittingTip ? (
               <View className="mt-2 flex-row items-center">

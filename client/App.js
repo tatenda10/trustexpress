@@ -484,7 +484,11 @@ function AppStack({ currentRouteName }) {
       } catch (error) {
         pushSyncKeyRef.current = '';
         // Only log network errors as warnings, don't treat as critical failures
-        if (error.message?.includes('Network error') || error.message?.includes('connection')) {
+        if (
+          error.message?.includes('Network error')
+          || error.message?.includes('Could not reach Trust Express')
+          || error.message?.includes('connection')
+        ) {
           console.log('[AppStack] Push token registration deferred due to network connectivity');
         } else {
           console.warn('[AppStack] Failed to register push token', error);

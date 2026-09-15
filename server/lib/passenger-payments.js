@@ -8,6 +8,7 @@ import {
   normalizeDateOfBirth,
   normalizeGender,
   normalizeZimMobile,
+  toIsoDateOnly,
 } from './smile-cash.js';
 
 const PAYABLE_RIDE_STATUSES = new Set([
@@ -46,7 +47,7 @@ function shapePassengerSmileCash(row) {
     status: row?.smile_cash_status || null,
     openedAt: row?.smile_cash_opened_at ? new Date(row.smile_cash_opened_at).toISOString() : null,
     lastError: row?.smile_cash_last_error || null,
-    dateOfBirth: row?.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
+    dateOfBirth: toIsoDateOnly(row?.date_of_birth),
     gender: row?.gender || null,
     nationalIdNumber: row?.national_id_number || null,
   };

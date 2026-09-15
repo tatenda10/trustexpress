@@ -425,8 +425,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     try {
       token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      const currentRideData = await getPassengerCurrentRide(token);
-      if (navigateToActiveRide(currentRideData)) return;
+      // find-driver already rejects open rides with 409; skip a serial current-ride round-trip.
       const data = await findNearbyDrivers(token, {
         pickupCoordinate,
         dropoffCoordinate,

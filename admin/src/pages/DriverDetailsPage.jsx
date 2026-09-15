@@ -44,6 +44,20 @@ function formatDateTime(value) {
   })
 }
 
+function formatDate(value) {
+  if (!value) return '-'
+  const raw = String(value).trim()
+  const isoDay = raw.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]
+  const date = new Date(isoDay ? `${isoDay}T00:00:00Z` : raw)
+  if (Number.isNaN(date.getTime())) return raw
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
 function formatWalletMoney(wallet) {
   if (!wallet) return '-'
   const currency = String(wallet.currency || 'USD').toUpperCase()
@@ -417,8 +431,8 @@ export default function DriverDetailsPage() {
           <Field label="EcoCash Registered Name" value={driver.profile?.ecocashRegisteredName || '-'} />
           <Field label="Smile Cash Mobile" value={driver.profile?.smileCashMobile || '-'} />
           <Field label="Smile Cash Status" value={driver.profile?.smileCashStatus || '-'} />
-          <Field label="Date of Birth" value={driver.profile?.dateOfBirth || driver?.profileDocs?.dateOfBirth || '-'} />
-          <Field label="Licence Expiration" value={driver?.profileDocs?.driverLicenceExpiresAt || '-'} />
+          <Field label="Date of Birth" value={formatDate(driver.profile?.dateOfBirth || driver?.profileDocs?.dateOfBirth)} />
+          <Field label="Licence Expiration" value={formatDate(driver?.profileDocs?.driverLicenceExpiresAt)} />
           <Field label="Gender" value={driver.profile?.gender || '-'} />
           <Field label="Joined" value={formatDateTime(driver.createdAt)} />
           <Field label="National ID Number" value={driver?.profileDocs?.nationalIdNumber || '-'} />

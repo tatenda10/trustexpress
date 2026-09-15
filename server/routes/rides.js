@@ -38,6 +38,10 @@ import {
   applyRatingAutomationAfterDriverRated,
   assertAccountNotRestricted,
 } from '../lib/rating-performance.js';
+import {
+  getDriverPushTokensByUserIds,
+  upsertDriverPushTokens,
+} from '../lib/driver-push-tokens.js';
 
 const router = Router();
 
@@ -527,25 +531,48 @@ export async function notifyDriversAboutRideRequest({ drivers, passengerName, pi
       .map((driver) => String(driver.id))
   );
 
+  const driverIds = drivers.map((driver) => String(driver.id));
+  let cachedTokens = new Map();
+  try {
+    cachedTokens = await getDriverPushTokensByUserIds(driverIds);
+  } catch (error) {
+    console.error('[rides.findDriver] push token cache read failed', error);
+  }
+
   const destinations = (
     await Promise.all(
       drivers.map(async (driver) => {
-        try {
-          const driverUser = await getClerkUserById(driver.id);
-          return {
-            driverId: String(driver.id),
-            expoToken: String(driverUser?.privateMetadata?.pushToken || '').trim() || null,
-            fcmToken: String(driverUser?.privateMetadata?.fcmToken || '').trim() || null,
-            isPriority: prioritizedDriverIds.has(String(driver.id)),
-          };
-        } catch {
-          return {
-            driverId: String(driver.id),
-            expoToken: null,
-            fcmToken: null,
-            isPriority: prioritizedDriverIds.has(String(driver.id)),
-          };
+        const driverId = String(driver.id);
+        const cached = cachedTokens.get(driverId);
+        let expoToken = cached?.expoPushToken || null;
+        let fcmToken = cached?.fcmToken || null;
+
+        if (!expoToken && !fcmToken) {
+          try {
+            const driverUser = await getClerkUserById(driver.id);
+            expoToken = String(driverUser?.privateMetadata?.pushToken || '').trim() || null;
+            fcmToken = String(driverUser?.privateMetadata?.fcmToken || '').trim() || null;
+            if (expoToken || fcmToken) {
+              upsertDriverPushTokens({
+                driverUserId: driverId,
+                expoPushToken: expoToken,
+                fcmToken,
+              }).catch((error) => {
+                console.error('[rides.findDriver] push token cache write failed', error);
+              });
+            }
+          } catch {
+            expoToken = null;
+            fcmToken = null;
+          }
         }
+
+        return {
+          driverId,
+          expoToken,
+          fcmToken,
+          isPriority: prioritizedDriverIds.has(driverId),
+        };
       })
     )
   ).filter((item) => item.expoToken || item.fcmToken);
@@ -1058,13 +1085,12 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       estimatedAmount: authoritativeAmount,
       tierKey: tier.tier_key,
     });
-    const nearbyDrivers = await Promise.all(
-      nearbyDriversBase.map(async (driver) => ({
-        ...driver,
-        amount: finalEstimatedAmount,
-        profileImageUrl: await getUserProfileImageUrl(driver.id),
-      }))
-    );
+    // Skip Clerk profile-image lookups on the critical path; waiting UI does not need them.
+    const nearbyDrivers = nearbyDriversBase.map((driver) => ({
+      ...driver,
+      amount: finalEstimatedAmount,
+      profileImageUrl: null,
+    }));
 
     console.log('[rides.findDriver] request created', {
       rideRequestId,
@@ -1085,17 +1111,6 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
     });
 
     await createPendingDriverOffers(rideRequestId, nearbyDrivers);
-    await notifyDriversAboutRideRequest({
-      drivers: nearbyDrivers,
-      passengerName,
-      pickupLabel: String(pickupLabel).trim(),
-      dropoffLabel: String(dropoffLabel).trim(),
-      intermediateStops: normalizedIntermediateStops,
-      rideRequestId,
-      publicId,
-      tierName: tier.tier_name,
-      passengerCount: partySize,
-    });
 
     nearbyDrivers.forEach((driver) => {
       emitRideRequestToDriver(driver.id, {
@@ -1109,6 +1124,26 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         requestedTierName: tier.tier_name,
         passengerCount: partySize,
         paymentMethod,
+      });
+    });
+
+    // Push notifications are slow (Clerk/Expo/FCM). Do not block the passenger response.
+    setImmediate(() => {
+      notifyDriversAboutRideRequest({
+        drivers: nearbyDrivers,
+        passengerName,
+        pickupLabel: String(pickupLabel).trim(),
+        dropoffLabel: String(dropoffLabel).trim(),
+        intermediateStops: normalizedIntermediateStops,
+        rideRequestId,
+        publicId,
+        tierName: tier.tier_name,
+        passengerCount: partySize,
+      }).catch((error) => {
+        console.error('[rides.findDriver] background notify failed', {
+          rideRequestId,
+          message: error?.message || String(error),
+        });
       });
     });
 

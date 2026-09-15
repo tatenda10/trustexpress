@@ -213,7 +213,10 @@ const PassengerActivityScreen = ({ navigation }) => {
                 return (
                   <TouchableOpacity
                     key={ride.id}
-                    onPress={() => navigation.navigate('PassengerRideDetail', { rideRequestId: ride.id })}
+                    onPress={() => navigation.navigate('PassengerRideDetail', {
+                      rideRequestId: ride.id,
+                      initialRide: ride,
+                    })}
                     className="mb-4 rounded-[28px] border border-gray-100 bg-white px-5 py-5"
                   >
                     <View className="flex-row items-start justify-between">

@@ -61,6 +61,7 @@
     "db:migrate:driver-licence-expiry": "node scripts/run-migration.js sql/migrations/076_add_driver_licence_expiry.sql",
     "db:migrate:admin-ride-dispatch": "node scripts/run-migration.js sql/migrations/077_add_admin_ride_dispatch.sql",
     "db:migrate:passenger-ride-refunds": "node scripts/run-migration.js sql/migrations/078_add_passenger_ride_payment_refunds.sql",
+    "db:migrate:driver-push-tokens": "node scripts/run-migration.js sql/migrations/079_add_driver_push_tokens.sql",
     "db:verify:captain-rewards": "node scripts/verify-captain-rewards-db.js",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
     "db:migrate:place-cache": "node scripts/run-migration.js sql/migrations/042_add_place_search_cache.sql",

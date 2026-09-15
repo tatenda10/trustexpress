@@ -166,6 +166,21 @@ function formatAdminDateTime(value) {
   })
 }
 
+function formatAdminDate(value) {
+  if (!value) return '-'
+  const raw = String(value).trim()
+  const isoDay = raw.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]
+  const parsed = new Date(isoDay ? `${isoDay}T00:00:00Z` : raw)
+  if (Number.isNaN(parsed.getTime())) return raw
+
+  return parsed.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
 export default function DriverVerificationDetailPage() {
   const { driverId } = useParams()
   const { token, can, admin } = useAuth()
@@ -548,8 +563,8 @@ export default function DriverVerificationDetailPage() {
               <Field label="Current Status" value={verificationStatusLabel} />
               <Field label="National ID Number" value={profileDocs.nationalIdNumber || '-'} />
               <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
-              <Field label="Licence Expiration" value={profileDocs.driverLicenceExpiresAt || '-'} />
-              <Field label="Date of Birth" value={profileDocs.dateOfBirth || driver.profile?.dateOfBirth || '-'} />
+              <Field label="Licence Expiration" value={formatAdminDate(profileDocs.driverLicenceExpiresAt)} />
+              <Field label="Date of Birth" value={formatAdminDate(profileDocs.dateOfBirth || driver.profile?.dateOfBirth)} />
               <Field
                 label="Referred By Agent"
                 value={
