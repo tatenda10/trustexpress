@@ -86,9 +86,25 @@ export function clearOverlayRideRequest({ keepDismissed = true } = {}) {
   return getDriverRideOverlayState();
 }
 
-export function filterActiveRideRequests(requests = []) {
+export function getRideRequestRemainingSeconds(request) {
+  const serverRemaining = Number(request?.remainingSeconds);
+  const capturedAt = Number(request?.remainingSecondsCapturedAt);
+  if (Number.isFinite(serverRemaining) && serverRemaining >= 0) {
+    if (!Number.isFinite(capturedAt)) return Math.max(0, Math.floor(serverRemaining));
+    const elapsed = Math.max(0, Math.floor((Date.now() - capturedAt) / 1000));
+    return Math.max(0, Math.floor(serverRemaining) - elapsed);
+  }
+  if (!request?.expiresAt) return 0;
+  const expiresMs = new Date(request.expiresAt).getTime();
+  if (!Number.isFinite(expiresMs)) return 0;
+  return Math.max(0, Math.ceil((expiresMs - Date.now()) / 1000));
+}
+
+export function filterActiveRideRequests(requests = [], { minSeconds = 1 } = {}) {
+  const minRemaining = Math.max(1, Number(minSeconds) || 1);
   return (Array.isArray(requests) ? requests : []).filter((request) => {
     const id = Number(request?.id || 0);
-    return Number.isInteger(id) && id > 0 && !dismissedRideRequestIds.has(id);
+    if (!Number.isInteger(id) || id <= 0 || dismissedRideRequestIds.has(id)) return false;
+    return getRideRequestRemainingSeconds(request) >= minRemaining;
   });
 }

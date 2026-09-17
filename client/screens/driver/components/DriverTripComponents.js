@@ -217,6 +217,12 @@ export function DriverTripMapPanel({
         toolbarEnabled={false}
         rotateEnabled={true}
         showsTraffic={true}
+        mapPadding={{
+          top: Math.max(insets.top + 72, 96),
+          right: 16,
+          bottom: Math.max(tripPanelMaxHeight + insets.bottom + 12, 200),
+          left: 16,
+        }}
       >
         {driverCoordinate ? (
           <DriverVehicleMapMarker
@@ -321,65 +327,73 @@ export function DriverTripMapPanel({
 
       <View
         className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-white"
-        style={{ maxHeight: tripPanelMaxHeight + 20, paddingBottom: Math.max(insets.bottom, 12) }}
+        style={{
+          maxHeight: tripPanelMaxHeight + Math.max(insets.bottom, 12),
+          paddingBottom: Math.max(insets.bottom, 12),
+          overflow: 'hidden',
+        }}
       >
         <ScrollView
           bounces={false}
+          nestedScrollEnabled
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20 }}
+          style={{ maxHeight: tripPanelMaxHeight }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 }}
         >
-          <View className="mb-5 items-center">
+          <View className="mb-3 items-center">
             <View className="h-1.5 w-14 rounded-full bg-gray-300" />
           </View>
 
           <View className="flex-row items-center justify-between">
             <View className="flex-1 pr-3">
-              <Text className="text-2xl font-extrabold text-gray-950">{stageTitle}</Text>
-              <Text className="mt-1 text-base font-semibold text-gray-500">{primaryMetric} - {secondaryMetric}</Text>
+              <Text className="text-xl font-extrabold text-gray-950" numberOfLines={1}>{stageTitle}</Text>
+              <Text className="mt-1 text-sm font-semibold text-gray-500" numberOfLines={1}>
+                {primaryMetric} - {secondaryMetric}
+              </Text>
             </View>
             <View className="items-end">
               <Text className="text-xs font-bold uppercase tracking-widest text-gray-400">Fare</Text>
-              <Text className="mt-1 text-xl font-extrabold text-gray-950">{fareText}</Text>
+              <Text className="mt-1 text-lg font-extrabold text-gray-950">{fareText}</Text>
             </View>
           </View>
 
-          <View className="mt-4 flex-row items-center rounded-2xl bg-gray-50 px-4 py-3">
+          <View className="mt-3 flex-row items-center rounded-2xl bg-gray-50 px-3 py-2.5">
             {passengerProfileImageUrl ? (
-              <Image source={{ uri: passengerProfileImageUrl }} style={{ width: 46, height: 46, borderRadius: 23 }} />
+              <Image source={{ uri: passengerProfileImageUrl }} style={{ width: 40, height: 40, borderRadius: 20 }} />
             ) : (
-              <View className="h-[46px] w-[46px] items-center justify-center rounded-full bg-[#e0e7ff]">
-                <Ionicons name="person" size={20} color={primaryBlue} />
+              <View className="h-10 w-10 items-center justify-center rounded-full bg-[#e0e7ff]">
+                <Ionicons name="person" size={18} color={primaryBlue} />
               </View>
             )}
             <View className="ml-3 flex-1">
-              <Text className="text-base font-bold text-gray-900">{passengerName}</Text>
+              <Text className="text-base font-bold text-gray-900" numberOfLines={1}>{passengerName}</Text>
               <Text className="mt-0.5 text-sm text-gray-500" numberOfLines={1}>{passengerSubtitle}</Text>
             </View>
           </View>
 
           {passengerConfirmationText ? (
-            <View className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+            <View className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
               <Text className="text-xs font-bold uppercase tracking-widest text-emerald-700">Passenger update</Text>
-              <Text className="mt-1 text-sm font-semibold text-emerald-900">{passengerConfirmationText}</Text>
+              <Text className="mt-1 text-sm font-semibold text-emerald-900" numberOfLines={2}>{passengerConfirmationText}</Text>
             </View>
           ) : null}
 
           {safetyPinReminderText ? (
-            <View className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+            <View className="mt-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-3 py-2.5">
               <Text className="text-xs font-bold uppercase tracking-widest text-indigo-700">Night safety PIN</Text>
-              <Text className="mt-1 text-sm font-semibold text-indigo-900">{safetyPinReminderText}</Text>
+              <Text className="mt-1 text-sm font-semibold text-indigo-900" numberOfLines={2}>{safetyPinReminderText}</Text>
             </View>
           ) : null}
 
           {showGuidance ? (
-            <View className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-4">
+            <View className="mt-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-3 py-2.5">
               <View className="flex-row items-center">
-                <View className="h-10 w-10 items-center justify-center rounded-full bg-white">
-                  <Ionicons name="navigate" size={18} color="#4338ca" />
+                <View className="h-9 w-9 items-center justify-center rounded-full bg-white">
+                  <Ionicons name="navigate" size={16} color="#4338ca" />
                 </View>
                 <View className="ml-3 flex-1">
                   <Text className="text-xs font-bold uppercase tracking-widest text-indigo-500">Next direction</Text>
-                  <Text className="mt-1 text-base font-bold text-gray-900">
+                  <Text className="mt-0.5 text-sm font-bold text-gray-900" numberOfLines={2}>
                     {guidanceText || 'Follow the route to your destination.'}
                   </Text>
                 </View>
@@ -388,7 +402,7 @@ export function DriverTripMapPanel({
           ) : null}
 
           {Array.isArray(stopTimeline) && stopTimeline.length > 2 ? (
-            <View className="mt-4 rounded-2xl border border-orange-100 bg-orange-50 px-4 py-4">
+            <View className="mt-3 rounded-2xl border border-orange-100 bg-orange-50 px-3 py-3">
               <Text className="text-xs font-bold uppercase tracking-widest text-orange-600">Trip stops</Text>
               <Text className="mt-1 text-sm font-semibold text-orange-900">
                 {Number(remainingIntermediateStopsCount || 0) > 0
@@ -435,7 +449,7 @@ export function DriverTripMapPanel({
             <TouchableOpacity
               onPress={onMarkArrived}
               disabled={submitting}
-              className="mt-4 h-14 items-center justify-center rounded-[20px]"
+              className="mt-3 h-14 items-center justify-center rounded-[20px]"
               style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
             >
               {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Mark Arrived</Text>}
@@ -443,7 +457,7 @@ export function DriverTripMapPanel({
           ) : null}
 
           {showStartRide && showCancelRide ? (
-            <View className="mt-4 flex-row">
+            <View className="mt-3 flex-row">
               <TouchableOpacity
                 onPress={onCancelRide}
                 disabled={submitting || cancellingRide}
@@ -467,7 +481,7 @@ export function DriverTripMapPanel({
             <TouchableOpacity
               onPress={onAdvanceStop}
               disabled={submitting}
-              className="mt-4 h-14 items-center justify-center rounded-[20px] bg-orange-500"
+              className="mt-3 h-14 items-center justify-center rounded-[20px] bg-orange-500"
               style={{ opacity: submitting ? 0.7 : 1 }}
             >
               {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">{advanceStopLabel || 'Reached stop'}</Text>}
@@ -475,7 +489,7 @@ export function DriverTripMapPanel({
           ) : null}
 
           {showCompleteRide && showCancelRide && !showStartRide ? (
-            <View className="mt-4 flex-row">
+            <View className="mt-3 flex-row">
               <TouchableOpacity
                 onPress={onCancelRide}
                 disabled={submitting || cancellingRide}
@@ -499,7 +513,7 @@ export function DriverTripMapPanel({
             <TouchableOpacity
               onPress={onCompleteRide}
               disabled={submitting}
-              className="mt-4 h-14 items-center justify-center rounded-[20px]"
+              className="mt-3 h-14 items-center justify-center rounded-[20px]"
               style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
             >
               {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Complete Ride</Text>}

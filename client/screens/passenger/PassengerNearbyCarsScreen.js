@@ -226,7 +226,9 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
             <View className="mt-1.5 flex-row items-center gap-1">
               <Ionicons name="star" size={12} color="#f59e0b" />
               <Text className="text-[11px] font-semibold text-gray-600">
-                {Number.isFinite(Number(driver.rating)) ? Number(driver.rating).toFixed(2) : 'New'} · {driver.trips} rides
+                {Number(driver.ratingCount || 0) > 0 && Number.isFinite(Number(driver.rating)) && Number(driver.rating) > 0
+                  ? `${Number(driver.rating).toFixed(2)}`
+                  : 'New'} · {driver.trips || 0} rides
               </Text>
             </View>
           </View>

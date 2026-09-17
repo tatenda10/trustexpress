@@ -1437,86 +1437,121 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
       longitude: Number(ride.pickup_lng),
     };
 
-    const respondingDrivers = await query(
-      `SELECT
-         rr.driver_user_id,
-         rr.status AS response_status,
-         rr.responded_at,
-         GREATEST(
-           0,
-           ${DRIVER_ACCEPT_OFFER_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
-         ) AS offer_remaining_seconds,
-         da.driver_name,
-         da.phone_number,
-         da.vehicle_tier_key,
-         da.vehicle_tier_name,
-         da.vehicle_make,
-         da.vehicle_model,
-         COALESCE(NULLIF(TRIM(dv.number_plate), ''), da.number_plate) AS number_plate,
-         da.car_photo_url,
-         NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
-         da.current_lat,
-         da.current_lng,
-         da.last_seen_at,
-         da.is_online,
-         rr.driver_user_id AS profile_image_user_id
-       FROM ride_request_driver_responses rr
-       LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
-       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
-       WHERE rr.ride_request_id = ?
-         AND rr.status IN ('accepted', 'selected')
-       ORDER BY rr.responded_at ASC`,
-      [rideRequestId]
-    );
-    const driverStatsMap = await loadDriverRideStats([
-      ...respondingDrivers.map((row) => row.driver_user_id),
-      ride.driver_user_id,
-    ]);
-    const acceptedDrivers = await Promise.all(
-      respondingDrivers.map(async (row) => ({
-        ...mapAcceptedDriverOffer(
-          attachDriverRideStats(row, driverStatsMap),
-          pickupCoordinate,
-          ride.final_estimated_amount || ride.estimated_amount
-        ),
-        profileImageUrl: await getUserProfileImageUrl(row.profile_image_user_id || row.driver_user_id),
-      }))
-    );
+    const needsAcceptedMarketplace = isOpenRideRequest(ride.status);
+    let acceptedDrivers = [];
+    let assignedDriver = null;
 
-    let assignedDriver = ride.driver_user_id
-      ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || (() => {
-          const selectedRow = respondingDrivers.find((item) => item.driver_user_id === ride.driver_user_id);
-          if (!selectedRow) return null;
-          return mapDriverAvailability(attachDriverRideStats({
-            ...selectedRow,
-            estimated_amount: ride.estimated_amount,
-          }, driverStatsMap), pickupCoordinate);
-        })()
-      : null;
-    if (ride.driver_user_id && !assignedDriver?.coordinate) {
+    if (needsAcceptedMarketplace) {
+      const respondingDrivers = await query(
+        `SELECT
+           rr.driver_user_id,
+           rr.status AS response_status,
+           rr.responded_at,
+           GREATEST(
+             0,
+             ${DRIVER_ACCEPT_OFFER_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
+           ) AS offer_remaining_seconds,
+           da.driver_name,
+           da.phone_number,
+           da.vehicle_tier_key,
+           da.vehicle_tier_name,
+           da.vehicle_make,
+           da.vehicle_model,
+           COALESCE(NULLIF(TRIM(dv.number_plate), ''), da.number_plate) AS number_plate,
+           da.car_photo_url,
+           NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
+           da.current_lat,
+           da.current_lng,
+           da.last_seen_at,
+           da.is_online,
+           rr.driver_user_id AS profile_image_user_id
+         FROM ride_request_driver_responses rr
+         LEFT JOIN driver_availability da ON da.driver_user_id = rr.driver_user_id
+         LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
+         WHERE rr.ride_request_id = ?
+           AND rr.status IN ('accepted', 'selected')
+         ORDER BY rr.responded_at ASC`,
+        [rideRequestId]
+      );
+      const driverStatsMap = await loadDriverRideStats([
+        ...respondingDrivers.map((row) => row.driver_user_id),
+        ride.driver_user_id,
+      ]);
+      acceptedDrivers = await Promise.all(
+        respondingDrivers.map(async (row) => ({
+          ...mapAcceptedDriverOffer(
+            attachDriverRideStats(row, driverStatsMap),
+            pickupCoordinate,
+            ride.final_estimated_amount || ride.estimated_amount
+          ),
+          // Don't block the live status poll on Clerk avatar lookups.
+          profileImageUrl: null,
+        }))
+      );
+      assignedDriver = ride.driver_user_id
+        ? acceptedDrivers.find((item) => item.id === ride.driver_user_id) || null
+        : null;
+    }
+
+    if (ride.driver_user_id) {
       const [liveLocation] = await query(
-        `SELECT current_lat, current_lng, last_seen_at, driver_name, phone_number
-         FROM driver_availability
-         WHERE driver_user_id = ?
+        `SELECT
+           da.current_lat,
+           da.current_lng,
+           da.last_seen_at,
+           da.driver_name,
+           da.phone_number,
+           da.vehicle_tier_key,
+           da.vehicle_tier_name,
+           da.vehicle_make,
+           da.vehicle_model,
+           COALESCE(NULLIF(TRIM(dv.number_plate), ''), da.number_plate) AS number_plate,
+           da.car_photo_url,
+           NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url
+         FROM driver_availability da
+         LEFT JOIN driver_vehicle dv ON dv.driver_user_id = da.driver_user_id
+         WHERE da.driver_user_id = ?
          LIMIT 1`,
         [ride.driver_user_id]
       );
       const liveCoordinate = toMapCoordinate(liveLocation?.current_lat, liveLocation?.current_lng);
-      if (liveCoordinate) {
-        assignedDriver = {
-          ...(assignedDriver || {
-            id: ride.driver_user_id,
-            driverName: liveLocation.driver_name || ride.driver_name || 'Driver',
-          }),
-          coordinate: liveCoordinate,
-          lastSeenAt: liveLocation.last_seen_at || assignedDriver?.lastSeenAt || null,
-          phoneNumber: assignedDriver?.phoneNumber || liveLocation.phone_number || null,
-        };
-      }
+      const driverStatsMap = await loadDriverRideStats([ride.driver_user_id]);
+      const mappedAssigned = liveLocation
+        ? mapDriverAvailability(attachDriverRideStats({
+          ...liveLocation,
+          driver_user_id: ride.driver_user_id,
+          estimated_amount: ride.estimated_amount,
+        }, driverStatsMap), pickupCoordinate)
+        : null;
+      assignedDriver = {
+        ...(assignedDriver || mappedAssigned || {
+          id: ride.driver_user_id,
+          driverName: ride.driver_name || liveLocation?.driver_name || 'Driver',
+        }),
+        ...(mappedAssigned || {}),
+        id: ride.driver_user_id,
+        driverName: assignedDriver?.driverName
+          || mappedAssigned?.driverName
+          || ride.driver_name
+          || liveLocation?.driver_name
+          || 'Driver',
+        phoneNumber: assignedDriver?.phoneNumber
+          || mappedAssigned?.phoneNumber
+          || liveLocation?.phone_number
+          || ride.driver_phone
+          || null,
+        coordinate: liveCoordinate || assignedDriver?.coordinate || mappedAssigned?.coordinate || null,
+        lastSeenAt: liveLocation?.last_seen_at || assignedDriver?.lastSeenAt || null,
+        rating: assignedDriver?.rating
+          ?? mappedAssigned?.rating
+          ?? null,
+        ratingCount: Number(assignedDriver?.ratingCount || 0) > 0
+          ? Number(assignedDriver.ratingCount)
+          : Number(mappedAssigned?.ratingCount || 0),
+        // Avatar is optional UX — never stall status updates waiting on Clerk.
+        profileImageUrl: assignedDriver?.profileImageUrl || mappedAssigned?.profileImageUrl || null,
+      };
     }
-    const assignedDriverProfileImageUrl = ride.driver_user_id
-      ? await getUserProfileImageUrl(ride.driver_user_id)
-      : null;
 
     const driverCoordinate = assignedDriver?.coordinate || null;
 
@@ -1549,6 +1584,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         passengerCount: Number(ride.passenger_count || 1),
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
+        completedAt: toIsoOrNull(ride.completed_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),
         ...buildPassengerSafetyPinPayload(ride),
         expiresAt: null,
@@ -1564,10 +1600,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         visibleDriversPreview: viewingSnapshot.visibleDriversPreview,
       },
       acceptedDrivers,
-      assignedDriver: assignedDriver ? {
-        ...assignedDriver,
-        profileImageUrl: assignedDriverProfileImageUrl,
-      } : null,
+      assignedDriver,
     });
   } catch (err) {
     console.error('GET /api/rides/passenger/:rideRequestId/status', err);

@@ -41,7 +41,7 @@ const LOCATION_UPDATE_INTERVAL_MS = 1000;
 const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
 const AUTO_ARRIVAL_STABLE_MS = 3500;
-const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.34);
+const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.30);
 const TRIP_STATUS_REFRESH_MS = 8000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
@@ -893,7 +893,12 @@ export default function DriverTripScreen({ navigation, route }) {
           stage: ride?.stage || null,
         });
         mapRef.current?.fitToCoordinates(coordinatesToFit, {
-          edgePadding: { top: 90, right: 28, bottom: 180, left: 28 },
+          edgePadding: {
+            top: Math.max(insets.top + 88, 110),
+            right: 36,
+            bottom: Math.max(TRIP_PANEL_MAX_HEIGHT + insets.bottom + 28, 220),
+            left: 36,
+          },
           animated: true,
         });
         hasAutoFocusedRef.current = true;
@@ -906,7 +911,7 @@ export default function DriverTripScreen({ navigation, route }) {
     }, 400);
 
     return () => clearTimeout(timeout);
-  }, [ride?.stage, routeCoordinates.length, targetCoordinate]);
+  }, [insets.bottom, insets.top, ride?.stage, routeCoordinates.length, targetCoordinate]);
 
   // Live distance from current position to the active target so it updates every location tick.
   const distanceKmText = useMemo(() => {
@@ -1432,7 +1437,9 @@ export default function DriverTripScreen({ navigation, route }) {
       stopTimeline={stopTimeline}
       remainingIntermediateStopsCount={remainingIntermediateStopsCount}
       guidanceText={guidanceText}
-      showGuidance={Boolean(ride.stage === 'on_trip' || nextInstruction)}
+      showGuidance={Boolean(
+        (ride.stage === 'on_trip' || ride.stage === 'to_pickup') && nextInstruction
+      )}
       showMarkArrived={ride.stage === 'to_pickup'}
       showStartRide={ride.stage === 'waiting_for_customer'}
       startRideLabel={startRideLabel}

@@ -387,7 +387,6 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
           <Text className="text-lg font-bold text-gray-900">{ride.pickupLabel}</Text>
           <Text className="mt-1 text-sm text-gray-500">to {ride.dropoffLabel}</Text>
           <Text className="mt-4 text-3xl font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
-          <Text className="mt-1 text-sm text-gray-500">{ride.tierName || 'Ride'}</Text>
           {tipAmount > 0 ? (
             <Text className="mt-2 text-sm font-medium text-green-600">
               Includes {formatCurrency(tipAmount)} tip
@@ -431,9 +430,6 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
                 {paymentStatus === 'paid' ? 'Paid online' : paymentStatus === 'refunded' ? 'Refunded' : paymentStatus === 'refund_pending' ? 'Refunding' : paymentMethod === 'cash' ? 'Cash' : 'Unpaid'}
               </Text>
             </View>
-            <Text className="mt-2 text-sm text-gray-500">
-              Choose cash or pay online. Online payments withhold the platform service fee and credit the remaining amount to the driver Trust Express wallet.
-            </Text>
             {(canPayCash || canPayWithSmilePay) ? (
               <View className="mt-4 flex-row gap-3">
                 {canPayCash ? (

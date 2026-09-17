@@ -754,7 +754,7 @@ function AppStack({ currentRouteName }) {
         }
 
         const requestsData = await getDriverRideRequests(token);
-        const activeRequests = filterActiveRideRequests(requestsData?.requests || []);
+        const activeRequests = filterActiveRideRequests(requestsData?.requests || [], { minSeconds: 8 });
         if (activeRequests[0]) {
           setOverlayRideRequest(activeRequests[0]);
         } else {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Dimensions, PanResponder, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Dimensions, PanResponder, Linking, AppState } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -78,6 +78,16 @@ function mapRideStatusToStage(status) {
 function isTerminalRideStatus(status) {
   const normalized = String(status || '').toLowerCase();
   return normalized === 'completed' || normalized === 'cancelled';
+}
+
+function rideProgressRank(stage, status) {
+  const normalizedStatus = String(status || '').toLowerCase();
+  const normalizedStage = String(stage || mapRideStatusToStage(normalizedStatus) || '').toLowerCase();
+  if (normalizedStatus === 'cancelled' || normalizedStage === 'cancelled') return 50;
+  if (normalizedStatus === 'completed' || normalizedStage === 'completed') return 40;
+  if (normalizedStatus === 'in_progress' || normalizedStage === 'on_trip') return 30;
+  if (normalizedStatus === 'driver_arrived' || normalizedStage === 'waiting_at_pickup') return 20;
+  return 10;
 }
 
 function findNearestRouteIndex(routeCoordinates, coordinate) {
@@ -175,6 +185,45 @@ function normalizeVehicleImageUrl(url) {
   }
 }
 
+function formatDriverRatingLabel(driver) {
+  if (!driver) return 'Loading rating…';
+  const hasRatingField = Object.prototype.hasOwnProperty.call(driver, 'rating')
+    || Object.prototype.hasOwnProperty.call(driver, 'ratingCount');
+  const ratingCount = Number(driver.ratingCount || 0);
+  const rating = Number(driver.rating);
+  if (ratingCount > 0 && Number.isFinite(rating) && rating > 0) {
+    return `${rating.toFixed(2)} rating`;
+  }
+  if (!hasRatingField) return 'Loading rating…';
+  return 'New driver';
+}
+
+function mergeAssignedDriver(current, next, mergedCoordinate = null) {
+  if (!next) return current || null;
+  if (!current) return next;
+  const nextRating = Number(next.rating);
+  const currentRating = Number(current.rating);
+  const preferNextRating = next.rating != null && Number.isFinite(nextRating) && nextRating > 0;
+  const preferCurrentRating = current.rating != null && Number.isFinite(currentRating) && currentRating > 0;
+  return {
+    ...current,
+    ...next,
+    coordinate: mergedCoordinate || next.coordinate || current.coordinate || null,
+    profileImageUrl: next.profileImageUrl || current.profileImageUrl || null,
+    carImage: next.carImage || current.carImage || null,
+    carName: next.carName || current.carName || null,
+    plate: next.plate || current.plate || null,
+    phoneNumber: next.phoneNumber || current.phoneNumber || null,
+    driverName: next.driverName || current.driverName || null,
+    rating: preferNextRating
+      ? next.rating
+      : (preferCurrentRating ? current.rating : (next.rating ?? current.rating ?? null)),
+    ratingCount: Number(next.ratingCount || 0) > 0
+      ? Number(next.ratingCount)
+      : (Number(current.ratingCount || 0) > 0 ? Number(current.ratingCount) : Number(next.ratingCount || 0)),
+  };
+}
+
 async function fetchTrackingDirections(token, origin, destination, waypoints = []) {
   const safeOrigin = normalizeCoordinate(origin);
   const safeDestination = normalizeCoordinate(destination);
@@ -217,7 +266,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     dropoffLabel: initialDropoffLabel,
     intermediateStops: initialIntermediateStops = [],
     estimatedAmount: initialEstimatedAmount,
-    selectedTier,
     driver: initialDriver,
     rideRequestId,
   } = route.params || {};
@@ -252,6 +300,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [tipDraft, setTipDraft] = useState('');
+  const [statusSyncWarning, setStatusSyncWarning] = useState('');
+  const statusPollFailuresRef = useRef(0);
   const driverCancelHandledRef = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
@@ -383,17 +433,30 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             next.driverCoordinate,
             data?.assignedDriver?.lastSeenAt || next.driverLocationUpdatedAt
           );
+          const nextStage = next.stage || mapRideStatusToStage(next.status) || current.stage;
+          const nextStatus = next.status || current.status;
           // A slow poll started before complete must not wipe the socket's terminal state.
-          if (isTerminalRideStatus(current.status) && !isTerminalRideStatus(next.status)) {
+          if (isTerminalRideStatus(current.status) && !isTerminalRideStatus(nextStatus)) {
             return {
               ...next,
               status: current.status,
-              stage: current.stage || mapRideStatusToStage(current.status) || next.stage,
+              stage: current.stage || mapRideStatusToStage(current.status) || nextStage,
+              driverCoordinate: mergedCoordinate,
+            };
+          }
+          // Never let a stale response roll the trip backwards (e.g. completed -> on the way).
+          if (rideProgressRank(current.stage, current.status) > rideProgressRank(nextStage, nextStatus)) {
+            return {
+              ...next,
+              status: current.status,
+              stage: current.stage,
               driverCoordinate: mergedCoordinate,
             };
           }
           return {
             ...next,
+            status: nextStatus,
+            stage: nextStage,
             driverCoordinate: mergedCoordinate,
           };
         });
@@ -406,10 +469,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             next.coordinate,
             next.lastSeenAt
           );
-          return {
-            ...next,
-            coordinate: mergedCoordinate,
-          };
+          return mergeAssignedDriver(current, next, mergedCoordinate);
         });
         const savedRating = Number(data?.rideRequest?.passengerDriverRating || 0);
         const savedReview = String(data?.rideRequest?.passengerDriverReview || '');
@@ -420,6 +480,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             ratingDraftTouchedRef.current = false;
           }
         }
+        statusPollFailuresRef.current = 0;
+        setStatusSyncWarning('');
       } catch (error) {
         if (!active || currentRequestId !== requestId) return;
         console.error('[smilepay] rideStatus.load.error', {
@@ -427,10 +489,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           message: error?.message || String(error),
           status: error?.status || null,
         });
-        // Trip UI is already seeded from navigation params / sockets — stay quiet on blips.
-        if (isTransientNetworkError(error)) {
-          setLoadError('');
-        } else {
+        statusPollFailuresRef.current += 1;
+        if (statusPollFailuresRef.current >= 2) {
+          setStatusSyncWarning('Having trouble updating this trip. Retrying…');
+        }
+        if (!isTransientNetworkError(error) && statusPollFailuresRef.current >= 3) {
           setLoadError(error?.message || 'Could not load ride status.');
         }
       } finally {
@@ -439,16 +502,22 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     };
 
     loadStatus();
-    const refreshMs = rideStatus?.stage === 'on_trip'
-      ? TRACKING_STATUS_REFRESH_ON_TRIP_MS
-      : TRACKING_STATUS_REFRESH_MS;
-    const interval = setInterval(loadStatus, refreshMs);
+    // Keep a steady poll while this screen is open so completion is not missed.
+    const interval = setInterval(loadStatus, TRACKING_STATUS_REFRESH_ON_TRIP_MS);
+
+    const onAppStateChange = (nextState) => {
+      if (nextState === 'active') {
+        loadStatus();
+      }
+    };
+    const appStateSub = AppState.addEventListener('change', onAppStateChange);
 
     return () => {
       active = false;
       clearInterval(interval);
+      appStateSub?.remove?.();
     };
-  }, [rideRequestId, realtimeSignal, rideStatus?.stage]);
+  }, [rideRequestId, realtimeSignal]);
 
   useEffect(() => {
     if (!rideRequestId) return undefined;
@@ -487,10 +556,26 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 id: rideRequestId,
                 stage: 'driver_on_the_way',
               };
+              const resolvedStage = nextStage
+                || mapRideStatusToStage(nextStatus)
+                || base.stage
+                || 'driver_on_the_way';
+              if (
+                hasStatusUpdate
+                && rideProgressRank(base.stage, base.status) > rideProgressRank(resolvedStage, nextStatus)
+                && !isTerminalRideStatus(nextStatus)
+              ) {
+                return {
+                  ...base,
+                  ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
+                };
+              }
               return {
                 ...base,
-                ...(hasStatusUpdate ? { status: nextStatus } : null),
-                stage: nextStage || base.stage || 'driver_on_the_way',
+                ...(hasStatusUpdate ? { status: nextStatus, stage: resolvedStage } : null),
+                stage: hasStatusUpdate
+                  ? resolvedStage
+                  : (nextStage || base.stage || 'driver_on_the_way'),
                 ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
                 ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
                 ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
@@ -631,8 +716,21 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     if (lastArrivalAnnouncementRef.current === String(rideRequestId || '')) return undefined;
 
     lastArrivalAnnouncementRef.current = String(rideRequestId || '');
+    const arrivalVibrationPattern = [0, 700, 220, 700, 220, 700, 350, 700];
+    let cancelVibrationTimer = null;
     try {
-      Vibration.vibrate([250, 120, 250]);
+      if (Platform.OS === 'android') {
+        Vibration.vibrate(arrivalVibrationPattern, 0);
+        cancelVibrationTimer = setTimeout(() => {
+          try {
+            Vibration.cancel();
+          } catch {
+            // Ignore vibration support issues.
+          }
+        }, 4500);
+      } else {
+        Vibration.vibrate(arrivalVibrationPattern);
+      }
     } catch {
       // Ignore vibration support issues.
     }
@@ -643,7 +741,14 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       language: 'en',
     });
 
-    return undefined;
+    return () => {
+      if (cancelVibrationTimer) clearTimeout(cancelVibrationTimer);
+      try {
+        Vibration.cancel();
+      } catch {
+        // Ignore vibration support issues.
+      }
+    };
   }, [rideRequestId, stage]);
 
   useEffect(() => {
@@ -1526,21 +1631,25 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         <Text className="text-xs font-semibold uppercase text-gray-400">
                           Trip status
                         </Text>
-                        {routeLoading ? <ActivityIndicator size="small" color={PRIMARY_BLUE} /> : null}
+                        {routeLoading || statusSyncWarning ? <ActivityIndicator size="small" color={PRIMARY_BLUE} /> : null}
                       </View>
                       <Text className="mt-2 text-base font-bold text-gray-900">
-                        {stage === 'waiting_at_pickup'
+                        {stage === 'completed'
+                          ? 'Trip completed'
+                          : stage === 'waiting_at_pickup'
                           ? 'Driver is at your pickup point.'
                           : 'Driver is heading to your pickup.'}
                       </Text>
-                      <Text className="mt-1 text-sm text-gray-500">
-                        {hasDriverCoordinate
-                          ? `${liveEtaText} · ${liveDistanceText} ${hasRoadDistance ? 'road distance' : 'estimated distance'}`
-                          : 'Live location will appear as soon as your driver is on the move.'}
-                      </Text>
-                      <Text className="mt-1 text-xs text-gray-400">
-                        Road distance refreshes about every 30 seconds or sooner if the car changes direction.
-                      </Text>
+                      {stage !== 'waiting_at_pickup' ? (
+                        <Text className="mt-1 text-sm text-gray-500">
+                          {hasDriverCoordinate
+                            ? `${liveEtaText} · ${liveDistanceText}`
+                            : 'Live location will appear as soon as your driver is on the move.'}
+                        </Text>
+                      ) : null}
+                      {statusSyncWarning ? (
+                        <Text className="mt-2 text-sm text-amber-600">{statusSyncWarning}</Text>
+                      ) : null}
                       {routeError ? (
                         <Text className="mt-2 text-sm text-amber-600">{routeError}</Text>
                       ) : null}
@@ -1554,9 +1663,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         <View className="mt-1 flex-row items-center">
                           <Ionicons name="star" size={16} color="#f59e0b" />
                           <Text className="ml-2 text-sm text-gray-500">
-                            {Number.isFinite(Number(driver?.rating))
-                              ? `${Number(driver.rating).toFixed(2)} rating`
-                              : 'New driver'}
+                            {formatDriverRatingLabel(driver)}
                           </Text>
                         </View>
                         <Text className="mt-2 text-sm text-gray-500">
@@ -1567,11 +1674,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         </Text>
                       </View>
                       <View className="relative">
-                        <Image
-                          source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=800&q=80' }}
-                          style={{ width: 148, height: 108, borderRadius: 20 }}
-                          resizeMode="cover"
-                        />
+                        <View
+                          className="items-center justify-center overflow-hidden rounded-[20px] bg-[#f1f5f9]"
+                          style={{ width: 156, height: 112 }}
+                        >
+                          <Image
+                            source={{ uri: normalizeVehicleImageUrl(driver?.carImage) || 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=800&q=80' }}
+                            style={{ width: 148, height: 104 }}
+                            resizeMode="contain"
+                          />
+                        </View>
                         <View
                           className="absolute items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#e0e7ff]"
                           style={{ width: 52, height: 52, borderRadius: 26, right: -6, bottom: -10 }}
@@ -1631,18 +1743,17 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       )}
                     </View>
 
-                    {stage === 'on_trip' ? (
+                    {stage === 'on_trip' && (intermediateStops.length > 0 || tipAmount > 0) ? (
                       <View className="mt-5 border-t border-gray-100 pt-4">
-                        <Text className="text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
                         {intermediateStops.length ? (
-                          <Text className="mt-2 text-sm text-gray-500">
+                          <Text className="text-sm text-gray-500">
                             {remainingIntermediateStopsCount > 0
                               ? `${remainingIntermediateStopsCount} stop${remainingIntermediateStopsCount === 1 ? '' : 's'} left before final drop-off`
                               : 'Final destination leg'}
                           </Text>
                         ) : null}
                         {tipAmount > 0 ? (
-                          <Text className="mt-2 text-sm font-medium text-green-600">
+                          <Text className={`${intermediateStops.length ? 'mt-2 ' : ''}text-sm font-medium text-green-600`}>
                             Includes ${tipAmount.toFixed(2)} tip
                           </Text>
                         ) : null}
@@ -1653,7 +1764,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       <View className="mt-5 border-t border-gray-100 pt-4">
                         <Text className="text-sm font-medium text-gray-500">Fare</Text>
                         <Text className="mt-1 text-3xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
-                        <Text className="mt-1 text-sm text-gray-500">{selectedTier?.tierName || driver?.tier?.tierName || 'Ride'}</Text>
                         {tipAmount > 0 ? (
                           <Text className="mt-2 text-sm font-medium text-green-600">
                             Includes ${tipAmount.toFixed(2)} tip

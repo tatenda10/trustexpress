@@ -1038,6 +1038,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
 
     const nearestRequests = baseRequests
       .filter((request) => Number(request.driverDistanceKm || 0) <= DRIVER_REQUEST_RADIUS_KM)
+      .filter((request) => Number(request.remainingSeconds || 0) > 0)
       .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
       .slice(0, 8);
 

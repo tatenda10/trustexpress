@@ -798,33 +798,33 @@ const DriverHomeScreen = ({ navigation, route }) => {
         const data = await getDriverRideRequests(token);
         if (!active) return;
 
+        const serverCapturedAt = Date.now();
         const nextListRaw = filterActiveRideRequests(
           Array.isArray(data?.requests)
-            ? data.requests.filter((request) => {
-                const hiddenUntil = Number(hiddenRequestUntilRef.current.get(request.id) || 0);
-                return !dismissedRequestIds.includes(request.id) && hiddenUntil <= Date.now();
-              })
-            : []
+            ? data.requests
+                .filter((request) => {
+                  const hiddenUntil = Number(hiddenRequestUntilRef.current.get(request.id) || 0);
+                  return !dismissedRequestIds.includes(request.id) && hiddenUntil <= Date.now();
+                })
+                .map((request) => ({
+                  ...request,
+                  remainingSecondsCapturedAt: serverCapturedAt,
+                }))
+            : [],
+          { minSeconds: MIN_ACCEPTABLE_REQUEST_SECONDS },
         );
-        const serverCapturedAt = Date.now();
-        const nextList = nextListRaw
-          .map((request) => ({
-            ...request,
-            remainingSecondsCapturedAt: serverCapturedAt,
-          }))
-          .filter((request) => {
-            if (!request?.expiresAt) return true;
-            const remaining = getRemainingSeconds(
-              request?.expiresAt,
-              request?.remainingSeconds,
-              request?.remainingSecondsCapturedAt,
-            );
-            if (remaining < 1) {
-              hiddenRequestUntilRef.current.set(request.id, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
-              return false;
-            }
-            return remaining >= MIN_ACCEPTABLE_REQUEST_SECONDS;
-          });
+        const nextList = nextListRaw.filter((request) => {
+          const remaining = getRemainingSeconds(
+            request?.expiresAt,
+            request?.remainingSeconds,
+            request?.remainingSecondsCapturedAt,
+          );
+          if (remaining < 1) {
+            hiddenRequestUntilRef.current.set(request.id, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
+            return false;
+          }
+          return remaining >= MIN_ACCEPTABLE_REQUEST_SECONDS;
+        });
         const nextRequest = nextList[0] || null;
 
         const prevCount = prevRequestCountRef.current;
@@ -952,12 +952,45 @@ const DriverHomeScreen = ({ navigation, route }) => {
   }, [dismissedRequestIds, isOnline, realtimeSignal]);
 
   useEffect(() => {
+    const liveRequests = availableRequests.filter((request) => (
+      getRemainingSeconds(
+        request?.expiresAt,
+        request?.remainingSeconds,
+        request?.remainingSecondsCapturedAt,
+      ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
+    ));
+    if (liveRequests.length === availableRequests.length) return;
+
+    setAvailableRequests(liveRequests);
+    if (liveRequests.length === 0) {
+      clearOverlayRideRequest();
+      updateTripOverlay({
+        variant: 'online',
+        title: 'Trust Express',
+        subtitle: 'Online - Ready for rides',
+      }).catch(() => {});
+      setShowIncomingRideOverlay(false);
+      setShowNewRequestBadge(false);
+      setActiveRequest(null);
+      return;
+    }
+    setOverlayRideRequest(liveRequests[0]);
+  }, [availableRequests, nowTick]);
+
+  useEffect(() => {
+    const hasLiveIncomingRequest = availableRequests.some((request) => (
+      getRemainingSeconds(
+        request?.expiresAt,
+        request?.remainingSeconds,
+        request?.remainingSecondsCapturedAt,
+      ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
+    ));
     const shouldAlertForIncomingRide =
       isFocused &&
       isOnline &&
       !currentRide &&
       !pendingSelectionRide &&
-      availableRequests.length > 0;
+      hasLiveIncomingRequest;
 
     const playIncomingAlert = async () => {
       if (incomingAlertInFlightRef.current) return;
@@ -984,6 +1017,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
         const sound = incomingRideSoundRef.current;
         if (sound) {
+          await sound.setIsLoopingAsync(false);
           await sound.setVolumeAsync(1.0);
           await sound.replayAsync();
         }
@@ -995,7 +1029,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       }
     };
 
-    const stopIncomingAlert = async () => {
+    const stopIncomingAlert = async ({ clearNativeOverlay = false } = {}) => {
       if (incomingAlertTimerRef.current) {
         clearInterval(incomingAlertTimerRef.current);
         incomingAlertTimerRef.current = null;
@@ -1010,7 +1044,19 @@ const DriverHomeScreen = ({ navigation, route }) => {
       } finally {
         incomingRideSoundRef.current = null;
       }
-      Vibration.cancel();
+      try {
+        Vibration.cancel();
+      } catch {
+        // ignore
+      }
+      if (clearNativeOverlay) {
+        clearOverlayRideRequest();
+        updateTripOverlay({
+          variant: 'online',
+          title: 'Trust Express',
+          subtitle: 'Online - Ready for rides',
+        }).catch(() => {});
+      }
     };
 
     if (shouldAlertForIncomingRide) {
@@ -1019,13 +1065,15 @@ const DriverHomeScreen = ({ navigation, route }) => {
         incomingAlertTimerRef.current = setInterval(playIncomingAlert, INCOMING_RIDE_ALERT_INTERVAL_MS);
       }
     } else {
-      stopIncomingAlert();
+      stopIncomingAlert({
+        clearNativeOverlay: !currentRide && !pendingSelectionRide && !hasLiveIncomingRequest,
+      });
     }
 
     return () => {
       stopIncomingAlert();
     };
-  }, [availableRequests.length, currentRide, isFocused, isOnline, pendingSelectionRide]);
+  }, [availableRequests, currentRide, isFocused, isOnline, nowTick, pendingSelectionRide]);
 
   useEffect(() => {
     if (!isOnline || activeRequest || currentRide || pendingSelectionRide) {
