@@ -1,5 +1,9 @@
-import { isCoordinateInBulawayoServiceArea } from './service-area.js';
-import { BULAWAYO_CENTER_COORDINATE } from './service-area.js';
+import {
+  BULAWAYO_CENTER_COORDINATE,
+  filterSuggestionsInServiceArea,
+  getServiceAreaLabel,
+  isCoordinateInServiceAreaFromDb,
+} from './service-area.js';
 
 const DEFAULT_GOOGLE_BASE_URL = 'https://maps.googleapis.com/maps/api/place';
 const SERVICE_AREA_BIAS_RADIUS_METERS = 20000;
@@ -125,10 +129,10 @@ export async function fetchGooglePlaceAutocomplete({ query, originCoordinate }) 
   });
 
   const payload = await fetchJson(`${getGoogleBaseUrl()}/textsearch/json?${params.toString()}`);
-  const suggestions = (Array.isArray(payload?.results) ? payload.results : [])
+  const rawSuggestions = (Array.isArray(payload?.results) ? payload.results : [])
     .map((item, index) => mapTextSearchResult(item, index, normalizedQuery, normalizedOrigin))
-    .filter((suggestion) => suggestion.coordinate && isCoordinateInBulawayoServiceArea(suggestion.coordinate))
     .slice(0, 6);
+  const suggestions = await filterSuggestionsInServiceArea(rawSuggestions);
 
   return { suggestions, cacheHit: false };
 }
@@ -160,8 +164,9 @@ export async function fetchGooglePlaceDetails({ placeId }) {
     error.status = 502;
     throw error;
   }
-  if (!isCoordinateInBulawayoServiceArea(coordinate)) {
-    const error = new Error('That place is outside the Bulawayo service area');
+  if (!await isCoordinateInServiceAreaFromDb(coordinate)) {
+    const serviceAreaLabel = await getServiceAreaLabel();
+    const error = new Error(`That place is outside the ${serviceAreaLabel} service area`);
     error.status = 422;
     throw error;
   }

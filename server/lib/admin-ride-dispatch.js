@@ -8,7 +8,7 @@ import { normalizePaymentMethod } from './payment-method.js';
 import { normalizeZimbabwePhoneNumber } from './phone-number.js';
 import { getTierMaxPassengerCount, parseRequiredPassengerCount } from './ride-passenger-count.js';
 import { sanitizeIntermediateStops, stringifyIntermediateStops } from './ride-stops.js';
-import { isCoordinateInBulawayoServiceArea, BULAWAYO_CENTER_COORDINATE } from './service-area.js';
+import { getServiceAreaLabel, isCoordinateInServiceAreaFromDb, BULAWAYO_CENTER_COORDINATE } from './service-area.js';
 import { emitRideRequestToDriver } from './realtime.js';
 import {
   calculateTierFare,
@@ -169,13 +169,17 @@ async function buildDispatchQuote({
     error.status = 400;
     throw error;
   }
-  if (!isCoordinateInBulawayoServiceArea(pickupPoint) || !isCoordinateInBulawayoServiceArea(dropoffPoint)) {
-    const error = new Error('Trust Express currently supports rides within Bulawayo only.');
+  const serviceAreaLabel = await getServiceAreaLabel();
+  if (!await isCoordinateInServiceAreaFromDb(pickupPoint) || !await isCoordinateInServiceAreaFromDb(dropoffPoint)) {
+    const error = new Error(`Trust Express currently supports rides within ${serviceAreaLabel}.`);
     error.status = 422;
     throw error;
   }
-  if (normalizedIntermediateStops.some((stop) => !isCoordinateInBulawayoServiceArea(stop.coordinate))) {
-    const error = new Error('All stops must be inside Bulawayo.');
+  const stopsInServiceArea = await Promise.all(
+    normalizedIntermediateStops.map((stop) => isCoordinateInServiceAreaFromDb(stop.coordinate))
+  );
+  if (stopsInServiceArea.some((ok) => !ok)) {
+    const error = new Error(`All stops must be inside ${serviceAreaLabel}.`);
     error.status = 422;
     throw error;
   }

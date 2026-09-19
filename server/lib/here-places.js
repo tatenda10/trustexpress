@@ -1,4 +1,4 @@
-import { isCoordinateInBulawayoServiceArea } from './service-area.js'
+import { filterSuggestionsInServiceArea } from './service-area.js'
 
 const DEFAULT_HERE_GEOCODER_BASE_URL = 'https://geocode.search.hereapi.com'
 
@@ -119,10 +119,10 @@ export async function fetchHerePlaceAutocomplete({
   }
 
   const payload = await fetchJson(`${getHereBaseUrl()}/v1/geocode?${params.toString()}`)
-  const suggestions = (Array.isArray(payload?.items) ? payload.items : [])
+  const rawSuggestions = (Array.isArray(payload?.items) ? payload.items : [])
     .map((item, index) => mapHereItem(item, index, normalizedQuery, normalizedOrigin))
-    .filter((suggestion) => suggestion.coordinate && isCoordinateInBulawayoServiceArea(suggestion.coordinate))
     .slice(0, 6)
+  const suggestions = await filterSuggestionsInServiceArea(rawSuggestions)
 
   return { suggestions, cacheHit: false }
 }

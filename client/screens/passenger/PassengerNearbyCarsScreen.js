@@ -38,7 +38,7 @@ import {
   sampleCoordinatesForFit,
 } from '../../lib/passengerRideMap';
 
-const REQUEST_EXPIRY_POLL_MS = 2500;
+const REQUEST_EXPIRY_POLL_MS = 5000;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const EMPTY_ROUTE_COORDINATES = [];
 

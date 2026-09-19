@@ -33,6 +33,7 @@ const navSections = [
     label: 'Business',
     items: [
       { id: 'pricing', label: 'Pricing', icon: ServerIcon, to: '/dashboard/pricing-zones', permission: 'pricing.read' },
+      { id: 'service-areas', label: 'Service Areas', icon: NetworkIcon, to: '/dashboard/service-areas', permission: 'pricing.read' },
       { id: 'vehicle-catalog', label: 'Vehicle Catalog', icon: CatalogIcon, to: '/dashboard/vehicle-catalog', permission: 'pricing.read' },
       { id: 'vehicle-tiers', label: 'Vehicle Tiers', icon: ComponentsIcon, to: '/dashboard/vehicle-tiers', permission: 'pricing.read' },
       { id: 'agent-rewards', label: 'Agent Rewards', icon: ComponentsIcon, to: '/dashboard/agent-rewards', permission: 'payouts.read' },

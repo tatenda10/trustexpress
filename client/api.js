@@ -1,6 +1,9 @@
 /**
  * Backend connection - BASE_URL and helpers for API routes.
  */
+import { getRegistrationCityPayload } from './lib/registrationCity';
+import { configureServiceAreas } from './constants/serviceArea';
+
 export const BASE_URL = 'https://ridehailcarsserver.online';
 //export const BASE_URL = 'http://192.168.100.171:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
@@ -94,7 +97,29 @@ export async function apiFetch(path, options = {}, token) {
 }
 
 export async function registerUser(token, payload) {
-  return apiFetch('/api/users/register', { method: 'POST', body: JSON.stringify(payload) }, token);
+  await loadServiceAreas().catch(() => null);
+  const registrationCityPayload = await getRegistrationCityPayload();
+  return apiFetch(
+    '/api/users/register',
+    { method: 'POST', body: JSON.stringify({ ...(payload || {}), ...registrationCityPayload }) },
+    token,
+  );
+}
+
+let serviceAreasLoadPromise = null;
+export async function loadServiceAreas() {
+  if (!serviceAreasLoadPromise) {
+    serviceAreasLoadPromise = apiFetch('/api/service-areas')
+      .then((data) => {
+        configureServiceAreas(data?.areas || []);
+        return data;
+      })
+      .catch((error) => {
+        serviceAreasLoadPromise = null;
+        throw error;
+      });
+  }
+  return serviceAreasLoadPromise;
 }
 
 export async function lookupAccountRole(identifier) {

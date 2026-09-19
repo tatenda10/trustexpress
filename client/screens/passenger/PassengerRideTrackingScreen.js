@@ -35,7 +35,7 @@ import { isTransientNetworkError, withNetworkRetry } from '../../lib/networkRetr
 WebBrowser.maybeCompleteAuthSession();
 
 const TRACKING_STATUS_REFRESH_MS = 3000;
-const TRACKING_STATUS_REFRESH_ON_TRIP_MS = 1500;
+const TRACKING_STATUS_REFRESH_ON_TRIP_MS = 4000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const ROUTE_REFRESH_DISTANCE_METERS = 10;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
@@ -690,31 +690,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const activeTarget = stage === 'on_trip' ? currentTargetCoordinate : pickupCoordinate;
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
 
-  useEffect(() => {
-    if (stage !== 'waiting_at_pickup') return undefined;
-    setNowTick(Date.now());
-    const interval = setInterval(() => {
-      setNowTick(Date.now());
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [stage]);
-
-  useEffect(() => {
-    const shouldOpen = shouldPromptForPostTrip;
-    if (lastRatingModalStateRef.current !== shouldOpen) {
-      lastRatingModalStateRef.current = shouldOpen;
-      setShowDriverRatingModal(shouldOpen);
-    }
-    if (!shouldOpen) {
-      ratingDraftTouchedRef.current = false;
-    }
-  }, [shouldPromptForPostTrip]);
-
-  useEffect(() => {
-    if (stage !== 'waiting_at_pickup') return undefined;
-    if (lastArrivalAnnouncementRef.current === String(rideRequestId || '')) return undefined;
-
+  const triggerPassengerArrivalAlert = useCallback(() => {
+    if (lastArrivalAnnouncementRef.current === String(rideRequestId || '')) return;
     lastArrivalAnnouncementRef.current = String(rideRequestId || '');
     const arrivalVibrationPattern = [0, 700, 220, 700, 220, 700, 350, 700];
     let cancelVibrationTimer = null;
@@ -740,7 +717,6 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       pitch: 1.0,
       language: 'en',
     });
-
     return () => {
       if (cancelVibrationTimer) clearTimeout(cancelVibrationTimer);
       try {
@@ -749,7 +725,33 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         // Ignore vibration support issues.
       }
     };
-  }, [rideRequestId, stage]);
+  }, [rideRequestId]);
+
+  useEffect(() => {
+    if (stage !== 'waiting_at_pickup') return undefined;
+    setNowTick(Date.now());
+    const interval = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [stage]);
+
+  useEffect(() => {
+    const shouldOpen = shouldPromptForPostTrip;
+    if (lastRatingModalStateRef.current !== shouldOpen) {
+      lastRatingModalStateRef.current = shouldOpen;
+      setShowDriverRatingModal(shouldOpen);
+    }
+    if (!shouldOpen) {
+      ratingDraftTouchedRef.current = false;
+    }
+  }, [shouldPromptForPostTrip]);
+
+  useEffect(() => {
+    if (stage !== 'waiting_at_pickup') return undefined;
+    return triggerPassengerArrivalAlert();
+  }, [stage, triggerPassengerArrivalAlert]);
 
   useEffect(() => {
     if (!hasDriverCoordinate || !activeTarget || isCompleted) {

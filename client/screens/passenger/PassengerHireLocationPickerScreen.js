@@ -19,6 +19,7 @@ import {
   BULAWAYO_DEFAULT_REGION,
   BULAWAYO_GEO_LOCK_ENABLED,
   BULAWAYO_SERVICE_BOUNDS_ARRAY,
+  SERVICE_AREA_LABEL,
   filterBulawayoSuggestions,
   isCoordinateInBulawayoServiceArea,
 } from '../../constants/serviceArea';
@@ -138,7 +139,7 @@ export default function PassengerHireLocationPickerScreen({ navigation, route })
         return;
       }
       if (!isCoordinateInBulawayoServiceArea(nextCoordinate)) {
-        Alert.alert('Outside Bulawayo', 'Please choose a location inside the Bulawayo service area.');
+        Alert.alert('Outside service area', `Please choose a location inside ${SERVICE_AREA_LABEL}.`);
         return;
       }
 
@@ -161,7 +162,7 @@ export default function PassengerHireLocationPickerScreen({ navigation, route })
     const next = event?.nativeEvent?.coordinate;
     if (!next) return;
     if (!isCoordinateInBulawayoServiceArea(next)) {
-      Alert.alert('Outside Bulawayo', 'Please choose a location inside the Bulawayo service area.');
+      Alert.alert('Outside service area', `Please choose a location inside ${SERVICE_AREA_LABEL}.`);
       return;
     }
     const point = {

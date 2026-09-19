@@ -16,7 +16,7 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions, validatePassengerDiscount } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PAYMENT_METHOD_CASH, PAYMENT_METHOD_ONLINE } from '../../constants/payment';
-import { isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
+import { SERVICE_AREA_LABEL, isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 import { connectRealtime } from '../../realtime';
 import RideTierCarIcon from '../../components/RideTierCarIcon';
 
@@ -409,7 +409,7 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
       return;
     }
     if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
-      Alert.alert('Outside Bulawayo', 'Trust Express currently supports rides within Bulawayo only.');
+      Alert.alert('Outside service area', `Trust Express currently supports rides within ${SERVICE_AREA_LABEL}.`);
       return;
     }
     if (!(Number(distanceKm) > 0)) {

@@ -122,7 +122,7 @@ function AuthStack() {
   );
 }
 
-import { attachAgentReferral, getMe, getDriverMe, registerUser, saveDriverPushToken, saveDriverFcmToken, saveUserPushToken } from './api';
+import { attachAgentReferral, getMe, getDriverMe, loadServiceAreas, registerUser, saveDriverPushToken, saveDriverFcmToken, saveUserPushToken } from './api';
 import {
   DRIVER_SKIP_ENHANCED_SELFIE_KEY,
   DRIVER_SKIP_ONBOARDING_KEY,
@@ -202,6 +202,10 @@ function AppStack({ currentRouteName }) {
   const [passengerLocationGranted, setPassengerLocationGranted] = useState(null);
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
   const [roleBootstrapped, setRoleBootstrapped] = useState(() => hasSessionRoleBootstrap);
+
+  useEffect(() => {
+    loadServiceAreas().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (hasSessionRoleBootstrap && user?.id) {

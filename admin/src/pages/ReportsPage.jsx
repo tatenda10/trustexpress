@@ -222,7 +222,7 @@ function getSectionCopy(activeTab) {
     passengers: 'Watch passenger identity progress and rider-side health.',
     support: 'Measure support workload and issue resolution patterns.',
     verification: 'See driver and passenger verification progress in one place.',
-    geography: 'Understand where demand is clustering across the platform.',
+    geography: 'See where new passenger and driver accounts are registering from.',
     safety: 'Spot cancellations, expiries, and operational risk signals.',
   }
   return copy[activeTab] || 'Platform reporting.'
@@ -377,13 +377,23 @@ export default function ReportsPage() {
 
             <div className="border border-slate-200 bg-slate-50">
               <div className="border-b border-slate-200 bg-white px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Trend Analysis</p>
-                <p className="mt-1 text-xs text-slate-500">Operational trend for the currently selected report section.</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  {activeTab === 'geography' ? 'Signup Cities' : 'Trend Analysis'}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {activeTab === 'geography'
+                    ? 'New accounts grouped by detected signup city.'
+                    : 'Operational trend for the currently selected report section.'}
+                </p>
               </div>
-              <ReportLineChart
-                items={activeSection.chart || []}
-                color={activeTab === 'support' ? '#f59e0b' : activeTab === 'safety' ? '#ef4444' : '#4f46e5'}
-              />
+              {activeTab === 'geography' ? (
+                <ReportBarChart items={activeSection.chart || []} color="#10b981" />
+              ) : (
+                <ReportLineChart
+                  items={activeSection.chart || []}
+                  color={activeTab === 'support' ? '#f59e0b' : activeTab === 'safety' ? '#ef4444' : '#4f46e5'}
+                />
+              )}
             </div>
 
             {activeTab === 'rides' ? (
@@ -422,6 +432,16 @@ export default function ReportsPage() {
                   <ReportBarChart items={activeSection.tierMix || []} color="#8b5cf6" />
                 </div>
               </>
+            ) : null}
+
+            {activeTab === 'geography' ? (
+              <div className="border border-slate-200 bg-slate-50">
+                <div className="border-b border-slate-200 bg-white px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Ride Hotspots</p>
+                  <p className="mt-1 text-xs text-slate-500">Top pickup locations across ride requests.</p>
+                </div>
+                <ReportBarChart items={activeSection.rideHotspots || []} color="#0ea5e9" />
+              </div>
             ) : null}
           </div>
         )}

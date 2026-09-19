@@ -70,17 +70,24 @@ router.get('/summary', requireAdminAuth, requirePermission('reports.read'), asyn
     const dateTo = normalizeDateInput(req.query.dateTo, true);
     const rideWhere = [];
     const rideParams = [];
+    const userWhere = [];
+    const userParams = [];
 
     if (dateFrom) {
       rideWhere.push('requested_at >= ?');
       rideParams.push(dateFrom);
+      userWhere.push('created_at >= ?');
+      userParams.push(dateFrom);
     }
     if (dateTo) {
       rideWhere.push('requested_at <= ?');
       rideParams.push(dateTo);
+      userWhere.push('created_at <= ?');
+      userParams.push(dateTo);
     }
 
     const rideWhereSql = rideWhere.length ? `WHERE ${rideWhere.join(' AND ')}` : '';
+    const userWhereSql = userWhere.length ? `WHERE ${userWhere.join(' AND ')}` : '';
 
     const [
       [rideSummary],
@@ -95,6 +102,8 @@ router.get('/summary', requireAdminAuth, requirePermission('reports.read'), asyn
       [supportSummaryRow],
       supportSeriesRows,
       hotspotRows,
+      signupCityRows,
+      signupCityRoleRows,
       [safetyRow],
     ] = await Promise.all([
       query(
@@ -204,6 +213,26 @@ router.get('/summary', requireAdminAuth, requirePermission('reports.read'), asyn
          LIMIT 5`
       ),
       query(
+        `SELECT COALESCE(NULLIF(registration_city, ''), 'Unknown') AS city, COUNT(*) AS total
+         FROM users
+         ${userWhereSql}
+         GROUP BY COALESCE(NULLIF(registration_city, ''), 'Unknown')
+         ORDER BY total DESC
+         LIMIT 8`,
+        userParams
+      ),
+      query(
+        `SELECT
+           COALESCE(NULLIF(registration_city, ''), 'Unknown') AS city,
+           role,
+           COUNT(*) AS total
+         FROM users
+         ${userWhereSql}
+         GROUP BY COALESCE(NULLIF(registration_city, ''), 'Unknown'), role
+         ORDER BY city ASC, role ASC`,
+        userParams
+      ),
+      query(
         `SELECT
            SUM(CASE WHEN status IN ('cancelled', 'driver_cancelled', 'passenger_cancelled') THEN 1 ELSE 0 END) AS cancelled_rides,
            SUM(CASE WHEN cancellation_reason IS NOT NULL AND cancellation_reason <> '' THEN 1 ELSE 0 END) AS documented_cancellations,
@@ -295,11 +324,20 @@ router.get('/summary', requireAdminAuth, requirePermission('reports.read'), asyn
           ],
         },
         geography: {
-          metrics: hotspotRows.map((row) => ({
-            label: row.area || 'Unknown',
+          metrics: signupCityRows.map((row) => ({
+            label: `${row.city || 'Unknown'} signups`,
             value: Number(row.total || 0),
           })),
-          chart: hotspotRows.map((row) => ({
+          chart: signupCityRows.map((row) => ({
+            label: row.city || 'Unknown',
+            value: Number(row.total || 0),
+          })),
+          signupCityBreakdown: signupCityRoleRows.map((row) => ({
+            city: row.city || 'Unknown',
+            role: row.role || 'unknown',
+            value: Number(row.total || 0),
+          })),
+          rideHotspots: hotspotRows.map((row) => ({
             label: row.area || 'Unknown',
             value: Number(row.total || 0),
           })),
@@ -339,6 +377,15 @@ router.get('/export.csv', requireAdminAuth, requirePermission('reports.read'), a
       admin: 0,
       unknown: 0,
     };
+    const signupCityRows = await query(
+      `SELECT
+         COALESCE(NULLIF(registration_city, ''), 'Unknown') AS city,
+         role,
+         COUNT(*) AS total
+       FROM users
+       GROUP BY COALESCE(NULLIF(registration_city, ''), 'Unknown'), role
+       ORDER BY city ASC, role ASC`
+    );
 
     const monthly = new Map();
     for (const user of users) {
@@ -368,6 +415,12 @@ router.get('/export.csv', requireAdminAuth, requirePermission('reports.read'), a
       .forEach(([month, count]) => {
         lines.push(['monthly_signups', month, count].map(csvEscape).join(','));
       });
+
+    lines.push('');
+    lines.push('section,city,role,new_users');
+    signupCityRows.forEach((row) => {
+      lines.push(['signup_city', row.city || 'Unknown', row.role || 'unknown', Number(row.total || 0)].map(csvEscape).join(','));
+    });
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="reports_export_${Date.now()}.csv"`);

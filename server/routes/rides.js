@@ -5,7 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
 import { normalizePaymentMethod, receiptPaymentMethodLabel } from '../lib/payment-method.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
-import { isCoordinateInBulawayoServiceArea } from '../lib/service-area.js';
+import { getServiceAreaLabel, isCoordinateInServiceAreaFromDb } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { findBestAutoDiscountForRide, syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
@@ -939,14 +939,18 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
 
     const pickupPoint = { latitude: pickupLat, longitude: pickupLng };
     const dropoffPoint = { latitude: dropoffLat, longitude: dropoffLng };
-    if (!isCoordinateInBulawayoServiceArea(pickupPoint) || !isCoordinateInBulawayoServiceArea(dropoffPoint)) {
+    const serviceAreaLabel = await getServiceAreaLabel();
+    if (!await isCoordinateInServiceAreaFromDb(pickupPoint) || !await isCoordinateInServiceAreaFromDb(dropoffPoint)) {
       return res.status(422).json({
-        error: 'Trust Express currently supports rides within Bulawayo only. Please choose pickup and drop-off points in Bulawayo.',
+        error: `Trust Express currently supports rides within ${serviceAreaLabel}. Please choose pickup and drop-off points in a supported city.`,
       });
     }
-    if (normalizedIntermediateStops.some((stop) => !isCoordinateInBulawayoServiceArea(stop.coordinate))) {
+    const stopsInServiceArea = await Promise.all(
+      normalizedIntermediateStops.map((stop) => isCoordinateInServiceAreaFromDb(stop.coordinate))
+    );
+    if (stopsInServiceArea.some((ok) => !ok)) {
       return res.status(422).json({
-        error: 'All stops must be inside Bulawayo.',
+        error: `All stops must be inside ${serviceAreaLabel}.`,
       });
     }
 

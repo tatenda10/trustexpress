@@ -6,10 +6,18 @@ CREATE TABLE IF NOT EXISTS users (
   role ENUM('passenger', 'driver') NOT NULL DEFAULT 'passenger',
   phone_number VARCHAR(20) DEFAULT NULL,
   phone_verified_at TIMESTAMP NULL DEFAULT NULL,
+  registration_city VARCHAR(80) DEFAULT NULL,
+  registration_country_code CHAR(2) DEFAULT NULL,
+  registration_lat DECIMAL(10,7) DEFAULT NULL,
+  registration_lng DECIMAL(10,7) DEFAULT NULL,
+  registration_source VARCHAR(40) DEFAULT NULL,
+  registration_detected_at TIMESTAMP NULL DEFAULT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_clerk_user_id (clerk_user_id),
-  INDEX idx_role (role)
+  INDEX idx_role (role),
+  INDEX idx_users_registration_city (registration_city),
+  INDEX idx_users_registration_created (registration_city, created_at)
 );
 
 -- Phase 1: Driver identity documents (national ID front/back, licence, selfie) -> admin approval
@@ -78,4 +86,25 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE CASCADE,
   INDEX idx_admin_session_lookup (admin_user_id, expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS service_areas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  area_key VARCHAR(80) NOT NULL UNIQUE,
+  label VARCHAR(120) NOT NULL,
+  country_code CHAR(2) NOT NULL DEFAULT 'ZW',
+  center_lat DECIMAL(10,7) NOT NULL,
+  center_lng DECIMAL(10,7) NOT NULL,
+  west_lng DECIMAL(10,7) NOT NULL,
+  south_lat DECIMAL(10,7) NOT NULL,
+  east_lng DECIMAL(10,7) NOT NULL,
+  north_lat DECIMAL(10,7) NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_by_admin_id INT NULL DEFAULT NULL,
+  updated_by_admin_id INT NULL DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_service_areas_active (is_active, sort_order),
+  INDEX idx_service_areas_label (label)
 );

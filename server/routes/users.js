@@ -20,8 +20,55 @@ import {
 import { generateSupportAgentReply, getSupportAgentSettings } from '../lib/support-agent.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
 import { normalizeLookupIdentifier } from '../lib/phone-number.js';
+import { getServiceAreaForCoordinateFromDb } from '../lib/service-area.js';
+import { query } from '../db/connection.js';
 
 const router = Router();
+
+async function normalizeRegistrationCity(input = {}) {
+  const latitude = Number(input.registrationLatitude ?? input.latitude);
+  const longitude = Number(input.registrationLongitude ?? input.longitude);
+  const coordinate = Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? { latitude, longitude }
+    : null;
+  const serviceArea = coordinate ? await getServiceAreaForCoordinateFromDb(coordinate) : null;
+  const rawCity = String(input.registrationCity || input.city || '').trim();
+  const city = serviceArea?.label || rawCity.slice(0, 80);
+
+  if (!city) return null;
+
+  return {
+    city,
+    countryCode: String(input.registrationCountryCode || input.countryCode || 'ZW').trim().slice(0, 2).toUpperCase() || 'ZW',
+    latitude: coordinate ? latitude : null,
+    longitude: coordinate ? longitude : null,
+    source: String(input.registrationSource || 'device_location').trim().slice(0, 40) || 'device_location',
+  };
+}
+
+async function saveRegistrationCity(userId, registrationCity) {
+  if (!userId || !registrationCity?.city) return;
+  await query(
+    `UPDATE users
+     SET registration_city = ?,
+         registration_country_code = ?,
+         registration_lat = ?,
+         registration_lng = ?,
+         registration_source = ?,
+         registration_detected_at = COALESCE(registration_detected_at, CURRENT_TIMESTAMP),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE clerk_user_id = ?
+       AND (registration_city IS NULL OR registration_city = '' OR registration_source = 'device_location')`,
+    [
+      registrationCity.city,
+      registrationCity.countryCode,
+      registrationCity.latitude,
+      registrationCity.longitude,
+      registrationCity.source,
+      userId,
+    ]
+  );
+}
 
 router.post('/lookup-role', async (req, res) => {
   try {
@@ -79,6 +126,7 @@ router.get('/me', requireAuth, async (req, res) => {
 router.post('/register', requireAuth, async (req, res) => {
   try {
     const { role, inviteToken, referrerEmail } = req.body || {};
+    const registrationCity = await normalizeRegistrationCity(req.body || {});
     await setRoleForUser(req.userId, role);
 
     let referral = null;
@@ -128,8 +176,10 @@ router.post('/register', requireAuth, async (req, res) => {
 
     const user = await getClerkUserById(req.userId);
     await upsertClerkUserToMysql(user);
+    await saveRegistrationCity(req.userId, registrationCity);
     return res.status(201).json({
       ...toAppUser(user),
+      registrationCity: registrationCity?.city || null,
       passengerPeerReferral,
     });
   } catch (err) {

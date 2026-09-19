@@ -25,6 +25,7 @@ import {
   BULAWAYO_DEFAULT_REGION,
   BULAWAYO_SERVICE_BOUNDS_ARRAY,
   BULAWAYO_CENTER_COORDINATE,
+  SERVICE_AREA_LABEL,
   filterBulawayoSuggestions,
   isCoordinateInBulawayoServiceArea,
 } from '../../constants/serviceArea';
@@ -45,6 +46,7 @@ import {
 } from '../../lib/passengerRideMap';
 
 const HARARE_FALLBACK = BULAWAYO_DEFAULT_REGION;
+const SERVICE_AREA_TITLE = 'Outside service area';
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -375,7 +377,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     };
 
     resumeActiveRide();
-    const interval = setInterval(resumeActiveRide, 5000);
+    const interval = setInterval(resumeActiveRide, 15000);
 
     return () => {
       active = false;
@@ -497,9 +499,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
           setCurrentLocationCoordinate(null);
           setPickupCoordinate(null);
           setMapRegion(BULAWAYO_DEFAULT_REGION);
-          setPickupLabel('Choose pickup in Bulawayo');
+          setPickupLabel(`Choose pickup in ${SERVICE_AREA_LABEL}`);
           setPickupQuery('');
-          setLocationError('Trust Express currently supports rides within Bulawayo only.');
+          setLocationError(`Trust Express currently supports rides within ${SERVICE_AREA_LABEL}.`);
           setTimeout(() => {
             mapRef.current?.animateToRegion(BULAWAYO_DEFAULT_REGION, 500);
           }, 50);
@@ -563,7 +565,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     };
 
     loadNearbyDrivers();
-    const interval = setInterval(loadNearbyDrivers, 5000);
+    const interval = setInterval(loadNearbyDrivers, 15000);
 
     return () => {
       active = false;
@@ -749,7 +751,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
   const applyPickup = async (coordinate, label) => {
     if (!isCoordinateInBulawayoServiceArea(coordinate)) {
-      Alert.alert('Outside Bulawayo', 'Trust Express currently supports pickup points within Bulawayo only.');
+      Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports pickup points within ${SERVICE_AREA_LABEL}.`);
       return;
     }
     setPickupCoordinate(coordinate);
@@ -762,7 +764,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
   const applyDestination = async (coordinate, label, closeModal = false) => {
     if (!isCoordinateInBulawayoServiceArea(coordinate)) {
-      Alert.alert('Outside Bulawayo', 'Trust Express currently supports drop-off points within Bulawayo only.');
+      Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports drop-off points within ${SERVICE_AREA_LABEL}.`);
       return;
     }
     setDropoffCoordinate(coordinate);
@@ -776,7 +778,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
 
   const applyIntermediateStop = async (index, coordinate, label, closeModal = false) => {
     if (!isCoordinateInBulawayoServiceArea(coordinate)) {
-      Alert.alert('Outside Bulawayo', 'Trust Express currently supports stop points within Bulawayo only.');
+      Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports stop points within ${SERVICE_AREA_LABEL}.`);
       return;
     }
     setIntermediateStops((current) => {
@@ -808,7 +810,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
     if (!showRouteModal) return;
     const coordinate = event.nativeEvent.coordinate;
     if (!isCoordinateInBulawayoServiceArea(coordinate)) {
-      Alert.alert('Outside Bulawayo', 'Please choose a location inside Bulawayo.');
+      Alert.alert(SERVICE_AREA_TITLE, `Please choose a location inside ${SERVICE_AREA_LABEL}.`);
       return;
     }
     const isPickupField = activeField === 'pickup';
@@ -881,7 +883,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       return;
     }
     if (!isCoordinateInBulawayoServiceArea(resolvedSuggestion.coordinate)) {
-      Alert.alert('Outside Bulawayo', 'Please choose a place inside Bulawayo.');
+      Alert.alert(SERVICE_AREA_TITLE, `Please choose a place inside ${SERVICE_AREA_LABEL}.`);
       return;
     }
 
@@ -926,7 +928,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       return;
     }
     if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
-      Alert.alert('Outside Bulawayo', 'Trust Express currently supports rides within Bulawayo only.');
+      Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports rides within ${SERVICE_AREA_LABEL}.`);
       return;
     }
     if (!routeReady || !(routeDistanceKm > 0)) {
@@ -956,7 +958,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
       return;
     }
     if (!isCoordinateInBulawayoServiceArea(pickupCoordinate) || !isCoordinateInBulawayoServiceArea(dropoffCoordinate)) {
-      Alert.alert('Outside Bulawayo', 'Trust Express currently supports hiring within Bulawayo only.');
+      Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports hiring within ${SERVICE_AREA_LABEL}.`);
       return;
     }
     navigation.navigate('PassengerHireCreate', {
@@ -1567,9 +1569,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
                         : String(intermediateStops[Number((/^stop-(\d+)$/.exec(String(activeField || '')) || [])[1] || -1)]?.label || '')
                   ).trim().length >= PLACE_SEARCH_MIN_CHARS ? (
                     <View className="rounded-[22px] bg-white px-4 py-5">
-                      <Text className="text-base font-semibold text-gray-900">No Bulawayo places found</Text>
+                      <Text className="text-base font-semibold text-gray-900">No supported places found</Text>
                       <Text className="mt-2 text-sm text-gray-500">
-                        Try a street, suburb, landmark, or business name inside Bulawayo.
+                        Try a street, suburb, landmark, or business name inside {SERVICE_AREA_LABEL}.
                       </Text>
                     </View>
                   ) : (
