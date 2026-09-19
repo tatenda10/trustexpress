@@ -9,7 +9,7 @@ function buildError(message, status = 400) {
   return error;
 }
 
-function mapWalletError(data, fallbackStatus) {
+function mapWalletError(data, fallbackStatus, path = '') {
   const rawMessage = String(
     data?.responseMessage
       || data?.message
@@ -38,9 +38,16 @@ function mapWalletError(data, fallbackStatus) {
     || normalizedMessage === 'forbidden'
     || normalizedMessage.includes('not allowed')
   ) {
+    if (String(path || '').includes('/subscriber/external/cashout/auth')) {
+      return {
+        status: 403,
+        message: 'Smile Cash cash-outs are not authorised for Trust Express yet. Your wallet balance was restored; please contact support.',
+        code: 'SMILE_CASH_CASHOUT_NOT_AUTHORIZED',
+      };
+    }
     return {
       status: 403,
-      message: 'Smile Cash rejected this cash out. If the company Smile Cash number is linked, unlink it and use your personal Smile Cash number.',
+      message: 'Smile Cash rejected this request. Please contact support so we can check your Smile Cash setup.',
       code: 'SMILE_CASH_FORBIDDEN',
     };
   }
@@ -153,7 +160,7 @@ async function walletRequest(path, { method = 'POST', body } = {}) {
     || ['00', '0', '200', '201', 'SUCCESS', 'SUCCESSFUL'].includes(responseCode.toUpperCase());
   const failedFlag = data?.success === false || data?.error === true;
   if (!res.ok || failedFlag || !okByCode) {
-    const mapped = mapWalletError(data, res.status >= 400 && res.status < 500 ? res.status : 502);
+    const mapped = mapWalletError(data, res.status >= 400 && res.status < 500 ? res.status : 502, path);
     const error = buildError(mapped.message, mapped.status);
     error.code = mapped.code;
     error.providerPayload = data;

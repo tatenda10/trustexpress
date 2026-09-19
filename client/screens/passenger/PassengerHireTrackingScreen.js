@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Platform, Text, TouchableOpacity, Vibration, View } from 'react-native';
-import * as Speech from 'expo-speech';
+import { ActivityIndicator, Alert, Linking, Platform, Text, TouchableOpacity, View, Vibration } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Speech from 'expo-speech';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
 import { getDirectionsRoute, getHireRequest } from '../../api';
@@ -65,40 +65,21 @@ export default function PassengerHireTrackingScreen({ navigation, route }) {
   const targetLabel = onTrip ? (request?.dropoffLabel || 'Drop-off') : (request?.pickupLabel || 'Pickup');
 
   const triggerPassengerArrivalAlert = useCallback(() => {
-    if (lastArrivalAnnouncementRef.current === String(requestId || '')) return;
-    lastArrivalAnnouncementRef.current = String(requestId || '');
-    const pattern = [0, 700, 220, 700, 220, 700, 350, 700];
-    let cancelTimer = null;
+    const announcementKey = String(requestId || '');
+    if (!announcementKey || lastArrivalAnnouncementRef.current === announcementKey) return undefined;
+    lastArrivalAnnouncementRef.current = announcementKey;
     try {
-      if (Platform.OS === 'android') {
-        Vibration.vibrate(pattern, 0);
-        cancelTimer = setTimeout(() => {
-          try {
-            Vibration.cancel();
-          } catch {
-            // Ignore vibration support issues.
-          }
-        }, 4500);
-      } else {
-        Vibration.vibrate(pattern);
-      }
-    } catch {
-      // Ignore vibration support issues.
-    }
-    Speech.stop();
-    Speech.speak('Your hiring driver has arrived at the pickup point.', {
-      rate: 0.95,
-      pitch: 1.0,
-      language: 'en',
-    });
-    return () => {
-      if (cancelTimer) clearTimeout(cancelTimer);
-      try {
-        Vibration.cancel();
-      } catch {
-        // Ignore vibration support issues.
-      }
-    };
+      Vibration.vibrate([0, 450, 180, 450], false);
+    } catch (_) {}
+    try {
+      Speech.stop();
+      Speech.speak('Your hire driver has arrived at the pickup point.', {
+        rate: 0.95,
+        pitch: 1.0,
+        language: 'en',
+      });
+    } catch (_) {}
+    return undefined;
   }, [requestId]);
 
   const load = useCallback(async () => {

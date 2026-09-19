@@ -97,8 +97,7 @@ export async function apiFetch(path, options = {}, token) {
 }
 
 export async function registerUser(token, payload) {
-  await loadServiceAreas().catch(() => null);
-  const registrationCityPayload = await getRegistrationCityPayload();
+  const registrationCityPayload = await getRegistrationCityPayload().catch(() => ({}));
   return apiFetch(
     '/api/users/register',
     { method: 'POST', body: JSON.stringify({ ...(payload || {}), ...registrationCityPayload }) },
@@ -109,14 +108,19 @@ export async function registerUser(token, payload) {
 let serviceAreasLoadPromise = null;
 export async function loadServiceAreas() {
   if (!serviceAreasLoadPromise) {
-    serviceAreasLoadPromise = apiFetch('/api/service-areas')
+    serviceAreasLoadPromise = Promise.race([
+      apiFetch('/api/service-areas'),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Service area load timed out')), 3500);
+      }),
+    ])
       .then((data) => {
         configureServiceAreas(data?.areas || []);
         return data;
       })
-      .catch((error) => {
+      .catch(() => {
         serviceAreasLoadPromise = null;
-        throw error;
+        return null;
       });
   }
   return serviceAreasLoadPromise;

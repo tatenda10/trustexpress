@@ -83,7 +83,10 @@ router.post('/cash-outs', requireAuth, async (req, res) => {
     return res.status(201).json({ ok: true, cashout: result });
   } catch (err) {
     console.error('POST /api/drivers/wallet/cash-outs', err);
-    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
+    return res.status(err?.status || 500).json({
+      error: err?.message || 'Server error',
+      code: err?.code || null,
+    });
   }
 });
 

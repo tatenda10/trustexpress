@@ -107,8 +107,6 @@ export const BULAWAYO_DEFAULT_REGION = {
 };
 
 export function getServiceAreaForCoordinate(coordinate) {
-  if (!BULAWAYO_GEO_LOCK_ENABLED) return true;
-
   const latitude = Number(coordinate?.latitude);
   const longitude = Number(coordinate?.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;

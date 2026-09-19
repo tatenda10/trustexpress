@@ -11,9 +11,7 @@ import {
   Animated,
   Dimensions,
   PanResponder,
-  Vibration,
 } from 'react-native';
-import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
@@ -298,8 +296,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const seenAcceptedDriverIdsRef = useRef(new Set());
-  const acceptSoundRef = useRef(null);
-  const acceptAlertInFlightRef = useRef(false);
   const mapRef = useRef(null);
   const hasAutoFitMapRef = useRef(false);
 
@@ -482,72 +478,13 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     return () => { active = false; localSocket?.__cleanup?.(); };
   }, [refreshRideStatus, rideRequest?.id]);
 
-  const playDriverAcceptedAlert = useCallback(async () => {
-    if (acceptAlertInFlightRef.current) return;
-    acceptAlertInFlightRef.current = true;
-    try {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-      } catch {
-        // Keep the request flow working even if audio mode cannot change.
-      }
-      if (!acceptSoundRef.current) {
-        const { sound } = await Audio.Sound.createAsync(
-          require('../../assets/notificationaudio.mpeg'),
-          { shouldPlay: false, volume: 1.0, isLooping: false },
-        );
-        acceptSoundRef.current = sound;
-      }
-      const sound = acceptSoundRef.current;
-      if (sound) {
-        await sound.setVolumeAsync(1.0);
-        sound.setOnPlaybackStatusUpdate((status) => {
-          if (!status?.didJustFinish) return;
-          sound.setOnPlaybackStatusUpdate(null);
-          if (acceptSoundRef.current !== sound) {
-            sound.unloadAsync().catch(() => {});
-          }
-        });
-        await sound.replayAsync();
-      }
-      Vibration.vibrate(400);
-    } catch {
-      // Keep waiting UI working if sound cannot play.
-    } finally {
-      acceptAlertInFlightRef.current = false;
-    }
-  }, []);
-
   useEffect(() => {
     const ids = acceptedDrivers.map((driver) => String(driver?.id || '')).filter(Boolean);
     const assignedId = assignedDriver?.id ? String(assignedDriver.id) : '';
     const incomingIds = assignedId ? [...new Set([...ids, assignedId])] : ids;
     const newIds = incomingIds.filter((id) => !seenAcceptedDriverIdsRef.current.has(id));
     newIds.forEach((id) => seenAcceptedDriverIdsRef.current.add(id));
-    if (newIds.length) {
-      playDriverAcceptedAlert();
-    }
-  }, [acceptedDrivers, assignedDriver, playDriverAcceptedAlert]);
-
-  useEffect(() => () => {
-    const sound = acceptSoundRef.current;
-    acceptSoundRef.current = null;
-    if (!sound) return;
-    sound.getStatusAsync()
-      .then((status) => {
-        if (!status?.isLoaded || !status?.isPlaying) {
-          return sound.unloadAsync();
-        }
-        return null;
-      })
-      .catch(() => sound.unloadAsync?.().catch(() => {}));
-  }, []);
+  }, [acceptedDrivers, assignedDriver]);
 
   // ── Navigate to tracking when driver assigned ──
   useEffect(() => {

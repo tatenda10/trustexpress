@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Vibration, Dimensions, PanResponder, Linking, AppState } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Dimensions, PanResponder, Linking, AppState, Vibration } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
 import { calculateDistanceKm, getHeadingAlongRoute, normalizeCoordinate, normalizeCoordinates } from '../../lib/mapVehicleHeading';
-import * as Speech from 'expo-speech';
 import * as Location from 'expo-location';
+import * as Speech from 'expo-speech';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, choosePassengerRideCashPayment, initiatePassengerRideSmilePay, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup, verifyPassengerRideSmilePay } from '../../api';
@@ -691,40 +691,21 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
 
   const triggerPassengerArrivalAlert = useCallback(() => {
-    if (lastArrivalAnnouncementRef.current === String(rideRequestId || '')) return;
-    lastArrivalAnnouncementRef.current = String(rideRequestId || '');
-    const arrivalVibrationPattern = [0, 700, 220, 700, 220, 700, 350, 700];
-    let cancelVibrationTimer = null;
+    const announcementKey = String(rideRequestId || '');
+    if (!announcementKey || lastArrivalAnnouncementRef.current === announcementKey) return undefined;
+    lastArrivalAnnouncementRef.current = announcementKey;
     try {
-      if (Platform.OS === 'android') {
-        Vibration.vibrate(arrivalVibrationPattern, 0);
-        cancelVibrationTimer = setTimeout(() => {
-          try {
-            Vibration.cancel();
-          } catch {
-            // Ignore vibration support issues.
-          }
-        }, 4500);
-      } else {
-        Vibration.vibrate(arrivalVibrationPattern);
-      }
-    } catch {
-      // Ignore vibration support issues.
-    }
-    Speech.stop();
-    Speech.speak('Your driver has arrived at the pickup point.', {
-      rate: 0.95,
-      pitch: 1.0,
-      language: 'en',
-    });
-    return () => {
-      if (cancelVibrationTimer) clearTimeout(cancelVibrationTimer);
-      try {
-        Vibration.cancel();
-      } catch {
-        // Ignore vibration support issues.
-      }
-    };
+      Vibration.vibrate([0, 450, 180, 450], false);
+    } catch (_) {}
+    try {
+      Speech.stop();
+      Speech.speak('Your driver has arrived at the pickup point.', {
+        rate: 0.95,
+        pitch: 1.0,
+        language: 'en',
+      });
+    } catch (_) {}
+    return undefined;
   }, [rideRequestId]);
 
   useEffect(() => {
