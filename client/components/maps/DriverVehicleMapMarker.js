@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Image, Platform } from 'react-native';
 import { Marker } from './MapViewCompat';
 import {
   normalizeCoordinate,
@@ -8,14 +7,17 @@ import {
   smoothHeadingDegrees,
 } from '../../lib/mapVehicleHeading';
 
-// car-white.svg is byte-identical to trust express.svg; use the existing JPEG raster on maps.
-const CAR_MAP_MARKER_IMAGE = require('../../assets/trust express.jpeg');
+const CAR_ICON_NATIVE_HEADING = 0;
+const CAR_WHITE_MARKER_SMALL = require('../../assets/car-white-marker-small.png');
+const CAR_WHITE_MARKER_MEDIUM = require('../../assets/car-white-marker-medium.png');
+const CAR_WHITE_MARKER_LARGE = require('../../assets/car-white-marker-large.png');
 
-/**
- * The trust express / car-white artwork points roughly east-southeast at 0deg rotation.
- * Subtract this offset so the hood aligns with the travel bearing (0=north).
- */
-const CAR_IMAGE_NATIVE_HEADING = 100;
+function getCarMarkerAsset(size) {
+  const numericSize = Number(size || 0);
+  if (numericSize <= 24) return CAR_WHITE_MARKER_SMALL;
+  if (numericSize <= 32) return CAR_WHITE_MARKER_MEDIUM;
+  return CAR_WHITE_MARKER_LARGE;
+}
 
 function isValidCoordinate(value) {
   return Boolean(normalizeCoordinate(value));
@@ -30,7 +32,7 @@ export default function DriverVehicleMapMarker({
   coordinate,
   headingDegrees = 0,
   etaLabel = null,
-  size = 44,
+  size = 28,
 }) {
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
   const previousCoordinateRef = useRef(null);
@@ -60,60 +62,26 @@ export default function DriverVehicleMapMarker({
     // Rebuild the marker bitmap on mount and meaningful visual changes only.
     // Continuous lat/lng updates keep working while tracksViewChanges is false.
     setTracksViewChanges(true);
-    const timer = setTimeout(() => setTracksViewChanges(false), headingChanged || etaLabel ? 700 : 350);
+    const timer = setTimeout(() => setTracksViewChanges(false), headingChanged ? 700 : 350);
     return () => clearTimeout(timer);
-  }, [etaLabel, renderHeading]);
+  }, [renderHeading]);
 
   const safeCoordinate = normalizeCoordinate(coordinate);
   if (!safeCoordinate) return null;
 
-  const rotation = renderHeading - CAR_IMAGE_NATIVE_HEADING;
+  const rotation = renderHeading - CAR_ICON_NATIVE_HEADING;
+  const markerAsset = getCarMarkerAsset(size);
 
   return (
     <Marker
       coordinate={safeCoordinate}
-      title="Driver"
+      title={etaLabel ? `Driver · ${etaLabel}` : 'Driver'}
       anchor={{ x: 0.5, y: 0.5 }}
       flat
-      rotation={Platform.OS === 'android' ? 0 : undefined}
+      rotation={rotation}
+      image={markerAsset}
       tracksViewChanges={tracksViewChanges}
       zIndex={20}
-    >
-      <View className="items-center justify-center" pointerEvents="none">
-        <View
-          style={{
-            width: size,
-            height: size,
-            alignItems: 'center',
-            justifyContent: 'center',
-            transform: [{ rotate: `${rotation}deg` }],
-            ...Platform.select({
-              ios: {
-                shadowColor: '#0f172a',
-                shadowOpacity: 0.28,
-                shadowRadius: 4,
-                shadowOffset: { width: 0, height: 2 },
-              },
-              android: {
-                elevation: 5,
-              },
-              default: {},
-            }),
-          }}
-        >
-          <Image
-            source={CAR_MAP_MARKER_IMAGE}
-            style={{ width: size, height: size }}
-            resizeMode="contain"
-            accessibilityLabel="Driver car"
-          />
-        </View>
-        {etaLabel ? (
-          <View className="mt-1 rounded-full bg-white px-2 py-1">
-            <Text className="text-xs font-bold text-gray-900">{etaLabel}</Text>
-          </View>
-        ) : null}
-      </View>
-    </Marker>
+    />
   );
 }

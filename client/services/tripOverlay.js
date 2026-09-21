@@ -1,17 +1,12 @@
 import { NativeModules, Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-let unsupportedLogged = false;
-
 function getOverlayModule() {
   return NativeModules.TrustOverlay;
 }
 
 function logOverlay(event, details = {}) {
-  console.log(`[TripOverlay] ${event}`, {
-    ...details,
-    support: getTripOverlaySupportInfo(),
-  });
+  return undefined;
 }
 
 export function getTripOverlaySupportInfo() {
@@ -36,9 +31,7 @@ function isSupported() {
 }
 
 function logUnsupported(source) {
-  if (unsupportedLogged) return;
-  unsupportedLogged = true;
-  console.log(`[TripOverlay] ${source}: unsupported`, getTripOverlaySupportInfo());
+  return undefined;
 }
 
 function normalizePayload(payload = {}) {

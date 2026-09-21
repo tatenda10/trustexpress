@@ -2,6 +2,8 @@ const DEFAULT_CACHE_TTL_MS = 15 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
 const DEFAULT_CACHE_PRECISION = 4;
 const DEFAULT_OSRM_BASE_URL = 'https://router.project-osrm.org';
+const DEFAULT_OSRM_TIMEOUT_MS = 6000;
+const DEFAULT_OSRM_RETRY_COUNT = 2;
 
 const routeCache = new Map();
 const inFlightRequests = new Map();
@@ -130,6 +132,74 @@ function mapOsrmInstruction(step) {
   return stripHtml(`${maneuver.type || 'Continue'}${modifier}${road}`);
 }
 
+function calculateDistanceKm(start, end) {
+  const origin = normalizeCoordinate(start);
+  const destination = normalizeCoordinate(end);
+  if (!origin || !destination) return 0;
+  const toRadians = (value) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(destination.latitude - origin.latitude);
+  const dLng = toRadians(destination.longitude - origin.longitude);
+  const lat1 = toRadians(origin.latitude);
+  const lat2 = toRadians(destination.latitude);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+  return 2 * earthRadiusKm * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function buildFallbackRoute({ origin, destination, waypoints = [] }) {
+  const coordinates = [origin, ...waypoints, destination].filter(Boolean);
+  let distanceKm = 0;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    distanceKm += calculateDistanceKm(coordinates[index - 1], coordinates[index]);
+  }
+  const distanceMeters = Math.round(distanceKm * 1000);
+  const durationSeconds = distanceMeters > 0
+    ? Math.max(60, Math.round((distanceMeters / 1000) * 4 * 60))
+    : 0;
+  return {
+    polyline: '',
+    coordinates,
+    distanceMeters,
+    durationSeconds,
+    distanceKm: distanceMeters > 0 ? distanceMeters / 1000 : null,
+    durationMinutes: durationSeconds > 0 ? Math.max(1, Math.round(durationSeconds / 60)) : null,
+    nextInstruction: 'Continue to destination',
+    includeTraffic: false,
+    fallback: true,
+  };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_OSRM_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchOsrmWithRetry(url, options) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= DEFAULT_OSRM_RETRY_COUNT; attempt += 1) {
+    try {
+      return await fetchWithTimeout(url, options);
+    } catch (error) {
+      lastError = error;
+      const message = error?.cause?.code || error?.code || error?.name || error?.message || 'fetch failed';
+      console.warn('[osm-directions] OSRM request failed', { attempt: attempt + 1, message });
+      if (attempt < DEFAULT_OSRM_RETRY_COUNT) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export function hasOsmDirectionsProvider() {
   return Boolean(getOsrmBaseUrl());
 }
@@ -187,7 +257,7 @@ export async function fetchCachedOsmDirections({
       steps: 'true',
     });
 
-    const response = await fetch(`${baseUrl}/route/v1/driving/${coordinates}?${params.toString()}`, {
+    const response = await fetchOsrmWithRetry(`${baseUrl}/route/v1/driving/${coordinates}?${params.toString()}`, {
       headers: {
         Accept: 'application/json',
         'User-Agent': 'TrustCars/1.0',
@@ -229,7 +299,17 @@ export async function fetchCachedOsmDirections({
     }
 
     return route;
-  })();
+  })().catch((error) => {
+    console.warn('[osm-directions] using fallback route', {
+      message: error?.message || String(error),
+      cause: error?.cause?.code || error?.code || null,
+    });
+    return buildFallbackRoute({
+      origin: normalizedOrigin,
+      destination: normalizedDestination,
+      waypoints: normalizedWaypoints,
+    });
+  });
 
   inFlightRequests.set(cacheKey, requestPromise);
 

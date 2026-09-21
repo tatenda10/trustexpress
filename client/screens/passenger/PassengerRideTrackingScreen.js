@@ -34,8 +34,8 @@ import { isTransientNetworkError, withNetworkRetry } from '../../lib/networkRetr
 
 WebBrowser.maybeCompleteAuthSession();
 
-const TRACKING_STATUS_REFRESH_MS = 3000;
-const TRACKING_STATUS_REFRESH_ON_TRIP_MS = 4000;
+const TRACKING_STATUS_REFRESH_MS = 1500;
+const TRACKING_STATUS_REFRESH_ON_TRIP_MS = 2000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const ROUTE_REFRESH_DISTANCE_METERS = 10;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
@@ -126,6 +126,70 @@ function buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destina
     ...remainingRoute,
     ...(shouldAppendDestination ? [safeDestination] : []),
   ];
+}
+
+function areCoordinateListsClose(a, b, tolerance = 0.000001) {
+  const first = normalizeCoordinates(a);
+  const second = normalizeCoordinates(b);
+  if (first.length !== second.length) return false;
+  return first.every((coordinate, index) => (
+    Math.abs(coordinate.latitude - second[index].latitude) <= tolerance &&
+    Math.abs(coordinate.longitude - second[index].longitude) <= tolerance
+  ));
+}
+
+function nextRouteCoordinates(currentRouteCoordinates, origin, destination) {
+  const next = buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destination);
+  return areCoordinateListsClose(currentRouteCoordinates, next) ? currentRouteCoordinates : next;
+}
+
+function decodePolyline(encoded, precision = 5) {
+  if (!encoded) return [];
+  let index = 0;
+  let latitude = 0;
+  let longitude = 0;
+  const coordinates = [];
+  const factor = Math.pow(10, precision);
+
+  while (index < encoded.length) {
+    let shift = 0;
+    let result = 0;
+    let byte = null;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index <= encoded.length);
+
+    latitude += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0;
+    result = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index <= encoded.length);
+
+    longitude += (result & 1) ? ~(result >> 1) : (result >> 1);
+    coordinates.push({ latitude: latitude / factor, longitude: longitude / factor });
+  }
+
+  return coordinates;
+}
+
+function MapLetterMarker({ letter, color, muted = false }) {
+  return (
+    <View className="items-center">
+      <View
+        className="h-8 w-8 items-center justify-center rounded-full border-2 border-white"
+        style={{ backgroundColor: muted ? '#94a3b8' : color }}
+      >
+        <Text className="text-[13px] font-extrabold text-white">{letter}</Text>
+      </View>
+    </View>
+  );
 }
 
 function formatCountdown(totalSeconds) {
@@ -644,8 +708,18 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     exitToPassengerHome();
   }, [rideStatus?.status, rideStatus?.paymentStatus]);
 
-  const pickupCoordinate = normalizeCoordinate(rideStatus?.pickupCoordinate || initialPickupCoordinate);
-  const dropoffCoordinate = normalizeCoordinate(rideStatus?.dropoffCoordinate || initialDropoffCoordinate);
+  const pickupCoordinateSource = rideStatus?.pickupCoordinate || initialPickupCoordinate;
+  const dropoffCoordinateSource = rideStatus?.dropoffCoordinate || initialDropoffCoordinate;
+  const pickupCoordinateKey = JSON.stringify(pickupCoordinateSource || null);
+  const dropoffCoordinateKey = JSON.stringify(dropoffCoordinateSource || null);
+  const pickupCoordinate = useMemo(
+    () => normalizeCoordinate(pickupCoordinateSource),
+    [pickupCoordinateKey],
+  );
+  const dropoffCoordinate = useMemo(
+    () => normalizeCoordinate(dropoffCoordinateSource),
+    [dropoffCoordinateKey],
+  );
   const pickupLabel = rideStatus?.pickupLabel || initialPickupLabel;
   const dropoffLabel = rideStatus?.dropoffLabel || initialDropoffLabel;
   const estimatedAmount = Number(rideStatus?.estimatedAmount || initialEstimatedAmount || 0);
@@ -653,6 +727,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const totalAmount = Number(rideStatus?.totalAmount || (estimatedAmount + tipAmount) || 0);
   const stage = rideStatus?.stage || 'driver_on_the_way';
   const isCompleted = stage === 'completed';
+  const passengerConfirmedPickup = Boolean(rideStatus?.passengerConfirmedAt);
   const safetyPinRequired = Boolean(rideStatus?.safetyPinRequired);
   const safetyPinVerified = Boolean(rideStatus?.safetyPinVerified);
   const safetyPinLocked = Boolean(rideStatus?.safetyPinLocked);
@@ -669,25 +744,45 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const canPayCash = Boolean(rideStatus?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
   const showPaymentCard = canPayCash || canPayWithSmilePay || paymentStatus === 'paid' || paymentStatus === 'pending' || isRefundedPayment;
   const driverHasArrived = stage === 'waiting_at_pickup';
-  const driverCoordinate = normalizeCoordinate(rideStatus?.driverCoordinate || driver?.coordinate);
+  const driverCoordinateSource = rideStatus?.driverCoordinate || driver?.coordinate;
+  const driverCoordinateKey = JSON.stringify(driverCoordinateSource || null);
+  const driverCoordinate = useMemo(
+    () => normalizeCoordinate(driverCoordinateSource),
+    [driverCoordinateKey],
+  );
   const hasDriverCoordinate = Boolean(driverCoordinate);
-  const intermediateStops = Array.isArray(rideStatus?.intermediateStops)
+  const intermediateStopsSource = Array.isArray(rideStatus?.intermediateStops)
     ? rideStatus.intermediateStops
     : Array.isArray(initialIntermediateStops)
       ? initialIntermediateStops
       : [];
+  const intermediateStopsKey = JSON.stringify(intermediateStopsSource || []);
+  const intermediateStops = useMemo(
+    () => intermediateStopsSource,
+    [intermediateStopsKey],
+  );
   const currentStopIndex = Number(rideStatus?.currentStopIndex || 0);
   const remainingIntermediateStopsCount = Number(rideStatus?.remainingIntermediateStopsCount || 0);
   const currentIntermediateStop = rideStatus?.currentIntermediateStop || intermediateStops[currentStopIndex] || null;
   const currentTargetLabel = rideStatus?.currentTargetLabel
     || currentIntermediateStop?.label
     || dropoffLabel;
-  const currentTargetCoordinate = normalizeCoordinate(
-    rideStatus?.currentTargetCoordinate
+  const currentTargetCoordinateSource = rideStatus?.currentTargetCoordinate
     || currentIntermediateStop?.coordinate
-    || dropoffCoordinate
+    || dropoffCoordinate;
+  const currentTargetCoordinateKey = JSON.stringify(currentTargetCoordinateSource || null);
+  const currentTargetCoordinate = useMemo(
+    () => normalizeCoordinate(currentTargetCoordinateSource),
+    [currentTargetCoordinateKey],
   );
-  const activeTarget = stage === 'on_trip' ? currentTargetCoordinate : pickupCoordinate;
+  const activeTarget = useMemo(
+    () => (
+      stage === 'on_trip' || (stage === 'waiting_at_pickup' && passengerConfirmedPickup)
+        ? currentTargetCoordinate || dropoffCoordinate
+        : pickupCoordinate
+    ),
+    [currentTargetCoordinate, dropoffCoordinate, passengerConfirmedPickup, pickupCoordinate, stage],
+  );
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
 
   const triggerPassengerArrivalAlert = useCallback(() => {
@@ -759,7 +854,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
       routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
-      setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, activeTarget));
+      setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, activeTarget));
       return undefined;
     }
 
@@ -769,7 +864,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     lastRouteOriginRef.current = driverCoordinate;
     lastRouteTargetRef.current = activeTarget;
     lastRouteFetchedAtRef.current = Date.now();
-    setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, activeTarget));
+    const fallbackDistanceKm = calculateDistanceKm(driverCoordinate, activeTarget);
+    const fallbackDistanceMeters = Number.isFinite(fallbackDistanceKm)
+      ? Math.max(0, Math.round(fallbackDistanceKm * 1000))
+      : 0;
+    const fallbackDurationSeconds = fallbackDistanceMeters > 0
+      ? Math.max(60, Math.round((fallbackDistanceMeters / 1000) * 4 * 60))
+      : 0;
+    setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, activeTarget));
+    setRouteDistanceMeters(fallbackDistanceMeters);
+    setRouteDurationSeconds(fallbackDurationSeconds);
 
     const loadDirections = async () => {
       try {
@@ -788,8 +892,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       } catch (error) {
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
         setRouteCoordinates([driverCoordinate, activeTarget].filter(Boolean));
-        setRouteDistanceMeters(0);
-        setRouteDurationSeconds(0);
+        setRouteDistanceMeters(fallbackDistanceMeters);
+        setRouteDurationSeconds(fallbackDurationSeconds);
         setNextInstruction('');
         setRouteError(error?.message || 'Could not load road directions.');
       } finally {
@@ -815,6 +919,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     }
 
     let cancelled = false;
+    const savedRouteCoordinates = decodePolyline(String(rideStatus?.routePolyline || '').trim());
+    if (savedRouteCoordinates.length > 1) {
+      setTripRouteCoordinates(savedRouteCoordinates);
+      setTripDistanceMeters((current) => current > 0 ? current : Number(rideStatus?.estimatedDistanceKm || 0) * 1000);
+      setTripDurationSeconds((current) => current > 0 ? current : Number(rideStatus?.estimatedMinutes || 0) * 60);
+    } else {
+      setTripRouteCoordinates([pickupCoordinate, dropoffCoordinate].filter(Boolean));
+      setTripDistanceMeters((current) => current > 0 ? current : Number(rideStatus?.estimatedDistanceKm || 0) * 1000);
+      setTripDurationSeconds((current) => current > 0 ? current : Number(rideStatus?.estimatedMinutes || 0) * 60);
+    }
 
     const loadTripRoute = async () => {
       try {
@@ -846,7 +960,15 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [dropoffCoordinate, intermediateStops, isCompleted, pickupCoordinate]);
+  }, [
+    dropoffCoordinate,
+    intermediateStops,
+    isCompleted,
+    pickupCoordinate,
+    rideStatus?.estimatedDistanceKm,
+    rideStatus?.estimatedMinutes,
+    rideStatus?.routePolyline,
+  ]);
 
   const liveDriverDistanceKm = useMemo(
     () => {
@@ -894,10 +1016,20 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   }, [dropoffCoordinate, intermediateStops, pickupCoordinate, tripRouteCoordinates]);
   const liveRouteCoordinates = useMemo(() => {
     const routed = normalizeCoordinates(routeCoordinates);
+    const directLine = [driverCoordinate, activeTarget].filter(Boolean);
+    const routedIsOnlyDirectLine = routed.length === 2 && areCoordinateListsClose(routed, directLine);
+    if (routed.length > 1 && !routedIsOnlyDirectLine) return routed;
+    if (
+      (stage === 'on_trip' || (stage === 'waiting_at_pickup' && passengerConfirmedPickup)) &&
+      tripLineCoordinates.length > 1
+    ) {
+      const preview = getRoutePreviewCoordinates(tripLineCoordinates, driverCoordinate, activeTarget);
+      if (preview.length > 1) return preview;
+    }
     if (routed.length > 1) return routed;
     if (driverCoordinate && activeTarget) return [driverCoordinate, activeTarget];
     return [];
-  }, [activeTarget, driverCoordinate, routeCoordinates]);
+  }, [activeTarget, driverCoordinate, passengerConfirmedPickup, routeCoordinates, stage, tripLineCoordinates]);
   const activeRouteCoordinates = useMemo(() => {
     if (liveRouteCoordinates.length > 1) return liveRouteCoordinates;
     if (driverCoordinate && activeTarget) return [driverCoordinate, activeTarget];
@@ -963,7 +1095,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   useEffect(() => {
     if (isCompleted) return undefined;
 
-    const focusTarget = stage === 'on_trip' ? activeTarget : pickupCoordinate;
+    const focusTarget = stage === 'on_trip' || (stage === 'waiting_at_pickup' && passengerConfirmedPickup)
+      ? activeTarget
+      : pickupCoordinate;
     const fitCoordinates = getPassengerTrackingFitCoordinates(
       liveRouteCoordinates,
       driverCoordinate,
@@ -971,7 +1105,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     );
     if (!mapRef.current || fitCoordinates.length < 1) return undefined;
 
-    const stageKey = `${stage || ''}|${hasDriverCoordinate ? 'driver' : 'waiting'}`;
+    const stageKey = `${stage || ''}|${hasDriverCoordinate ? 'driver' : 'waiting'}|${passengerConfirmedPickup ? 'confirmed' : 'pending'}`;
     const stageChanged = lastAutoFitStageRef.current !== stageKey;
     const previousFitDriver = lastFitDriverRef.current;
     const movedMeters = previousFitDriver && driverCoordinate
@@ -1024,6 +1158,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     hasDriverCoordinate,
     isCompleted,
     liveRouteCoordinates,
+    passengerConfirmedPickup,
     pickupCoordinate,
     stage,
   ]);
@@ -1070,18 +1205,35 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
   const handleConfirmPickup = async () => {
     if (confirmingPickup || rideStatus?.passengerConfirmedAt || stage !== 'waiting_at_pickup') return;
+    const optimisticConfirmedAt = new Date().toISOString();
+    const previousConfirmedAt = rideStatus?.passengerConfirmedAt || null;
     setConfirmingPickup(true);
+    setRideStatus((current) => current ? {
+      ...current,
+      passengerConfirmedAt: optimisticConfirmedAt,
+    } : current);
     try {
-      const token = await getToken();
+      const token = (await getToken({ skipCache: true })) || (await getToken());
       if (!token || !rideRequestId) throw new Error('Not signed in');
-      const result = await confirmPassengerPickup(token, rideRequestId);
-      const confirmedAt = String(result?.confirmedAt || '').trim();
+      const result = await confirmPassengerPickup(token, rideRequestId, { suppressAuthErrorHandler: true });
+      const confirmedAt = String(result?.confirmedAt || optimisticConfirmedAt).trim();
       if (!confirmedAt) throw new Error('Could not confirm pickup.');
       setRideStatus((current) => current ? {
         ...current,
         passengerConfirmedAt: confirmedAt,
+        ...(result?.safetyPinRequired !== undefined ? { safetyPinRequired: Boolean(result.safetyPinRequired) } : {}),
+        ...(result?.safetyPinVerified !== undefined ? { safetyPinVerified: Boolean(result.safetyPinVerified) } : {}),
+        ...(result?.safetyPinVerifiedAt !== undefined ? { safetyPinVerifiedAt: result.safetyPinVerifiedAt } : {}),
+        ...(result?.safetyPin !== undefined ? { safetyPin: result.safetyPin } : {}),
+        ...(result?.safetyPinAttempts !== undefined ? { safetyPinAttempts: Number(result.safetyPinAttempts || 0) } : {}),
+        ...(result?.safetyPinMaxAttempts !== undefined ? { safetyPinMaxAttempts: Number(result.safetyPinMaxAttempts || 0) } : {}),
+        ...(result?.safetyPinLocked !== undefined ? { safetyPinLocked: Boolean(result.safetyPinLocked) } : {}),
       } : current);
     } catch (error) {
+      setRideStatus((current) => current ? {
+        ...current,
+        passengerConfirmedAt: previousConfirmedAt,
+      } : current);
       Alert.alert('Confirmation failed', error?.message || 'Could not confirm pickup.');
     } finally {
       setConfirmingPickup(false);
@@ -1381,22 +1533,28 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             />
           ) : null}
           {pickupCoordinate ? (
-            <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+            <Marker coordinate={pickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
+              <MapLetterMarker letter="A" color="#1d4ed8" />
+            </Marker>
           ) : null}
           {intermediateStops.map((stop, index) => {
             const stopCoordinate = normalizeCoordinate(stop?.coordinate);
+            const letter = String.fromCharCode(67 + index);
             return stopCoordinate ? (
               <Marker
                 key={`passenger-stop-${index}`}
                 coordinate={stopCoordinate}
-                title={stop.label || `Stop ${index + 1}`}
-                pinColor={index < currentStopIndex ? '#94a3b8' : '#f97316'}
-                tracksViewChanges={false}
-              />
+                title={`${letter} · ${stop.label || `Stop ${index + 1}`}`}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <MapLetterMarker letter={letter} color="#f97316" muted={index < currentStopIndex} />
+              </Marker>
             ) : null;
           })}
           {dropoffCoordinate ? (
-            <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
+            <Marker coordinate={dropoffCoordinate} title="B · Drop-off" anchor={{ x: 0.5, y: 0.5 }}>
+              <MapLetterMarker letter="B" color="#111827" />
+            </Marker>
           ) : null}
           {tripLineCoordinates.length > 1 ? (
             <Polyline
@@ -1972,9 +2130,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     <View className="flex-row items-center gap-3">
                       <TouchableOpacity
                         onPress={handleCancelRide}
-                        className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                        className="flex-1 h-14 rounded-[22px] border-2 border-red-300 items-center justify-center bg-red-50"
                       >
-                        <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                        <Text className="text-lg font-extrabold text-red-700">Cancel ride</Text>
                       </TouchableOpacity>
                     </View>
                   ) : (
@@ -2000,9 +2158,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         ) : (
                           <TouchableOpacity
                             onPress={handleCancelRide}
-                            className="flex-1 h-14 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                            className="flex-1 h-14 rounded-[22px] border-2 border-red-300 items-center justify-center bg-red-50"
                           >
-                            <Text className="text-lg font-bold text-red-500">Cancel ride</Text>
+                            <Text className="text-lg font-extrabold text-red-700">Cancel ride</Text>
                           </TouchableOpacity>
                         )}
                         <TouchableOpacity
@@ -2026,9 +2184,9 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       {driverHasArrived ? (
                         <TouchableOpacity
                           onPress={handleCancelRide}
-                          className="mt-3 h-12 rounded-[22px] border border-red-200 items-center justify-center bg-white"
+                          className="mt-3 h-14 rounded-[22px] border-2 border-red-300 items-center justify-center bg-red-50"
                         >
-                          <Text className="text-base font-bold text-red-500">Cancel ride</Text>
+                          <Text className="text-base font-extrabold text-red-700">Cancel ride</Text>
                         </TouchableOpacity>
                       ) : null}
                     </View>

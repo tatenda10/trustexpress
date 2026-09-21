@@ -15,12 +15,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
 import { useAuth } from '@clerk/clerk-expo';
 import {
   cancelRideRequest,
   declineRideDriver,
   getApiUrl,
   getDirectionsRoute,
+  getNearbyPassengerDrivers,
   getPassengerRideRequestStatus,
   selectRideDriver,
 } from '../../api';
@@ -37,6 +39,7 @@ import {
 } from '../../lib/passengerRideMap';
 
 const REQUEST_EXPIRY_POLL_MS = 5000;
+const NEARBY_DRIVER_POLL_MS = 4000;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const EMPTY_ROUTE_COORDINATES = [];
 
@@ -50,6 +53,31 @@ function normalizeRouteCoordinate(value) {
 function normalizeRouteCoordinates(values) {
   if (!Array.isArray(values)) return [];
   return values.map(normalizeRouteCoordinate).filter(Boolean);
+}
+
+function normalizeNearbyDriver(driver) {
+  const coordinate = normalizeRouteCoordinate(driver?.coordinate);
+  const id = String(driver?.id || driver?.driverUserId || '').trim();
+  if (!id || !coordinate) return null;
+  return {
+    ...driver,
+    id,
+    driverName: driver?.driverName || 'Driver',
+    coordinate,
+  };
+}
+
+function LetterMarker({ letter, color }) {
+  return (
+    <View className="items-center">
+      <View
+        className="h-8 w-8 items-center justify-center rounded-full border-2 border-white"
+        style={{ backgroundColor: color }}
+      >
+        <Text className="text-[13px] font-extrabold text-white">{letter}</Text>
+      </View>
+    </View>
+  );
 }
 
 function normalizeVehicleImageUrl(url) {
@@ -290,6 +318,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const [rideStatus, setRideStatus] = useState(route.params?.rideRequest || null);
   const [acceptedDrivers, setAcceptedDrivers] = useState([]);
   const [assignedDriver, setAssignedDriver] = useState(null);
+  const [nearbyLiveDrivers, setNearbyLiveDrivers] = useState([]);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [selectedCancelReason, setSelectedCancelReason] = useState('');
   const [routeCoordinates, setRouteCoordinates] = useState([]);
@@ -380,13 +409,84 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     return () => { cancelled = true; };
   }, [dropoffCoordinate, initialRouteCoordinates, pickupCoordinate]);
 
+  useEffect(() => {
+    if (!pickupCoordinate) {
+      setNearbyLiveDrivers([]);
+      return undefined;
+    }
+
+    let active = true;
+    const loadNearbyDrivers = async () => {
+      try {
+        const token = await getAuthToken();
+        if (!active || !token) return;
+        const data = await getNearbyPassengerDrivers(token, {
+          latitude: pickupCoordinate.latitude,
+          longitude: pickupCoordinate.longitude,
+          radiusKm: 8,
+        });
+        if (!active) return;
+        const drivers = (Array.isArray(data?.drivers) ? data.drivers : [])
+          .map(normalizeNearbyDriver)
+          .filter(Boolean);
+        setNearbyLiveDrivers(drivers);
+      } catch {
+        if (active) setNearbyLiveDrivers([]);
+      }
+    };
+
+    loadNearbyDrivers();
+    const interval = setInterval(loadNearbyDrivers, NEARBY_DRIVER_POLL_MS);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [getAuthToken, pickupCoordinate?.latitude, pickupCoordinate?.longitude]);
+
+  const routeStopMarkers = useMemo(
+    () =>
+      (Array.isArray(intermediateStops) ? intermediateStops : [])
+        .map((stop, index) => ({
+          key: `route-stop-${index}`,
+          coordinate: normalizeRouteCoordinate(stop?.coordinate || stop),
+          label: stop?.label || `Stop ${index + 1}`,
+          letter: String.fromCharCode(67 + index),
+        }))
+        .filter((stop) => !!stop.coordinate),
+    [intermediateStops],
+  );
+
+  const liveDriverMarkers = useMemo(() => {
+    const acceptedIds = new Set(acceptedDrivers.map((driver) => String(driver?.id || '')).filter(Boolean));
+    const assignedId = assignedDriver?.id ? String(assignedDriver.id) : '';
+    return nearbyLiveDrivers.filter((driver) => {
+      const id = String(driver?.id || '');
+      return id && id !== assignedId && !acceptedIds.has(id) && driver?.coordinate;
+    });
+  }, [acceptedDrivers, assignedDriver?.id, nearbyLiveDrivers]);
+
+  const acceptedDriverMarkers = useMemo(
+    () => acceptedDrivers
+      .map((driver) => {
+        const liveMatch = nearbyLiveDrivers.find((item) => String(item?.id || '') === String(driver?.id || ''));
+        return {
+          ...driver,
+          coordinate: liveMatch?.coordinate || driver?.coordinate,
+          headingDegrees: liveMatch?.headingDegrees ?? liveMatch?.heading ?? driver?.headingDegrees ?? driver?.heading ?? 0,
+        };
+      })
+      .filter((driver) => !!driver.coordinate),
+    [acceptedDrivers, nearbyLiveDrivers],
+  );
+
   const mapRegion = useMemo(
     () => buildPassengerRideMapRegion(
       [
         pickupCoordinate,
         dropoffCoordinate,
+        ...routeStopMarkers.map((stop) => stop.coordinate),
         ...sampleCoordinatesForFit(routeCoordinates),
-        ...acceptedDrivers.map((driver) => driver?.coordinate),
+        ...acceptedDriverMarkers.map((driver) => driver?.coordinate),
       ],
       {
         minDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
@@ -401,7 +501,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           : null,
       }
     ),
-    [acceptedDrivers, dropoffCoordinate, pickupCoordinate, routeCoordinates]
+    [acceptedDriverMarkers, dropoffCoordinate, pickupCoordinate, routeCoordinates, routeStopMarkers]
   );
 
   useEffect(() => {
@@ -409,8 +509,9 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     const fitCoordinates = [
       pickupCoordinate,
       dropoffCoordinate,
+      ...routeStopMarkers.map((stop) => stop.coordinate),
       ...sampleCoordinatesForFit(routeCoordinates),
-      ...acceptedDrivers.map((driver) => driver?.coordinate),
+      ...acceptedDriverMarkers.map((driver) => driver?.coordinate),
     ].filter(Boolean);
     if (fitCoordinates.length < 1) return undefined;
 
@@ -432,7 +533,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     }, 200);
 
     return () => clearTimeout(timeout);
-  }, [acceptedDrivers, dropoffCoordinate, mapRegion, pickupCoordinate, routeCoordinates]);
+  }, [acceptedDriverMarkers, dropoffCoordinate, mapRegion, pickupCoordinate, routeCoordinates, routeStopMarkers]);
 
   // ── Poll ride status ──
   useEffect(() => {
@@ -640,7 +741,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
   const hasDrivers = acceptedDrivers.length > 0 && !assignedDriver;
   const paymentLabel = paymentMethodLabel(rideStatus?.paymentMethod || rideRequest?.paymentMethod) || 'Cash';
-  const availableDriversCount = Math.max(driversViewingCount, acceptedDrivers.length);
+  const availableDriversCount = Math.max(driversViewingCount, acceptedDrivers.length, liveDriverMarkers.length);
   const bottomSafeInset = Math.max(insets.bottom, 12);
   const collapsedSheetHeight = Math.round(Math.min(430, SCREEN_HEIGHT * 0.5) + bottomSafeInset);
   const expandedSheetHeight = Math.round(SCREEN_HEIGHT * 0.92);
@@ -717,17 +818,47 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           rotateEnabled={false}
           pitchEnabled={false}
         >
-          <Marker coordinate={pickupCoordinate} title="Pickup" pinColor={PRIMARY_BLUE} />
-          <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" />
+          <Marker coordinate={pickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
+            <LetterMarker letter="A" color={PRIMARY_BLUE} />
+          </Marker>
+          <Marker
+            coordinate={dropoffCoordinate}
+            title="B · Drop-off"
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <LetterMarker letter="B" color="#111827" />
+          </Marker>
+          {routeStopMarkers.map((stop) => (
+            <Marker
+              key={stop.key}
+              coordinate={stop.coordinate}
+              title={`${stop.letter} · ${stop.label}`}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <LetterMarker letter={stop.letter} color="#f97316" />
+            </Marker>
+          ))}
           <Polyline
             coordinates={routeCoordinates}
             strokeColor={PRIMARY_BLUE}
             strokeWidth={5}
           />
-          {acceptedDrivers.filter((d) => !!d.coordinate).map((driver) => (
-            <Marker key={driver.id} coordinate={driver.coordinate} title={driver.driverName}>
-              <View className="h-7 w-7 rounded-full border-2 border-white" style={{ backgroundColor: PRIMARY_BLUE }} />
-            </Marker>
+          {liveDriverMarkers.map((driver) => (
+            <DriverVehicleMapMarker
+              key={`live-driver-${driver.id}`}
+              coordinate={driver.coordinate}
+              headingDegrees={driver.headingDegrees || driver.heading || 0}
+              size={26}
+            />
+          ))}
+          {acceptedDriverMarkers.map((driver) => (
+            <DriverVehicleMapMarker
+              key={`accepted-driver-${driver.id}`}
+              coordinate={driver.coordinate}
+              headingDegrees={driver.headingDegrees || driver.heading || 0}
+              etaLabel={driver.etaMinutes ? `${driver.etaMinutes} min` : null}
+              size={26}
+            />
           ))}
         </MapView>
 

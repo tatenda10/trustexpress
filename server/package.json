@@ -88,6 +88,7 @@
     "drivers:audit-unsynced": "node scripts/find-unsynced-clerk-drivers.js",
     "wallet:grant-startup": "node scripts/grant-startup-wallet-credit.js",
     "wallet:grant-startup:apply": "node scripts/grant-startup-wallet-credit.js --amount=5 --apply=true",
+    "wallet:top-up-driver": "node scripts/top-up-driver-wallet-by-email.js",
     "wallet:revoke-grant": "node scripts/revoke-wallet-grant.js",
     "wallet:auto-payout-online": "node scripts/process-monday-online-payouts.js",
     "agent:repair-driver-referrals": "node scripts/attach-agent-drivers.js",

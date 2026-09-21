@@ -5,7 +5,7 @@ import BASE_URL from '../context/Api'
 import { useAuth } from '../authcontext/AuthContext'
 import GeoPlotMap from '../components/GeoPlotMap'
 
-const DEFAULT_AREA = 'Bulawayo'
+const DEFAULT_AREA = ''
 
 function statusBadge(status) {
   if (status === 'Available') return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'

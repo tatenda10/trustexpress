@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Dimensions, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
@@ -27,6 +28,7 @@ import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons
 import { buildRatingReviewText, toggleRatingTag } from '../../constants/rideRatingTags';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
 import { connectRealtime } from '../../realtime';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import {
   DriverTripEmptyState,
   DriverTripLoadingState,
@@ -42,14 +44,14 @@ const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
 const AUTO_ARRIVAL_STABLE_MS = 3500;
 const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.30);
-const TRIP_STATUS_REFRESH_MS = 8000;
+const TRIP_STATUS_REFRESH_MS = 3000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
 const FALLBACK_DRIVER_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 const DEFAULT_LAT_DELTA = 0.03;
 const DEFAULT_LNG_DELTA = 0.03;
-const DRIVER_FOLLOW_LAT_DELTA = 0.012;
-const DRIVER_FOLLOW_LNG_DELTA = 0.012;
+const DRIVER_FOLLOW_LAT_DELTA = 0.007;
+const DRIVER_FOLLOW_LNG_DELTA = 0.007;
 const SERVER_DRIVER_COORDINATE_FALLBACK_MS = Math.max(LOCATION_UPDATE_INTERVAL_MS * 2, 15000);
 const SPEECH_MIN_INTERVAL_MS = 3500;
 const SPEECH_STABILIZE_MS = 900;
@@ -71,6 +73,16 @@ function normalizeCoordinate(value) {
 function normalizeCoordinates(values) {
   if (!Array.isArray(values)) return [];
   return values.map(normalizeCoordinate).filter(Boolean);
+}
+
+function areCoordinateListsClose(a, b, tolerance = 0.000001) {
+  const first = normalizeCoordinates(a);
+  const second = normalizeCoordinates(b);
+  if (first.length !== second.length) return false;
+  return first.every((coordinate, index) => (
+    Math.abs(coordinate.latitude - second[index].latitude) <= tolerance &&
+    Math.abs(coordinate.longitude - second[index].longitude) <= tolerance
+  ));
 }
 
 function calculateDistanceKm(start, end) {
@@ -223,6 +235,11 @@ function buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destina
     ...remainingRoute,
     ...(shouldAppendDestination ? [safeDestination] : []),
   ];
+}
+
+function nextRouteCoordinates(currentRouteCoordinates, origin, destination) {
+  const next = buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destination);
+  return areCoordinateListsClose(currentRouteCoordinates, next) ? currentRouteCoordinates : next;
 }
 
 function getRoutePreviewCoordinates(routeCoordinates, driverCoordinate, targetCoordinate) {
@@ -765,9 +782,14 @@ export default function DriverTripScreen({ navigation, route }) {
     () => resolvedLiveDriverCoordinate || resolvedRideDriverCoordinate || pickupCoordinate || dropoffCoordinate,
     [resolvedLiveDriverCoordinate, resolvedRideDriverCoordinate, pickupCoordinate, dropoffCoordinate],
   );
+  const passengerConfirmedPickup = Boolean(ride?.passengerConfirmedAt);
   const targetCoordinate = useMemo(
-    () => (ride?.stage === 'on_trip' ? currentTargetCoordinate || dropoffCoordinate : pickupCoordinate),
-    [currentTargetCoordinate, dropoffCoordinate, pickupCoordinate, ride?.stage],
+    () => (
+      ride?.stage === 'on_trip' || (ride?.stage === 'waiting_for_customer' && passengerConfirmedPickup)
+        ? currentTargetCoordinate || dropoffCoordinate
+        : pickupCoordinate
+    ),
+    [currentTargetCoordinate, dropoffCoordinate, passengerConfirmedPickup, pickupCoordinate, ride?.stage],
   );
   const safeRouteCoordinates = useMemo(
     () => normalizeCoordinates(routeCoordinates),
@@ -807,7 +829,7 @@ export default function DriverTripScreen({ navigation, route }) {
       movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
       routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
     ) {
-      setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, targetCoordinate));
+      setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, targetCoordinate));
       return undefined;
     }
 
@@ -817,7 +839,7 @@ export default function DriverTripScreen({ navigation, route }) {
     lastRouteOriginRef.current = driverCoordinate;
     lastRouteTargetRef.current = targetCoordinate;
     lastRouteFetchedAtRef.current = Date.now();
-    setRouteCoordinates((current) => buildImmediateRouteCoordinates(current, driverCoordinate, targetCoordinate));
+    setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, targetCoordinate));
 
     const loadDirections = async () => {
       try {
@@ -883,7 +905,8 @@ export default function DriverTripScreen({ navigation, route }) {
 
     if (!mapReadyRef.current || !mapRef.current || coordinatesToFit.length < 2) return;
 
-    const stageChanged = lastAutoFocusStageRef.current !== String(ride?.stage || '');
+    const focusStageKey = `${String(ride?.stage || '')}|${passengerConfirmedPickup ? 'confirmed' : 'waiting'}`;
+    const stageChanged = lastAutoFocusStageRef.current !== focusStageKey;
     if (hasAutoFocusedRef.current && !stageChanged) return;
 
     const timeout = setTimeout(() => {
@@ -902,7 +925,7 @@ export default function DriverTripScreen({ navigation, route }) {
           animated: true,
         });
         hasAutoFocusedRef.current = true;
-        lastAutoFocusStageRef.current = String(ride?.stage || '');
+        lastAutoFocusStageRef.current = focusStageKey;
         console.log(TRIP_DEBUG_PREFIX, 'fitToCoordinates success');
       } catch {
         console.log(TRIP_DEBUG_PREFIX, 'fitToCoordinates failed');
@@ -911,7 +934,7 @@ export default function DriverTripScreen({ navigation, route }) {
     }, 400);
 
     return () => clearTimeout(timeout);
-  }, [insets.bottom, insets.top, ride?.stage, routeCoordinates.length, targetCoordinate]);
+  }, [insets.bottom, insets.top, passengerConfirmedPickup, ride?.stage, routeCoordinates.length, targetCoordinate]);
 
   // Live distance from current position to the active target so it updates every location tick.
   const distanceKmText = useMemo(() => {
@@ -1301,9 +1324,11 @@ export default function DriverTripScreen({ navigation, route }) {
   }
 
   const destinationForMaps = ride.stage === 'on_trip'
+    || (ride.stage === 'waiting_for_customer' && passengerConfirmedPickup)
     ? (currentTargetCoordinate || dropoffCoordinate)
     : pickupCoordinate;
   const destinationLabelForMaps = ride.stage === 'on_trip'
+    || (ride.stage === 'waiting_for_customer' && passengerConfirmedPickup)
     ? (ride.currentTargetLabel || ride.dropoffLabel)
     : ride.pickupLabel;
   let passengerProfileImageUrl = null;
@@ -1316,8 +1341,8 @@ export default function DriverTripScreen({ navigation, route }) {
     });
   }
   const isWaitingAtPickup = ride.stage === 'waiting_for_customer';
-  const stageTitle = ride.stage === 'on_trip' ? 'Drive' : isWaitingAtPickup ? 'Pickup wait' : 'To pickup';
-  const targetLabel = ride.stage === 'on_trip'
+  const stageTitle = ride.stage === 'on_trip' ? 'Drive' : isWaitingAtPickup ? (passengerConfirmedPickup ? 'Ready to start' : 'Pickup wait') : 'To pickup';
+  const targetLabel = ride.stage === 'on_trip' || (isWaitingAtPickup && passengerConfirmedPickup)
     ? (ride.currentTargetLabel || currentIntermediateStop?.label || ride.dropoffLabel)
     : ride.pickupLabel;
   const primaryMetric = isWaitingAtPickup ? pickupWaitCountdownText : etaText;
@@ -1327,6 +1352,7 @@ export default function DriverTripScreen({ navigation, route }) {
       : 'Passenger pickup timer'
     : distanceKmText;
   const guidanceText = normalizeInstructionForSpeech(nextInstruction) || (ride.stage === 'on_trip'
+    || (isWaitingAtPickup && passengerConfirmedPickup)
     ? `Continue toward ${ride.currentTargetLabel || currentIntermediateStop?.label || ride.dropoffLabel || 'the next stop'}`
     : `Continue toward ${ride.pickupLabel || 'the pickup point'}`);
   const passengerConfirmationText = ride.passengerConfirmedAt
@@ -1461,47 +1487,71 @@ export default function DriverTripScreen({ navigation, route }) {
     <Modal
       visible={showPinModal}
       transparent
-      animationType="slide"
+      animationType="fade"
       onRequestClose={() => {
         if (!verifyingPin) setShowPinModal(false);
       }}
     >
-      <View className="flex-1 justify-end bg-black/50">
-        <View className="rounded-t-[28px] bg-white px-5 pt-5 pb-8">
-          <Text className="text-xs font-bold uppercase tracking-[1px] text-indigo-700">Night safety PIN</Text>
-          <Text className="mt-2 text-2xl font-bold text-gray-900">Enter passenger PIN</Text>
-          <Text className="mt-2 text-sm leading-6 text-gray-500">
-            Ask the passenger for their 4-digit PIN shown in their app before starting the trip.
-          </Text>
-          <TextInput
-            className="mt-5 rounded-[18px] border border-gray-200 bg-[#f8fafc] px-4 py-4 text-center text-3xl font-bold tracking-[12px] text-gray-900"
-            value={pinInput}
-            onChangeText={(value) => setPinInput(String(value || '').replace(/\D/g, '').slice(0, 4))}
-            keyboardType="number-pad"
-            maxLength={4}
-            placeholder="0000"
-            placeholderTextColor="#cbd5e1"
-            editable={!verifyingPin}
-          />
-          <TouchableOpacity
-            onPress={handleVerifyPinAndStart}
-            disabled={verifyingPin || pinInput.length !== 4}
-            className="mt-4 h-14 items-center justify-center rounded-[20px]"
-            style={{ backgroundColor: PRIMARY_BLUE, opacity: verifyingPin || pinInput.length !== 4 ? 0.6 : 1 }}
+      <KeyboardAvoidingView
+        behavior="padding"
+        className="flex-1"
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+      >
+        <View className="flex-1 justify-center bg-black/60 px-5">
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{
+              flexGrow: 1,
+              justifyContent: 'center',
+              paddingTop: Math.max(insets.top + 28, 56),
+              paddingBottom: Math.max(insets.bottom + 300, 330),
+            }}
           >
-            <Text className="text-base font-bold text-white">
-              {verifyingPin ? 'Verifying...' : 'Verify PIN and start ride'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setShowPinModal(false)}
-            disabled={verifyingPin}
-            className="mt-3 h-12 items-center justify-center"
-          >
-            <Text className="text-base font-semibold text-gray-500">Cancel</Text>
-          </TouchableOpacity>
+            <View className="self-stretch rounded-[30px] bg-white px-5 py-6">
+              <View className="items-center">
+                <View className="h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50">
+                  <Ionicons name="keypad" size={28} color="#4338ca" />
+                </View>
+                <Text className="mt-4 text-xs font-bold uppercase tracking-[1.5px] text-indigo-700">Night safety PIN</Text>
+                <Text className="mt-2 text-center text-2xl font-extrabold text-gray-950">Enter passenger PIN</Text>
+              </View>
+              <Text className="mt-3 text-center text-sm leading-6 text-gray-500">
+                Ask the passenger for their 4-digit PIN shown in their app before starting the trip.
+              </Text>
+              <TextInput
+                className="mt-6 rounded-[22px] border-2 border-indigo-100 bg-[#f8fafc] px-4 py-5 text-center text-3xl font-extrabold tracking-[12px] text-gray-950"
+                value={pinInput}
+                onChangeText={(value) => setPinInput(String(value || '').replace(/\D/g, '').slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+                placeholder="0000"
+                placeholderTextColor="#cbd5e1"
+                editable={!verifyingPin}
+                autoFocus
+              />
+              <TouchableOpacity
+                onPress={handleVerifyPinAndStart}
+                disabled={verifyingPin || pinInput.length !== 4}
+                className="mt-5 h-14 items-center justify-center rounded-[22px]"
+                style={{ backgroundColor: PRIMARY_BLUE, opacity: verifyingPin || pinInput.length !== 4 ? 0.6 : 1 }}
+              >
+                <Text className="text-base font-bold text-white">
+                  {verifyingPin ? 'Verifying...' : 'Verify PIN and start ride'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowPinModal(false)}
+                disabled={verifyingPin}
+                className="mt-3 h-12 items-center justify-center"
+              >
+                <Text className="text-base font-bold text-gray-500">Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
     </>
   );

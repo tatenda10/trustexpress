@@ -28,8 +28,10 @@ import {
   isAdminDispatchedRide,
 } from '../lib/assign-ride-driver.js';
 import {
+  assignSafetyPinIfNeeded,
   assertSafetyPinVerifiedForStart,
   buildDriverSafetyPinPayload,
+  buildPassengerSafetyPinPayload,
   verifyRideSafetyPin,
 } from '../lib/ride-safety-pin.js';
 import {
@@ -65,8 +67,14 @@ const DEADLOCK_RETRY_ATTEMPTS = 3;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
 const DRIVER_REQUEST_RADIUS_KM = 5;
+const DEBUG_DRIVER_REQUESTS = String(process.env.DEBUG_DRIVER_REQUESTS || '').trim().toLowerCase() === 'true';
 /** How long an open ride request stays accept-able for drivers (incoming request countdown). */
 const OPEN_REQUEST_TTL_MINUTES = 3;
+
+function debugDriverRequests(event, payload = {}) {
+  if (!DEBUG_DRIVER_REQUESTS) return;
+  console.log(`[drivers.ride-requests] ${event}`, payload);
+}
 
 function computeOpenRequestExpiry(presentedAt) {
   if (!presentedAt) {
@@ -649,8 +657,31 @@ router.post('/availability', requireAuth, async (req, res) => {
       [req.userId]
     );
     const wasOnline = Number(existingAvailability?.is_online || 0) === 1;
-    const isLocationHeartbeat = isOnline && wasOnline;
     const forHire = req.body?.forHire === true;
+    let hasActiveTrip = false;
+
+    if (isOnline && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      const [activeRideOrHire] = await query(
+        `SELECT active_id
+         FROM (
+           SELECT id AS active_id, COALESCE(started_at, arrived_at, assigned_at, requested_at) AS active_at
+           FROM ride_requests
+           WHERE driver_user_id = ?
+             AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+           UNION ALL
+           SELECT id AS active_id, COALESCE(started_at, arrived_at, created_at) AS active_at
+           FROM hire_bookings
+           WHERE driver_user_id = ?
+             AND status IN ('confirmed', 'driver_arrived', 'in_progress')
+         ) active_trips
+         ORDER BY active_at DESC, active_id DESC
+         LIMIT 1`,
+        [req.userId, req.userId]
+      );
+      hasActiveTrip = Boolean(activeRideOrHire);
+    }
+
+    const isLocationHeartbeat = isOnline && (wasOnline || hasActiveTrip);
 
     // Mid-ride / heartbeat location updates should not re-run go-online gates.
     // Wallet/verification checks only apply when transitioning offline -> online.
@@ -871,7 +902,17 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
 
     const walletStatus = await getDriverWalletStatus(req.userId);
     if (!walletStatus.sufficientBalance) {
-      return res.json({ requests: [], wallet: walletStatus });
+      debugDriverRequests('empty:wallet', {
+        driverUserId: req.userId,
+        availableBalance: walletStatus.availableBalance,
+        promotionalBalance: walletStatus.promotionalBalance,
+        minimumRequiredBalance: walletStatus.minimumRequiredBalance,
+      });
+      return res.json({
+        requests: [],
+        wallet: walletStatus,
+        debug: { driverUserId: req.userId, reason: 'wallet', serverTime: new Date().toISOString() },
+      });
     }
 
     await cleanupStaleActiveRides(req.userId);
@@ -886,7 +927,18 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     );
 
     if (!availability || !availability.is_online || availability.current_lat === null || availability.current_lng === null) {
-      return res.json({ requests: [], wallet: walletStatus });
+      debugDriverRequests('empty:availability', {
+        driverUserId: req.userId,
+        hasAvailability: Boolean(availability),
+        isOnline: Boolean(availability?.is_online),
+        hasLatitude: availability?.current_lat !== null && availability?.current_lat !== undefined,
+        hasLongitude: availability?.current_lng !== null && availability?.current_lng !== undefined,
+      });
+      return res.json({
+        requests: [],
+        wallet: walletStatus,
+        debug: { driverUserId: req.userId, reason: 'availability', serverTime: new Date().toISOString() },
+      });
     }
 
     const [activeRide] = await query(
@@ -898,7 +950,15 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       [req.userId]
     );
     if (activeRide) {
-      return res.json({ requests: [], wallet: walletStatus });
+      debugDriverRequests('empty:active-ride', {
+        driverUserId: req.userId,
+        activeRideId: activeRide.id,
+      });
+      return res.json({
+        requests: [],
+        wallet: walletStatus,
+        debug: { driverUserId: req.userId, reason: 'active_ride', activeRideId: activeRide.id, serverTime: new Date().toISOString() },
+      });
     }
 
     const [activeHire] = await query(
@@ -909,8 +969,24 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
        LIMIT 1`,
       [req.userId]
     );
-    if (activeHire || isTruckDriver((await getDriverVerificationFromMysql(req.userId, user))?.driverProfile)) {
-      return res.json({ requests: [], wallet: walletStatus });
+    const verificationForRequests = await getDriverVerificationFromMysql(req.userId, user);
+    if (activeHire || isTruckDriver(verificationForRequests?.driverProfile)) {
+      debugDriverRequests(activeHire ? 'empty:active-hire' : 'empty:truck-driver', {
+        driverUserId: req.userId,
+        activeHireId: activeHire?.id || null,
+        driverKind: verificationForRequests?.driverProfile?.driverKind || null,
+      });
+      return res.json({
+        requests: [],
+        wallet: walletStatus,
+        debug: {
+          driverUserId: req.userId,
+          reason: activeHire ? 'active_hire' : 'truck_driver',
+          activeHireId: activeHire?.id || null,
+          driverKind: verificationForRequests?.driverProfile?.driverKind || null,
+          serverTime: new Date().toISOString(),
+        },
+      });
     }
 
     await refreshOpenRideOffers();
@@ -964,7 +1040,12 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.requested_at,
          r.driver_found_at,
          r.driver_user_id,
-         rr.responded_at AS offer_presented_at
+         rr.responded_at AS offer_presented_at,
+         DATE_ADD(rr.responded_at, INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE) AS offer_expires_at,
+         GREATEST(
+           0,
+           (${OPEN_REQUEST_TTL_MINUTES} * 60) - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
+         ) AS offer_remaining_seconds
        FROM ride_request_driver_responses rr
        INNER JOIN ride_requests r ON r.id = rr.ride_request_id
        WHERE rr.driver_user_id = ?
@@ -991,7 +1072,13 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       const driverDistanceKm = calculateDistanceKm(driverPoint, pickupCoordinate);
       const requestedAt = toIsoOrNull(row.requested_at);
       const offerPresentedAt = toIsoOrNull(row.offer_presented_at) || requestedAt;
-      const { expiresAt, remainingSeconds } = computeOpenRequestExpiry(row.offer_presented_at || row.requested_at);
+      const fallbackExpiry = computeOpenRequestExpiry(row.offer_presented_at || row.requested_at);
+      const remainingSeconds = Number.isFinite(Number(row.offer_remaining_seconds))
+        ? Number(row.offer_remaining_seconds)
+        : fallbackExpiry.remainingSeconds;
+      const expiresAt = row.offer_expires_at
+        ? toIsoOrNull(row.offer_expires_at)
+        : fallbackExpiry.expiresAt;
 
       return {
         id: row.id,
@@ -1072,12 +1159,45 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       }
     }));
 
-    await markRideRequestsViewedByDriver(
-      rows.map((row) => row.id),
+    const markedViewedCount = await markRideRequestsViewedByDriver(
+      requests.map((request) => request.id),
       req.userId
     );
 
-    return res.json({ requests, wallet: walletStatus });
+    debugDriverRequests('result', {
+      driverUserId: req.userId,
+      offeredRideRequestIds: rows.map((row) => row.id),
+      visibleRideRequestIds: requests.map((request) => request.id),
+      hiddenRideRequestIds: rows
+        .map((row) => row.id)
+        .filter((id) => !requests.some((request) => Number(request.id) === Number(id))),
+      markedViewedCount,
+    });
+    console.log('[drivers.ride-requests] response timing', {
+      driverUserId: req.userId,
+      serverTime: new Date().toISOString(),
+      offeredCount: rows.length,
+      visibleCount: requests.length,
+      offeredRideRequestIds: rows.map((row) => row.id),
+      visibleRideRequestIds: requests.map((request) => request.id),
+      visibleRequestAgesMs: requests.map((request) => ({
+        id: request.id,
+        requestedAt: request.requestedAt || null,
+        ageMs: request.requestedAt ? Date.now() - new Date(request.requestedAt).getTime() : null,
+      })),
+    });
+
+    return res.json({
+      requests,
+      wallet: walletStatus,
+      debug: {
+        driverUserId: req.userId,
+        reason: 'ok',
+        offeredRideRequestIds: rows.map((row) => row.id),
+        visibleRideRequestIds: requests.map((request) => request.id),
+        serverTime: new Date().toISOString(),
+      },
+    });
   } catch (err) {
     console.error('GET /api/drivers/ride-requests', err);
     return res.status(500).json({ error: 'Server error' });
@@ -1495,16 +1615,20 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
     );
     const arrivedAt = new Date().toISOString();
 
+    await assignSafetyPinIfNeeded(rideRequestId, new Date());
+
     const [ride] = await query(
-      'SELECT passenger_user_id FROM ride_requests WHERE id = ? AND driver_user_id = ? LIMIT 1',
+      'SELECT * FROM ride_requests WHERE id = ? AND driver_user_id = ? LIMIT 1',
       [rideRequestId, req.userId]
     );
+    const passengerSafetyPinPayload = buildPassengerSafetyPinPayload(ride);
     if (ride?.passenger_user_id) {
       emitRideStatusToPassenger(ride.passenger_user_id, {
         rideRequestId,
         status: 'driver_arrived',
         arrivedAt,
         driverUserId: req.userId,
+        ...passengerSafetyPinPayload,
       });
       await notifyPassengerRideStatus(ride.passenger_user_id, {
         title: 'Driver has arrived',
@@ -1524,7 +1648,7 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
       arrivedAt,
     });
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, arrivedAt });
   } catch (err) {
     console.error('PATCH /api/drivers/current-ride/:rideRequestId/arrived', err);
     return res.status(500).json({ error: 'Server error' });

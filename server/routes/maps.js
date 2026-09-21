@@ -60,6 +60,7 @@ router.post('/directions', requireAuth, async (req, res) => {
         durationMinutes: route.durationMinutes,
         nextInstruction: route.nextInstruction || '',
         includeTraffic: Boolean(route.includeTraffic),
+        fallback: Boolean(route.fallback),
       },
       cacheHit: Boolean(route.cacheHit),
     });

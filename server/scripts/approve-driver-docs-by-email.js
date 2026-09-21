@@ -30,6 +30,7 @@ async function main() {
     `SELECT id, clerk_user_id, email, role, phone_number, phone_verified_at
      FROM users
      WHERE LOWER(email) = ?
+     ORDER BY updated_at DESC, created_at DESC, id DESC
      LIMIT 5`,
     [email]
   );

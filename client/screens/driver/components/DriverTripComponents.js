@@ -23,6 +23,20 @@ function getStopDisplayNumber(index) {
   return Number(index) + 1;
 }
 
+function RouteLetterMarker({ letter, color, muted = false }) {
+  const markerColor = muted ? '#94a3b8' : color;
+  return (
+    <View className="items-center">
+      <View
+        className="h-8 w-8 items-center justify-center rounded-full border-2 border-white"
+        style={{ backgroundColor: markerColor }}
+      >
+        <Text className="text-[13px] font-extrabold text-white">{letter}</Text>
+      </View>
+    </View>
+  );
+}
+
 export function DriverTripEmptyState({ onBack }) {
   return (
     <View className="flex-1 items-center justify-center bg-white px-5">
@@ -206,6 +220,8 @@ export function DriverTripMapPanel({
   onCancelRide,
   submittingPanicAlert,
 }) {
+  const isPinStartAction = /pin/i.test(String(startRideLabel || '')) && !startRideDisabled;
+
   return (
     <View className="flex-1 bg-[#eef2f7]">
       <MapView
@@ -231,21 +247,30 @@ export function DriverTripMapPanel({
           />
         ) : null}
         {pickupCoordinate ? (
-          <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+          <Marker coordinate={pickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
+            <RouteLetterMarker letter="A" color="#1d4ed8" />
+          </Marker>
         ) : null}
         {Array.isArray(intermediateStops) ? intermediateStops.map((stop, index) => (
           stop?.coordinate ? (
             <Marker
               key={`driver-stop-${index}`}
               coordinate={stop.coordinate}
-              title={stop.label || `Stop ${index + 1}`}
-              pinColor={index < Number(currentStopIndex || 0) ? '#94a3b8' : '#f97316'}
-              tracksViewChanges={false}
-            />
+              title={`${String.fromCharCode(67 + index)} · ${stop.label || `Stop ${index + 1}`}`}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <RouteLetterMarker
+                letter={String.fromCharCode(67 + index)}
+                color="#f97316"
+                muted={index < Number(currentStopIndex || 0)}
+              />
+            </Marker>
           ) : null
         )) : null}
         {dropoffCoordinate ? (
-          <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
+          <Marker coordinate={dropoffCoordinate} title="B · Drop-off" anchor={{ x: 0.5, y: 0.5 }}>
+            <RouteLetterMarker letter="B" color="#111827" />
+          </Marker>
         ) : null}
         {safeRouteCoordinates.length > 1 ? (
           <>
@@ -469,10 +494,22 @@ export function DriverTripMapPanel({
               <TouchableOpacity
                 onPress={onStartRide}
                 disabled={submitting || startRideDisabled}
-                className="ml-2 h-14 flex-1 items-center justify-center rounded-[20px]"
-                style={{ backgroundColor: primaryBlue, opacity: submitting || startRideDisabled ? 0.7 : 1 }}
+                className={`ml-2 h-14 flex-1 flex-row items-center justify-center rounded-[20px] ${isPinStartAction ? 'border border-indigo-200' : ''}`}
+                style={{
+                  backgroundColor: isPinStartAction ? '#eef2ff' : primaryBlue,
+                  opacity: submitting || startRideDisabled ? 0.7 : 1,
+                }}
               >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">{startRideLabel}</Text>}
+              {submitting ? (
+                <ActivityIndicator size="small" color={isPinStartAction ? '#4338ca' : '#fff'} />
+              ) : (
+                <>
+                  {isPinStartAction ? <Ionicons name="keypad" size={18} color="#4338ca" style={{ marginRight: 7 }} /> : null}
+                  <Text className={`text-base font-extrabold ${isPinStartAction ? 'text-indigo-800' : 'text-white'}`}>
+                    {startRideLabel}
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
           ) : null}

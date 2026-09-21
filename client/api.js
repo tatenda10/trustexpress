@@ -700,10 +700,11 @@ export async function markRideArrived(token, rideRequestId) {
   }, token);
 }
 
-export async function confirmPassengerPickup(token, rideRequestId) {
+export async function confirmPassengerPickup(token, rideRequestId, options = {}) {
   return apiFetch(`/api/rides/passenger/${rideRequestId}/confirm-pickup`, {
     method: 'PATCH',
     body: JSON.stringify({}),
+    suppressAuthErrorHandler: Boolean(options?.suppressAuthErrorHandler),
   }, token);
 }
 

@@ -270,16 +270,19 @@ export async function assignSafetyPinIfNeeded(rideRequestId, assignedAt = new Da
   if (!isNightSafetyWindow(assignedAt, settings)) return null;
 
   const pin = generateSafetyPin();
-  await query(
+  const result = await query(
     `UPDATE ride_requests
      SET safety_pin_required = 1,
          safety_pin_hash = ?,
          safety_pin_encrypted = ?,
          safety_pin_verified_at = NULL,
          safety_pin_attempts = 0
-     WHERE id = ?`,
+     WHERE id = ?
+       AND COALESCE(safety_pin_required, 0) = 0`,
     [hashSafetyPin(pin, rideId), encryptSafetyPin(pin, rideId), rideId]
   );
+
+  if (Number(result?.affectedRows || 0) <= 0) return null;
 
   return {
     required: true,

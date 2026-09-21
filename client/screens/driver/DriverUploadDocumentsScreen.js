@@ -22,12 +22,14 @@ import { applyDriverKindToStatus, getDriverVehicleRoute, normalizeDriverKind, re
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
+import DateSelectField from '../../components/DateSelectField';
 
 export const DRIVER_SKIP_ONBOARDING_KEY = 'trust_express_driver_skip_onboarding';
 export const DRIVER_SKIP_ENHANCED_SELFIE_KEY = 'trust_express_driver_skip_enhanced_selfie';
 
 const STEP_CURRENT = 4;
 const STEP_TOTAL = 6;
+const CURRENT_YEAR = new Date().getFullYear();
 
 const DOCS = [
   { key: 'driverLicence', label: "Driver's License", subtitle: 'Front and back sides', icon: 'id-card-outline' },
@@ -762,33 +764,27 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
             <Text className="mb-4 text-xs text-gray-500">
               These numbers must match your documents and cannot be reused on another account.
             </Text>
-            <Text className="mb-2 text-sm font-medium text-gray-700">
-              Date of birth <Text className="text-red-500">*</Text>
-            </Text>
-            <TextInput
-              className="mb-4 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#9ca3af"
-              autoCapitalize="none"
-              autoCorrect={false}
+            <DateSelectField
+              label="Date of birth"
               value={dateOfBirth}
-              onChangeText={setDateOfBirth}
+              placeholder="Select date of birth"
+              required
+              minYear={1940}
+              maxYear={CURRENT_YEAR - 16}
+              fallbackYear={1998}
+              onChange={setDateOfBirth}
             />
-            <Text className="mb-2 text-sm font-medium text-gray-700">
-              Licence expiration <Text className="text-red-500">*</Text>
-            </Text>
-            <TextInput
-              className="mb-1 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#9ca3af"
-              autoCapitalize="none"
-              autoCorrect={false}
+            <DateSelectField
+              label="Licence expiration"
               value={driverLicenceExpiresAt}
-              onChangeText={setDriverLicenceExpiresAt}
+              placeholder="Select licence expiry date"
+              required
+              minYear={CURRENT_YEAR}
+              maxYear={CURRENT_YEAR + 20}
+              fallbackYear={CURRENT_YEAR + 1}
+              helpText="Use the expiry date printed on your driver licence."
+              onChange={setDriverLicenceExpiresAt}
             />
-            <Text className="mb-2 text-xs text-gray-500">
-              Use the expiry date printed on your driver licence.
-            </Text>
           </View>
         ) : null}
 

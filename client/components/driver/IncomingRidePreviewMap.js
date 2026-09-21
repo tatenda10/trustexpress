@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import MapView, { Marker, Polyline } from '../maps/MapViewCompat';
+import DriverVehicleMapMarker from '../maps/DriverVehicleMapMarker';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 function isValidCoord(coordinate) {
@@ -67,25 +68,9 @@ function regionFromPoints(points) {
   };
 }
 
-function LetterMarker({ letter, color, label }) {
+function LetterMarker({ letter, color }) {
   return (
     <View style={{ alignItems: 'center' }}>
-      {label ? (
-        <View
-          style={{
-            marginBottom: 4,
-            maxWidth: 120,
-            borderRadius: 8,
-            backgroundColor: color,
-            paddingHorizontal: 8,
-            paddingVertical: 4,
-          }}
-        >
-          <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }} numberOfLines={1}>
-            {label}
-          </Text>
-        </View>
-      ) : null}
       <View
         style={{
           height: 28,
@@ -250,41 +235,30 @@ export default function IncomingRidePreviewMap({
           <Polyline coordinates={tripLine} strokeColor="#111827" strokeWidth={4} />
         ) : null}
 
-        {driver ? (
-          <Marker coordinate={driver} title="You" tracksViewChanges={tracksViewChanges} anchor={{ x: 0.5, y: 0.5 }}>
-            <View
-              style={{
-                height: 18,
-                width: 18,
-                borderRadius: 9,
-                backgroundColor: PRIMARY_BLUE,
-                borderWidth: 3,
-                borderColor: '#fff',
-              }}
-            />
-          </Marker>
-        ) : null}
+        {driver ? <DriverVehicleMapMarker coordinate={driver} size={24} /> : null}
 
         {pickup ? (
           <Marker
             coordinate={pickup}
             title="A · Pickup"
             tracksViewChanges={tracksViewChanges}
-            anchor={{ x: 0.5, y: 1 }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            zIndex={40}
           >
-            <LetterMarker letter="A" color={PRIMARY_BLUE} label={pickupEtaLabel} />
+            <LetterMarker letter="A" color={PRIMARY_BLUE} />
           </Marker>
         ) : null}
 
         {stops.map((stop, index) => {
-          const letter = String.fromCharCode(66 + index);
+          const letter = String.fromCharCode(67 + index);
           return (
             <Marker
               key={`incoming-preview-stop-${index}`}
               coordinate={stop}
               title={`${letter} · Stop ${index + 1}`}
               tracksViewChanges={tracksViewChanges}
-              anchor={{ x: 0.5, y: 1 }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={35}
             >
               <LetterMarker letter={letter} color="#f97316" />
             </Marker>
@@ -296,9 +270,10 @@ export default function IncomingRidePreviewMap({
             coordinate={dropoff}
             title={`${String.fromCharCode(65 + 1 + stops.length)} · Drop-off`}
             tracksViewChanges={tracksViewChanges}
-            anchor={{ x: 0.5, y: 1 }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            zIndex={40}
           >
-            <LetterMarker letter={String.fromCharCode(65 + 1 + stops.length)} color="#111827" label={tripEtaLabel} />
+            <LetterMarker letter="B" color="#111827" />
           </Marker>
         ) : null}
       </MapView>

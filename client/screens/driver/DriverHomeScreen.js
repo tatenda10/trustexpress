@@ -49,7 +49,7 @@ import {
 } from '../../services/driverRideOverlayState';
 
 const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
-const REQUEST_REFRESH_INTERVAL_MS = 2500;
+const REQUEST_REFRESH_INTERVAL_MS = 800;
 const CURRENT_RIDE_REFRESH_INTERVAL_MS = 15000;
 const AVAILABILITY_TOGGLE_DEBOUNCE_MS = 2500;
 const DB_UPDATE_INTERVAL_MS = 90000;
@@ -65,7 +65,6 @@ const INITIAL_REGION = {
 };
 const DRIVER_IDLE_REGION = { latitudeDelta: 0.05, longitudeDelta: 0.05 };
 const DRIVER_KEEP_AWAKE_TAG = 'driver-home-online';
-const INCOMING_RIDE_ALERT_INTERVAL_MS = 4500;
 const MIN_ACCEPTABLE_REQUEST_SECONDS = 8;
 const REQUEST_REAPPEAR_DELAY_MS = 5000;
 const PRIORITY_DRIVER_DISTANCE_KM = 1.5;
@@ -98,6 +97,15 @@ function getRemainingSeconds(expiresAt, serverRemainingSeconds = null, capturedA
   }
   if (!expiresAt) return 0;
   return Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000));
+}
+
+function getRideRequestDismissalMs(request) {
+  const remainingSeconds = getRemainingSeconds(
+    request?.expiresAt,
+    request?.remainingSeconds,
+    request?.remainingSecondsCapturedAt,
+  );
+  return Math.max(REQUEST_REAPPEAR_DELAY_MS, (remainingSeconds + 2) * 1000);
 }
 
 function formatCountdown(totalSeconds) {
@@ -363,8 +371,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const idleLocationWatcherRef = useRef(null);
   const incomingRideSoundRef = useRef(null);
-  const incomingAlertTimerRef = useRef(null);
   const incomingAlertInFlightRef = useRef(false);
+  const incomingAlertActiveRef = useRef(false);
   const locationWatcherRef = useRef(null);
   const locationSyncInFlightRef = useRef(false);
   const manualAvailabilityRequestRef = useRef(null);
@@ -372,6 +380,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const currentRideLoadInFlightRef = useRef(false);
   const currentRideRefreshQueuedRef = useRef(false);
   const requestLoadInFlightRef = useRef(false);
+  const requestRefreshNowRef = useRef(null);
   const overlayPermissionPromptOpenRef = useRef(false);
   const forceOpenIncomingOverlayRef = useRef(false);
   const pendingNotificationRideRequestIdRef = useRef(null);
@@ -445,6 +454,27 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
         const handleRealtimeRefresh = (payload = {}) => {
           if (!active) return;
+          const realtimeReceivedAtMs = Date.now();
+          const serverRequestedAtMs = payload?.requestedAt ? new Date(payload.requestedAt).getTime() : null;
+          const serverEmittedAtMs = payload?.emittedAt ? new Date(payload.emittedAt).getTime() : null;
+          if (__DEV__) {
+            console.log('[driver.requests] realtime event', {
+              type: payload?.type || null,
+              status: payload?.status || null,
+              rideRequestId: payload?.rideRequestId || null,
+              requestedAt: payload?.requestedAt || null,
+              emittedAt: payload?.emittedAt || null,
+              receiveDelayMs: Number.isFinite(serverRequestedAtMs) ? realtimeReceivedAtMs - serverRequestedAtMs : null,
+              socketDelayMs: Number.isFinite(serverEmittedAtMs) ? realtimeReceivedAtMs - serverEmittedAtMs : null,
+            });
+          }
+          if (payload?.rideRequestId && !currentRide && !pendingSelectionRide) {
+            forceOpenIncomingOverlayRef.current = true;
+            pendingNotificationRideRequestIdRef.current = Number(payload.rideRequestId);
+            setIsListening(false);
+            setShowNewRequestBadge(true);
+            requestRefreshNowRef.current?.('realtime');
+          }
           const removedRideRequestId = Number(payload?.rideRequestId || 0);
           if (removedRideRequestId && Number(pendingSelectionRide?.id || 0) === removedRideRequestId) {
             setPendingSelectionRide(null);
@@ -562,11 +592,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
         markRideRequestDismissed(notificationRideRequestId);
         setDismissedRequestIds((current) => [...new Set([...current, notificationRideRequestId])]);
         clearOverlayRideRequest();
-        hiddenRequestUntilRef.current.set(notificationRideRequestId, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
-        setTimeout(() => {
-          restoreRideRequestDismissal(notificationRideRequestId);
-          setDismissedRequestIds((current) => current.filter((item) => item !== notificationRideRequestId));
-        }, REQUEST_REAPPEAR_DELAY_MS);
+        hiddenRequestUntilRef.current.set(notificationRideRequestId, Number.MAX_SAFE_INTEGER);
+        if (__DEV__) {
+          console.log('[driver.requests] notification decline hidden permanently', {
+            rideRequestId: notificationRideRequestId,
+          });
+        }
         updateTripOverlay({
           variant: 'online',
           title: 'Trust Express',
@@ -783,9 +814,15 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
     let active = true;
 
-    const loadRequests = async (initialLoad = false) => {
-      if (requestLoadInFlightRef.current) return;
+    const loadRequests = async (initialLoad = false, source = 'poll') => {
+      if (requestLoadInFlightRef.current) {
+        if (__DEV__) {
+          console.log('[driver.requests] load skipped: in flight', { source });
+        }
+        return;
+      }
       requestLoadInFlightRef.current = true;
+      const loadStartedAtMs = Date.now();
       try {
         if (initialLoad) {
           setLoadingRequests(true);
@@ -799,9 +836,37 @@ const DriverHomeScreen = ({ navigation, route }) => {
         if (!active) return;
 
         const serverCapturedAt = Date.now();
+        const serverRequests = Array.isArray(data?.requests) ? data.requests : [];
+        if (__DEV__) {
+          console.log('[driver.requests] api result', {
+            source,
+            loadDurationMs: Date.now() - loadStartedAtMs,
+            isOnline,
+            serverCount: serverRequests.length,
+            ids: serverRequests.map((request) => request.id),
+            requestAgesMs: serverRequests.map((request) => ({
+              id: request.id,
+              requestedAt: request.requestedAt || null,
+              ageMs: request.requestedAt ? Date.now() - new Date(request.requestedAt).getTime() : null,
+            })),
+            remainingSeconds: serverRequests.map((request) => ({
+              id: request.id,
+              remainingSeconds: request.remainingSeconds,
+              expiresAt: request.expiresAt || null,
+            })),
+            wallet: data?.wallet
+              ? {
+                  sufficientBalance: data.wallet.sufficientBalance,
+                  availableBalance: data.wallet.availableBalance,
+                  currency: data.wallet.currency,
+                }
+              : null,
+            serverDebug: data?.debug || null,
+          });
+        }
         const nextListRaw = filterActiveRideRequests(
-          Array.isArray(data?.requests)
-            ? data.requests
+          serverRequests.length
+            ? serverRequests
                 .filter((request) => {
                   const hiddenUntil = Number(hiddenRequestUntilRef.current.get(request.id) || 0);
                   return !dismissedRequestIds.includes(request.id) && hiddenUntil <= Date.now();
@@ -826,6 +891,47 @@ const DriverHomeScreen = ({ navigation, route }) => {
           return remaining >= MIN_ACCEPTABLE_REQUEST_SECONDS;
         });
         const nextRequest = nextList[0] || null;
+        if (__DEV__) {
+          console.log('[driver.requests] client visible', {
+            source,
+            rawCount: nextListRaw.length,
+            visibleCount: nextList.length,
+            visibleIds: nextList.map((request) => request.id),
+            visibleAgesMs: nextList.map((request) => ({
+              id: request.id,
+              requestedAt: request.requestedAt || null,
+              ageMs: request.requestedAt ? Date.now() - new Date(request.requestedAt).getTime() : null,
+            })),
+            dismissedRequestIds,
+            activeRequestId: activeRequest?.id || null,
+            currentRideId: currentRide?.id || null,
+            pendingSelectionRideId: pendingSelectionRide?.id || null,
+            showIncomingRideOverlay,
+          });
+        }
+
+        if (nextRequest && !currentRide && !pendingSelectionRide) {
+          if (__DEV__) {
+            console.log('[driver.requests] display incoming immediately', {
+              source,
+              rideRequestId: nextRequest.id,
+              requestedAt: nextRequest.requestedAt || null,
+              requestToDisplayMs: nextRequest.requestedAt ? Date.now() - new Date(nextRequest.requestedAt).getTime() : null,
+            });
+          }
+          setAvailableRequests(nextList);
+          setActiveRequest((current) => {
+            if (current) {
+              const refreshedCurrent = nextList.find((request) => request.id === current.id);
+              if (refreshedCurrent) return refreshedCurrent;
+            }
+            return nextRequest;
+          });
+          setOverlayRideRequest(nextRequest);
+          setShowIncomingRideOverlay(true);
+          setShowNewRequestBadge(true);
+          setIsListening(false);
+        }
 
         const prevCount = prevRequestCountRef.current;
         if (!initialLoad && nextList.length > prevCount && prevCount >= 0) {
@@ -924,6 +1030,13 @@ const DriverHomeScreen = ({ navigation, route }) => {
           pendingNotificationActionRef.current = null;
         } else if (!nextRequest) {
           setShowIncomingRideOverlay(false);
+        } else if (!currentRide && !pendingSelectionRide) {
+          if (__DEV__) {
+            console.log('[driver.requests] opening in-app incoming ride overlay', {
+              rideRequestId: nextRequest.id,
+            });
+          }
+          setShowIncomingRideOverlay(true);
         }
         setShowNewRequestBadge(nextList.length > 0);
         setIsListening(!nextRequest);
@@ -940,13 +1053,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
       }
     };
 
-    loadRequests(true);
+    requestRefreshNowRef.current = (source = 'manual') => loadRequests(false, source);
+
+    loadRequests(true, 'initial');
     const interval = setInterval(() => {
-      loadRequests(false);
+      loadRequests(false, 'poll');
     }, REQUEST_REFRESH_INTERVAL_MS);
 
     return () => {
       active = false;
+      requestRefreshNowRef.current = null;
       clearInterval(interval);
     };
   }, [dismissedRequestIds, isOnline, realtimeSignal]);
@@ -977,14 +1093,23 @@ const DriverHomeScreen = ({ navigation, route }) => {
     setOverlayRideRequest(liveRequests[0]);
   }, [availableRequests, nowTick]);
 
-  useEffect(() => {
-    const hasLiveIncomingRequest = availableRequests.some((request) => (
+  const liveIncomingRequestIds = useMemo(
+    () => availableRequests
+      .filter((request) => (
       getRemainingSeconds(
         request?.expiresAt,
         request?.remainingSeconds,
         request?.remainingSecondsCapturedAt,
       ) >= MIN_ACCEPTABLE_REQUEST_SECONDS
-    ));
+      ))
+      .map((request) => String(request?.id || ''))
+      .filter(Boolean)
+      .join(','),
+    [availableRequests],
+  );
+
+  useEffect(() => {
+    const hasLiveIncomingRequest = Boolean(liveIncomingRequestIds);
     const shouldAlertForIncomingRide =
       isFocused &&
       isOnline &&
@@ -996,6 +1121,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
       if (incomingAlertInFlightRef.current) return;
       incomingAlertInFlightRef.current = true;
       try {
+        if (incomingAlertActiveRef.current) return;
+        incomingAlertActiveRef.current = true;
         try {
           await Audio.setAudioModeAsync({
             allowsRecordingIOS: false,
@@ -1010,19 +1137,25 @@ const DriverHomeScreen = ({ navigation, route }) => {
         if (!incomingRideSoundRef.current) {
           const { sound } = await Audio.Sound.createAsync(
             require('../../assets/near_rides.mpeg'),
-            { shouldPlay: false, volume: 1.0, isLooping: false },
+            { shouldPlay: false, volume: 1.0, isLooping: true },
           );
           incomingRideSoundRef.current = sound;
         }
 
         const sound = incomingRideSoundRef.current;
         if (sound) {
-          await sound.setIsLoopingAsync(false);
+          await sound.setIsLoopingAsync(true);
           await sound.setVolumeAsync(1.0);
-          await sound.replayAsync();
+          const status = await sound.getStatusAsync().catch(() => null);
+          if (!status?.isLoaded) {
+            await sound.playAsync();
+          } else if (!status.isPlaying) {
+            await sound.playFromPositionAsync(0);
+          }
         }
-        Vibration.vibrate([0, 500, 180, 500, 180, 500]);
+        Vibration.vibrate([0, 500, 180, 500, 180, 500, 1200], true);
       } catch {
+        incomingAlertActiveRef.current = false;
         // Keep request flow working even if audio playback fails.
       } finally {
         incomingAlertInFlightRef.current = false;
@@ -1030,10 +1163,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
     };
 
     const stopIncomingAlert = async ({ clearNativeOverlay = false } = {}) => {
-      if (incomingAlertTimerRef.current) {
-        clearInterval(incomingAlertTimerRef.current);
-        incomingAlertTimerRef.current = null;
-      }
+      incomingAlertActiveRef.current = false;
       try {
         if (incomingRideSoundRef.current) {
           await incomingRideSoundRef.current.stopAsync();
@@ -1061,9 +1191,6 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
     if (shouldAlertForIncomingRide) {
       playIncomingAlert();
-      if (!incomingAlertTimerRef.current) {
-        incomingAlertTimerRef.current = setInterval(playIncomingAlert, INCOMING_RIDE_ALERT_INTERVAL_MS);
-      }
     } else {
       stopIncomingAlert({
         clearNativeOverlay: !currentRide && !pendingSelectionRide && !hasLiveIncomingRequest,
@@ -1073,7 +1200,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
     return () => {
       stopIncomingAlert();
     };
-  }, [availableRequests, currentRide, isFocused, isOnline, nowTick, pendingSelectionRide]);
+  }, [currentRide, isFocused, isOnline, liveIncomingRequestIds, pendingSelectionRide]);
 
   useEffect(() => {
     if (!isOnline || activeRequest || currentRide || pendingSelectionRide) {
@@ -1769,11 +1896,12 @@ const DriverHomeScreen = ({ navigation, route }) => {
     if (!req) return;
     markRideRequestDismissed(req.id);
     setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
-    hiddenRequestUntilRef.current.set(req.id, Date.now() + REQUEST_REAPPEAR_DELAY_MS);
-    setTimeout(() => {
-      restoreRideRequestDismissal(req.id);
-      setDismissedRequestIds((current) => current.filter((item) => item !== req.id));
-    }, REQUEST_REAPPEAR_DELAY_MS);
+    hiddenRequestUntilRef.current.set(req.id, Number.MAX_SAFE_INTEGER);
+    if (__DEV__) {
+      console.log('[driver.requests] declined request hidden permanently', {
+        rideRequestId: req.id,
+      });
+    }
     const nextList = availableRequests.filter((r) => r.id !== req.id);
     clearRideRequestNotifications({ rideRequestId: req.id }).catch(() => {});
     setAvailableRequests(nextList);

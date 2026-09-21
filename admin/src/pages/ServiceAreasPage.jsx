@@ -2,6 +2,7 @@ import axios from 'axios'
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
+import GeoPlotMap from '../components/GeoPlotMap'
 
 const EMPTY_FORM = {
   id: null,
@@ -41,6 +42,43 @@ function Input({ label, value, onChange, type = 'text', placeholder = '' }) {
   )
 }
 
+function roundCoordinate(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return ''
+  return Number(number.toFixed(6))
+}
+
+function toPoint(lat, lng) {
+  const nextLat = Number(lat)
+  const nextLng = Number(lng)
+  if (!Number.isFinite(nextLat) || !Number.isFinite(nextLng)) return null
+  return { lat: nextLat, lng: nextLng }
+}
+
+function buildAreaPath(area) {
+  const westLng = Number(area?.westLng)
+  const southLat = Number(area?.southLat)
+  const eastLng = Number(area?.eastLng)
+  const northLat = Number(area?.northLat)
+  if (![westLng, southLat, eastLng, northLat].every(Number.isFinite)) return []
+  return [
+    { lat: northLat, lng: westLng },
+    { lat: northLat, lng: eastLng },
+    { lat: southLat, lng: eastLng },
+    { lat: southLat, lng: westLng },
+    { lat: northLat, lng: westLng },
+  ]
+}
+
+function buildAreaBounds(area) {
+  const westLng = Number(area?.westLng)
+  const southLat = Number(area?.southLat)
+  const eastLng = Number(area?.eastLng)
+  const northLat = Number(area?.northLat)
+  if (![westLng, southLat, eastLng, northLat].every(Number.isFinite)) return null
+  return { minLat: southLat, minLng: westLng, maxLat: northLat, maxLng: eastLng }
+}
+
 export default function ServiceAreasPage() {
   const { token, can, admin } = useAuth()
   const [areas, setAreas] = useState([])
@@ -49,6 +87,7 @@ export default function ServiceAreasPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [visibleMapBounds, setVisibleMapBounds] = useState(null)
 
   const canManage = admin?.role === 'super_admin' || can('pricing.manage')
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token])
@@ -147,6 +186,61 @@ export default function ServiceAreasPage() {
     }
   }
 
+  const selectedCenter = toPoint(form.centerLat, form.centerLng)
+  const selectedPath = buildAreaPath(form)
+  const selectedBounds = buildAreaBounds(form)
+  const mapMarkers = [
+    ...areas.map((area) => {
+      const point = toPoint(area.centerLat, area.centerLng)
+      if (!point) return null
+      return {
+        id: `area-${area.id}`,
+        ...point,
+        label: area.label,
+        color: area.isActive ? '#059669' : '#94a3b8',
+        size: form.id === area.id ? 18 : 12,
+        selected: form.id === area.id,
+        onClick: () => editArea(area),
+      }
+    }).filter(Boolean),
+    selectedCenter ? {
+      id: 'selected-area-center',
+      ...selectedCenter,
+      label: `${form.label || 'Selected area'} center`,
+      color: '#4f46e5',
+      size: 18,
+      selected: true,
+    } : null,
+  ].filter(Boolean)
+  const mapPaths = selectedPath.length > 1
+    ? [{ id: 'selected-area-bounds', points: selectedPath, color: '#4f46e5' }]
+    : []
+
+  const applyVisibleMapBounds = () => {
+    if (!visibleMapBounds) return
+    setForm((current) => ({
+      ...current,
+      westLng: roundCoordinate(visibleMapBounds.westLng),
+      southLat: roundCoordinate(visibleMapBounds.southLat),
+      eastLng: roundCoordinate(visibleMapBounds.eastLng),
+      northLat: roundCoordinate(visibleMapBounds.northLat),
+    }))
+  }
+
+  const applyDefaultBoxAroundCenter = () => {
+    const center = toPoint(form.centerLat, form.centerLng)
+    if (!center) return
+    const latDelta = 0.08
+    const lngDelta = 0.08
+    setForm((current) => ({
+      ...current,
+      westLng: roundCoordinate(center.lng - lngDelta),
+      southLat: roundCoordinate(center.lat - latDelta),
+      eastLng: roundCoordinate(center.lng + lngDelta),
+      northLat: roundCoordinate(center.lat + latDelta),
+    }))
+  }
+
   return (
     <section className="space-y-4">
       <div className="border border-slate-300 bg-white px-4 py-3">
@@ -217,6 +311,45 @@ export default function ServiceAreasPage() {
           <div>
             <p className="text-sm font-semibold text-slate-900">{form.id ? 'Edit service area' : 'Add service area'}</p>
             <p className="mt-1 text-xs text-slate-500">Use coordinates around the city or operating zone.</p>
+          </div>
+          <div className="overflow-hidden border border-slate-200 bg-slate-50">
+            <div className="border-b border-slate-200 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-800">Pick from map</p>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Click the map to set the centre, zoom/pan around the region, then use visible map as bounds.
+              </p>
+            </div>
+            <div className="h-72">
+              <GeoPlotMap
+                bounds={selectedBounds}
+                markers={mapMarkers}
+                paths={mapPaths}
+                emptyMessage="Click the map to choose the centre of this service area."
+                onMapClick={(point) => {
+                  updateForm('centerLat', roundCoordinate(point.lat))
+                  updateForm('centerLng', roundCoordinate(point.lng))
+                }}
+                onBoundsChange={setVisibleMapBounds}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2 border-t border-slate-200 px-3 py-2">
+              <button
+                type="button"
+                onClick={applyVisibleMapBounds}
+                disabled={!visibleMapBounds}
+                className="h-9 bg-indigo-700 px-3 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
+              >
+                Use visible map as bounds
+              </button>
+              <button
+                type="button"
+                onClick={applyDefaultBoxAroundCenter}
+                disabled={!selectedCenter}
+                className="h-9 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Make box around centre
+              </button>
+            </div>
           </div>
           <Input label="Area name" value={form.label} onChange={(value) => updateForm('label', value)} placeholder="e.g. Harare" />
           <Input label="Area key" value={form.areaKey} onChange={(value) => updateForm('areaKey', value)} placeholder="harare" />

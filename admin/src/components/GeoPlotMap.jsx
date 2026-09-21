@@ -55,6 +55,8 @@ export default function GeoPlotMap({
   markers = [],
   paths = [],
   emptyMessage = 'No coordinates available.',
+  onMapClick,
+  onBoundsChange,
 }) {
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
@@ -235,6 +237,36 @@ export default function GeoPlotMap({
       map.flyTo({ center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat], zoom: 12, duration: 450 })
     }
   }, [mapReady, normalizedMarkers, normalizedPaths, providedBounds])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return undefined
+    const map = mapRef.current
+
+    const emitBounds = () => {
+      if (typeof onBoundsChange !== 'function') return
+      const bounds = map.getBounds()
+      onBoundsChange({
+        westLng: bounds.getWest(),
+        southLat: bounds.getSouth(),
+        eastLng: bounds.getEast(),
+        northLat: bounds.getNorth(),
+      })
+    }
+
+    const handleClick = (event) => {
+      if (typeof onMapClick !== 'function') return
+      onMapClick({ lat: event.lngLat.lat, lng: event.lngLat.lng })
+    }
+
+    map.on('moveend', emitBounds)
+    map.on('click', handleClick)
+    emitBounds()
+
+    return () => {
+      map.off('moveend', emitBounds)
+      map.off('click', handleClick)
+    }
+  }, [mapReady, onBoundsChange, onMapClick])
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-slate-100">

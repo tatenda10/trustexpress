@@ -1116,6 +1116,8 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
 
     await createPendingDriverOffers(rideRequestId, nearbyDrivers);
 
+    const requestedAt = new Date().toISOString();
+    const driverEmitStartedAt = new Date().toISOString();
     nearbyDrivers.forEach((driver) => {
       emitRideRequestToDriver(driver.id, {
         rideRequestId,
@@ -1128,7 +1130,16 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         requestedTierName: tier.tier_name,
         passengerCount: partySize,
         paymentMethod,
+        requestedAt,
+        emittedAt: driverEmitStartedAt,
       });
+    });
+    console.log('[rides.findDriver] realtime offers emitted', {
+      rideRequestId,
+      requestedAt,
+      emittedAt: driverEmitStartedAt,
+      emittedDriverIds: nearbyDrivers.map((driver) => driver.id),
+      emittedCount: nearbyDrivers.length,
     });
 
     // Push notifications are slow (Clerk/Expo/FCM). Do not block the passenger response.
@@ -1156,8 +1167,6 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
       offeredDriverIds: nearbyDrivers.map((driver) => driver.id),
       offeredCount: nearbyDrivers.length,
     });
-
-    const requestedAt = new Date().toISOString();
 
     return res.status(201).json({
       rideRequest: {
@@ -1380,6 +1389,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
         requestedTierName: ride.requested_tier_name,
+        routePolyline: ride.route_polyline || '',
         passengerCount: Number(ride.passenger_count || 1),
         requestedAt: toIsoOrNull(ride.requested_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
@@ -2453,10 +2463,13 @@ router.patch('/passenger/:rideRequestId/arrived', requireAuth, async (req, res) 
     );
     const arrivedAt = new Date().toISOString();
 
+    await assignSafetyPinIfNeeded(rideRequestId, new Date());
+
     const [ride] = await query(
-      'SELECT driver_user_id FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
+      'SELECT * FROM ride_requests WHERE id = ? AND passenger_user_id = ? LIMIT 1',
       [rideRequestId, req.userId]
     );
+    const safetyPinPayload = buildPassengerSafetyPinPayload(ride);
     if (ride?.driver_user_id) {
       emitRideStatusToDriver(ride.driver_user_id, {
         rideRequestId,
@@ -2469,9 +2482,10 @@ router.patch('/passenger/:rideRequestId/arrived', requireAuth, async (req, res) 
       rideRequestId,
       status: 'driver_arrived',
       arrivedAt,
+      ...safetyPinPayload,
     });
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, arrivedAt, ...safetyPinPayload });
   } catch (err) {
     console.error('PATCH /api/rides/passenger/:rideRequestId/arrived', err);
     return res.status(500).json({ error: 'Server error' });
@@ -2498,8 +2512,10 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
       [rideRequestId, req.userId]
     );
 
+    await assignSafetyPinIfNeeded(rideRequestId, new Date());
+
     const [ride] = await query(
-      `SELECT driver_user_id, passenger_confirmed_at, status
+      `SELECT *
        FROM ride_requests
        WHERE id = ? AND passenger_user_id = ?
        LIMIT 1`,
@@ -2515,8 +2531,17 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
       return res.status(409).json({ error: 'Wait until your driver has arrived at pickup before confirming.' });
     }
 
+    const safetyPinPayload = buildPassengerSafetyPinPayload(ride);
+
     if (ride?.driver_user_id) {
-      try {
+      emitRideStatusToDriver(ride.driver_user_id, {
+        rideRequestId,
+        status: 'passenger_confirmed',
+        confirmedAt,
+        passengerUserId: req.userId,
+      });
+
+      Promise.resolve().then(async () => {
         const driverUser = await getClerkUserById(ride.driver_user_id);
         const pushToken = String(driverUser?.privateMetadata?.pushToken || '').trim();
         const fcmToken = String(driverUser?.privateMetadata?.fcmToken || '').trim();
@@ -2541,22 +2566,17 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
             ...pushPayload,
           });
         }
-      } catch (pushError) {
+      }).catch((pushError) => {
         console.error('PATCH /api/rides/passenger/:rideRequestId/confirm-pickup push', pushError);
-      }
-      emitRideStatusToDriver(ride.driver_user_id, {
-        rideRequestId,
-        status: 'passenger_confirmed',
-        confirmedAt,
-        passengerUserId: req.userId,
       });
     }
     emitRideStatusToPassenger(req.userId, {
       rideRequestId,
       confirmedAt,
+      ...safetyPinPayload,
     });
 
-    return res.json({ ok: true, confirmedAt });
+    return res.json({ ok: true, confirmedAt, ...safetyPinPayload });
   } catch (err) {
     console.error('PATCH /api/rides/passenger/:rideRequestId/confirm-pickup', err);
     return res.status(500).json({ error: 'Server error' });
