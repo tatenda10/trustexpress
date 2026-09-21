@@ -189,6 +189,7 @@ export default function ServiceAreasPage() {
   const selectedCenter = toPoint(form.centerLat, form.centerLng)
   const selectedPath = buildAreaPath(form)
   const selectedBounds = buildAreaBounds(form)
+  const editMapCenter = selectedCenter || toPoint(-17.8292, 31.0522)
   const mapMarkers = [
     ...areas.map((area) => {
       const point = toPoint(area.centerLat, area.centerLng)
@@ -254,7 +255,7 @@ export default function ServiceAreasPage() {
       {error ? <div className="border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
       {success ? <div className="border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{success}</div> : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="space-y-4">
         <div className="border border-slate-300 bg-white">
           <div className="border-b border-slate-200 px-4 py-3">
             <p className="text-sm font-semibold text-slate-900">Active and inactive areas</p>
@@ -307,49 +308,58 @@ export default function ServiceAreasPage() {
           )}
         </div>
 
+        <div className="overflow-hidden border border-slate-300 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-900">Pick service area from map</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Click the map to set the centre. Zoom into the exact area you want, then use the visible map as the rectangular bounds.
+            </p>
+          </div>
+          <div className="h-[520px]">
+            <GeoPlotMap
+              bounds={null}
+              markers={mapMarkers}
+              paths={mapPaths}
+              emptyMessage="Click the map to choose the centre of this service area."
+              fitToGeometry={false}
+              initialCenter={editMapCenter}
+              initialZoom={selectedCenter ? 13 : 11}
+              onMapClick={(point) => {
+                updateForm('centerLat', roundCoordinate(point.lat))
+                updateForm('centerLng', roundCoordinate(point.lng))
+              }}
+              onBoundsChange={setVisibleMapBounds}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2 border-t border-slate-200 px-4 py-3">
+            <button
+              type="button"
+              onClick={applyVisibleMapBounds}
+              disabled={!visibleMapBounds}
+              className="h-10 bg-indigo-700 px-4 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
+            >
+              Use visible map as bounds
+            </button>
+            <button
+              type="button"
+              onClick={applyDefaultBoxAroundCenter}
+              disabled={!selectedCenter}
+              className="h-10 border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Make box around centre
+            </button>
+            {selectedBounds ? (
+              <span className="flex items-center text-xs text-slate-500">
+                Current bounds preview is shown in purple.
+              </span>
+            ) : null}
+          </div>
+        </div>
+
         <form onSubmit={saveArea} className="space-y-3 border border-slate-300 bg-white px-4 py-4">
           <div>
             <p className="text-sm font-semibold text-slate-900">{form.id ? 'Edit service area' : 'Add service area'}</p>
             <p className="mt-1 text-xs text-slate-500">Use coordinates around the city or operating zone.</p>
-          </div>
-          <div className="overflow-hidden border border-slate-200 bg-slate-50">
-            <div className="border-b border-slate-200 px-3 py-2">
-              <p className="text-xs font-semibold text-slate-800">Pick from map</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">
-                Click the map to set the centre, zoom/pan around the region, then use visible map as bounds.
-              </p>
-            </div>
-            <div className="h-72">
-              <GeoPlotMap
-                bounds={selectedBounds}
-                markers={mapMarkers}
-                paths={mapPaths}
-                emptyMessage="Click the map to choose the centre of this service area."
-                onMapClick={(point) => {
-                  updateForm('centerLat', roundCoordinate(point.lat))
-                  updateForm('centerLng', roundCoordinate(point.lng))
-                }}
-                onBoundsChange={setVisibleMapBounds}
-              />
-            </div>
-            <div className="flex flex-wrap gap-2 border-t border-slate-200 px-3 py-2">
-              <button
-                type="button"
-                onClick={applyVisibleMapBounds}
-                disabled={!visibleMapBounds}
-                className="h-9 bg-indigo-700 px-3 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
-              >
-                Use visible map as bounds
-              </button>
-              <button
-                type="button"
-                onClick={applyDefaultBoxAroundCenter}
-                disabled={!selectedCenter}
-                className="h-9 border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                Make box around centre
-              </button>
-            </div>
           </div>
           <Input label="Area name" value={form.label} onChange={(value) => updateForm('label', value)} placeholder="e.g. Harare" />
           <Input label="Area key" value={form.areaKey} onChange={(value) => updateForm('areaKey', value)} placeholder="harare" />

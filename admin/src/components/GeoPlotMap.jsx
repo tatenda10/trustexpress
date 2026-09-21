@@ -57,6 +57,9 @@ export default function GeoPlotMap({
   emptyMessage = 'No coordinates available.',
   onMapClick,
   onBoundsChange,
+  fitToGeometry = true,
+  initialCenter = DEFAULT_CENTER,
+  initialZoom = 12,
 }) {
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
@@ -107,8 +110,8 @@ export default function GeoPlotMap({
         const map = new maplibregl.Map({
           container: mapContainerRef.current,
           style: OSM_RASTER_STYLE,
-          center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
-          zoom: 12,
+          center: [Number(initialCenter?.lng) || DEFAULT_CENTER.lng, Number(initialCenter?.lat) || DEFAULT_CENTER.lat],
+          zoom: Number(initialZoom) || 12,
           attributionControl: true,
         })
 
@@ -225,6 +228,10 @@ export default function GeoPlotMap({
         }
       : autoBounds
 
+    if (!fitToGeometry) {
+      return
+    }
+
     if (boundsToUse) {
       map.fitBounds(
         [
@@ -236,7 +243,19 @@ export default function GeoPlotMap({
     } else {
       map.flyTo({ center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat], zoom: 12, duration: 450 })
     }
-  }, [mapReady, normalizedMarkers, normalizedPaths, providedBounds])
+  }, [fitToGeometry, mapReady, normalizedMarkers, normalizedPaths, providedBounds])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || fitToGeometry) return
+    const lat = Number(initialCenter?.lat)
+    const lng = Number(initialCenter?.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+    mapRef.current.flyTo({
+      center: [lng, lat],
+      zoom: Number(initialZoom) || 12,
+      duration: 350,
+    })
+  }, [fitToGeometry, initialCenter?.lat, initialCenter?.lng, initialZoom, mapReady])
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return undefined
