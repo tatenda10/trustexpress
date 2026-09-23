@@ -65,6 +65,36 @@ function normalizeMoney(value) {
   return Math.round(amount * 100) / 100;
 }
 
+function maskMobile(value) {
+  const raw = String(value || '').trim();
+  if (raw.length <= 6) return raw ? '***' : '';
+  return `${raw.slice(0, 5)}***${raw.slice(-3)}`;
+}
+
+function redactSmileCashDebugPayload(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(redactSmileCashDebugPayload);
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => {
+      const normalizedKey = String(key || '').toLowerCase();
+      if (normalizedKey.includes('secret') || normalizedKey.includes('api-key') || normalizedKey.includes('apikey')) {
+        return [key, '[redacted]'];
+      }
+      if (normalizedKey.includes('mobile') || normalizedKey.includes('phone')) {
+        return [key, maskMobile(item)];
+      }
+      if (item && typeof item === 'object') {
+        return [key, redactSmileCashDebugPayload(item)];
+      }
+      return [key, item];
+    })
+  );
+}
+
+function shouldLogSmileCashCashout(path) {
+  return String(path || '').includes('/transactions/subscriber/external/cashout/');
+}
+
 export function getSmileCashEnvironment() {
   const value = String(process.env.SMILEPAY_ENVIRONMENT || 'sandbox').trim().toLowerCase();
   return value === 'live' || value === 'production' ? 'live' : 'sandbox';
@@ -148,6 +178,16 @@ async function walletRequest(path, { method = 'POST', body } = {}) {
   const secret = getApiSecret();
   if (secret) headers['x-api-secret'] = secret;
 
+  const shouldLogCashout = shouldLogSmileCashCashout(path);
+  if (shouldLogCashout) {
+    console.log('[smile-cash.cashout] provider request', {
+      environment: getSmileCashEnvironment(),
+      method,
+      path,
+      body: redactSmileCashDebugPayload(body),
+    });
+  }
+
   const res = await fetch(`${getWalletBaseUrl()}${path}`, {
     method,
     headers,
@@ -155,6 +195,15 @@ async function walletRequest(path, { method = 'POST', body } = {}) {
   });
 
   const data = await res.json().catch(() => ({}));
+  if (shouldLogCashout) {
+    console.log('[smile-cash.cashout] provider response', {
+      method,
+      path,
+      status: res.status,
+      ok: res.ok,
+      body: redactSmileCashDebugPayload(data),
+    });
+  }
   const responseCode = String(data?.responseCode ?? data?.code ?? data?.statusCode ?? '').trim();
   const okByCode = !responseCode
     || ['00', '0', '200', '201', 'SUCCESS', 'SUCCESSFUL'].includes(responseCode.toUpperCase());
@@ -164,6 +213,16 @@ async function walletRequest(path, { method = 'POST', body } = {}) {
     const error = buildError(mapped.message, mapped.status);
     error.code = mapped.code;
     error.providerPayload = data;
+    if (shouldLogCashout) {
+      console.log('[smile-cash.cashout] provider mapped error', {
+        method,
+        path,
+        status: error.status,
+        code: error.code || null,
+        message: error.message,
+        providerPayload: redactSmileCashDebugPayload(data),
+      });
+    }
     throw error;
   }
   return data;
