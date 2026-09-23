@@ -205,8 +205,11 @@ async function walletRequest(path, { method = 'POST', body } = {}) {
     });
   }
   const responseCode = String(data?.responseCode ?? data?.code ?? data?.statusCode ?? '').trim();
+  const responseDescription = String(data?.responseDescription || data?.message || '').trim().toLowerCase();
   const okByCode = !responseCode
-    || ['00', '0', '200', '201', 'SUCCESS', 'SUCCESSFUL'].includes(responseCode.toUpperCase());
+    || ['000', '00', '0', '200', '201', 'SUCCESS', 'SUCCESSFUL'].includes(responseCode.toUpperCase())
+    || responseDescription.includes('approved')
+    || responseDescription.includes('completed successfully');
   const failedFlag = data?.success === false || data?.error === true;
   if (!res.ok || failedFlag || !okByCode) {
     const mapped = mapWalletError(data, res.status >= 400 && res.status < 500 ? res.status : 502, path);
@@ -339,6 +342,8 @@ export async function executeSmileCashExternalCashout({
   const transactionId = String(
     authPayload?.transactionId
     || authPayload?.data?.transactionId
+    || authPayload?.data?.id
+    || authPayload?.data?.reference
     || authPayload?.reference
     || ''
   ).trim();
@@ -362,6 +367,8 @@ export async function executeSmileCashExternalCashout({
     paymentTransactionId: String(
       paymentPayload?.transactionId
       || paymentPayload?.data?.transactionId
+      || paymentPayload?.data?.id
+      || paymentPayload?.data?.reference
       || transactionId
     ),
     authPayload,
