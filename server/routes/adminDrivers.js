@@ -138,7 +138,9 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
     ? {
         id: `profile_${user.id}`,
         driverKind: identityRow.driver_kind || null,
-        status: identityRow.profile_status || 'pending',
+        status: hasProfileDocuments || identityRow.profile_submitted_at
+          ? (identityRow.profile_status || 'pending')
+          : 'not_submitted',
         submittedAt: identityRow.profile_submitted_at ? new Date(identityRow.profile_submitted_at).toISOString() : null,
         rejectionReason: identityRow.profile_rejection_reason || null,
         ecocashNumber: identityRow.ecocash_number || null,

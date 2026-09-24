@@ -54,10 +54,20 @@ export async function getDriverVehicle(driverUserId) {
  */
 function shapeProfileFromRow(row) {
   if (!row) return null;
+  const hasDocuments = !!(
+    row.national_id_front_url ||
+    row.national_id_back_url ||
+    row.driver_licence_url ||
+    row.selfie_url ||
+    row.selfie_with_id_card_url
+  );
+  const effectiveStatus = hasDocuments || row.profile_submitted_at
+    ? (row.profile_status || 'pending')
+    : 'not_submitted';
   return {
     id: `profile_${row.driver_user_id}`,
     driverKind: row.driver_kind || null,
-    status: row.profile_status || 'pending',
+    status: effectiveStatus,
     submittedAt: row.profile_submitted_at ? new Date(row.profile_submitted_at).toISOString() : null,
     rejectionReason: row.profile_rejection_reason || null,
     canResubmit: row.profile_can_resubmit === undefined ? true : !!row.profile_can_resubmit,
@@ -79,6 +89,7 @@ function shapeProfileFromRow(row) {
       ? new Date(row.smile_cash_opened_at).toISOString()
       : null,
     smileCashLastError: row.smile_cash_last_error || null,
+    hasDocuments,
   };
 }
 

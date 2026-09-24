@@ -2542,6 +2542,20 @@ router.post('/documents', requireAuth, async (req, res) => {
       driverLicenceExpiresAt,
       driverKind: rawDriverKind,
     } = req.body || {};
+    console.log('[POST /api/drivers/documents] received payload', {
+      userId: req.userId,
+      bodyKeys: Object.keys(req.body || {}),
+      hasNationalIdFrontUrl: !!nationalIdFrontUrl,
+      hasNationalIdBackUrl: !!nationalIdBackUrl,
+      hasDriverLicenceUrl: !!driverLicenceUrl,
+      hasSelfieUrl: !!selfieUrl,
+      hasSelfieWithIdCardUrl: !!selfieWithIdCardUrl,
+      hasNationalIdNumber: !!nationalIdNumber,
+      hasDriverLicenceNumber: !!driverLicenceNumber,
+      dateOfBirth: dateOfBirth || null,
+      driverLicenceExpiresAt: driverLicenceExpiresAt || null,
+      rawDriverKind: rawDriverKind || null,
+    });
     const driverKind = normalizeDriverKind(rawDriverKind || existing.driverProfile?.driverKind);
     const currentProfile = existing.driverProfile || null;
     const currentValues = {
@@ -2576,6 +2590,12 @@ router.post('/documents', requireAuth, async (req, res) => {
     ].filter(Boolean).length;
 
     if (providedCount === 0) {
+      console.warn('[POST /api/drivers/documents] rejected empty identity payload', {
+        userId: req.userId,
+        bodyKeys: Object.keys(req.body || {}),
+        currentProfileStatus: currentProfile?.status || null,
+        currentHasDocuments: currentProfile?.hasDocuments === true,
+      });
       return res.status(400).json({
         error: 'Submit at least one identity document to save progress',
       });
@@ -2696,6 +2716,10 @@ router.post('/documents', requireAuth, async (req, res) => {
       status: row.profile_status || 'pending',
       submittedAt: row.profile_submitted_at ? new Date(row.profile_submitted_at).toISOString() : submittedAt.toISOString(),
       rejectionReason: row.profile_rejection_reason || null,
+      nationalIdFrontUrl: row.national_id_front_url || null,
+      nationalIdBackUrl: row.national_id_back_url || null,
+      driverLicenceUrl: row.driver_licence_url || null,
+      selfieUrl: row.selfie_url || null,
       selfieWithIdCardUrl: row.selfie_with_id_card_url || null,
       nationalIdNumber: row.national_id_number || null,
       driverLicenceNumber: row.driver_licence_number || null,
