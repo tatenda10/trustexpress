@@ -799,8 +799,20 @@ router.post(
       };
       const nationalIdNumber = normalizeOptionalText(req.body?.nationalIdNumber);
       const driverLicenceNumber = normalizeOptionalText(req.body?.driverLicenceNumber);
+      const dateOfBirth = toIsoDateOnly(req.body?.dateOfBirth);
+      const driverLicenceExpiresAt = toIsoDateOnly(req.body?.driverLicenceExpiresAt);
       const hasUpload = Object.values(uploaded).some(Boolean);
-      const hasNumberUpdate = !!(nationalIdNumber || driverLicenceNumber);
+      const hasNumberUpdate = !!(nationalIdNumber || driverLicenceNumber || dateOfBirth || driverLicenceExpiresAt);
+
+      console.log('[POST /api/admin/drivers/:driverId/documents] received payload', {
+        driverId,
+        bodyKeys: Object.keys(req.body || {}),
+        uploaded,
+        hasNationalIdNumber: !!nationalIdNumber,
+        hasDriverLicenceNumber: !!driverLicenceNumber,
+        dateOfBirth: dateOfBirth || null,
+        driverLicenceExpiresAt: driverLicenceExpiresAt || null,
+      });
 
       if (!hasUpload && !hasNumberUpdate) {
         return res.status(400).json({ error: 'Upload at least one document or enter an ID/licence number' });
@@ -847,6 +859,8 @@ router.post(
         selfieWithIdCardUrl: uploaded.selfieWithIdCardUrl || normalizeUploadPath(existing?.selfie_with_id_card_url),
         nationalIdNumber: nationalIdNumber || existing?.national_id_number || null,
         driverLicenceNumber: driverLicenceNumber || existing?.driver_licence_number || null,
+        dateOfBirth: dateOfBirth || toIsoDateOnly(existing?.date_of_birth) || null,
+        driverLicenceExpiresAt: driverLicenceExpiresAt || toIsoDateOnly(existing?.driver_licence_expires_at) || null,
       };
       const isComplete = !!(
         nextDocs.nationalIdFrontUrl &&
@@ -855,7 +869,9 @@ router.post(
         nextDocs.selfieUrl &&
         nextDocs.selfieWithIdCardUrl &&
         nextDocs.nationalIdNumber &&
-        nextDocs.driverLicenceNumber
+        nextDocs.driverLicenceNumber &&
+        nextDocs.dateOfBirth &&
+        nextDocs.driverLicenceExpiresAt
       );
       const nextStatus = isComplete ? 'pending' : (existing?.profile_status || 'pending');
 
@@ -869,12 +885,14 @@ router.post(
            selfie_with_id_card_url,
            national_id_number,
            driver_licence_number,
+           date_of_birth,
+           driver_licence_expires_at,
            profile_status,
            profile_submitted_at,
            profile_rejection_reason,
            profile_can_resubmit
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 1)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 1)
          ON DUPLICATE KEY UPDATE
            national_id_front_url = VALUES(national_id_front_url),
            national_id_back_url = VALUES(national_id_back_url),
@@ -883,6 +901,8 @@ router.post(
            selfie_with_id_card_url = VALUES(selfie_with_id_card_url),
            national_id_number = VALUES(national_id_number),
            driver_licence_number = VALUES(driver_licence_number),
+           date_of_birth = VALUES(date_of_birth),
+           driver_licence_expires_at = VALUES(driver_licence_expires_at),
            profile_status = VALUES(profile_status),
            profile_submitted_at = CURRENT_TIMESTAMP,
            profile_reviewed_at = NULL,
@@ -898,6 +918,8 @@ router.post(
           nextDocs.selfieWithIdCardUrl,
           nextDocs.nationalIdNumber,
           nextDocs.driverLicenceNumber,
+          nextDocs.dateOfBirth,
+          nextDocs.driverLicenceExpiresAt,
           nextStatus,
         ]
       );

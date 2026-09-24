@@ -225,7 +225,8 @@ export default function DriverDetailsPage() {
       const file = formData.get(key)
       return file instanceof File && file.size > 0
     })
-    const hasText = ['nationalIdNumber', 'driverLicenceNumber'].some((key) => String(formData.get(key) || '').trim())
+    const hasText = ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
+      .some((key) => String(formData.get(key) || '').trim())
 
     if (!hasFile && !hasText) {
       setManualDocsMessage('Choose at least one file or enter an ID/licence number.')
@@ -718,6 +719,24 @@ export default function DriverDetailsPage() {
                     defaultValue={driver?.profileDocs?.driverLicenceNumber || ''}
                     className="mt-1 w-full border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800"
                     placeholder="Existing value is kept if blank"
+                  />
+                </label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Date of Birth
+                  <input
+                    type="date"
+                    name="dateOfBirth"
+                    defaultValue={driver?.profileDocs?.dateOfBirth || ''}
+                    className="mt-1 w-full border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800"
+                  />
+                </label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Licence Expiration
+                  <input
+                    type="date"
+                    name="driverLicenceExpiresAt"
+                    defaultValue={driver?.profileDocs?.driverLicenceExpiresAt || ''}
+                    className="mt-1 w-full border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800"
                   />
                 </label>
                 {[
