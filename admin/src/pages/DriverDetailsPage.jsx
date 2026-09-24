@@ -9,6 +9,73 @@ const ADMIN_DOCUMENT_FILE_FIELDS = ['nationalIdFront', 'nationalIdBack', 'driver
 const ADMIN_DOCUMENT_TEXT_FIELDS = ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
 const MAX_ADMIN_DOCUMENT_FILE_BYTES = 10 * 1024 * 1024
 const MAX_ADMIN_DOCUMENT_FILE_MB = MAX_ADMIN_DOCUMENT_FILE_BYTES / 1024 / 1024
+const ADMIN_IMAGE_COMPRESS_THRESHOLD_BYTES = 900 * 1024
+const ADMIN_IMAGE_COMPRESS_TARGET_BYTES = 700 * 1024
+const ADMIN_IMAGE_MAX_DIMENSION = 1400
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0)
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`
+  if (value >= 1024) return `${Math.round(value / 1024)}KB`
+  return `${value}B`
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error(`Could not read ${file.name || 'image file'}`))
+    }
+    image.src = url
+  })
+}
+
+function canvasToBlob(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('Could not compress image'))
+    }, 'image/jpeg', quality)
+  })
+}
+
+async function compressAdminDocumentImage(file) {
+  if (!(file instanceof File) || !file.type?.startsWith('image/') || file.size <= ADMIN_IMAGE_COMPRESS_THRESHOLD_BYTES) {
+    return file
+  }
+
+  const image = await loadImageFromFile(file)
+  const largestSide = Math.max(image.width || 1, image.height || 1)
+  const scale = Math.min(1, ADMIN_IMAGE_MAX_DIMENSION / largestSide)
+  const width = Math.max(1, Math.round((image.width || 1) * scale))
+  const height = Math.max(1, Math.round((image.height || 1) * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) return file
+  context.drawImage(image, 0, 0, width, height)
+
+  let bestBlob = null
+  for (const quality of [0.82, 0.74, 0.66, 0.58, 0.5]) {
+    const blob = await canvasToBlob(canvas, quality)
+    bestBlob = blob
+    if (blob.size <= ADMIN_IMAGE_COMPRESS_TARGET_BYTES) break
+  }
+
+  if (!bestBlob || bestBlob.size >= file.size) return file
+  const safeName = String(file.name || 'document.jpg').replace(/\.[^.]+$/, '') || 'document'
+  return new File([bestBlob], `${safeName}.jpg`, {
+    type: 'image/jpeg',
+    lastModified: Date.now(),
+  })
+}
 
 function Field({ label, value }) {
   return (
@@ -263,9 +330,43 @@ export default function DriverDetailsPage() {
     }
 
     setManualDocsSubmitting(true)
-    setManualDocsMessage('')
+    setManualDocsMessage(hasFile ? 'Preparing document upload…' : '')
     setWarning('')
     try {
+      const compressedFiles = []
+      for (const fieldName of ADMIN_DOCUMENT_FILE_FIELDS) {
+        const file = formData.get(fieldName)
+        if (!(file instanceof File) || file.size <= 0) continue
+        const compressed = await compressAdminDocumentImage(file)
+        if (compressed !== file) {
+          formData.set(fieldName, compressed)
+          compressedFiles.push({
+            fieldName,
+            name: file.name,
+            originalSize: file.size,
+            compressedSize: compressed.size,
+          })
+        }
+      }
+      const finalFiles = ADMIN_DOCUMENT_FILE_FIELDS.map((key) => {
+        const file = formData.get(key)
+        return {
+          key,
+          hasFile: file instanceof File && file.size > 0,
+          name: file instanceof File ? file.name : '',
+          size: file instanceof File ? file.size : 0,
+          type: file instanceof File ? file.type : '',
+        }
+      })
+      const totalUploadBytes = finalFiles.reduce((sum, file) => sum + Number(file.size || 0), 0)
+      console.log('[DriverDetailsPage] admin profile documents upload:prepared', {
+        driverId,
+        compressedFiles,
+        finalFiles,
+        totalUploadBytes,
+        totalUploadSize: formatBytes(totalUploadBytes),
+      })
+      setManualDocsMessage(hasFile ? `Uploading documents (${formatBytes(totalUploadBytes)})…` : '')
       const { data } = await axios.post(`${BASE_URL}/api/admin/drivers/${driverId}/documents`, formData, {
         headers: {
           Authorization: `Bearer ${token}`,
