@@ -36,8 +36,38 @@ function normalizeOptionalText(value) {
 function runProfileDocumentUpload(req, res) {
   return new Promise((resolve, reject) => {
     upload.fields(PROFILE_DOCUMENT_UPLOAD_FIELDS)(req, res, (err) => {
-      if (err) reject(err);
-      else resolve();
+      if (err) {
+        console.log('[POST /api/admin/drivers/:driverId/documents] multer upload failed', {
+          driverId: req.params?.driverId || null,
+          adminId: req.admin?.id || null,
+          contentType: req.headers?.['content-type'] || null,
+          contentLength: req.headers?.['content-length'] || null,
+          code: err.code || null,
+          message: err.message || String(err),
+        });
+        reject(err);
+      } else {
+        console.log('[POST /api/admin/drivers/:driverId/documents] multer upload parsed', {
+          driverId: req.params?.driverId || null,
+          adminId: req.admin?.id || null,
+          contentType: req.headers?.['content-type'] || null,
+          contentLength: req.headers?.['content-length'] || null,
+          bodyKeys: Object.keys(req.body || {}),
+          fileFields: Object.fromEntries(
+            Object.entries(req.files || {}).map(([field, files]) => [
+              field,
+              (Array.isArray(files) ? files : []).map((file) => ({
+                originalname: file.originalname,
+                filename: file.filename,
+                size: file.size,
+                mimetype: file.mimetype,
+                path: file.path,
+              })),
+            ])
+          ),
+        });
+        resolve();
+      }
     });
   });
 }
@@ -762,8 +792,10 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
       ratingPerformance,
     };
 
-    console.log('[GET /api/admin/drivers/:driverId] document payload', {
+    console.log('[GET /api/admin/drivers/:driverId] document payload only - this is NOT an upload submit', {
       driverId: user.id,
+      adminId: req.admin?.id || null,
+      adminEmail: req.admin?.email || null,
       profileDocs,
       vehicleDocs,
       profileStatus: responseDriver?.profile?.status || null,
@@ -783,6 +815,15 @@ router.post(
   requirePermission('verification.review'),
   async (req, res) => {
     try {
+      console.log('[POST /api/admin/drivers/:driverId/documents] request received', {
+        driverId: req.params?.driverId || null,
+        adminId: req.admin?.id || null,
+        adminEmail: req.admin?.email || null,
+        contentType: req.headers?.['content-type'] || null,
+        contentLength: req.headers?.['content-length'] || null,
+        method: req.method,
+        url: req.originalUrl || req.url,
+      });
       await runProfileDocumentUpload(req, res);
 
       const driverId = String(req.params.driverId || '').trim();
