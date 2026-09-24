@@ -285,13 +285,23 @@ export default function DriverDetailsPage() {
       )
       await loadDriver()
     } catch (err) {
+      const uploadUrl = `${BASE_URL}/api/admin/drivers/${driverId}/documents`
+      const errorMessage = err?.response?.data?.error
+        || (err?.response?.status ? `Upload failed with status ${err.response.status}` : '')
+        || (err?.request ? `Network error reaching ${uploadUrl}. Check API URL, CORS, HTTPS, or proxy upload size.` : '')
+        || err?.message
+        || 'Failed to upload documents'
       console.error('[DriverDetailsPage] admin profile documents submit:error', {
         driverId,
+        uploadUrl,
         message: err?.message || null,
+        code: err?.code || null,
         status: err?.response?.status || null,
         data: err?.response?.data || null,
+        hasResponse: !!err?.response,
+        hasRequest: !!err?.request,
       })
-      setManualDocsMessage(err?.response?.data?.error || err?.message || 'Failed to upload documents')
+      setManualDocsMessage(errorMessage)
     } finally {
       setManualDocsSubmitting(false)
     }

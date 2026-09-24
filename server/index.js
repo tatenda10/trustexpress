@@ -15,6 +15,24 @@ const PORT = Number(process.env.PORT);
 
 const app = express();
 app.use(cors());
+
+app.use((req, res, next) => {
+  const isAdminDocumentUpload = /^\/api\/admin\/drivers\/[^/]+\/documents\/?$/.test(req.path || '');
+  if (isAdminDocumentUpload) {
+    console.log('[admin.documents.request] incoming before auth/upload', {
+      method: req.method,
+      path: req.path,
+      originalUrl: req.originalUrl,
+      origin: req.headers.origin || null,
+      referer: req.headers.referer || null,
+      contentType: req.headers['content-type'] || null,
+      contentLength: req.headers['content-length'] || null,
+      hasAuthorization: !!req.headers.authorization,
+    });
+  }
+  next();
+});
+
 app.use(express.json());
 const uploadsStaticRoot = path.join(__dirname, 'uploads');
 app.use('/uploads', express.static(uploadsStaticRoot));
