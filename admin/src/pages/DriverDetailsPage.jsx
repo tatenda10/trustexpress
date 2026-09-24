@@ -5,6 +5,11 @@ import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 import { resolveMediaUrl } from '../utils/media'
 
+const ADMIN_DOCUMENT_FILE_FIELDS = ['nationalIdFront', 'nationalIdBack', 'driverLicence', 'selfie', 'selfieWithIdCard']
+const ADMIN_DOCUMENT_TEXT_FIELDS = ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
+const MAX_ADMIN_DOCUMENT_FILE_BYTES = 10 * 1024 * 1024
+const MAX_ADMIN_DOCUMENT_FILE_MB = MAX_ADMIN_DOCUMENT_FILE_BYTES / 1024 / 1024
+
 function Field({ label, value }) {
   return (
     <div className="border border-slate-200 bg-slate-50 px-3 py-2">
@@ -221,13 +226,12 @@ export default function DriverDetailsPage() {
     event.preventDefault()
     const form = event.currentTarget
     const formData = new FormData(form)
-    const hasFile = ['nationalIdFront', 'nationalIdBack', 'driverLicence', 'selfie', 'selfieWithIdCard'].some((key) => {
+    const hasFile = ADMIN_DOCUMENT_FILE_FIELDS.some((key) => {
       const file = formData.get(key)
       return file instanceof File && file.size > 0
     })
-    const hasText = ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
-      .some((key) => String(formData.get(key) || '').trim())
-    const debugFiles = ['nationalIdFront', 'nationalIdBack', 'driverLicence', 'selfie', 'selfieWithIdCard'].map((key) => {
+    const hasText = ADMIN_DOCUMENT_TEXT_FIELDS.some((key) => String(formData.get(key) || '').trim())
+    const debugFiles = ADMIN_DOCUMENT_FILE_FIELDS.map((key) => {
       const file = formData.get(key)
       return {
         key,
@@ -237,9 +241,9 @@ export default function DriverDetailsPage() {
         type: file instanceof File ? file.type : '',
       }
     })
+    const oversizedFile = debugFiles.find((file) => file.hasFile && file.size > MAX_ADMIN_DOCUMENT_FILE_BYTES)
     const debugFields = Object.fromEntries(
-      ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
-        .map((key) => [key, String(formData.get(key) || '').trim()])
+      ADMIN_DOCUMENT_TEXT_FIELDS.map((key) => [key, String(formData.get(key) || '').trim()])
     )
     console.log('[DriverDetailsPage] admin profile documents submit:start', {
       driverId,
@@ -251,6 +255,10 @@ export default function DriverDetailsPage() {
 
     if (!hasFile && !hasText) {
       setManualDocsMessage('Choose at least one file or enter an ID/licence number.')
+      return
+    }
+    if (oversizedFile) {
+      setManualDocsMessage(`${oversizedFile.name || oversizedFile.key} is too large. Maximum is ${MAX_ADMIN_DOCUMENT_FILE_MB}MB per file.`)
       return
     }
 

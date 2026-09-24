@@ -990,6 +990,9 @@ router.post(
       if (err?.code === 'ER_DUP_ENTRY') {
         return res.status(409).json({ error: 'National ID or driver licence number is already used by another driver' });
       }
+      if (err?.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'One of the files is too large. Maximum is 10MB per file.' });
+      }
       const message = err?.message || 'Server error';
       const status = message.includes('Unsupported file type') ? 400 : 500;
       return res.status(status).json({ error: status === 400 ? message : 'Server error' });
