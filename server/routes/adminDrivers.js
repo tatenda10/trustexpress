@@ -874,6 +874,13 @@ router.post(
         nextDocs.driverLicenceExpiresAt
       );
       const nextStatus = isComplete ? 'pending' : (existing?.profile_status || 'pending');
+      console.log('[POST /api/admin/drivers/:driverId/documents] resolved next docs', {
+        driverId,
+        nextDocs,
+        isComplete,
+        nextStatus,
+        existingStatus: existing?.profile_status || null,
+      });
 
       await query(
         `INSERT INTO driver_identity (
@@ -925,6 +932,12 @@ router.post(
       );
 
       const refreshed = await getDriverIdentity(driverId);
+      console.log('[POST /api/admin/drivers/:driverId/documents] saved row', {
+        driverId,
+        profileDocs: mapIdentityProfileDocs(refreshed),
+        profileStatus: refreshed?.profile_status || null,
+        submittedAt: refreshed?.profile_submitted_at || null,
+      });
       return res.json({
         ok: true,
         complete: isComplete,

@@ -227,6 +227,27 @@ export default function DriverDetailsPage() {
     })
     const hasText = ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
       .some((key) => String(formData.get(key) || '').trim())
+    const debugFiles = ['nationalIdFront', 'nationalIdBack', 'driverLicence', 'selfie', 'selfieWithIdCard'].map((key) => {
+      const file = formData.get(key)
+      return {
+        key,
+        hasFile: file instanceof File && file.size > 0,
+        name: file instanceof File ? file.name : '',
+        size: file instanceof File ? file.size : 0,
+        type: file instanceof File ? file.type : '',
+      }
+    })
+    const debugFields = Object.fromEntries(
+      ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
+        .map((key) => [key, String(formData.get(key) || '').trim()])
+    )
+    console.log('[DriverDetailsPage] admin profile documents submit:start', {
+      driverId,
+      hasFile,
+      hasText,
+      fields: debugFields,
+      files: debugFiles,
+    })
 
     if (!hasFile && !hasText) {
       setManualDocsMessage('Choose at least one file or enter an ID/licence number.')
@@ -241,6 +262,10 @@ export default function DriverDetailsPage() {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+      })
+      console.log('[DriverDetailsPage] admin profile documents submit:success', {
+        driverId,
+        data,
       })
       setDriver((current) => ({
         ...(current || {}),
@@ -260,6 +285,12 @@ export default function DriverDetailsPage() {
       )
       await loadDriver()
     } catch (err) {
+      console.error('[DriverDetailsPage] admin profile documents submit:error', {
+        driverId,
+        message: err?.message || null,
+        status: err?.response?.status || null,
+        data: err?.response?.data || null,
+      })
       setManualDocsMessage(err?.response?.data?.error || err?.message || 'Failed to upload documents')
     } finally {
       setManualDocsSubmitting(false)

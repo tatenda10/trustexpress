@@ -479,38 +479,41 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         const driverLicenceUrl = await uploadUri(token, getEffectiveDocUri('driverLicence'), "Driver's license");
         const selfieUrl = await uploadUri(token, getEffectiveDocUri('selfie'), 'Selfie');
         const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
+        const documentPayload = {
+          nationalIdFrontUrl,
+          nationalIdBackUrl,
+          driverLicenceUrl,
+          selfieUrl,
+          selfieWithIdCardUrl,
+          nationalIdNumber: trimmedNationalIdNumber,
+          driverLicenceNumber: trimmedDriverLicenceNumber,
+          dateOfBirth: String(dateOfBirth || '').trim(),
+          driverLicenceExpiresAt: String(driverLicenceExpiresAt || '').trim(),
+          driverKind,
+        };
+        console.log('[DriverUploadDocumentsScreen] submit documents payload', {
+          hasToken: !!token,
+          payload: documentPayload,
+        });
 
         try {
           await submitDriverDocuments(
             token,
-            {
-              nationalIdFrontUrl,
-              nationalIdBackUrl,
-              driverLicenceUrl,
-              selfieUrl,
-              selfieWithIdCardUrl,
-              nationalIdNumber: trimmedNationalIdNumber,
-              driverLicenceNumber: trimmedDriverLicenceNumber,
-              dateOfBirth: String(dateOfBirth || '').trim(),
-              driverLicenceExpiresAt: String(driverLicenceExpiresAt || '').trim(),
-              driverKind,
-            },
+            documentPayload,
             { suppressAuthErrorHandler: true },
           );
+          console.log('[DriverUploadDocumentsScreen] submit documents success', {
+            payload: documentPayload,
+          });
         } catch (error) {
           console.log('[DriverUploadDocumentsScreen] submit documents failed', {
             mode: 'full',
             error: error?.message || null,
+            status: error?.status || null,
+            code: error?.code || null,
+            cause: error?.cause?.message || String(error?.cause || ''),
             apiError: error?.response?.data || null,
-            payload: {
-              nationalIdFrontUrl,
-              nationalIdBackUrl,
-              driverLicenceUrl,
-              selfieUrl,
-              selfieWithIdCardUrl,
-              nationalIdNumber: trimmedNationalIdNumber,
-              driverLicenceNumber: trimmedDriverLicenceNumber,
-            },
+            payload: documentPayload,
           });
           throw new Error(formatUploadErrorMessage(error, 'Could not submit your documents for verification. Please try again.'));
         }

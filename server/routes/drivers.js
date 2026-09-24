@@ -2580,6 +2580,10 @@ router.post('/documents', requireAuth, async (req, res) => {
       dateOfBirth: normalizeDateOfBirth(dateOfBirth || currentValues.dateOfBirth),
       driverLicenceExpiresAt: normalizeDateOfBirth(driverLicenceExpiresAt || currentValues.driverLicenceExpiresAt),
     };
+    console.log('[POST /api/drivers/documents] resolved next values', {
+      userId: req.userId,
+      nextValues,
+    });
 
     const providedCount = [
       nextValues.nationalIdFrontUrl,
@@ -2711,6 +2715,20 @@ router.post('/documents', requireAuth, async (req, res) => {
 
     const [identity] = await query('SELECT * FROM driver_identity WHERE driver_user_id = ? LIMIT 1', [req.userId]);
     const row = identity || {};
+    console.log('[POST /api/drivers/documents] saved row', {
+      userId: req.userId,
+      nationalIdFrontUrl: row.national_id_front_url || null,
+      nationalIdBackUrl: row.national_id_back_url || null,
+      driverLicenceUrl: row.driver_licence_url || null,
+      selfieUrl: row.selfie_url || null,
+      selfieWithIdCardUrl: row.selfie_with_id_card_url || null,
+      nationalIdNumber: row.national_id_number || null,
+      driverLicenceNumber: row.driver_licence_number || null,
+      dateOfBirth: toIsoDateOnly(row.date_of_birth),
+      driverLicenceExpiresAt: toIsoDateOnly(row.driver_licence_expires_at),
+      profileStatus: row.profile_status || null,
+      submittedAt: row.profile_submitted_at || null,
+    });
     const driverProfile = {
       id: `profile_${req.userId}`,
       status: row.profile_status || 'pending',
