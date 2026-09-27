@@ -30,6 +30,18 @@ app.use((req, res, next) => {
       hasAuthorization: !!req.headers.authorization,
     });
   }
+  if (req.path === '/api/upload') {
+    console.log('[upload.request] incoming before auth/upload', {
+      method: req.method,
+      path: req.path,
+      originalUrl: req.originalUrl,
+      origin: req.headers.origin || null,
+      referer: req.headers.referer || null,
+      contentType: req.headers['content-type'] || null,
+      contentLength: req.headers['content-length'] || null,
+      hasAuthorization: !!req.headers.authorization,
+    });
+  }
   next();
 });
 

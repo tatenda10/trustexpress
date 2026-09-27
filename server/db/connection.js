@@ -25,7 +25,7 @@ function isTransientDbError(error) {
     'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
     'ECONNREFUSED',
     'ETIMEDOUT',
-  ].includes(error.code);
+  ].includes(error.code) || Number(error.errno || error.code) === 4031;
 }
 
 function resetPool() {

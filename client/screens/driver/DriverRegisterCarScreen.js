@@ -462,13 +462,28 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
     for (let attempt = 0; attempt <= UPLOAD_RETRY_COUNT; attempt += 1) {
       try {
-        const uploadReadyUri = await prepareImageForUpload(uri);
+        const uploadReadyUri = await prepareImageForUpload(uri, { maxWidth: 960, compress: 0.55 });
+        console.log('[driver.vehicle.upload] prepared', {
+          filename,
+          attempt: attempt + 1,
+          originalUri: String(uri || '').slice(0, 80),
+          uploadReadyUri: String(uploadReadyUri || '').slice(0, 80),
+        });
         const formData = new FormData();
         formData.append('file', { uri: uploadReadyUri, name: filename, type: 'image/jpeg' });
         const { url } = await uploadFile(token, formData);
+        console.log('[driver.vehicle.upload] success', { filename, url });
         return url;
       } catch (error) {
         lastError = error;
+        console.warn('[driver.vehicle.upload] failed', {
+          filename,
+          attempt: attempt + 1,
+          message: error?.message || null,
+          status: error?.status || null,
+          code: error?.code || null,
+          cause: error?.cause?.message || null,
+        });
         if (attempt < UPLOAD_RETRY_COUNT) {
           await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
         }
@@ -533,14 +548,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
       const uploadedCarPhotos = await mapWithConcurrency(
         carPhotoUris,
-        3,
+        1,
         async (uri, index) => uploadUri(token, uri, `car-photo-${index + 1}.jpg`)
       );
-      const [registrationBookUrl, insuranceUrl, zinaraUrl] = await Promise.all([
-        uploadUri(token, regBookUri, 'registration-book.jpg'),
-        uploadUri(token, insuranceUri, 'insurance.jpg'),
-        uploadUri(token, zinaraUri, 'zinara.jpg'),
-      ]);
+      const registrationBookUrl = await uploadUri(token, regBookUri, 'registration-book.jpg');
+      const insuranceUrl = await uploadUri(token, insuranceUri, 'insurance.jpg');
+      const zinaraUrl = await uploadUri(token, zinaraUri, 'zinara.jpg');
       const selectedTier = tiers.find((tier) => tier.tierKey === selectedTierKey) || null;
 
       await submitVehicle(token, {

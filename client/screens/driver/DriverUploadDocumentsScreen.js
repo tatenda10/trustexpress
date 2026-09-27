@@ -30,6 +30,7 @@ export const DRIVER_SKIP_ENHANCED_SELFIE_KEY = 'trust_express_driver_skip_enhanc
 const STEP_CURRENT = 4;
 const STEP_TOTAL = 6;
 const CURRENT_YEAR = new Date().getFullYear();
+const DOCUMENT_UPLOAD_RETRY_COUNT = 2;
 
 const DOCS = [
   { key: 'driverLicence', label: "Driver's License", subtitle: 'Front and back sides', icon: 'id-card-outline' },
@@ -96,6 +97,15 @@ function isIsoDate(value) {
 }
 
 function formatUploadErrorMessage(error, fallback) {
+  if (Number(error?.status || 0) === 0 || error?.code === 'UPLOAD_NETWORK_ERROR') {
+    return error?.message || 'Upload could not reach the server. Please check your internet connection and try again.';
+  }
+  if (Number(error?.status || 0) === 413 || error?.code === 'LIMIT_FILE_SIZE') {
+    return error?.message || 'The selected photo is too large. Please retake it with a lower camera setting or choose a smaller image.';
+  }
+  if (Number(error?.status || 0) === 401) {
+    return error?.message || 'Your session expired before the upload finished. Please sign in again and retry.';
+  }
   const apiMessage = String(
     error?.response?.data?.error ||
     error?.response?.data?.message ||
@@ -398,23 +408,42 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       return toStoredUploadPath(trimmedUri);
     }
 
-    const uploadReadyUri = await prepareImageForUpload(trimmedUri);
-    const formData = new FormData();
-    formData.append('file', { uri: uploadReadyUri, name: 'photo.jpg', type: 'image/jpeg' });
-    try {
-      const { url } = await uploadFile(token, formData, { suppressAuthErrorHandler: true });
-      console.log('[DriverUploadDocumentsScreen] upload success', { label, url });
-      return url;
-    } catch (error) {
-      console.log('[DriverUploadDocumentsScreen] upload failed', {
-        label,
-        uri,
-        uploadReadyUri,
-        error: error?.message || null,
-        apiError: error?.response?.data || null,
-      });
-      throw new Error(formatUploadErrorMessage(error, `${label} upload failed. Please try again.`));
+    let lastError = null;
+    for (let attempt = 0; attempt <= DOCUMENT_UPLOAD_RETRY_COUNT; attempt += 1) {
+      let uploadReadyUri = null;
+      try {
+        uploadReadyUri = await prepareImageForUpload(trimmedUri, { maxWidth: 960, compress: 0.55 });
+        console.log('[DriverUploadDocumentsScreen] upload prepared', {
+          label,
+          attempt: attempt + 1,
+          originalUri: trimmedUri.slice(0, 80),
+          uploadReadyUri: String(uploadReadyUri || '').slice(0, 80),
+        });
+        const formData = new FormData();
+        formData.append('file', { uri: uploadReadyUri, name: 'photo.jpg', type: 'image/jpeg' });
+        const { url } = await uploadFile(token, formData, { suppressAuthErrorHandler: true });
+        console.log('[DriverUploadDocumentsScreen] upload success', { label, url });
+        return url;
+      } catch (error) {
+        lastError = error;
+        console.log('[DriverUploadDocumentsScreen] upload failed', {
+          label,
+          attempt: attempt + 1,
+          uri: trimmedUri.slice(0, 80),
+          uploadReadyUri: String(uploadReadyUri || '').slice(0, 80),
+          error: error?.message || null,
+          status: error?.status || null,
+          code: error?.code || null,
+          cause: error?.cause?.message || String(error?.cause || ''),
+          apiError: error?.response?.data || null,
+        });
+        if (attempt < DOCUMENT_UPLOAD_RETRY_COUNT) {
+          await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+        }
+      }
     }
+
+    throw new Error(formatUploadErrorMessage(lastError, `${label} upload failed. Please try again.`));
   };
 
   const handleSubmit = async () => {

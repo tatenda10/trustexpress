@@ -21,7 +21,10 @@ router.post('/', requireAuth, (req, res) => {
         message,
         mimetype: req.headers['content-type'] || null,
       });
-      return res.status(400).json({ error: message });
+      return res.status(isMulter && err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
+        error: message,
+        code: isMulter ? err.code : 'UPLOAD_FAILED',
+      });
     }
 
     const files = [

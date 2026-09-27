@@ -18,6 +18,28 @@ export function getApiUrl(path) {
   return `${base}${p}`;
 }
 
+function getFriendlyUploadErrorMessage(status, fallbackMessage) {
+  if (status === 0) {
+    return 'Upload could not reach the server. Please check your internet connection and try again. If this keeps happening, the photo may be too large or the server upload limit is blocking it.';
+  }
+  if (status === 400) {
+    return fallbackMessage || 'The selected file could not be uploaded. Please choose a clear JPG or PNG image and try again.';
+  }
+  if (status === 401) {
+    return 'Your session expired before the upload finished. Please sign in again and retry.';
+  }
+  if (status === 413) {
+    return fallbackMessage || 'The selected photo is too large. Please retake it with a lower camera setting or choose a smaller image.';
+  }
+  if (status === 429) {
+    return 'Too many upload attempts right now. Please wait a moment and try again.';
+  }
+  if (status >= 500) {
+    return 'The server could not save the upload right now. Please try again in a moment.';
+  }
+  return fallbackMessage || 'Upload failed. Please try again.';
+}
+
 /**
  * Uploaded files are stored as /uploads/... on our API host. Older sessions may have
  * full URLs pointing at a dev IP or old domain — always resolve /uploads/ against current BASE_URL.
@@ -753,16 +775,29 @@ export async function uploadFile(token, formData, options = {}) {
   let res;
   let data = {};
   try {
+    console.log('[api.uploadFile] start', { url });
     res = await fetch(url, { method: 'POST', headers, body: formData });
     data = res.ok ? await res.json().catch(() => ({})) : await res.json().catch(() => ({}));
+    console.log('[api.uploadFile] response', {
+      url,
+      ok: res.ok,
+      status: res.status,
+      error: data?.error || null,
+    });
   } catch (error) {
-    const err = new Error('Upload failed because the network connection was interrupted. Please try again.');
+    console.warn('[api.uploadFile] network failure', {
+      url,
+      message: error?.message || null,
+      name: error?.name || null,
+    });
+    const err = new Error(getFriendlyUploadErrorMessage(0));
     err.status = 0;
+    err.code = 'UPLOAD_NETWORK_ERROR';
     err.cause = error;
     throw err;
   }
   if (!res.ok) {
-    let message = getFriendlyApiErrorMessage(res.status, data?.error);
+    let message = getFriendlyUploadErrorMessage(res.status, data?.error);
     const err = new Error(message);
     err.status = res.status;
     err.code = data?.code || null;
