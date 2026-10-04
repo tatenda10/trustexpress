@@ -22,6 +22,19 @@ function getBaseUrl() {
   return getEnvironment() === 'live' ? LIVE_BASE_URL : SANDBOX_BASE_URL;
 }
 
+function getCheckoutMode() {
+  const value = String(process.env.SMILEPAY_CHECKOUT_MODE || 'hosted').trim().toLowerCase();
+  if (['express_ecocash', 'ecocash'].includes(value)) return 'express_ecocash';
+  if (['express_mpgs', 'mpgs', 'card', 'express_card'].includes(value)) return 'express_mpgs';
+  return 'hosted';
+}
+
+function getCheckoutPath(mode) {
+  if (mode === 'express_ecocash') return '/payments/express-checkout/ecocash';
+  if (mode === 'express_mpgs') return '/payments/express-checkout/mpgs';
+  return '/payments/initiate-transaction';
+}
+
 function getCredentials() {
   const apiKey = String(process.env.SMILEPAY_API_KEY || '').trim();
   const apiSecret = String(process.env.SMILEPAY_API_SECRET || '').trim();
@@ -203,6 +216,41 @@ function pickSmilePayTransactionId(body = {}) {
   ).trim() || null;
 }
 
+function pickSmilePayAuthorizationUrl(body = {}) {
+  return String(
+    body?.paymentUrl
+    || body?.checkoutUrl
+    || body?.redirectUrl
+    || body?.authenticationUrl
+    || body?.threeDsUrl
+    || body?.deepLink
+    || body?.data?.paymentUrl
+    || body?.data?.checkoutUrl
+    || body?.data?.redirectUrl
+    || body?.data?.authenticationUrl
+    || body?.data?.threeDsUrl
+    || body?.data?.deepLink
+    || ''
+  ).trim() || null;
+}
+
+function pickSmilePayNextAction(body = {}, mode = 'hosted') {
+  const explicit = String(
+    body?.nextAction
+    || body?.next_action
+    || body?.action
+    || body?.data?.nextAction
+    || body?.data?.next_action
+    || body?.data?.action
+    || ''
+  ).trim().toLowerCase();
+  if (explicit) return explicit;
+  if (pickSmilePayAuthorizationUrl(body)) return 'redirect';
+  if (mode === 'express_ecocash') return 'poll';
+  if (mode === 'express_mpgs') return 'poll';
+  return 'redirect';
+}
+
 export const smilePayProvider = {
   id: 'smilepay',
   label: 'Smile&Pay (ZB Bank)',
@@ -224,29 +272,41 @@ export const smilePayProvider = {
     const currencyCode = toSmilePayCurrencyCode(currency);
     const resultUrl = String(customResultUrl || '').trim() || getSmilePayWebhookUrl();
     const returnUrl = String(callbackUrl || '').trim() || resultUrl;
+    const checkoutMode = getCheckoutMode();
+    const checkoutPath = getCheckoutPath(checkoutMode);
+    const requestBody = {
+      orderReference: reference,
+      amount: normalizeMoney(amount),
+      currencyCode,
+      itemName: String(itemName || 'Trust Express Wallet Top-up').trim() || 'Trust Express Wallet Top-up',
+      itemDescription: String(itemDescription || `Driver wallet top-up for ${driverUserId}`).trim() || `Driver wallet top-up for ${driverUserId}`,
+      returnUrl,
+      resultUrl,
+      email: email || undefined,
+      firstName: firstName || undefined,
+      lastName: lastName || undefined,
+      mobilePhoneNumber: mobilePhoneNumber || undefined,
+    };
+    if (checkoutMode === 'hosted') {
+      requestBody.paymentMethod = 'WALLETPLUS';
+    } else if (checkoutMode === 'express_ecocash') {
+      requestBody.paymentMethod = 'ECOCASH';
+      requestBody.msisdn = mobilePhoneNumber || undefined;
+    } else if (checkoutMode === 'express_mpgs') {
+      requestBody.paymentMethod = 'CARD';
+    }
 
-    const payload = await smilePayRequest('/payments/initiate-transaction', {
+    const payload = await smilePayRequest(checkoutPath, {
       method: 'POST',
-      body: {
-        orderReference: reference,
-        amount: normalizeMoney(amount),
-        currencyCode,
-        itemName: String(itemName || 'Trust Express Wallet Top-up').trim() || 'Trust Express Wallet Top-up',
-        itemDescription: String(itemDescription || `Driver wallet top-up for ${driverUserId}`).trim() || `Driver wallet top-up for ${driverUserId}`,
-        returnUrl,
-        resultUrl,
-        paymentMethod: 'WALLETPLUS',
-        email: email || undefined,
-        firstName: firstName || undefined,
-        lastName: lastName || undefined,
-        mobilePhoneNumber: mobilePhoneNumber || undefined,
-      },
+      body: requestBody,
     });
 
     const initiated = {
       provider: 'smilepay',
       reference,
-      authorizationUrl: payload?.paymentUrl || payload?.checkoutUrl || null,
+      checkoutMode,
+      nextAction: pickSmilePayNextAction(payload, checkoutMode),
+      authorizationUrl: pickSmilePayAuthorizationUrl(payload),
       accessCode: null,
       externalTransactionId: payload?.transactionReference
         ? String(payload.transactionReference)
@@ -255,6 +315,8 @@ export const smilePayProvider = {
     };
     logSmilePay('initialize.success', {
       reference,
+      checkoutMode,
+      nextAction: initiated.nextAction,
       returnUrl,
       resultUrl,
       authorizationUrl: initiated.authorizationUrl,

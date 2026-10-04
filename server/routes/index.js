@@ -40,6 +40,7 @@ import agentRecruitmentRouter from './agentRecruitment.js';
 import agentRewardsRouter from './agentRewards.js';
 import publicShareRouter from './publicShare.js';
 import hireRouter from './hire.js';
+import whatsappRouter from './whatsapp.js';
 
 const router = Router();
 
@@ -54,6 +55,7 @@ router.use('/passengers/payments', passengerPaymentsRouter);
 router.use('/drivers/wallet', driverWalletRouter);
 router.use('/drivers', driversRouter);
 router.use('/hire', hireRouter);
+router.use('/whatsapp', whatsappRouter);
 router.use('/rides', ridesRouter);
 router.use('/maps', mapsRouter);
 router.use('/service-areas', serviceAreasRouter);

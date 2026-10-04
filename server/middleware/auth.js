@@ -1,7 +1,7 @@
 import { verifyToken } from '@clerk/backend';
 import { query } from '../db/connection.js';
 
-const ENFORCE_SINGLE_SESSION = String(process.env.ENFORCE_SINGLE_SESSION || 'true').toLowerCase() !== 'false';
+const ENFORCE_SINGLE_SESSION = String(process.env.ENFORCE_SINGLE_SESSION || 'false').toLowerCase() === 'true';
 
 function getTokenFromRequest(req) {
   const authHeader = req.headers.authorization;

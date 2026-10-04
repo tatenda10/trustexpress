@@ -312,10 +312,14 @@ export async function initializePassengerRidePayment({
       status: existingPending.status,
       amount: Number(existingPending.amount || amount),
       authorizationUrl: raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl || null,
+      checkoutMode: raw.checkoutMode || null,
+      nextAction: raw.nextAction || null,
     });
     return {
       reference: existingPending.reference,
       authorizationUrl: raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl || null,
+      checkoutMode: raw.checkoutMode || 'hosted',
+      nextAction: raw.nextAction || (raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl ? 'redirect' : 'poll'),
       amount: Number(existingPending.amount || amount),
       currency: existingPending.currency || 'USD',
       status: existingPending.status,
@@ -351,6 +355,8 @@ export async function initializePassengerRidePayment({
     callback: callback || null,
     resultUrl: `${resultUrl}/api/passengers/payments/webhooks/smilepay`,
     authorizationUrl: topup.authorizationUrl,
+    checkoutMode: topup.checkoutMode || null,
+    nextAction: topup.nextAction || null,
     externalTransactionId: topup.externalTransactionId || null,
   });
 
@@ -370,6 +376,8 @@ export async function initializePassengerRidePayment({
       JSON.stringify({
         ...topup.rawInitializePayload,
         authorizationUrl: topup.authorizationUrl,
+        checkoutMode: topup.checkoutMode || 'hosted',
+        nextAction: topup.nextAction || (topup.authorizationUrl ? 'redirect' : 'poll'),
       }),
     ]
   );
@@ -387,6 +395,8 @@ export async function initializePassengerRidePayment({
   return {
     reference,
     authorizationUrl: topup.authorizationUrl,
+    checkoutMode: topup.checkoutMode || 'hosted',
+    nextAction: topup.nextAction || (topup.authorizationUrl ? 'redirect' : 'poll'),
     amount,
     currency: 'USD',
     status: 'pending',

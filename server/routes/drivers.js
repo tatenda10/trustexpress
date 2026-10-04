@@ -58,6 +58,7 @@ import {
 import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger-payments.js';
 import { upsertDriverPushTokens } from '../lib/driver-push-tokens.js';
 import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
+import { notifyWhatsAppDriverArrived, notifyWhatsAppDriverOffer } from '../lib/whatsapp/ride-notifications.js';
 import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
 
 const router = Router();
@@ -1438,6 +1439,30 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
         driverUserId: req.userId,
       },
     });
+    notifyWhatsAppDriverOffer({
+      ride,
+      driverUserId: req.userId,
+      driverName: acceptedDriverPayload.driverName,
+      driverPhone: acceptedDriverPayload.phoneNumber,
+      driverEtaMinutes,
+      vehicleLabel: acceptedDriverPayload.carName,
+      plate: acceptedDriverPayload.plate,
+    }).then((result) => {
+      if (result?.sent) {
+        console.log('[whatsapp.ride-notifications] driver offer sent', {
+          rideRequestId,
+          driverUserId: req.userId,
+          phone: result.phone,
+        });
+      }
+    }).catch((error) => {
+      console.error('[whatsapp.ride-notifications] driver offer failed', {
+        rideRequestId,
+        driverUserId: req.userId,
+        message: error?.message || String(error),
+        status: error?.status || null,
+      });
+    });
     emitRideStatusToDriver(req.userId, {
       rideRequestId,
       status: 'driver_found',
@@ -1622,6 +1647,22 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
       [rideRequestId, req.userId]
     );
     const passengerSafetyPinPayload = buildPassengerSafetyPinPayload(ride);
+    notifyWhatsAppDriverArrived({ ride }).then((result) => {
+      if (result?.sent) {
+        console.log('[whatsapp.ride-notifications] driver arrived sent', {
+          rideRequestId,
+          driverUserId: req.userId,
+          phone: result.phone,
+        });
+      }
+    }).catch((error) => {
+      console.error('[whatsapp.ride-notifications] driver arrived failed', {
+        rideRequestId,
+        driverUserId: req.userId,
+        message: error?.message || String(error),
+        status: error?.status || null,
+      });
+    });
     if (ride?.passenger_user_id) {
       emitRideStatusToPassenger(ride.passenger_user_id, {
         rideRequestId,

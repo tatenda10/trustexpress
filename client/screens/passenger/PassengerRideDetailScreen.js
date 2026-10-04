@@ -231,11 +231,13 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
       const callbackUrl = ExpoLinking.createURL('passenger-ride-payment');
       const result = await initiatePassengerRideSmilePay(token, rideRequestId, { callbackUrl });
       const payment = result?.payment || {};
-      if (!payment.authorizationUrl) {
+      if (!payment.authorizationUrl && String(payment.nextAction || '').toLowerCase() !== 'poll') {
         throw new Error('Could not start Smile&Pay checkout.');
       }
 
-      const authResult = await WebBrowser.openAuthSessionAsync(payment.authorizationUrl, callbackUrl);
+      const authResult = payment.authorizationUrl
+        ? await WebBrowser.openAuthSessionAsync(payment.authorizationUrl, callbackUrl)
+        : { type: 'poll' };
       const references = [payment.reference].filter(Boolean);
       if (authResult?.type === 'success' && authResult?.url) {
         const parsed = ExpoLinking.parse(authResult.url);
@@ -248,6 +250,13 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
         }
       }
 
+      if (!payment.authorizationUrl) {
+        Alert.alert(
+          'Payment started',
+          'Smile&Pay has started the express payment. Approve it on your phone, then wait a moment while we confirm it.'
+        );
+        await new Promise((resolve) => setTimeout(resolve, 3500));
+      }
       let verifiedPayment = null;
       for (const reference of references) {
         const verifyResult = await verifyPassengerRideSmilePay(token, rideRequestId, reference);

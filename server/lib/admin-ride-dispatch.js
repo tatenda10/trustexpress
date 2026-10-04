@@ -259,6 +259,7 @@ async function insertDispatchedRide({
   passengerPhone,
   quote,
   adminUserId,
+  bookingSource = 'admin_dispatch',
 }) {
   const values = [
     publicId,
@@ -287,7 +288,7 @@ async function insertDispatchedRide({
     quote.estimatedAmount,
     0,
     quote.paymentMethod,
-    'admin_dispatch',
+    bookingSource,
     adminUserId || null,
   ];
 
@@ -377,6 +378,8 @@ export async function createDispatchRide({
   passengerCount,
   paymentMethod,
   adminUserId,
+  bookingSource = 'admin_dispatch',
+  passengerUserId: passengerUserIdOverride = null,
 }) {
   const phone = normalizeZimbabwePhoneNumber(passengerPhone);
   if (!phone.ok) {
@@ -404,7 +407,7 @@ export async function createDispatchRide({
   });
 
   const publicId = createPublicRideId();
-  const passengerUserId = `dispatch:${crypto.randomUUID()}`;
+  const passengerUserId = passengerUserIdOverride || `dispatch:${crypto.randomUUID()}`;
   const result = await insertDispatchedRide({
     publicId,
     passengerUserId,
@@ -412,6 +415,7 @@ export async function createDispatchRide({
     passengerPhone: phone.localPhone,
     quote,
     adminUserId,
+    bookingSource,
   });
   const rideRequestId = result.insertId;
 
@@ -468,7 +472,7 @@ export async function createDispatchRide({
       id: rideRequestId,
       publicId,
       status: 'requested',
-      bookingSource: 'admin_dispatch',
+      bookingSource,
       passengerName: name,
       passengerPhone: phone.localPhone,
       pickupLabel: quote.pickupLabel,
