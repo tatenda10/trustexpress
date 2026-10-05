@@ -625,7 +625,7 @@ export default function DriverDetailsPage() {
 
       {activeTab === 'wallet' ? (
         <section className="space-y-4 border border-slate-300 bg-white p-4">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <Field label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
             <Field
               label="Total credits"
@@ -640,6 +640,14 @@ export default function DriverDetailsPage() {
               value={
                 driver.walletSummary
                   ? `${String(driver.wallet?.currency || 'USD').toUpperCase()} ${Number(driver.walletSummary.totalDebits || 0).toFixed(2)}`
+                  : '-'
+              }
+            />
+            <Field
+              label="Promo debits"
+              value={
+                driver.walletSummary
+                  ? `${String(driver.wallet?.currency || 'USD').toUpperCase()} ${Number(driver.walletSummary.totalPromotionalDebits || 0).toFixed(2)}`
                   : '-'
               }
             />
@@ -662,19 +670,23 @@ export default function DriverDetailsPage() {
                     <td colSpan={5} className="px-3 py-6 text-center text-slate-500">No wallet transactions yet.</td>
                   </tr>
                 ) : (
-                  walletTransactions.map((tx) => (
-                    <tr key={tx.id} className="border-t border-slate-200">
-                      <td className="px-3 py-2 text-slate-600">{formatDateTime(tx.createdAt)}</td>
-                      <td className="px-3 py-2 font-medium text-slate-800">{tx.transactionType || '-'}</td>
-                      <td className={`px-3 py-2 font-semibold ${Number(tx.amount || 0) < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                        {String(tx.currency || driver.wallet?.currency || 'USD').toUpperCase()} {Number(tx.amount || 0).toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2 text-slate-700">
-                        {String(tx.currency || driver.wallet?.currency || 'USD').toUpperCase()} {Number(tx.balanceAfter || 0).toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2 text-slate-600">{tx.description || tx.sourceType || '-'}</td>
-                    </tr>
-                  ))
+                  walletTransactions.map((tx) => {
+                    const isPromoDebit = tx.transactionType === 'promo_commission_debit';
+                    const currency = String(tx.currency || driver.wallet?.currency || 'USD').toUpperCase();
+                    return (
+                      <tr key={tx.id} className="border-t border-slate-200">
+                        <td className="px-3 py-2 text-slate-600">{formatDateTime(tx.createdAt)}</td>
+                        <td className="px-3 py-2 font-medium text-slate-800">{tx.transactionType || '-'}</td>
+                        <td className={`px-3 py-2 font-semibold ${Number(tx.amount || 0) < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                          {currency} {Number(tx.amount || 0).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700">
+                          {isPromoDebit ? 'Promo ' : ''}{currency} {Number(tx.balanceAfter || 0).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{tx.description || tx.sourceType || '-'}</td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

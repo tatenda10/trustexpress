@@ -105,8 +105,19 @@ export async function apiFetch(path, options = {}, token) {
     const err = new Error(message);
     err.status = res.status;
     err.code = data?.code || null;
+    err.restriction = data?.restriction || null;
     // If the backend reports an auth problem, trigger the global handler so the app can log out.
-    if (res.status === 401 && authErrorHandler && !suppressAuthErrorHandler) {
+    if (
+      authErrorHandler
+      && !suppressAuthErrorHandler
+      && (
+        res.status === 401
+        || err.code === 'ACCOUNT_RESTRICTED'
+        || err.code === 'ACCOUNT_LOGIN_RESTRICTED'
+        || err.code === 'ACCOUNT_BLOCKED'
+        || err.code === 'ACCOUNT_FLAGGED'
+      )
+    ) {
       try {
         authErrorHandler(err, data);
       } catch {
@@ -801,7 +812,14 @@ export async function uploadFile(token, formData, options = {}) {
     const err = new Error(message);
     err.status = res.status;
     err.code = data?.code || null;
-    if (res.status === 401) {
+    err.restriction = data?.restriction || null;
+    if (
+      res.status === 401
+      || err.code === 'ACCOUNT_RESTRICTED'
+      || err.code === 'ACCOUNT_LOGIN_RESTRICTED'
+      || err.code === 'ACCOUNT_BLOCKED'
+      || err.code === 'ACCOUNT_FLAGGED'
+    ) {
       if (authErrorHandler && !suppressAuthErrorHandler) {
         try {
           authErrorHandler(err, data);

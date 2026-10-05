@@ -1412,7 +1412,8 @@ export async function getAdminDriverWalletLedger({
   const [summaryRow] = await query(
     `SELECT
        COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit') THEN amount ELSE 0 END), 0) AS total_credits,
-       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit', 'promo_commission_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
+       COALESCE(SUM(CASE WHEN transaction_type = 'promo_commission_debit' THEN ABS(amount) ELSE 0 END), 0) AS total_promotional_debits,
        COUNT(*) AS transaction_count
      FROM driver_wallet_transactions
      WHERE driver_user_id = ?`,
@@ -1434,6 +1435,7 @@ export async function getAdminDriverWalletLedger({
     summary: {
       totalCredits: normalizeMoney(summaryRow?.total_credits || 0),
       totalDebits: normalizeMoney(summaryRow?.total_debits || 0),
+      totalPromotionalDebits: normalizeMoney(summaryRow?.total_promotional_debits || 0),
       transactionCount: Number(summaryRow?.transaction_count || 0),
     },
     transactions: (transactions || []).map((row) => mapTransactionRow(row, settings)),

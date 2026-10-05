@@ -1591,6 +1591,7 @@ function AppContent() {
   const pendingInviteNavigationRef = useRef(null);
   const sessionReplacedAlertShownRef = useRef(false);
   const [currentRouteName, setCurrentRouteName] = useState(null);
+  const [blockedAccountParams, setBlockedAccountParams] = useState(null);
 
   const syncCurrentRouteName = useCallback(() => {
     try {
@@ -1695,6 +1696,12 @@ function AppContent() {
     });
   }, [isLoaded, isSignedIn]);
 
+  useEffect(() => {
+    if (!isSignedIn) {
+      setBlockedAccountParams(null);
+    }
+  }, [isSignedIn]);
+
   // Preload notification module during startup so signup/login does not trigger a mid-session bundle reload.
   useEffect(() => {
     import('./notifications').catch(() => {});
@@ -1705,6 +1712,20 @@ function AppContent() {
   useEffect(() => {
     setApiAuthErrorHandler((authError) => {
       const authCode = String(authError?.code || '').trim().toUpperCase();
+      if (
+        authCode === 'ACCOUNT_RESTRICTED'
+        || authCode === 'ACCOUNT_LOGIN_RESTRICTED'
+        || authCode === 'ACCOUNT_BLOCKED'
+        || authCode === 'ACCOUNT_FLAGGED'
+      ) {
+        const restriction = authError?.restriction || {};
+        setBlockedAccountParams({
+          reason: authCode === 'ACCOUNT_FLAGGED' ? 'flagged' : 'blocked',
+          message: authError?.message || null,
+          restriction,
+        });
+        return;
+      }
       if (authCode !== 'SESSION_REPLACED') return;
       if (sessionReplacedAlertShownRef.current) return;
       sessionReplacedAlertShownRef.current = true;
@@ -1788,7 +1809,21 @@ function AppContent() {
     >
       <SafeAreaProvider>
         <KeyboardProvider>
-          {!isLoaded ? <SplashScreen /> : isSignedIn ? <AppStack currentRouteName={currentRouteName} /> : <AuthStack />}
+          {!isLoaded ? (
+            <SplashScreen />
+          ) : isSignedIn && blockedAccountParams ? (
+            <Stack.Navigator screenOptions={{ headerShown: false }}>
+              <Stack.Screen
+                name="BlockedAccount"
+                component={BlockedAccountScreen}
+                initialParams={blockedAccountParams}
+              />
+            </Stack.Navigator>
+          ) : isSignedIn ? (
+            <AppStack currentRouteName={currentRouteName} />
+          ) : (
+            <AuthStack />
+          )}
           <StatusBar style="auto" />
         </KeyboardProvider>
       </SafeAreaProvider>
