@@ -41,6 +41,7 @@ import DriverDiscountReimbursementsPage from './pages/DriverDiscountReimbursemen
 import DriverWalletSettingsPage from './pages/DriverWalletSettingsPage'
 import HireCommissionSettingsPage from './pages/HireCommissionSettingsPage'
 import HireVehicleTypesPage from './pages/HireVehicleTypesPage'
+import AccountRestrictionsPage from './pages/AccountRestrictionsPage'
 import { getDefaultDashboardPath } from './utils/dashboardHome'
 
 function ProtectedRoute({ children }) {
@@ -249,6 +250,10 @@ function AppRoutes() {
         <Route
           path="support-agent"
           element={<PermissionRoute permission="support.manage"><SupportAgentPage /></PermissionRoute>}
+        />
+        <Route
+          path="account-restrictions"
+          element={<PermissionRoute permission="account_restrictions.read"><AccountRestrictionsPage /></PermissionRoute>}
         />
       </Route>
 

@@ -151,7 +151,10 @@ async function upsertUser(connection, appUser) {
       first_name = VALUES(first_name),
       last_name = VALUES(last_name),
       image_url = VALUES(image_url),
-      role = VALUES(role),
+      role = CASE
+        WHEN role = 'driver' AND VALUES(role) <> 'driver' THEN role
+        ELSE VALUES(role)
+      END,
       phone_number = VALUES(phone_number),
       phone_verified_at = VALUES(phone_verified_at),
       updated_at = CURRENT_TIMESTAMP`,

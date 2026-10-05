@@ -63,6 +63,57 @@ function mapPassenger(user, passengerIdentity = null) {
   };
 }
 
+function mapMysqlPassenger(row, passengerIdentity = null) {
+  const fullName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null;
+  return {
+    id: row.clerk_user_id,
+    firstName: row.first_name || null,
+    lastName: row.last_name || null,
+    fullName,
+    email: row.email || null,
+    phoneNumber: row.phone_number || null,
+    createdAt: row.created_at || null,
+    phoneVerified: !!row.phone_verified_at,
+    phoneVerifiedAt: row.phone_verified_at || null,
+    status: 'active',
+    totalRides: 0,
+    totalSpend: 0,
+    lastRideAt: null,
+    savedAddresses: [],
+    emergencyContact: null,
+    paymentMethods: [],
+    passengerIdentity,
+    registrationCity: row.registration_city || null,
+    registrationSource: row.registration_source || null,
+    source: String(row.registration_source || '').startsWith('whatsapp') || String(row.clerk_user_id || '').startsWith('whatsapp:')
+      ? 'whatsapp'
+      : 'app',
+    _role: normalizeRole(row.role),
+  };
+}
+
+async function loadMysqlPassengerUsers(excludeIds = []) {
+  const normalizedExcludeIds = Array.from(new Set(
+    excludeIds.map((value) => String(value || '').trim()).filter(Boolean)
+  ));
+  const params = [];
+  let excludeClause = '';
+  if (normalizedExcludeIds.length) {
+    excludeClause = `AND clerk_user_id NOT IN (${normalizedExcludeIds.map(() => '?').join(', ')})`;
+    params.push(...normalizedExcludeIds);
+  }
+  return query(
+    `SELECT clerk_user_id, email, first_name, last_name, role, phone_number, phone_verified_at,
+            registration_city, registration_country_code, registration_source,
+            registration_detected_at, created_at, updated_at
+     FROM users
+     WHERE role = 'passenger'
+       ${excludeClause}
+     ORDER BY created_at DESC`,
+    params
+  );
+}
+
 async function loadPassengerRideStats(passengerUserIds = []) {
   const normalizedIds = Array.from(
     new Set(passengerUserIds.map((value) => String(value || '').trim()).filter(Boolean))
@@ -141,8 +192,13 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
 
     const clerkUsers = await loadAllClerkUsers('-created_at');
     const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
-    const identities = await listPassengerIdentities(passengerUsers.map((item) => item.id));
-    const passengerRideStats = await loadPassengerRideStats(passengerUsers.map((item) => item.id));
+    const mysqlUsers = await loadMysqlPassengerUsers(passengerUsers.map((item) => item.id));
+    const allPassengerIds = [
+      ...passengerUsers.map((item) => item.id),
+      ...mysqlUsers.map((item) => item.clerk_user_id),
+    ];
+    const identities = await listPassengerIdentities(allPassengerIds);
+    const passengerRideStats = await loadPassengerRideStats(allPassengerIds);
     const identityByUserId = new Map(
       identities.map((row) => [row.passenger_user_id, shapePassengerIdentityFromRow(row)])
     );
@@ -154,9 +210,19 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
       ))
       .filter((item) => item._role === 'passenger');
 
+    passengers = [
+      ...passengers,
+      ...mysqlUsers
+        .map((item) => applyPassengerRideStats(
+          mapMysqlPassenger(item, identityByUserId.get(item.clerk_user_id) || null),
+          passengerRideStats
+        ))
+        .filter((item) => item._role === 'passenger'),
+    ];
+
     if (search) {
       passengers = passengers.filter((item) => {
-        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName]
+        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName, item.registrationCity, item.registrationSource, item.source]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();
@@ -230,8 +296,13 @@ async function exportPassengersWorkbook(req, res) {
 
     const clerkUsers = await loadAllClerkUsers('-created_at');
     const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
-    const identities = await listPassengerIdentities(passengerUsers.map((item) => item.id));
-    const passengerRideStats = await loadPassengerRideStats(passengerUsers.map((item) => item.id));
+    const mysqlUsers = await loadMysqlPassengerUsers(passengerUsers.map((item) => item.id));
+    const allPassengerIds = [
+      ...passengerUsers.map((item) => item.id),
+      ...mysqlUsers.map((item) => item.clerk_user_id),
+    ];
+    const identities = await listPassengerIdentities(allPassengerIds);
+    const passengerRideStats = await loadPassengerRideStats(allPassengerIds);
     const identityByUserId = new Map(
       identities.map((row) => [row.passenger_user_id, shapePassengerIdentityFromRow(row)])
     );
@@ -243,9 +314,19 @@ async function exportPassengersWorkbook(req, res) {
       ))
       .filter((item) => item._role === 'passenger');
 
+    passengers = [
+      ...passengers,
+      ...mysqlUsers
+        .map((item) => applyPassengerRideStats(
+          mapMysqlPassenger(item, identityByUserId.get(item.clerk_user_id) || null),
+          passengerRideStats
+        ))
+        .filter((item) => item._role === 'passenger'),
+    ];
+
     if (search) {
       passengers = passengers.filter((item) => {
-        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName]
+        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName, item.registrationCity, item.registrationSource, item.source]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();

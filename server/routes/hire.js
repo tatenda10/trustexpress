@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { query, withTransaction } from '../db/connection.js';
 import { getClerkUserById, toAppUser, normalizeRole } from '../lib/clerk-user.js';
-import { upsertClerkUserToMysql } from '../lib/user-sync.js';
+import { recordRoleChangeAudit, upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { emitHireBookingUpdated, emitHireQuoteToPassenger, emitHireRequestToDriver, emitToUser } from '../lib/realtime.js';
 import {
@@ -21,6 +21,7 @@ import { getHireCommissionSettings, resolveHireTripType } from '../lib/hire-comm
 import { listHireVehicleTypes } from '../lib/hire-vehicle-types.js';
 import { normalizePaymentMethod, paymentMethodLabel } from '../lib/payment-method.js';
 import { normalizeUploadPath } from '../lib/driver-verification-mysql.js';
+import { assertNoActiveRestriction, restrictionErrorResponse } from '../lib/account-restrictions.js';
 
 const LIVE_HIRE_CONTACT_STATUSES = new Set(['confirmed', 'driver_arrived', 'in_progress']);
 
@@ -86,6 +87,17 @@ async function requireDriver(req, res) {
       `UPDATE users SET role = 'driver', updated_at = CURRENT_TIMESTAMP WHERE clerk_user_id = ?`,
       [req.userId]
     );
+    await recordRoleChangeAudit({
+      clerkUserId: req.userId,
+      previousRole: existingUser?.role || null,
+      newRole: 'driver',
+      source: 'hire.requireDriver',
+      reason: 'Existing MySQL driver role restored while Clerk metadata was not driver',
+      metadata: {
+        existingMysqlRole: existingUser?.role || null,
+        clerkRole: appUser.role || null,
+      },
+    });
   }
   if (!isDriver) {
     res.status(403).json({ error: 'Not a driver' });
@@ -656,6 +668,11 @@ router.post('/requests', requireAuth, async (req, res) => {
   try {
     const passenger = await requirePassenger(req, res);
     if (!passenger) return;
+    try {
+      await assertNoActiveRestriction(req.userId, 'request_rides');
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
+    }
 
     const pickupLabel = String(req.body?.pickupLabel || '').trim();
     const dropoffLabel = String(req.body?.dropoffLabel || '').trim() || null;
@@ -993,6 +1010,11 @@ router.post('/requests/:id/quotes', requireAuth, async (req, res) => {
   try {
     const driver = await requireDriver(req, res);
     if (!driver) return;
+    try {
+      await assertNoActiveRestriction(req.userId, 'accept_rides');
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
+    }
     const requestId = Number(req.params.id);
     const hireVehicleId = Number(req.body?.hireVehicleId);
     const amount = Number(req.body?.amount);
@@ -1068,6 +1090,11 @@ router.post('/requests/:id/accept-passenger-offer', requireAuth, async (req, res
   try {
     const driver = await requireDriver(req, res);
     if (!driver) return;
+    try {
+      await assertNoActiveRestriction(req.userId, 'accept_rides');
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
+    }
     const requestId = Number(req.params.id);
     const hireVehicleId = Number(req.body?.hireVehicleId);
     const message = String(req.body?.message || '').trim() || null;

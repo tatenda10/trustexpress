@@ -38,6 +38,11 @@ function getPassengerName(passenger) {
   return fullName || passenger?.email || 'Unknown passenger'
 }
 
+function sourceClass(source) {
+  if (source === 'whatsapp') return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+  return 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
+}
+
 export default function PassengersPage() {
   const { token } = useAuth()
   const navigate = useNavigate()
@@ -309,6 +314,14 @@ export default function PassengersPage() {
                       <div className="space-y-1">
                         <p className="font-medium text-slate-800">{getPassengerName(passenger)}</p>
                         <p className="text-[11px] text-slate-400">{passenger.id || '-'}</p>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${sourceClass(passenger.source)}`}>
+                            {passenger.source === 'whatsapp' ? 'WhatsApp' : 'App'}
+                          </span>
+                          {passenger.registrationCity ? (
+                            <span className="text-[10px] text-slate-400">{passenger.registrationCity}</span>
+                          ) : null}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3">

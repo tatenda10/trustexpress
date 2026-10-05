@@ -29,7 +29,6 @@ export async function notifyWhatsAppRideAssigned({
     `Driver: ${driverName || 'Driver'}`,
     vehicleLabel ? `Vehicle: ${vehicleLabel}` : null,
     plate ? `Plate: ${String(plate).toUpperCase()}` : null,
-    driverPhone ? `Phone: ${driverPhone}` : null,
     Number(driverEtaMinutes || 0) > 0 ? `ETA: ${driverEtaMinutes} min` : null,
     `Fare estimate: USD ${formatMoney(ride?.final_estimated_amount || ride?.estimated_amount)}`,
     '',
@@ -81,6 +80,7 @@ export async function notifyWhatsAppDriverOffer({
   await sendButtons(whatsappRide.phone, body, [
     { id: `wa_accept:${rideRequestId}:${driverUserId}`, title: 'Accept Driver' },
     { id: `wa_decline:${rideRequestId}:${driverUserId}`, title: 'Decline' },
+    { id: `wa_cancel:${rideRequestId}`, title: 'Cancel Ride' },
   ]);
 
   await updateWhatsAppRideStatus(rideRequestId, 'driver_offered', {
@@ -104,20 +104,53 @@ export async function notifyWhatsAppDriverArrived({ ride } = {}) {
   if (!whatsappRide?.phone) return { sent: false, reason: 'not_whatsapp_ride' };
 
   const safetyPinPayload = buildPassengerSafetyPinPayload(ride);
-  await sendText(
+  const body = [
+    'Your driver has arrived at the pickup point.',
+    safetyPinPayload.safetyPinRequired && safetyPinPayload.safetyPin
+      ? `Safety PIN: ${safetyPinPayload.safetyPin}`
+      : null,
+    'Please confirm you are coming, or cancel if you no longer need the ride.',
+  ].filter(Boolean).join('\n');
+
+  await sendButtons(
     whatsappRide.phone,
+    body,
     [
-      'Your driver has arrived at the pickup point.',
-      safetyPinPayload.safetyPinRequired && safetyPinPayload.safetyPin
-        ? `Safety PIN: ${safetyPinPayload.safetyPin}`
-        : null,
-      'Give this PIN to the driver only when you are ready to start the ride.',
-    ].filter(Boolean).join('\n')
+      { id: `wa_coming:${rideRequestId}`, title: "I'm Coming" },
+      { id: `wa_cancel:${rideRequestId}`, title: 'Cancel Ride' },
+    ]
   );
   await updateWhatsAppRideStatus(rideRequestId, 'driver_arrived', {
     safetyPinRequired: safetyPinPayload.safetyPinRequired,
     safetyPin: safetyPinPayload.safetyPin || null,
     arrivedAt: new Date().toISOString(),
+  });
+
+  return { sent: true, phone: whatsappRide.phone };
+}
+
+export async function notifyWhatsAppRideCompleted({ ride } = {}) {
+  const rideRequestId = Number(ride?.id || ride?.rideRequestId || 0);
+  if (!rideRequestId) return { sent: false, reason: 'invalid_ride' };
+
+  const whatsappRide = await getWhatsAppRideByRideRequestId(rideRequestId);
+  if (!whatsappRide?.phone) return { sent: false, reason: 'not_whatsapp_ride' };
+
+  await sendButtons(
+    whatsappRide.phone,
+    [
+      'Your ride has concluded.',
+      `Fare: USD ${formatMoney(ride?.final_estimated_amount || ride?.estimated_amount)}`,
+      'Thank you for riding with Trust Express.',
+    ].join('\n'),
+    [
+      { id: 'book_ride', title: 'Book Again' },
+      { id: 'my_rides', title: 'My Rides' },
+      { id: 'support', title: 'Support' },
+    ]
+  );
+  await updateWhatsAppRideStatus(rideRequestId, 'completed', {
+    completedAt: new Date().toISOString(),
   });
 
   return { sent: true, phone: whatsappRide.phone };

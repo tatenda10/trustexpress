@@ -46,8 +46,8 @@ import {
 } from '../lib/driver-income.js';
 import {
   applyRatingAutomationAfterPassengerRated,
-  assertAccountNotRestricted,
 } from '../lib/rating-performance.js';
+import { assertUserCanPerform, restrictionErrorResponse } from '../lib/account-restrictions.js';
 import {
   createSmileCashSubscriber,
   normalizeDateOfBirth,
@@ -58,7 +58,11 @@ import {
 import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger-payments.js';
 import { upsertDriverPushTokens } from '../lib/driver-push-tokens.js';
 import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
-import { notifyWhatsAppDriverArrived, notifyWhatsAppDriverOffer } from '../lib/whatsapp/ride-notifications.js';
+import {
+  notifyWhatsAppDriverArrived,
+  notifyWhatsAppDriverOffer,
+  notifyWhatsAppRideCompleted,
+} from '../lib/whatsapp/ride-notifications.js';
 import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
 
 const router = Router();
@@ -688,12 +692,14 @@ router.post('/availability', requireAuth, async (req, res) => {
     // Wallet/verification checks only apply when transitioning offline -> online.
     if (isOnline && !isLocationHeartbeat && !forHire) {
       try {
-        assertAccountNotRestricted(user, 'driver');
-      } catch (restrictionError) {
-        return res.status(restrictionError?.status || 403).json({
-          error: restrictionError?.message || 'Account is restricted.',
-          code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
+        await assertUserCanPerform({
+          userId: req.userId,
+          user,
+          role: 'driver',
+          scope: 'go_online',
         });
+      } catch (restrictionError) {
+        return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
       }
 
       if (isTruckDriver(profile)) {
@@ -1211,12 +1217,14 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
     if (!user) return;
 
     try {
-      assertAccountNotRestricted(user, 'driver');
-    } catch (restrictionError) {
-      return res.status(restrictionError?.status || 403).json({
-        error: restrictionError?.message || 'Account is restricted.',
-        code: restrictionError?.code || 'ACCOUNT_RESTRICTED',
+      await assertUserCanPerform({
+        userId: req.userId,
+        user,
+        role: 'driver',
+        scope: 'accept_rides',
       });
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
     }
 
     await assertDriverWalletSufficient(req.userId);
@@ -1967,6 +1975,31 @@ router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, r
         driverUserId: req.userId,
       });
     }
+    const [completedRideForWhatsApp] = await query(
+      `SELECT *
+       FROM ride_requests
+       WHERE id = ?
+       LIMIT 1`,
+      [rideRequestId]
+    );
+    notifyWhatsAppRideCompleted({ ride: completedRideForWhatsApp || { ...rideBeforeComplete, id: rideRequestId } })
+      .then((result) => {
+        if (result?.sent) {
+          console.log('[whatsapp.ride-notifications] ride completed sent', {
+            rideRequestId,
+            driverUserId: req.userId,
+            phone: result.phone,
+          });
+        }
+      })
+      .catch((error) => {
+        console.error('[whatsapp.ride-notifications] ride completed failed', {
+          rideRequestId,
+          driverUserId: req.userId,
+          message: error?.message || String(error),
+          status: error?.status || null,
+        });
+      });
     emitRideStatusToDriver(req.userId, {
       rideRequestId,
       status: 'completed',

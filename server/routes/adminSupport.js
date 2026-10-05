@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { query } from '../db/connection.js';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { getClerkUserById, toAppUser } from '../lib/clerk-user.js';
@@ -45,6 +46,32 @@ async function enrichThread(row) {
       },
     };
   } catch {
+    try {
+      const [mysqlUser] = await query(
+        `SELECT clerk_user_id, email, first_name, last_name, role, phone_number, registration_source
+         FROM users
+         WHERE clerk_user_id = ?
+         LIMIT 1`,
+        [thread.userId]
+      );
+      if (mysqlUser) {
+        return {
+          ...thread,
+          user: {
+            id: mysqlUser.clerk_user_id,
+            email: mysqlUser.email || null,
+            firstName: mysqlUser.first_name || null,
+            lastName: mysqlUser.last_name || null,
+            fullName: [mysqlUser.first_name, mysqlUser.last_name].filter(Boolean).join(' ').trim() || null,
+            role: mysqlUser.role || thread.userRole,
+            phoneNumber: mysqlUser.phone_number || null,
+            registrationSource: mysqlUser.registration_source || null,
+          },
+        };
+      }
+    } catch {
+      // Fall through to the raw support user id.
+    }
     return {
       ...thread,
       user: {

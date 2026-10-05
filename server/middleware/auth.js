@@ -1,5 +1,6 @@
 import { verifyToken } from '@clerk/backend';
 import { query } from '../db/connection.js';
+import { assertNoActiveRestriction, restrictionErrorResponse } from '../lib/account-restrictions.js';
 
 const ENFORCE_SINGLE_SESSION = String(process.env.ENFORCE_SINGLE_SESSION || 'false').toLowerCase() === 'true';
 
@@ -67,6 +68,14 @@ export async function requireAuth(req, res, next) {
             console.error('[auth] single-session check failed', sessionError);
           }
         }
+      }
+    }
+
+    try {
+      await assertNoActiveRestriction(payload.sub, 'login');
+    } catch (restrictionError) {
+      if (restrictionError?.code !== 'ER_NO_SUCH_TABLE') {
+        return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
       }
     }
 

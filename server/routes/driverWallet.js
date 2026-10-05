@@ -8,6 +8,7 @@ import {
   handleSmilePayWalletWebhook,
   cashOutDriverWallet,
 } from '../lib/driver-wallet.js';
+import { assertNoActiveRestriction, restrictionErrorResponse } from '../lib/account-restrictions.js';
 
 const router = Router();
 
@@ -72,6 +73,11 @@ router.post('/cash-outs', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
     if (!user) return;
+    try {
+      await assertNoActiveRestriction(req.userId, 'cash_out');
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
+    }
     const amount = req.body?.amount === undefined || req.body?.amount === null || req.body?.amount === ''
       ? null
       : Number(req.body.amount);

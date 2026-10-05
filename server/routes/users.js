@@ -126,16 +126,31 @@ router.get('/me', requireAuth, async (req, res) => {
 router.post('/register', requireAuth, async (req, res) => {
   try {
     const { role, inviteToken, referrerEmail } = req.body || {};
+    const requestedRole = normalizeRole(role);
     const registrationCity = await normalizeRegistrationCity(req.body || {});
-    await setRoleForUser(req.userId, role);
+    const [existingMysqlUser] = await query(
+      `SELECT role
+       FROM users
+       WHERE clerk_user_id = ?
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (normalizeRole(existingMysqlUser?.role) === 'driver' && requestedRole !== 'driver') {
+      return res.status(409).json({
+        error: 'This account is already registered as a driver. Please use a different account for passenger access.',
+        code: 'DRIVER_ACCOUNT_DETECTED',
+        role: 'driver',
+      });
+    }
+    await setRoleForUser(req.userId, requestedRole);
 
     let referral = null;
-    if (role === 'driver' && inviteToken) {
+    if (requestedRole === 'driver' && inviteToken) {
       referral = await attachDriverToAgentInvite({
         driverUserId: req.userId,
         inviteToken,
       });
-    } else if (role === 'passenger' && inviteToken) {
+    } else if (requestedRole === 'passenger' && inviteToken) {
       referral = await attachPassengerToAgentInvite({
         passengerUserId: req.userId,
         inviteToken,
@@ -143,7 +158,7 @@ router.post('/register', requireAuth, async (req, res) => {
     }
 
     let passengerPeerReferral = null;
-    if (role === 'passenger' && referrerEmail) {
+    if (requestedRole === 'passenger' && referrerEmail) {
       try {
         const peerResult = await attachPassengerPeerReferral({
           referredUserId: req.userId,
@@ -162,7 +177,7 @@ router.post('/register', requireAuth, async (req, res) => {
     if (referral) {
       console.log('[users.register] agent referral attached', {
         userId: req.userId,
-        role,
+        role: requestedRole,
         inviteToken,
         agentUserId: referral.agentUserId,
         inviteId: referral.inviteId,

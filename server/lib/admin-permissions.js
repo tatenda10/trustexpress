@@ -28,6 +28,9 @@ export const PERMISSION_CATALOG = [
   { key: 'support.read', module: 'support', name: 'Read Support' },
   { key: 'support.manage', module: 'support', name: 'Manage Support' },
 
+  { key: 'account_restrictions.read', module: 'account_restrictions', name: 'Read Account Restrictions' },
+  { key: 'account_restrictions.manage', module: 'account_restrictions', name: 'Manage Account Restrictions' },
+
   { key: 'agents.read', module: 'agents', name: 'Read Agents' },
   { key: 'agents.manage', module: 'agents', name: 'Manage Agents' },
 
@@ -53,6 +56,7 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'live_map.read',
     'reports.read',
     'support.read',
+    'account_restrictions.read',
     'notifications.manage',
   ],
 
@@ -81,6 +85,8 @@ export const DEFAULT_ROLE_MAPPINGS = {
     'drivers.read',
     'passengers.read',
     'passengers.manage',
+    'account_restrictions.read',
+    'account_restrictions.manage',
     'notifications.manage',
   ],
 
