@@ -82,6 +82,8 @@ const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DRIVER_REQUEST_RADIUS_KM = 5;
 const MAX_DRIVER_OFFERS = 8;
 const DRIVER_ONLINE_STALE_DAYS = 1;
+const DRIVER_LIVE_LOCATION_FRESH_SECONDS = Number(process.env.DRIVER_LIVE_LOCATION_FRESH_SECONDS || 45);
+const DRIVER_AUTO_ARRIVED_DISTANCE_KM = Number(process.env.DRIVER_AUTO_ARRIVED_DISTANCE_KM || 0.15);
 const LOST_ITEM_MAX_LENGTH = 2000;
 const MAX_RIDE_TIP_AMOUNT = 200;
 const PANIC_ALERT_MESSAGE_MAX_LENGTH = 500;
@@ -211,6 +213,18 @@ function mapDriverAvailability(row, pickupCoordinate) {
     carImage,
     lastSeenAt: row.last_seen_at || null,
   };
+}
+
+function getLocationAgeSeconds(lastSeenAt) {
+  if (!lastSeenAt) return null;
+  const seenMs = new Date(lastSeenAt).getTime();
+  if (!Number.isFinite(seenMs)) return null;
+  return Math.max(0, Math.round((Date.now() - seenMs) / 1000));
+}
+
+function isFreshDriverLocation(lastSeenAt) {
+  const ageSeconds = getLocationAgeSeconds(lastSeenAt);
+  return ageSeconds !== null && ageSeconds <= DRIVER_LIVE_LOCATION_FRESH_SECONDS;
 }
 
 function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
@@ -1570,6 +1584,56 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     }
 
     const driverCoordinate = assignedDriver?.coordinate || null;
+    const driverLocationAgeSeconds = getLocationAgeSeconds(assignedDriver?.lastSeenAt);
+    const driverLocationFresh = isFreshDriverLocation(assignedDriver?.lastSeenAt);
+    const liveDriverDistanceKm = driverCoordinate ? calculateDistanceKm(driverCoordinate, pickupCoordinate) : null;
+    const liveDriverEtaMinutes = driverLocationFresh && liveDriverDistanceKm !== null
+      ? Math.max(1, Math.round(liveDriverDistanceKm * 4))
+      : null;
+    if (assignedDriver) {
+      assignedDriver.locationFresh = driverLocationFresh;
+      assignedDriver.locationAgeSeconds = driverLocationAgeSeconds;
+      assignedDriver.etaMinutes = liveDriverEtaMinutes ?? assignedDriver.etaMinutes ?? null;
+      assignedDriver.driverDistanceKm = driverLocationFresh && liveDriverDistanceKm !== null
+        ? Number(liveDriverDistanceKm.toFixed(2))
+        : assignedDriver.driverDistanceKm ?? null;
+    }
+
+    if (
+      ride.driver_user_id
+      && String(ride.status || '').toLowerCase() === 'driver_assigned'
+      && driverLocationFresh
+      && liveDriverDistanceKm !== null
+      && liveDriverDistanceKm <= DRIVER_AUTO_ARRIVED_DISTANCE_KM
+    ) {
+      await query(
+        `UPDATE ride_requests
+         SET status = 'driver_arrived',
+             arrived_at = COALESCE(arrived_at, CURRENT_TIMESTAMP),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND status = 'driver_assigned'
+           AND driver_user_id = ?`,
+        [ride.id, ride.driver_user_id]
+      );
+      ride.status = 'driver_arrived';
+      ride.arrived_at = ride.arrived_at || new Date();
+      emitRideStatusToPassenger(ride.passenger_user_id, {
+        rideRequestId: ride.id,
+        status: 'driver_arrived',
+        stage: 'waiting_at_pickup',
+        driverCoordinate,
+        driverLocationUpdatedAt: assignedDriver?.lastSeenAt || null,
+        arrivedAt: toIsoOrNull(ride.arrived_at),
+        reason: 'auto_arrived_by_live_location',
+      });
+      emitRideStatusToDriver(ride.driver_user_id, {
+        rideRequestId: ride.id,
+        status: 'driver_arrived',
+        stage: 'waiting_at_pickup',
+        reason: 'auto_arrived_by_live_location',
+      });
+    }
 
     const viewingSnapshot = (ride.status === 'requested' || ride.status === 'driver_found')
       ? await loadDriversViewingSnapshot(rideRequestId)
@@ -1605,9 +1669,14 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         ...buildPassengerSafetyPinPayload(ride),
         expiresAt: null,
         remainingSeconds: null,
-        driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
-        driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
+        driverDistanceKm: driverLocationFresh && liveDriverDistanceKm !== null
+          ? Number(liveDriverDistanceKm.toFixed(2))
+          : (ride.driver_distance_km === null ? null : Number(ride.driver_distance_km)),
+        driverEtaMinutes: liveDriverEtaMinutes ?? (ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes)),
         driverCoordinate,
+        driverLocationFresh,
+        driverLocationAgeSeconds,
+        driverLocationUpdatedAt: assignedDriver?.lastSeenAt || null,
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),

@@ -21,6 +21,7 @@ import {
 import { markRideRequestsViewedByDriver } from '../lib/ride-driver-responses.js';
 import {
   DRIVER_ACCEPT_OFFER_TTL_SECONDS,
+  DRIVER_PENDING_OFFER_TTL_SECONDS,
   refreshOpenRideOffers,
 } from '../lib/ride-offer-expiry.js';
 import {
@@ -74,7 +75,7 @@ const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
 const DRIVER_REQUEST_RADIUS_KM = 5;
 const DEBUG_DRIVER_REQUESTS = String(process.env.DEBUG_DRIVER_REQUESTS || '').trim().toLowerCase() === 'true';
 /** How long an open ride request stays accept-able for drivers (incoming request countdown). */
-const OPEN_REQUEST_TTL_MINUTES = 3;
+const OPEN_REQUEST_TTL_SECONDS = Math.max(15, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 30, 180));
 
 function debugDriverRequests(event, payload = {}) {
   if (!DEBUG_DRIVER_REQUESTS) return;
@@ -89,7 +90,7 @@ function computeOpenRequestExpiry(presentedAt) {
   if (!Number.isFinite(presentedMs)) {
     return { expiresAt: null, remainingSeconds: null };
   }
-  const expiresMs = presentedMs + (OPEN_REQUEST_TTL_MINUTES * 60 * 1000);
+  const expiresMs = presentedMs + (OPEN_REQUEST_TTL_SECONDS * 1000);
   const remainingSeconds = Math.max(0, Math.ceil((expiresMs - Date.now()) / 1000));
   return {
     expiresAt: new Date(expiresMs).toISOString(),
@@ -997,18 +998,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     }
 
     await refreshOpenRideOffers();
-    await query(
-      `UPDATE ride_request_driver_responses rr
-       INNER JOIN ride_requests r ON r.id = rr.ride_request_id
-       SET rr.responded_at = CURRENT_TIMESTAMP
-       WHERE rr.driver_user_id = ?
-         AND rr.status = 'pending'
-         AND rr.responded_at < (CURRENT_TIMESTAMP - INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE)
-         AND r.status IN ('requested', 'driver_found')
-         AND r.driver_user_id IS NULL`,
-      [req.userId]
-    );
-
     const driverPoint = {
       latitude: Number(availability.current_lat),
       longitude: Number(availability.current_lng),
@@ -1048,10 +1037,10 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
          r.driver_found_at,
          r.driver_user_id,
          rr.responded_at AS offer_presented_at,
-         DATE_ADD(rr.responded_at, INTERVAL ${OPEN_REQUEST_TTL_MINUTES} MINUTE) AS offer_expires_at,
+         DATE_ADD(rr.responded_at, INTERVAL ${OPEN_REQUEST_TTL_SECONDS} SECOND) AS offer_expires_at,
          GREATEST(
            0,
-           (${OPEN_REQUEST_TTL_MINUTES} * 60) - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
+           ${OPEN_REQUEST_TTL_SECONDS} - TIMESTAMPDIFF(SECOND, rr.responded_at, CURRENT_TIMESTAMP)
          ) AS offer_remaining_seconds
        FROM ride_request_driver_responses rr
        INNER JOIN ride_requests r ON r.id = rr.ride_request_id

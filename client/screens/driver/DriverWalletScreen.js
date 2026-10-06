@@ -38,6 +38,8 @@ const DriverWalletScreen = ({ navigation }) => {
   const [transactions, setTransactions] = useState([]);
   const [wallet, setWallet] = useState({
     availableBalance: 0,
+    cashBalance: 0,
+    promotionalBalance: 0,
     currency: 'ZAR',
     minimumRequiredBalance: 1,
     topupMinAmount: 1,
@@ -91,6 +93,8 @@ const DriverWalletScreen = ({ navigation }) => {
       setPendingTopups(Array.isArray(data?.pendingTopups) ? data.pendingTopups : []);
       setWallet({
         availableBalance: Number(data?.wallet?.availableBalance || 0),
+        cashBalance: Number(data?.wallet?.cashBalance || 0),
+        promotionalBalance: Number(data?.wallet?.promotionalBalance || 0),
         currency: data?.wallet?.currency || 'ZAR',
         minimumRequiredBalance: Number(data?.wallet?.minimumRequiredBalance || 1),
         topupMinAmount: Number(data?.wallet?.topupMinAmount || data?.settings?.topupMinAmount || 1),
@@ -110,6 +114,8 @@ const DriverWalletScreen = ({ navigation }) => {
       setPendingTopups([]);
       setWallet({
         availableBalance: 0,
+        cashBalance: 0,
+        promotionalBalance: 0,
         currency: 'ZAR',
         minimumRequiredBalance: 1,
         topupMinAmount: 1,
@@ -207,7 +213,7 @@ const DriverWalletScreen = ({ navigation }) => {
 
     Alert.alert(
       'Cash out wallet?',
-      `Send ${formatCurrency(balance, wallet.currency)} to your wallet now. This is your passenger-payment balance after the service fee.`,
+      `Send ${formatCurrency(balance, wallet.currency)} to your wallet now. Only cash earnings can be cashed out; reward balance stays for service fees.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -260,10 +266,20 @@ const DriverWalletScreen = ({ navigation }) => {
             style={{ backgroundColor: '#f9fafb' }}
           >
             <View className="mb-5 rounded-2xl p-5" style={{ backgroundColor: PRIMARY_BLUE }}>
-              <Text className="mb-1 text-sm font-medium text-white/90">Balance</Text>
+              <Text className="mb-1 text-sm font-medium text-white/90">Available balance</Text>
               <Text className="text-3xl font-bold text-white">
                 {formatCurrency(wallet.availableBalance, wallet.currency)}
               </Text>
+              {Number(wallet.promotionalBalance || 0) > 0 ? (
+                <Text className="mt-2 text-xs font-medium text-white/80">
+                  Includes {formatCurrency(wallet.promotionalBalance, wallet.currency)} reward balance for service fees
+                </Text>
+              ) : null}
+              {Number(wallet.withdrawableBalance || 0) > 0 ? (
+                <Text className="mt-1 text-xs font-medium text-white/80">
+                  Cash-out available: {formatCurrency(wallet.withdrawableBalance, wallet.currency)}
+                </Text>
+              ) : null}
               <View className="mt-4 flex-row gap-3">
                 <TouchableOpacity
                   onPress={openTopupModal}

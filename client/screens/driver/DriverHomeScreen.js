@@ -52,9 +52,9 @@ const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
 const REQUEST_REFRESH_INTERVAL_MS = 800;
 const CURRENT_RIDE_REFRESH_INTERVAL_MS = 15000;
 const AVAILABILITY_TOGGLE_DEBOUNCE_MS = 2500;
-const DB_UPDATE_INTERVAL_MS = 90000;
+const DB_UPDATE_INTERVAL_MS = 5000;
 const DB_UPDATE_INTERVAL_ACTIVE_RIDE_MS = 5000;
-const DB_UPDATE_MIN_DISTANCE_KM = 0.3;
+const DB_UPDATE_MIN_DISTANCE_KM = 0.02;
 const DB_UPDATE_MIN_DISTANCE_ACTIVE_RIDE_KM = 0.05;
 const FALLBACK_DRIVER_COORDINATE = { latitude: -20.1535, longitude: 28.5870 };
 const INITIAL_REGION = {
@@ -1621,8 +1621,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
       const subscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
-          timeInterval: 10000, // ms
-          distanceInterval: 30, // meters
+          timeInterval: 5000, // ms
+          distanceInterval: 10, // meters
         },
         async (loc) => {
           if (cancelled || !loc?.coords) return;

@@ -92,8 +92,9 @@ export function toAppUser(user) {
  * @param {{ skipCache?: boolean }} [opts] - skipCache: true to always fetch from Clerk (e.g. for driver /me so approval status is fresh)
  */
 export async function getClerkUserById(userId, opts = {}) {
-  // Admin book-for-passenger rides store synthetic passenger IDs — never hit Clerk for them.
-  if (!userId || String(userId).startsWith('dispatch:')) {
+  // Admin and WhatsApp rides can store synthetic passenger IDs; never hit Clerk for them.
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId || normalizedUserId.startsWith('dispatch:') || normalizedUserId.startsWith('whatsapp:')) {
     return null;
   }
   const skipCache = opts.skipCache === true;
@@ -245,3 +246,4 @@ export async function clearRecruitmentPrivateMetadata(userId) {
     throw error;
   }
 }
+

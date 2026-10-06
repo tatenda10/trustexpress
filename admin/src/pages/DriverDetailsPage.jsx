@@ -483,7 +483,7 @@ export default function DriverDetailsPage() {
               <HeaderField label="Joined" value={formatDateTime(driver.createdAt)} />
               <HeaderField label="Account status" value={driver.accountStatus || 'active'} />
               <HeaderField label="Approved tier" value={driver.vehicle?.vehicleTierName || '-'} />
-              <HeaderField label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
+              <HeaderField label="Available balance" value={formatWalletMoney(driver.wallet)} />
               <HeaderField label="Completed Trips" value={trips.filter((trip) => trip.status === 'completed').length} />
               <HeaderField label="Average Rating" value={averageRating ? `${averageRating.toFixed(1)} / 5` : 'No ratings yet'} />
               <HeaderField
@@ -557,7 +557,7 @@ export default function DriverDetailsPage() {
             }
           />
           <Field label="Rating restriction reason" value={driver.ratingRestrictionReason || '-'} />
-          <Field label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
+          <Field label="Available balance" value={formatWalletMoney(driver.wallet)} />
           <Field
             label="Wallet status"
             value={
@@ -625,8 +625,8 @@ export default function DriverDetailsPage() {
 
       {activeTab === 'wallet' ? (
         <section className="space-y-4 border border-slate-300 bg-white p-4">
-          <div className="grid gap-3 md:grid-cols-4">
-            <Field label="Wallet balance" value={formatWalletMoney(driver.wallet)} />
+          <div className="grid gap-3 md:grid-cols-3">
+            <Field label="Available balance" value={formatWalletMoney(driver.wallet)} />
             <Field
               label="Total credits"
               value={
@@ -640,14 +640,6 @@ export default function DriverDetailsPage() {
               value={
                 driver.walletSummary
                   ? `${String(driver.wallet?.currency || 'USD').toUpperCase()} ${Number(driver.walletSummary.totalDebits || 0).toFixed(2)}`
-                  : '-'
-              }
-            />
-            <Field
-              label="Promo debits"
-              value={
-                driver.walletSummary
-                  ? `${String(driver.wallet?.currency || 'USD').toUpperCase()} ${Number(driver.walletSummary.totalPromotionalDebits || 0).toFixed(2)}`
                   : '-'
               }
             />

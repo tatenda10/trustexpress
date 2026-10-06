@@ -15,15 +15,44 @@ export function formatWalletDate(value) {
 }
 
 export function getTransactionMeta(transaction) {
-  if (transaction?.transactionType === 'top_up_credit') {
+  if (transaction?.transactionType === 'top_up_credit' || transaction?.transactionType === 'manual_credit') {
     return {
       icon: 'cash-outline',
       iconBg: '#DCFCE7',
       amountColor: 'text-green-600',
       amountPrefix: '+',
-      title: transaction.paymentMethod
+      title: transaction?.transactionType === 'manual_credit'
+        ? 'Wallet credit'
+        : transaction.paymentMethod
         ? `Top-up via ${String(transaction.paymentMethod).replace(/_/g, ' ')}`
         : 'Wallet top-up',
+    };
+  }
+  if (transaction?.transactionType === 'captain_promo_credit') {
+    return {
+      icon: 'gift-outline',
+      iconBg: '#E0F2FE',
+      amountColor: 'text-green-600',
+      amountPrefix: '+',
+      title: 'Reward balance added',
+    };
+  }
+  if (transaction?.transactionType === 'promo_commission_debit') {
+    return {
+      icon: 'remove-circle-outline',
+      iconBg: '#FEE2E2',
+      amountColor: 'text-red-600',
+      amountPrefix: '-',
+      title: transaction?.tripId ? `Trip #${transaction.tripId} service fee` : 'Service fee paid from rewards',
+    };
+  }
+  if (transaction?.transactionType === 'manual_debit') {
+    return {
+      icon: 'arrow-up-circle-outline',
+      iconBg: '#FEE2E2',
+      amountColor: 'text-red-600',
+      amountPrefix: '-',
+      title: transaction?.sourceType === 'driver_wallet_cashout' ? 'Cash out' : 'Wallet debit',
     };
   }
   return {
@@ -38,6 +67,10 @@ export function getTransactionMeta(transaction) {
 export function formatTransactionTypeLabel(transactionType) {
   const type = String(transactionType || '').trim().toLowerCase();
   if (type === 'commission_debit') return 'SERVICE FEE';
+  if (type === 'promo_commission_debit') return 'PAID FROM REWARD BALANCE';
+  if (type === 'captain_promo_credit') return 'REWARD BALANCE';
+  if (type === 'manual_credit') return 'WALLET CREDIT';
+  if (type === 'manual_debit') return 'WALLET DEBIT';
   return String(transactionType || '').replace(/_/g, ' ').toUpperCase();
 }
 
@@ -59,10 +92,10 @@ export function getTransactionDetailRows(transaction, fallbackCurrency = 'ZAR') 
       ? ['Service fee', `${Number(transaction.commissionRatePercent).toFixed(1)}%`]
       : null,
     transaction.balanceBefore != null
-      ? ['Balance before', formatWalletCurrency(transaction.balanceBefore, currency)]
+      ? [transaction.transactionType === 'promo_commission_debit' ? 'Reward balance before' : 'Balance before', formatWalletCurrency(transaction.balanceBefore, currency)]
       : null,
     transaction.balanceAfter != null
-      ? ['Balance after', formatWalletCurrency(transaction.balanceAfter, currency)]
+      ? [transaction.transactionType === 'promo_commission_debit' ? 'Reward balance after' : 'Balance after', formatWalletCurrency(transaction.balanceAfter, currency)]
       : null,
   ].filter(Boolean);
 }

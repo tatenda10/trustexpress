@@ -38,7 +38,7 @@ import {
   sampleCoordinatesForFit,
 } from '../../lib/passengerRideMap';
 
-const REQUEST_EXPIRY_POLL_MS = 5000;
+const REQUEST_EXPIRY_POLL_MS = 2000;
 const NEARBY_DRIVER_POLL_MS = 4000;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const EMPTY_ROUTE_COORDINATES = [];
@@ -883,9 +883,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             </View>
             <View className="flex-row items-center justify-between">
               <Text className="flex-1 pr-3 text-[15px] text-gray-800">
-                {driversViewingCount > 0
-                  ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} viewed your request`
-                  : 'Drivers will see your request nearby'}
+                {acceptedDrivers.length > 0
+                  ? `${acceptedDrivers.length} driver${acceptedDrivers.length === 1 ? '' : 's'} accepted. Choose one to continue.`
+                  : driversViewingCount > 0
+                    ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} viewed. Waiting for an accept.`
+                    : 'Drivers will see your request nearby'}
               </Text>
               <View className="flex-row items-center">
                 {visibleDriversPreview.slice(0, 3).map((driver, index) => (
@@ -921,7 +923,9 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             <Text className="mt-1 text-[16px] text-gray-500">
               {availableDriversCount > 0
                 ? `${availableDriversCount} driver${availableDriversCount === 1 ? '' : 's'} are available`
-                : 'Drivers see your request'}
+                : driversViewingCount > 0
+                  ? 'If nobody accepts quickly, we move on.'
+                  : 'Drivers see your request'}
             </Text>
             <SearchProgressBar />
 

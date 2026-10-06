@@ -7,6 +7,7 @@ import {
 
 /** How long a captain's accepted offer stays selectable before it is removed. */
 export const DRIVER_ACCEPT_OFFER_TTL_SECONDS = 30;
+export const DRIVER_PENDING_OFFER_TTL_SECONDS = Number(process.env.DRIVER_PENDING_OFFER_TTL_SECONDS || 30);
 export const DRIVER_REQUEST_REOFFER_DELAY_SECONDS = 5;
 /** Abandoned open searches expire so admin/driver queues do not keep ghost "requested" rides forever. */
 export const OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES = Number(
@@ -121,6 +122,58 @@ export async function expireStaleAcceptedDriverOffers(rideRequestId = null) {
   };
 }
 
+export async function expireStalePendingDriverOffers(rideRequestId = null) {
+  const safeTtlSeconds = Math.max(15, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 30, 180));
+  const params = [safeTtlSeconds];
+  let rideFilter = '';
+  if (rideRequestId != null) {
+    rideFilter = ' AND rr.ride_request_id = ?';
+    params.push(Number(rideRequestId));
+  }
+
+  const staleRows = await query(
+    `SELECT rr.ride_request_id, rr.driver_user_id
+     FROM ride_request_driver_responses rr
+     INNER JOIN ride_requests r ON r.id = rr.ride_request_id
+     WHERE rr.status = 'pending'
+       AND rr.responded_at < (CURRENT_TIMESTAMP - INTERVAL ? SECOND)
+       AND r.status IN ('requested', 'driver_found')
+       AND r.driver_user_id IS NULL
+       ${rideFilter}`,
+    params
+  );
+
+  if (!Array.isArray(staleRows) || staleRows.length === 0) {
+    return { expiredPendingOffers: [] };
+  }
+
+  await query(
+    `UPDATE ride_request_driver_responses rr
+     INNER JOIN ride_requests r ON r.id = rr.ride_request_id
+     SET rr.status = 'expired'
+     WHERE rr.status = 'pending'
+       AND rr.responded_at < (CURRENT_TIMESTAMP - INTERVAL ? SECOND)
+       AND r.status IN ('requested', 'driver_found')
+       AND r.driver_user_id IS NULL
+       ${rideFilter}`,
+    params
+  );
+
+  staleRows.forEach((row) => {
+    emitRideRequestRemovedFromDriver(row.driver_user_id, {
+      rideRequestId: row.ride_request_id,
+      reason: 'driver_response_timeout',
+    });
+    emitRideStatusToDriver(row.driver_user_id, {
+      rideRequestId: row.ride_request_id,
+      status: 'expired',
+      reason: 'driver_response_timeout',
+    });
+  });
+
+  return { expiredPendingOffers: staleRows };
+}
+
 export async function expireAbandonedOpenRideRequests({ ttlMinutes = OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES } = {}) {
   const safeTtlMinutes = Math.max(5, Math.min(Number(ttlMinutes) || OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES, 24 * 60));
 
@@ -193,12 +246,14 @@ export async function expireAbandonedOpenRideRequests({ ttlMinutes = OPEN_RIDE_R
 }
 
 export async function refreshOpenRideOffers(rideRequestId = null) {
-  const [offers, abandoned] = await Promise.all([
+  const [offers, pending, abandoned] = await Promise.all([
     expireStaleAcceptedDriverOffers(rideRequestId),
+    expireStalePendingDriverOffers(rideRequestId),
     expireAbandonedOpenRideRequests(),
   ]);
   return {
     ...offers,
+    ...pending,
     abandoned,
   };
 }

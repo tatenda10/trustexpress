@@ -75,15 +75,17 @@ async function ensureDriverWallet(driverUserId, connection = null) {
 }
 
 function mapWalletStatus(walletRow, settings) {
-  const availableBalance = normalizeMoney(walletRow?.available_balance || 0);
+  const cashBalance = normalizeMoney(walletRow?.available_balance || 0);
   const promotionalBalance = normalizeMoney(walletRow?.promotional_balance || 0);
+  const availableBalance = normalizeMoney(cashBalance + promotionalBalance);
   const minimumRequiredBalance = normalizeMoney(settings?.minimumBalanceUsd || 0);
   const paymentsEnabled = settings?.paymentsEnabled === true;
   // Balance gating only applies when the payments system is live.
   const walletEnabled = paymentsEnabled && settings?.walletEnabled !== false;
-  const sufficientBalance = !walletEnabled || (availableBalance + promotionalBalance) >= minimumRequiredBalance;
+  const sufficientBalance = !walletEnabled || availableBalance >= minimumRequiredBalance;
   return {
     availableBalance,
+    cashBalance,
     promotionalBalance,
     currency: settings?.currency || DRIVER_WALLET_CURRENCY,
     minimumRequiredBalance,
@@ -1393,7 +1395,7 @@ export async function getAdminDriverWalletLedger({
   }
 
   const walletRows = await query(
-    `SELECT driver_user_id, available_balance, owner_email, owner_full_name, account_deleted_at, created_at, updated_at
+    `SELECT driver_user_id, available_balance, promotional_balance, owner_email, owner_full_name, account_deleted_at, created_at, updated_at
      FROM driver_wallets
      WHERE driver_user_id = ?
      LIMIT 1`,
@@ -1402,6 +1404,7 @@ export async function getAdminDriverWalletLedger({
   const walletRow = walletRows[0] || {
     driver_user_id: resolvedDriverUserId,
     available_balance: 0,
+    promotional_balance: 0,
     owner_email: normalizedEmail || null,
     owner_full_name: null,
     account_deleted_at: null,
@@ -1411,8 +1414,8 @@ export async function getAdminDriverWalletLedger({
 
   const [summaryRow] = await query(
     `SELECT
-       COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit') THEN amount ELSE 0 END), 0) AS total_credits,
-       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit', 'captain_promo_credit') THEN amount ELSE 0 END), 0) AS total_credits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit', 'promo_commission_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
        COALESCE(SUM(CASE WHEN transaction_type = 'promo_commission_debit' THEN ABS(amount) ELSE 0 END), 0) AS total_promotional_debits,
        COUNT(*) AS transaction_count
      FROM driver_wallet_transactions

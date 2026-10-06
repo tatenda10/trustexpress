@@ -631,7 +631,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               ) {
                 return {
                   ...base,
-                  ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
+                  ...(nextDriverCoordinate ? {
+                    driverCoordinate: nextDriverCoordinate,
+                    driverLocationFresh: true,
+                    driverLocationAgeSeconds: 0,
+                    driverLocationUpdatedAt: payload?.driverLocationUpdatedAt || new Date().toISOString(),
+                  } : {}),
                 };
               }
               return {
@@ -640,7 +645,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 stage: hasStatusUpdate
                   ? resolvedStage
                   : (nextStage || base.stage || 'driver_on_the_way'),
-                ...(nextDriverCoordinate ? { driverCoordinate: nextDriverCoordinate } : {}),
+                ...(nextDriverCoordinate ? {
+                  driverCoordinate: nextDriverCoordinate,
+                  driverLocationFresh: true,
+                  driverLocationAgeSeconds: 0,
+                  driverLocationUpdatedAt: payload?.driverLocationUpdatedAt || new Date().toISOString(),
+                } : {}),
                 ...(payload?.arrivedAt ? { arrivedAt: payload.arrivedAt } : {}),
                 ...(payload?.confirmedAt ? { passengerConfirmedAt: payload.confirmedAt } : {}),
                 ...(payload?.safetyPinVerified ? {
@@ -657,6 +667,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               setDriver((current) => (current ? {
                 ...current,
                 coordinate: nextDriverCoordinate,
+                locationFresh: true,
+                locationAgeSeconds: 0,
               } : current));
             }
           }
@@ -751,6 +763,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     [driverCoordinateKey],
   );
   const hasDriverCoordinate = Boolean(driverCoordinate);
+  const driverLocationAgeSeconds = Number(rideStatus?.driverLocationAgeSeconds ?? driver?.locationAgeSeconds ?? 0);
+  const driverLocationFresh = hasDriverCoordinate && (
+    rideStatus?.driverLocationFresh === true
+    || driver?.locationFresh === true
+    || (driverLocationAgeSeconds > 0 && driverLocationAgeSeconds <= 45)
+  );
   const intermediateStopsSource = Array.isArray(rideStatus?.intermediateStops)
     ? rideStatus.intermediateStops
     : Array.isArray(initialIntermediateStops)
@@ -1002,8 +1020,12 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     return estimated > 0 ? estimated : 0;
   }, [rideStatus?.estimatedMinutes, tripDurationSeconds]);
   const hasRoadDistance = routeDistanceMeters > 0;
-  const liveEtaText = hasDriverCoordinate ? `${liveEtaMinutes} min` : 'Finding driver';
-  const liveDistanceText = hasDriverCoordinate ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Finding driver';
+  const liveEtaText = hasDriverCoordinate
+    ? (driverLocationFresh ? `${liveEtaMinutes} min` : 'Location updating')
+    : 'Finding driver';
+  const liveDistanceText = hasDriverCoordinate
+    ? (driverLocationFresh ? `${liveDriverDistanceKm.toFixed(1)} km` : 'Live location updating')
+    : 'Finding driver';
   const tripLineCoordinates = useMemo(() => {
     const routed = normalizeCoordinates(tripRouteCoordinates);
     if (routed.length > 1) return routed;
@@ -1540,7 +1562,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             <DriverVehicleMapMarker
               coordinate={driverCoordinate}
               headingDegrees={vehicleHeadingDegrees}
-              etaLabel={hasDriverCoordinate && stage !== 'on_trip' && stage !== 'waiting_at_pickup' ? liveEtaText : null}
+              etaLabel={driverLocationFresh && stage !== 'on_trip' && stage !== 'waiting_at_pickup' ? liveEtaText : null}
             />
           ) : null}
           {pickupCoordinate ? (
@@ -1801,6 +1823,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                       ) : null}
                       {statusSyncWarning ? (
                         <Text className="mt-2 text-sm text-amber-600">{statusSyncWarning}</Text>
+                      ) : null}
+                      {hasDriverCoordinate && !driverLocationFresh && stage !== 'waiting_at_pickup' ? (
+                        <Text className="mt-2 text-sm text-amber-600">
+                          Driver location is updating. ETA will refresh when their phone sends a fresh location.
+                        </Text>
                       ) : null}
                       {routeError ? (
                         <Text className="mt-2 text-sm text-amber-600">{routeError}</Text>
