@@ -201,7 +201,7 @@ function ViewingAvatar({ driver, size = 32, overlap = false }) {
 }
 
 // ── Driver card ──────────────────────────────────────────────────────────────
-function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDecline, isSubmitting }) {
+function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDecline, isSubmitting, isBusy }) {
   const faceUri = normalizeDriverProfileImageUrl(driver.profileImageUrl);
   const carUri =
     normalizeVehicleImageUrl(driver.carImage) ||
@@ -279,16 +279,18 @@ function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDec
         <View className="mt-3 flex-row gap-2">
           <TouchableOpacity
             onPress={onDecline}
+            disabled={isBusy}
             className="h-11 flex-1 items-center justify-center rounded-xl border border-gray-200 bg-gray-50"
+            style={{ opacity: isBusy ? 0.6 : 1 }}
             activeOpacity={0.75}
           >
             <Text className="text-sm font-semibold text-gray-600">Decline</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => onAccept(driver)}
-            disabled={isSubmitting}
+            disabled={isBusy}
             className="h-11 flex-[1.6] items-center justify-center rounded-xl"
-            style={{ backgroundColor: PRIMARY_BLUE }}
+            style={{ backgroundColor: PRIMARY_BLUE, opacity: isBusy && !isSubmitting ? 0.6 : 1 }}
             activeOpacity={0.85}
           >
             {isSubmitting ? (
@@ -660,18 +662,42 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
   // ── Actions ──
   const handleAccept = async (driver) => {
+    const selectedDriverId = String(driver?.id || '').trim();
+    if (!selectedDriverId || isSubmittingDriverId) return;
     try {
-      setIsSubmittingDriverId(driver.id);
+      setIsSubmittingDriverId(selectedDriverId);
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
       if (!rideRequest?.id) return;
-      const data = await selectRideDriver(token, rideRequest.id, driver.id);
-      const assigned = data?.assignedDriver || driver || null;
+      const data = await selectRideDriver(token, rideRequest.id, selectedDriverId);
+      const assigned = data?.assignedDriver || null;
+      const assignedDriverId = String(
+        assigned?.id
+        || assigned?.driverUserId
+        || data?.rideRequest?.driverUserId
+        || ''
+      ).trim();
+      if (assignedDriverId && assignedDriverId !== selectedDriverId) {
+        console.error('[passenger.nearby] selected driver mismatch', {
+          rideRequestId: rideRequest.id,
+          selectedDriverId,
+          assignedDriverId,
+          assigned,
+        });
+        await refreshRideStatus({ silent: true });
+        Alert.alert(
+          'Driver changed',
+          'This ride was assigned to a different driver. Please review the trip details before continuing.'
+        );
+        return;
+      }
+      const nextAssigned = assigned || driver || null;
       const nextStatus = String(data?.rideRequest?.status || 'driver_assigned').toLowerCase();
-      setAssignedDriver(assigned);
+      setAssignedDriver(nextAssigned);
       setRideStatus((current) => current ? {
         ...current,
         status: nextStatus,
+        driverUserId: selectedDriverId,
         ...(data?.rideRequest?.driverDistanceKm !== undefined ? { driverDistanceKm: Number(data.rideRequest.driverDistanceKm || 0) } : null),
         ...(data?.rideRequest?.driverEtaMinutes !== undefined ? { driverEtaMinutes: Number(data.rideRequest.driverEtaMinutes || 0) } : null),
       } : current);
@@ -683,8 +709,8 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
         pickupLabel,
         dropoffLabel,
         estimatedAmount: finalEstimatedAmount,
-        selectedTier: assigned?.tier || selectedTier,
-        driver: assigned,
+        selectedTier: nextAssigned?.tier || selectedTier,
+        driver: nextAssigned,
         rideRequestId: rideRequest.id,
       });
     } catch (error) {
@@ -799,6 +825,27 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     });
   }, [collapsedSheetHeight, expandedSheetHeight, sheetHeight, snapSheet]);
 
+  const mapPickupCoordinate = normalizeRouteCoordinate(pickupCoordinate);
+  const mapDropoffCoordinate = normalizeRouteCoordinate(dropoffCoordinate);
+
+  if (!mapPickupCoordinate || !mapDropoffCoordinate) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white px-6">
+        <Text className="text-center text-2xl font-bold text-gray-900">Could not load this ride request</Text>
+        <Text className="mt-2 text-center text-base text-gray-500">
+          The pickup or drop-off location is missing. Please start the booking again.
+        </Text>
+        <TouchableOpacity
+          onPress={() => navigation.reset({ index: 0, routes: [{ name: 'PassengerBookingHome', params: { resetRideDraftAt: Date.now() } }] })}
+          className="mt-6 h-14 w-full items-center justify-center rounded-[18px]"
+          style={{ backgroundColor: PRIMARY_BLUE }}
+        >
+          <Text className="text-base font-bold text-white">Back to booking</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View className="flex-1 bg-white">
       <View className="flex-1">
@@ -807,8 +854,8 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           initialRegion={mapRegion || {
-            latitude: pickupCoordinate.latitude,
-            longitude: pickupCoordinate.longitude,
+            latitude: mapPickupCoordinate.latitude,
+            longitude: mapPickupCoordinate.longitude,
             latitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
             longitudeDelta: PASSENGER_RIDE_MAP_MIN_DELTA,
           }}
@@ -818,11 +865,11 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           rotateEnabled={false}
           pitchEnabled={false}
         >
-          <Marker coordinate={pickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
+          <Marker coordinate={mapPickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
             <LetterMarker letter="A" color={PRIMARY_BLUE} />
           </Marker>
           <Marker
-            coordinate={dropoffCoordinate}
+            coordinate={mapDropoffCoordinate}
             title="B · Drop-off"
             anchor={{ x: 0.5, y: 0.5 }}
           >
@@ -838,11 +885,13 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
               <LetterMarker letter={stop.letter} color="#f97316" />
             </Marker>
           ))}
-          <Polyline
-            coordinates={routeCoordinates}
-            strokeColor={PRIMARY_BLUE}
-            strokeWidth={5}
-          />
+          {routeCoordinates.length > 1 ? (
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor={PRIMARY_BLUE}
+              strokeWidth={5}
+            />
+          ) : null}
           {liveDriverMarkers.map((driver) => (
             <DriverVehicleMapMarker
               key={`live-driver-${driver.id}`}
@@ -944,6 +993,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
                     onAccept={handleAccept}
                     onDecline={() => handleDeclineDriver(driver)}
                     isSubmitting={isSubmittingDriverId === driver.id}
+                    isBusy={Boolean(isSubmittingDriverId)}
                   />
                 ))}
               </View>

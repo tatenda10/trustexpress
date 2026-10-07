@@ -155,8 +155,18 @@ function rememberDriverStatus(userId, status) {
   sessionDriverStatusSnapshot = status;
 }
 
+function isRestrictionAuthCode(code) {
+  const authCode = String(code || '').trim().toUpperCase();
+  return (
+    authCode === 'ACCOUNT_RESTRICTED'
+    || authCode === 'ACCOUNT_LOGIN_RESTRICTED'
+    || authCode === 'ACCOUNT_BLOCKED'
+    || authCode === 'ACCOUNT_FLAGGED'
+  );
+}
+
 // App Stack (for authenticated users)
-function AppStack({ currentRouteName }) {
+function AppStack({ currentRouteName, onBlockedAccount }) {
   const { getToken } = useAuth();
   const { user } = useUser();
   const { inviteToken, attachedUserId, markInviteAttached, clearInvite } = useAgentInvite();
@@ -1263,11 +1273,19 @@ function AppStack({ currentRouteName }) {
       const profile = await getMe(token);
       setUserProfile(profile);
       return profile;
-    } catch {
+    } catch (error) {
+      if (isRestrictionAuthCode(error?.code)) {
+        const authCode = String(error?.code || '').trim().toUpperCase();
+        onBlockedAccount?.({
+          reason: authCode === 'ACCOUNT_FLAGGED' ? 'flagged' : 'blocked',
+          message: error?.message || null,
+          restriction: error?.restriction || null,
+        });
+      }
       setUserProfile((prev) => ({ ...(prev || {}), ...fallbackProfile }));
       return fallbackProfile;
     }
-  }, [user?.firstName, user?.lastName, userProfile?.role, userProfile?.phoneVerified, storedRole]);
+  }, [onBlockedAccount, user?.firstName, user?.lastName, userProfile?.role, userProfile?.phoneVerified, storedRole]);
 
   const effectiveFirstName = String(userProfile?.first_name || user?.firstName || '').trim();
   const effectiveLastName = String(userProfile?.last_name || user?.lastName || '').trim();
@@ -1820,7 +1838,7 @@ function AppContent() {
               />
             </Stack.Navigator>
           ) : isSignedIn ? (
-            <AppStack currentRouteName={currentRouteName} />
+            <AppStack currentRouteName={currentRouteName} onBlockedAccount={setBlockedAccountParams} />
           ) : (
             <AuthStack />
           )}

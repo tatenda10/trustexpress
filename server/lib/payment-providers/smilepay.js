@@ -22,11 +22,23 @@ function getBaseUrl() {
   return getEnvironment() === 'live' ? LIVE_BASE_URL : SANDBOX_BASE_URL;
 }
 
-function getCheckoutMode() {
-  const value = String(process.env.SMILEPAY_CHECKOUT_MODE || 'hosted').trim().toLowerCase();
-  if (['express_ecocash', 'ecocash'].includes(value)) return 'express_ecocash';
-  if (['express_mpgs', 'mpgs', 'card', 'express_card'].includes(value)) return 'express_mpgs';
-  return 'hosted';
+export function normalizeSmilePayCheckoutMode(value, fallback = 'express_mpgs') {
+  const normalizedFallback = ['hosted', 'express_ecocash', 'express_mpgs'].includes(String(fallback || '').trim().toLowerCase())
+    ? String(fallback || '').trim().toLowerCase()
+    : 'express_mpgs';
+  const key = String(value || '').trim().toLowerCase();
+  if (!key) return normalizedFallback;
+  if (['standard', 'hosted', 'walletplus', 'wallet_plus'].includes(key)) return 'hosted';
+  if (['express_ecocash', 'ecocash'].includes(key)) return 'express_ecocash';
+  if (['express_mpgs', 'mpgs', 'card', 'express_card'].includes(key)) return 'express_mpgs';
+  return normalizedFallback;
+}
+
+function getCheckoutMode(override = null) {
+  return normalizeSmilePayCheckoutMode(
+    override || process.env.SMILEPAY_CHECKOUT_MODE,
+    'express_mpgs'
+  );
 }
 
 function getCheckoutPath(mode) {
@@ -268,11 +280,12 @@ export const smilePayProvider = {
     mobilePhoneNumber = '',
     itemName = 'Trust Express Wallet Top-up',
     itemDescription = '',
+    checkoutMode: checkoutModeOverride = null,
   }) {
     const currencyCode = toSmilePayCurrencyCode(currency);
     const resultUrl = String(customResultUrl || '').trim() || getSmilePayWebhookUrl();
     const returnUrl = String(callbackUrl || '').trim() || resultUrl;
-    const checkoutMode = getCheckoutMode();
+    const checkoutMode = getCheckoutMode(checkoutModeOverride);
     const checkoutPath = getCheckoutPath(checkoutMode);
     const requestBody = {
       orderReference: reference,

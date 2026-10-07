@@ -2281,6 +2281,27 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
       return res.status(409).json({ error: 'This ride could not be assigned to the selected driver anymore. Please refresh and choose again.' });
     }
 
+    const [confirmedRide] = await query(
+      `SELECT id, driver_user_id, status
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (String(confirmedRide?.driver_user_id || '') !== driverUserId) {
+      console.error('[rides.selectDriver] selected driver mismatch after assignment', {
+        rideRequestId,
+        passengerUserId: req.userId,
+        requestedDriverUserId: driverUserId,
+        assignedDriverUserId: confirmedRide?.driver_user_id || null,
+        status: confirmedRide?.status || null,
+      });
+      return res.status(409).json({
+        error: 'This ride was assigned to a different driver. Please refresh and check the trip before continuing.',
+        assignedDriverUserId: confirmedRide?.driver_user_id || null,
+      });
+    }
+
     await query(
       `UPDATE ride_request_driver_responses
        SET status = CASE WHEN driver_user_id = ? THEN 'selected' ELSE status END,
@@ -2365,6 +2386,7 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
       rideRequest: {
         id: rideRequestId,
         status: 'driver_assigned',
+        driverUserId,
         driverDistanceKm: Number(driverDistanceKm.toFixed(2)),
         driverEtaMinutes,
         ...safetyPinPayload,

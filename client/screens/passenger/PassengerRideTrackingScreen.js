@@ -1358,7 +1358,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
       const callbackUrl = ExpoLinking.createURL('passenger-ride-payment');
       console.log('[smilepay] client.initiate.start', { rideRequestId, callbackUrl });
-      const result = await initiatePassengerRideSmilePay(token, rideRequestId, { callbackUrl });
+      const result = await initiatePassengerRideSmilePay(token, rideRequestId, {
+        callbackUrl,
+        checkoutMode: 'express_mpgs',
+      });
       const payment = result?.payment || {};
       console.log('[smilepay] client.initiate.result', {
         rideRequestId,
@@ -2055,7 +2058,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                               {startingPayment ? (
                                 <ActivityIndicator color="#fff" />
                               ) : (
-                                <Text className="text-sm font-bold uppercase text-white">Pay online</Text>
+                                <Text className="text-sm font-bold uppercase text-white">Pay by card</Text>
                               )}
                             </TouchableOpacity>
                           ) : null}

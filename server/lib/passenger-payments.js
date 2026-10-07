@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db/connection.js';
 import { toAppUser } from './clerk-user.js';
 import { getPaymentProvider } from './payment-providers/index.js';
+import { normalizeSmilePayCheckoutMode } from './payment-providers/smilepay.js';
 import { getDriverWalletSettings } from './driver-wallet-settings.js';
 import {
   createSmileCashSubscriber,
@@ -268,6 +269,7 @@ export async function initializePassengerRidePayment({
   passenger,
   rideRequestId,
   callbackUrl = null,
+  checkoutMode = 'express_mpgs',
 }) {
   const [ride] = await query(
     `SELECT rr.*,
@@ -286,6 +288,7 @@ export async function initializePassengerRidePayment({
   if (!(amount > 0)) throw buildPaymentError('Ride amount must be greater than zero');
 
   const receiverMobile = normalizeZimMobile(ride.driver_smile_cash_mobile || '') || null;
+  const requestedCheckoutMode = normalizeSmilePayCheckoutMode(checkoutMode, 'express_mpgs');
 
   const [existingPending] = await query(
     `SELECT *
@@ -306,24 +309,33 @@ export async function initializePassengerRidePayment({
     } catch {
       raw = {};
     }
-    console.log('[smilepay] initialize.reuse_pending', {
+    const existingCheckoutMode = normalizeSmilePayCheckoutMode(raw.checkoutMode || raw.checkout_mode, 'hosted');
+    if (existingCheckoutMode === requestedCheckoutMode) {
+      console.log('[smilepay] initialize.reuse_pending', {
+        rideRequestId,
+        reference: existingPending.reference,
+        status: existingPending.status,
+        amount: Number(existingPending.amount || amount),
+        authorizationUrl: raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl || null,
+        checkoutMode: raw.checkoutMode || null,
+        nextAction: raw.nextAction || null,
+      });
+      return {
+        reference: existingPending.reference,
+        authorizationUrl: raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl || null,
+        checkoutMode: raw.checkoutMode || existingCheckoutMode,
+        nextAction: raw.nextAction || (raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl ? 'redirect' : 'poll'),
+        amount: Number(existingPending.amount || amount),
+        currency: existingPending.currency || 'USD',
+        status: existingPending.status,
+      };
+    }
+    console.log('[smilepay] initialize.ignore_pending_mode_mismatch', {
       rideRequestId,
-      reference: existingPending.reference,
-      status: existingPending.status,
-      amount: Number(existingPending.amount || amount),
-      authorizationUrl: raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl || null,
-      checkoutMode: raw.checkoutMode || null,
-      nextAction: raw.nextAction || null,
+      existingReference: existingPending.reference,
+      existingCheckoutMode,
+      requestedCheckoutMode,
     });
-    return {
-      reference: existingPending.reference,
-      authorizationUrl: raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl || null,
-      checkoutMode: raw.checkoutMode || 'hosted',
-      nextAction: raw.nextAction || (raw.authorizationUrl || raw.paymentUrl || raw.checkoutUrl ? 'redirect' : 'poll'),
-      amount: Number(existingPending.amount || amount),
-      currency: existingPending.currency || 'USD',
-      status: existingPending.status,
-    };
   }
 
   const provider = getPaymentProvider('smilepay');
@@ -346,6 +358,7 @@ export async function initializePassengerRidePayment({
     mobilePhoneNumber: passenger?.phone_number || passenger?.phoneNumber || '',
     itemName: `Trust Express Ride ${ride.public_id || ride.id}`,
     itemDescription: `Passenger ride payment held by Trust Express for ${ride.driver_name || 'driver'}`,
+    checkoutMode: requestedCheckoutMode,
   });
 
   console.log('[smilepay] initialize.created', {

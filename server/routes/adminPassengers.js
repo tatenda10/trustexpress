@@ -471,6 +471,22 @@ router.delete('/:passengerId', requireAdminAuth, requirePermission('passengers.d
       return res.status(400).json({ error: 'Invalid passenger id' });
     }
 
+    if (passengerId.startsWith('whatsapp:')) {
+      const [row] = await query(
+        `SELECT clerk_user_id, role
+         FROM users
+         WHERE clerk_user_id = ?
+         LIMIT 1`,
+        [passengerId]
+      );
+      if (!row || normalizeRole(row.role) !== 'passenger') {
+        return res.status(404).json({ error: 'Passenger not found' });
+      }
+
+      await deleteEndUserAccount(passengerId, 'passenger');
+      return res.json({ ok: true });
+    }
+
     const clerkClient = getClerkClient();
     const user = await clerkClient.users.getUser(passengerId);
     const mapped = mapPassenger(user);

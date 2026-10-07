@@ -92,12 +92,14 @@ router.post('/rides/:rideRequestId/smilepay/initiate', requireAuth, async (req, 
       rideRequestId,
       passengerUserId: req.userId,
       callbackUrl: req.body?.callbackUrl || null,
+      checkoutMode: req.body?.checkoutMode || req.body?.paymentMethod || null,
     });
     const payment = await initializePassengerRidePayment({
       passengerUserId: req.userId,
       passenger: passenger.user,
       rideRequestId,
       callbackUrl: req.body?.callbackUrl,
+      checkoutMode: req.body?.checkoutMode || req.body?.paymentMethod || 'express_mpgs',
     });
     return res.json({ ok: true, payment });
   } catch (err) {

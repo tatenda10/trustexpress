@@ -94,6 +94,11 @@ async function deleteUploadedFiles(pathsToDelete) {
 }
 
 async function cleanupPassengerData(connection, userId) {
+  const normalizedUserId = String(userId || '').trim();
+  const whatsappPhone = normalizedUserId.startsWith('whatsapp:')
+    ? normalizedUserId.slice('whatsapp:'.length).replace(/\D/g, '')
+    : null;
+
   const [identityRows] = await connection.execute(
     `SELECT national_id_front_url, national_id_back_url, selfie_url
      FROM passenger_identity
@@ -107,11 +112,28 @@ async function cleanupPassengerData(connection, userId) {
      WHERE passenger_user_id = ?`,
     [userId]
   );
+  if (whatsappPhone) {
+    await connection.execute(
+      `DELETE FROM whatsapp_ride_requests
+       WHERE whatsapp_phone = ?`,
+      [whatsappPhone]
+    );
+    await connection.execute(
+      `DELETE FROM whatsapp_sessions
+       WHERE whatsapp_phone = ?`,
+      [whatsappPhone]
+    );
+  }
   // Without this the identity row survives the account and keeps inflating the
   // pending-verification count with a user that can never be reviewed.
   await connection.execute(
     `DELETE FROM passenger_identity
      WHERE passenger_user_id = ?`,
+    [userId]
+  );
+  await connection.execute(
+    `DELETE FROM users
+     WHERE clerk_user_id = ?`,
     [userId]
   );
 
@@ -190,6 +212,8 @@ async function cleanupDriverData(connection, userId) {
 
 export async function deleteEndUserAccount(userId, role, { email = null, fullName = null } = {}) {
   const normalizedRole = role === 'driver' ? 'driver' : 'passenger';
+  const normalizedUserId = String(userId || '').trim();
+  const isSyntheticUser = normalizedUserId.startsWith('dispatch:') || normalizedUserId.startsWith('whatsapp:');
   let uploadPaths = [];
   const snapshotEmail = email ? String(email).trim().toLowerCase() : null;
   const snapshotName = fullName ? String(fullName).trim() : null;
@@ -252,8 +276,10 @@ export async function deleteEndUserAccount(userId, role, { email = null, fullNam
     uploadPaths = await cleanupPassengerData(connection, userId);
   });
 
-  const clerkClient = getClerkClient();
-  await clerkClient.users.deleteUser(userId);
+  if (!isSyntheticUser) {
+    const clerkClient = getClerkClient();
+    await clerkClient.users.deleteUser(userId);
+  }
   if (uploadPaths.length > 0) {
     await deleteUploadedFiles(uploadPaths);
   }

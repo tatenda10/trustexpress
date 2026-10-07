@@ -30,6 +30,12 @@ Node.js + Express + MySQL. No `src` folder: use `db/`, `middleware/`, `routes/` 
 
 Send `Authorization: Bearer <Clerk session token>` for protected routes.
 
+## Smile&Pay Checkout
+
+- Passenger ride card payments use Smile&Pay Express Checkout by default: `SMILEPAY_CHECKOUT_MODE=express_mpgs`.
+- Set `SMILEPAY_CHECKOUT_MODE=hosted` only if ZB asks you to fall back to the standard hosted checkout.
+- `PUBLIC_API_BASE_URL` must point to the public API origin so Smile&Pay can call `/api/passengers/payments/webhooks/smilepay`.
+
 ## DB schema (summary)
 
 - **users** – clerk_user_id, email, role (passenger | driver)

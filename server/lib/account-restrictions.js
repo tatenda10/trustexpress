@@ -42,6 +42,38 @@ function toIsoOrNull(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function normalizePhoneForLookup(value) {
+  return String(value || '').replace(/[^\d]/g, '');
+}
+
+export async function resolveRestrictionUserId(identifier) {
+  const raw = String(identifier || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('user_') || raw.startsWith('whatsapp:') || raw.startsWith('dispatch:')) {
+    return raw;
+  }
+
+  const phoneDigits = normalizePhoneForLookup(raw);
+  const params = [raw, `user_${raw}`, raw, raw];
+  const phoneSql = phoneDigits
+    ? `OR REPLACE(REPLACE(REPLACE(REPLACE(u.phone_number, '+', ''), ' ', ''), '-', ''), '.', '') = ?`
+    : '';
+  if (phoneDigits) params.push(phoneDigits);
+
+  const [user] = await query(
+    `SELECT u.clerk_user_id
+     FROM users u
+     WHERE u.clerk_user_id = ?
+        OR u.clerk_user_id = ?
+        OR u.email = ?
+        OR LOWER(u.email) = LOWER(?)
+        ${phoneSql}
+     LIMIT 1`,
+    params
+  );
+  return user?.clerk_user_id || raw;
+}
+
 export function durationToExpiry(duration) {
   const value = String(duration || '').trim().toLowerCase();
   if (value === 'permanent') return null;
@@ -231,7 +263,8 @@ export async function createRestriction({
   expiresAt = null,
   adminUserId = null,
 }) {
-  const safeUserId = String(userId || '').trim();
+  const requestedUserId = String(userId || '').trim();
+  const safeUserId = await resolveRestrictionUserId(requestedUserId);
   const safeReason = String(reason || '').trim();
   if (!safeUserId) {
     const error = new Error('User id is required');
@@ -241,6 +274,15 @@ export async function createRestriction({
   if (!safeReason) {
     const error = new Error('Restriction reason is required');
     error.status = 400;
+    throw error;
+  }
+  if (
+    !safeUserId.startsWith('user_')
+    && !safeUserId.startsWith('whatsapp:')
+    && !safeUserId.startsWith('dispatch:')
+  ) {
+    const error = new Error('User not found. Search and copy the full Clerk user ID, email, or phone number.');
+    error.status = 404;
     throw error;
   }
 

@@ -229,7 +229,10 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
       const callbackUrl = ExpoLinking.createURL('passenger-ride-payment');
-      const result = await initiatePassengerRideSmilePay(token, rideRequestId, { callbackUrl });
+      const result = await initiatePassengerRideSmilePay(token, rideRequestId, {
+        callbackUrl,
+        checkoutMode: 'express_mpgs',
+      });
       const payment = result?.payment || {};
       if (!payment.authorizationUrl && String(payment.nextAction || '').toLowerCase() !== 'poll') {
         throw new Error('Could not start Smile&Pay checkout.');
@@ -461,7 +464,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
                     {startingPayment ? (
                       <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                      <Text className="text-sm font-bold uppercase text-white">Pay online</Text>
+                      <Text className="text-sm font-bold uppercase text-white">Pay by card</Text>
                     )}
                   </TouchableOpacity>
                 ) : null}
