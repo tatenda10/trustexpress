@@ -13,6 +13,35 @@ function buildError(message, status = 400) {
   return error;
 }
 
+function redactSmilePayPayload(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(redactSmilePayPayload);
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      const normalizedKey = String(key || '').toLowerCase();
+      if (['pan', 'securitycode', 'cvv', 'cvc', 'cardnumber'].includes(normalizedKey)) {
+        return [key, entry ? '***REDACTED***' : entry];
+      }
+      if (normalizedKey === 'expmonth' || normalizedKey === 'expyear') {
+        return [key, entry ? '**' : entry];
+      }
+      return [key, redactSmilePayPayload(entry)];
+    })
+  );
+}
+
+function normalizeCardDetails(cardDetails = {}) {
+  const source = cardDetails && typeof cardDetails === 'object' ? cardDetails : {};
+  const pan = String(source.pan || source.cardNumber || source.number || '').replace(/\D/g, '');
+  const expiryRaw = String(source.expiry || source.expiryDate || '').trim();
+  const expiryParts = expiryRaw ? expiryRaw.split(/[\/\-\s]+/).filter(Boolean) : [];
+  const expMonth = String(source.expMonth || source.expiryMonth || expiryParts[0] || '').replace(/\D/g, '').padStart(2, '0');
+  let expYear = String(source.expYear || source.expiryYear || expiryParts[1] || '').replace(/\D/g, '');
+  if (expYear.length === 4) expYear = expYear.slice(-2);
+  const securityCode = String(source.securityCode || source.cvv || source.cvc || '').replace(/\D/g, '');
+  return { pan, expMonth, expYear, securityCode };
+}
+
 function getEnvironment() {
   const value = String(process.env.SMILEPAY_ENVIRONMENT || 'sandbox').trim().toLowerCase();
   return value === 'live' || value === 'production' ? 'live' : 'sandbox';
@@ -109,7 +138,7 @@ async function smilePayRequest(path, { method = 'GET', body } = {}) {
     method,
     path,
     url,
-    body: body || null,
+    body: redactSmilePayPayload(body || null),
   });
   const res = await fetch(url, {
     method,
@@ -141,7 +170,7 @@ async function smilePayRequest(path, { method = 'GET', body } = {}) {
     orderReference: data?.orderReference || data?.order_reference || null,
     transactionReference: data?.transactionReference || data?.reference || null,
     amount: data?.amount ?? data?.data?.amount ?? null,
-    payload: data,
+    payload: redactSmilePayPayload(data),
   });
   if (!res.ok || data?.success === false || !okByCode) {
     const error = buildError(
@@ -153,7 +182,7 @@ async function smilePayRequest(path, { method = 'GET', body } = {}) {
       path,
       httpStatus: res.status,
       message: error.message,
-      payload: data,
+      payload: redactSmilePayPayload(data),
     });
     throw error;
   }
@@ -281,6 +310,7 @@ export const smilePayProvider = {
     itemName = 'Trust Express Wallet Top-up',
     itemDescription = '',
     checkoutMode: checkoutModeOverride = null,
+    cardDetails = null,
   }) {
     const currencyCode = toSmilePayCurrencyCode(currency);
     const resultUrl = String(customResultUrl || '').trim() || getSmilePayWebhookUrl();
@@ -307,6 +337,14 @@ export const smilePayProvider = {
       requestBody.msisdn = mobilePhoneNumber || undefined;
     } else if (checkoutMode === 'express_mpgs') {
       requestBody.paymentMethod = 'CARD';
+      const card = normalizeCardDetails(cardDetails);
+      if (!card.pan || !card.expMonth || !card.expYear || !card.securityCode) {
+        throw buildError('Card number, expiry date and CVV are required for Smile&Pay Express card checkout.', 400);
+      }
+      requestBody.pan = card.pan;
+      requestBody.expMonth = card.expMonth;
+      requestBody.expYear = card.expYear;
+      requestBody.securityCode = card.securityCode;
     }
 
     const payload = await smilePayRequest(checkoutPath, {

@@ -48,6 +48,7 @@ router.post('/top-ups/initiate', requireAuth, async (req, res) => {
       firstName: user.firstName || '',
       lastName: user.lastName || '',
       mobilePhoneNumber: user.phone || user.phoneNumber || '',
+      cardDetails: req.body?.card || req.body?.cardDetails || null,
     });
     return res.json({ ok: true, ...result });
   } catch (err) {

@@ -307,6 +307,7 @@ export async function initializeDriverWalletTopup({
   firstName = '',
   lastName = '',
   mobilePhoneNumber = '',
+  cardDetails = null,
 }) {
   const settings = await getDriverWalletSettings();
   if (settings.paymentsEnabled !== true) {
@@ -347,6 +348,7 @@ export async function initializeDriverWalletTopup({
     firstName,
     lastName,
     mobilePhoneNumber,
+    cardDetails,
   });
 
   await ensureDriverWallet(driverUserId);

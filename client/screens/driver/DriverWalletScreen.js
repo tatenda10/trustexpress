@@ -58,6 +58,9 @@ const DriverWalletScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [topupAmount, setTopupAmount] = useState('5');
+  const [topupCardNumber, setTopupCardNumber] = useState('');
+  const [topupCardExpiry, setTopupCardExpiry] = useState('');
+  const [topupCardCvv, setTopupCardCvv] = useState('');
   const [topupModalVisible, setTopupModalVisible] = useState(false);
   const [startingTopup, setStartingTopup] = useState(false);
   const [cashingOut, setCashingOut] = useState(false);
@@ -140,6 +143,9 @@ const DriverWalletScreen = ({ navigation }) => {
       return;
     }
     setTopupAmount(String(wallet.topupMinAmount || 5));
+    setTopupCardNumber('');
+    setTopupCardExpiry('');
+    setTopupCardCvv('');
     setTopupModalVisible(true);
   };
 
@@ -172,12 +178,38 @@ const DriverWalletScreen = ({ navigation }) => {
       if (!token) throw new Error('Not signed in');
 
       const callbackUrl = ExpoLinking.createURL('driver-wallet-topup');
+      const cardNumber = String(topupCardNumber || '').replace(/\D/g, '');
+      const [expMonth = '', expYear = ''] = String(topupCardExpiry || '').split('/').map((part) => part.replace(/\D/g, ''));
+      const cvv = String(topupCardCvv || '').replace(/\D/g, '');
+      if (wallet.paymentProvider === 'smilepay') {
+        if (cardNumber.length < 12 || !expMonth || !expYear || cvv.length < 3) {
+          Alert.alert('Card details required', 'Enter your card number, expiry date and CVV to continue.');
+          return;
+        }
+      }
       const topup = await initiateDriverWalletTopup(token, {
         amount,
         callbackUrl,
+        ...(wallet.paymentProvider === 'smilepay'
+          ? {
+              checkoutMode: 'express_mpgs',
+              card: {
+                pan: cardNumber,
+                expMonth,
+                expYear,
+                securityCode: cvv,
+              },
+            }
+          : {}),
       });
 
       if (!topup?.authorizationUrl) {
+        if (topup?.nextAction === 'poll' || topup?.reference) {
+          setTopupModalVisible(false);
+          await loadWallet(false, [topup.reference].filter(Boolean));
+          Alert.alert('Payment started', 'Smile&Pay Express started. If the bank requires approval, complete it and refresh your wallet.');
+          return;
+        }
         throw new Error(`Could not start ${providerLabel} checkout.`);
       }
 
@@ -433,6 +465,50 @@ const DriverWalletScreen = ({ navigation }) => {
                     </TouchableOpacity>
                   ))}
               </View>
+              {wallet.paymentProvider === 'smilepay' ? (
+                <View className="mt-4">
+                  <Text className="mb-2 text-xs font-semibold uppercase text-gray-500">Card number</Text>
+                  <TextInput
+                    value={topupCardNumber}
+                    onChangeText={(value) => setTopupCardNumber(value.replace(/[^\d\s-]/g, '').slice(0, 23))}
+                    keyboardType="number-pad"
+                    placeholder="5123 4500 0000 0008"
+                    autoComplete="cc-number"
+                    textContentType="creditCardNumber"
+                    className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-base"
+                  />
+                  <View className="mt-3 flex-row gap-3">
+                    <View className="flex-1">
+                      <Text className="mb-2 text-xs font-semibold uppercase text-gray-500">Expiry</Text>
+                      <TextInput
+                        value={topupCardExpiry}
+                        onChangeText={(value) => {
+                          const digits = value.replace(/\D/g, '').slice(0, 4);
+                          setTopupCardExpiry(digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits);
+                        }}
+                        keyboardType="number-pad"
+                        placeholder="MM/YY"
+                        maxLength={5}
+                        autoComplete="cc-exp"
+                        className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-base"
+                      />
+                    </View>
+                    <View className="flex-1">
+                      <Text className="mb-2 text-xs font-semibold uppercase text-gray-500">CVV</Text>
+                      <TextInput
+                        value={topupCardCvv}
+                        onChangeText={(value) => setTopupCardCvv(value.replace(/\D/g, '').slice(0, 4))}
+                        keyboardType="number-pad"
+                        placeholder="100"
+                        maxLength={4}
+                        secureTextEntry
+                        autoComplete="cc-csc"
+                        className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-base"
+                      />
+                    </View>
+                  </View>
+                </View>
+              ) : null}
               <View className="mt-5 flex-row gap-3">
                 <TouchableOpacity
                   onPress={closeTopupModal}
