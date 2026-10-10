@@ -75,7 +75,7 @@ const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
 const DRIVER_REQUEST_RADIUS_KM = 5;
 const DEBUG_DRIVER_REQUESTS = String(process.env.DEBUG_DRIVER_REQUESTS || '').trim().toLowerCase() === 'true';
 /** How long an open ride request stays accept-able for drivers (incoming request countdown). */
-const OPEN_REQUEST_TTL_SECONDS = Math.max(15, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 30, 180));
+const OPEN_REQUEST_TTL_SECONDS = Math.max(120, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 180, 600));
 
 function debugDriverRequests(event, payload = {}) {
   if (!DEBUG_DRIVER_REQUESTS) return;
@@ -258,7 +258,7 @@ router.get('/me', requireAuth, async (req, res) => {
       getDriverWalletStatus(req.userId),
     ]);
 
-    return res.json({
+    const responsePayload = {
       ...verification,
       wallet: walletStatus,
       availability: availability ? {
@@ -272,9 +272,27 @@ router.get('/me', requireAuth, async (req, res) => {
         longitude: null,
         lastSeenAt: null,
       },
+    };
+
+    console.log('[GET /api/drivers/me] status response', {
+      userId: req.userId,
+      role: user.role || null,
+      phoneVerified: responsePayload.phoneVerified === true,
+      profileStatus: responsePayload.driverProfile?.status || null,
+      profileHasDocuments: responsePayload.driverProfile?.hasDocuments === true,
+      vehicleStatus: responsePayload.vehicle?.status || null,
+      hasVehicle: !!responsePayload.vehicle,
+      walletAvailableBalance: responsePayload.wallet?.availableBalance ?? null,
     });
+
+    return res.json(responsePayload);
   } catch (err) {
-    console.error('GET /api/drivers/me', err);
+    console.error('GET /api/drivers/me', {
+      userId: req.userId || null,
+      message: err?.message || String(err),
+      code: err?.code || null,
+      stack: err?.stack || null,
+    });
     return res.status(500).json({ error: 'Server error' });
   }
 });

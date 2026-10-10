@@ -40,6 +40,14 @@ router.post('/top-ups/initiate', requireAuth, async (req, res) => {
     if (!user) return;
     const amount = Number(req.body?.amount);
     const callbackUrl = String(req.body?.callbackUrl || '').trim() || null;
+    const checkoutMode = String(req.body?.checkoutMode || req.body?.paymentMethod || '').trim() || null;
+    console.log('[driver.wallet.topup] initiate request', {
+      driverUserId: req.userId,
+      amount,
+      checkoutMode,
+      hasMobilePhoneNumber: Boolean(req.body?.mobilePhoneNumber),
+      hasCardDetails: Boolean(req.body?.card || req.body?.cardDetails),
+    });
     const result = await initializeDriverWalletTopup({
       driverUserId: req.userId,
       driverEmail: user.email,
@@ -47,13 +55,18 @@ router.post('/top-ups/initiate', requireAuth, async (req, res) => {
       callbackUrl,
       firstName: user.firstName || '',
       lastName: user.lastName || '',
-      mobilePhoneNumber: user.phone || user.phoneNumber || '',
+      mobilePhoneNumber: req.body?.mobilePhoneNumber || user.phone || user.phoneNumber || '',
+      checkoutMode,
       cardDetails: req.body?.card || req.body?.cardDetails || null,
     });
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('POST /api/drivers/wallet/top-ups/initiate', err);
-    return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
+    return res.status(err?.status || 500).json({
+      error: err?.message || 'Server error',
+      code: err?.code || null,
+      providerPayload: err?.status && err.status < 500 ? err?.providerPayload || null : undefined,
+    });
   }
 });
 

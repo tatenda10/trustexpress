@@ -4,8 +4,8 @@
 import { getRegistrationCityPayload } from './lib/registrationCity';
 import { configureServiceAreas } from './constants/serviceArea';
 
-export const BASE_URL = 'https://ridehailcarsserver.online';
-//export const BASE_URL = 'http://192.168.100.171:5000';
+//export const BASE_URL = 'https://ridehailcarsserver.online';
+export const BASE_URL = 'http://192.168.100.171:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {

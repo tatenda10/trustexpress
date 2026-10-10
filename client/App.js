@@ -1160,7 +1160,13 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         AsyncStorage.setItem(getDriverStatusCacheKey(user.id), JSON.stringify(merged)).catch(() => {});
       }
       return merged;
-    } catch {
+    } catch (error) {
+      console.warn('[driver.status] live refresh failed', {
+        userId: user?.id || null,
+        status: error?.status || null,
+        code: error?.code || null,
+        message: error?.message || null,
+      });
       try {
         if (user?.id) {
           const cached = await AsyncStorage.getItem(getDriverStatusCacheKey(user.id));
@@ -1168,6 +1174,12 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
             const parsed = JSON.parse(cached);
             if (parsed && typeof parsed === 'object') {
               const merged = await mergePendingDriverKind(parsed, user.id);
+              console.warn('[driver.status] using cached fallback after live refresh failed', {
+                userId: user.id,
+                profileStatus: merged?.driverProfile?.status || null,
+                vehicleStatus: merged?.vehicle?.status || null,
+                phoneVerified: merged?.phoneVerified ?? null,
+              });
               setDriverStatus(merged);
               return merged;
             }

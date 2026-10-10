@@ -7,19 +7,12 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
-  TextInput,
-  Modal,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/clerk-expo';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as ExpoLinking from 'expo-linking';
-import * as WebBrowser from 'expo-web-browser';
-import { cashOutDriverWallet, getDriverWallet, initiateDriverWalletTopup, verifyDriverWalletTopup } from '../../api';
+import { cashOutDriverWallet, getDriverWallet, verifyDriverWalletTopup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import {
   formatTransactionTypeLabel,
@@ -27,8 +20,6 @@ import {
   formatWalletDate as formatDate,
   getTransactionMeta,
 } from './walletTransactionMeta';
-
-WebBrowser.maybeCompleteAuthSession();
 
 const DriverWalletScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
@@ -53,16 +44,9 @@ const DriverWalletScreen = ({ navigation }) => {
     withdrawableBalance: 0,
     smileCashMobile: null,
   });
-  const providerLabel = wallet.paymentProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack';
   const [pendingTopups, setPendingTopups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [topupAmount, setTopupAmount] = useState('5');
-  const [topupCardNumber, setTopupCardNumber] = useState('');
-  const [topupCardExpiry, setTopupCardExpiry] = useState('');
-  const [topupCardCvv, setTopupCardCvv] = useState('');
-  const [topupModalVisible, setTopupModalVisible] = useState(false);
-  const [startingTopup, setStartingTopup] = useState(false);
   const [cashingOut, setCashingOut] = useState(false);
   const [error, setError] = useState('');
 
@@ -137,103 +121,12 @@ const DriverWalletScreen = ({ navigation }) => {
     }
   };
 
-  const openTopupModal = () => {
+  const openTopupPage = () => {
     if (!wallet.paymentsEnabled) {
       Alert.alert('Top-ups unavailable', wallet.paymentsUnavailableMessage || 'Wallet top-ups are not available yet. Please check back soon.');
       return;
     }
-    setTopupAmount(String(wallet.topupMinAmount || 5));
-    setTopupCardNumber('');
-    setTopupCardExpiry('');
-    setTopupCardCvv('');
-    setTopupModalVisible(true);
-  };
-
-  const closeTopupModal = () => {
-    if (startingTopup) return;
-    setTopupModalVisible(false);
-  };
-
-  const handleTopup = async () => {
-    if (!wallet.paymentsEnabled) {
-      Alert.alert('Top-ups unavailable', wallet.paymentsUnavailableMessage || 'Wallet top-ups are not available yet. Please check back soon.');
-      return;
-    }
-    try {
-      const amount = Number(String(topupAmount || '').replace(/[^0-9.]/g, ''));
-      if (!(amount > 0)) {
-        Alert.alert('Enter amount', 'Please enter a valid top-up amount.');
-        return;
-      }
-      if (amount < Number(wallet.topupMinAmount || 1)) {
-        Alert.alert('Amount too low', `Minimum top-up is ${formatCurrency(wallet.topupMinAmount, wallet.currency)}.`);
-        return;
-      }
-      if (amount > Number(wallet.topupMaxAmount || 500)) {
-        Alert.alert('Amount too high', `Maximum top-up is ${formatCurrency(wallet.topupMaxAmount, wallet.currency)}.`);
-        return;
-      }
-      setStartingTopup(true);
-      const token = await getTokenRef.current();
-      if (!token) throw new Error('Not signed in');
-
-      const callbackUrl = ExpoLinking.createURL('driver-wallet-topup');
-      const cardNumber = String(topupCardNumber || '').replace(/\D/g, '');
-      const [expMonth = '', expYear = ''] = String(topupCardExpiry || '').split('/').map((part) => part.replace(/\D/g, ''));
-      const cvv = String(topupCardCvv || '').replace(/\D/g, '');
-      if (wallet.paymentProvider === 'smilepay') {
-        if (cardNumber.length < 12 || !expMonth || !expYear || cvv.length < 3) {
-          Alert.alert('Card details required', 'Enter your card number, expiry date and CVV to continue.');
-          return;
-        }
-      }
-      const topup = await initiateDriverWalletTopup(token, {
-        amount,
-        callbackUrl,
-        ...(wallet.paymentProvider === 'smilepay'
-          ? {
-              checkoutMode: 'express_mpgs',
-              card: {
-                pan: cardNumber,
-                expMonth,
-                expYear,
-                securityCode: cvv,
-              },
-            }
-          : {}),
-      });
-
-      if (!topup?.authorizationUrl) {
-        if (topup?.nextAction === 'poll' || topup?.reference) {
-          setTopupModalVisible(false);
-          await loadWallet(false, [topup.reference].filter(Boolean));
-          Alert.alert('Payment started', 'Smile&Pay Express started. If the bank requires approval, complete it and refresh your wallet.');
-          return;
-        }
-        throw new Error(`Could not start ${providerLabel} checkout.`);
-      }
-
-      const authResult = await WebBrowser.openAuthSessionAsync(topup.authorizationUrl, callbackUrl);
-      const references = [topup.reference].filter(Boolean);
-      if (authResult?.type === 'success' && authResult?.url) {
-        const parsed = ExpoLinking.parse(authResult.url);
-        const returnedReference =
-          parsed?.queryParams?.reference
-          || parsed?.queryParams?.orderReference
-          || parsed?.queryParams?.transactionReference;
-        if (returnedReference && !references.includes(String(returnedReference))) {
-          references.push(String(returnedReference));
-        }
-      }
-
-      setTopupModalVisible(false);
-      await loadWallet(false, references);
-      Alert.alert('Payment check complete', 'Your wallet has been refreshed. If payment succeeded, the balance will update immediately.');
-    } catch (topupError) {
-      Alert.alert('Top-up failed', topupError?.message || 'Could not start wallet top-up.');
-    } finally {
-      setStartingTopup(false);
-    }
+    navigation.navigate('DriverWalletTopup', { wallet });
   };
 
   const handleCashOut = async () => {
@@ -314,8 +207,7 @@ const DriverWalletScreen = ({ navigation }) => {
               ) : null}
               <View className="mt-4 flex-row gap-3">
                 <TouchableOpacity
-                  onPress={openTopupModal}
-                  disabled={startingTopup}
+                  onPress={openTopupPage}
                   className="h-12 flex-1 items-center justify-center rounded-2xl bg-white"
                 >
                   <Text className="text-base font-bold" style={{ color: PRIMARY_BLUE }}>Top up</Text>
@@ -418,122 +310,6 @@ const DriverWalletScreen = ({ navigation }) => {
         </View>
       )}
 
-      <Modal
-        visible={topupModalVisible}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={closeTopupModal}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View className="flex-1 items-center justify-center bg-black/50 px-6">
-            <Pressable
-              style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
-              onPress={closeTopupModal}
-            />
-            <View className="w-full max-w-[360px] rounded-[24px] bg-white px-5 py-5">
-              <Text className="text-center text-lg font-bold text-gray-900">Top up</Text>
-              <Text className="mb-2 mt-4 text-xs font-semibold uppercase text-gray-500">
-                Amount ({wallet.currency})
-              </Text>
-              <TextInput
-                value={topupAmount}
-                onChangeText={setTopupAmount}
-                keyboardType="decimal-pad"
-                placeholder={String(wallet.topupMinAmount || 5)}
-                autoFocus
-                className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-center text-base"
-              />
-              <View className="mt-3 flex-row flex-wrap justify-center">
-                {[wallet.topupMinAmount, 10, 20]
-                  .map((value) => Number(value))
-                  .filter((value, index, list) => Number.isFinite(value) && value > 0 && list.indexOf(value) === index)
-                  .filter((value) => value <= Number(wallet.topupMaxAmount || 500))
-                  .slice(0, 3)
-                  .map((preset) => (
-                    <TouchableOpacity
-                      key={preset}
-                      onPress={() => setTopupAmount(String(preset))}
-                      className="mx-1 mt-2 rounded-full bg-[#eff6ff] px-4 py-2"
-                    >
-                      <Text className="text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
-                        {formatCurrency(preset, wallet.currency)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-              </View>
-              {wallet.paymentProvider === 'smilepay' ? (
-                <View className="mt-4">
-                  <Text className="mb-2 text-xs font-semibold uppercase text-gray-500">Card number</Text>
-                  <TextInput
-                    value={topupCardNumber}
-                    onChangeText={(value) => setTopupCardNumber(value.replace(/[^\d\s-]/g, '').slice(0, 23))}
-                    keyboardType="number-pad"
-                    placeholder="5123 4500 0000 0008"
-                    autoComplete="cc-number"
-                    textContentType="creditCardNumber"
-                    className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-base"
-                  />
-                  <View className="mt-3 flex-row gap-3">
-                    <View className="flex-1">
-                      <Text className="mb-2 text-xs font-semibold uppercase text-gray-500">Expiry</Text>
-                      <TextInput
-                        value={topupCardExpiry}
-                        onChangeText={(value) => {
-                          const digits = value.replace(/\D/g, '').slice(0, 4);
-                          setTopupCardExpiry(digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits);
-                        }}
-                        keyboardType="number-pad"
-                        placeholder="MM/YY"
-                        maxLength={5}
-                        autoComplete="cc-exp"
-                        className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-base"
-                      />
-                    </View>
-                    <View className="flex-1">
-                      <Text className="mb-2 text-xs font-semibold uppercase text-gray-500">CVV</Text>
-                      <TextInput
-                        value={topupCardCvv}
-                        onChangeText={(value) => setTopupCardCvv(value.replace(/\D/g, '').slice(0, 4))}
-                        keyboardType="number-pad"
-                        placeholder="100"
-                        maxLength={4}
-                        secureTextEntry
-                        autoComplete="cc-csc"
-                        className="h-12 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-base"
-                      />
-                    </View>
-                  </View>
-                </View>
-              ) : null}
-              <View className="mt-5 flex-row gap-3">
-                <TouchableOpacity
-                  onPress={closeTopupModal}
-                  disabled={startingTopup}
-                  className="h-12 flex-1 items-center justify-center rounded-2xl bg-slate-100"
-                >
-                  <Text className="font-semibold text-gray-700">Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleTopup}
-                  disabled={startingTopup}
-                  className="h-12 flex-1 items-center justify-center rounded-2xl"
-                  style={{ backgroundColor: PRIMARY_BLUE, opacity: startingTopup ? 0.7 : 1 }}
-                >
-                  {startingTopup ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text className="font-semibold text-white">Continue</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
     </View>
   );
 };

@@ -173,10 +173,21 @@ async function smilePayRequest(path, { method = 'GET', body } = {}) {
     payload: redactSmilePayPayload(data),
   });
   if (!res.ok || data?.success === false || !okByCode) {
+    const providerMessage = data?.responseMessage || data?.message || '';
+    const providerStatus = String(data?.status || '').trim().toUpperCase();
+    const providerCode = String(data?.responseCode ?? data?.code ?? '').trim();
+    const isProviderValidationError =
+      res.ok
+      && (
+        providerCode === '99'
+        || providerStatus === 'FAILED'
+        || /invalid|missing|required/i.test(providerMessage)
+      );
     const error = buildError(
-      data?.responseMessage || data?.message || `Smile&Pay request failed with status ${res.status}`,
-      502
+      providerMessage || `Smile&Pay request failed with status ${res.status}`,
+      isProviderValidationError ? 400 : 502
     );
+    error.code = isProviderValidationError ? 'SMILEPAY_VALIDATION_FAILED' : 'SMILEPAY_PROVIDER_FAILED';
     error.providerPayload = data;
     logSmilePay('request.failed', {
       path,

@@ -18,6 +18,7 @@ const Tab = createBottomTabNavigator();
 const ICON_SIZE = 24;
 const HIDDEN_TAB_BAR_ROUTES = new Set([
   'DriverHireTrip',
+  'DriverWalletTopup',
   'DriverWalletTransactionDetail',
   'DriverRideHistory',
   'RideChat',

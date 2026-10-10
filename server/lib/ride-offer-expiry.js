@@ -7,7 +7,10 @@ import {
 
 /** How long a captain's accepted offer stays selectable before it is removed. */
 export const DRIVER_ACCEPT_OFFER_TTL_SECONDS = 30;
-export const DRIVER_PENDING_OFFER_TTL_SECONDS = Number(process.env.DRIVER_PENDING_OFFER_TTL_SECONDS || 30);
+export const DRIVER_PENDING_OFFER_TTL_SECONDS = Math.max(
+  120,
+  Math.min(Number(process.env.DRIVER_PENDING_OFFER_TTL_SECONDS || 180) || 180, 600)
+);
 export const DRIVER_REQUEST_REOFFER_DELAY_SECONDS = 5;
 /** Abandoned open searches expire so admin/driver queues do not keep ghost "requested" rides forever. */
 export const OPEN_RIDE_REQUEST_ABANDON_TTL_MINUTES = Number(
@@ -123,7 +126,7 @@ export async function expireStaleAcceptedDriverOffers(rideRequestId = null) {
 }
 
 export async function expireStalePendingDriverOffers(rideRequestId = null) {
-  const safeTtlSeconds = Math.max(15, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 30, 180));
+  const safeTtlSeconds = Math.max(120, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 180, 600));
   const params = [safeTtlSeconds];
   let rideFilter = '';
   if (rideRequestId != null) {

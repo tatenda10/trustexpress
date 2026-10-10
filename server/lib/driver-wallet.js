@@ -307,6 +307,7 @@ export async function initializeDriverWalletTopup({
   firstName = '',
   lastName = '',
   mobilePhoneNumber = '',
+  checkoutMode = null,
   cardDetails = null,
 }) {
   const settings = await getDriverWalletSettings();
@@ -348,6 +349,7 @@ export async function initializeDriverWalletTopup({
     firstName,
     lastName,
     mobilePhoneNumber,
+    checkoutMode,
     cardDetails,
   });
 
