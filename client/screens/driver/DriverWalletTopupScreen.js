@@ -45,6 +45,15 @@ function getCardBrand(cardNumber) {
   return 'CARD';
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSuccessfulTopup(result) {
+  const status = String(result?.topup?.status || result?.status || '').trim().toLowerCase();
+  return status === 'success' || status === 'successful' || status === 'paid' || status === 'completed';
+}
+
 export default function DriverWalletTopupScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -133,10 +142,25 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
 
       if (!topup?.authorizationUrl) {
         if (topup?.nextAction === 'poll' || topup?.reference) {
-          if (topup?.reference) await verifyDriverWalletTopup(token, topup.reference).catch(() => {});
-          Alert.alert('Payment started', 'Smile&Pay Express started. If the bank requires approval, complete it and refresh your wallet.', [
-            { text: 'OK', onPress: () => navigation.goBack() },
-          ]);
+          let lastVerifyResult = null;
+          if (topup?.reference) {
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              if (attempt > 0) await wait(5000);
+              lastVerifyResult = await verifyDriverWalletTopup(token, topup.reference).catch(() => null);
+              if (isSuccessfulTopup(lastVerifyResult)) break;
+            }
+          }
+          if (isSuccessfulTopup(lastVerifyResult)) {
+            Alert.alert('Top-up successful', 'Your wallet has been credited.', [
+              { text: 'OK', onPress: () => navigation.goBack() },
+            ]);
+            return;
+          }
+          Alert.alert(
+            'Payment pending',
+            'Smile&Pay Express has started. Approve the request on your phone. If no prompt arrives, check the mobile number and try again.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
           return;
         }
         throw new Error(`Could not start ${providerLabel} checkout.`);

@@ -4,8 +4,8 @@
 import { getRegistrationCityPayload } from './lib/registrationCity';
 import { configureServiceAreas } from './constants/serviceArea';
 
-//export const BASE_URL = 'https://ridehailcarsserver.online';
-export const BASE_URL = 'http://192.168.100.171:5000';
+export const BASE_URL = 'https://ridehailcarsserver.online';
+//export const BASE_URL = 'http://192.168.100.171:5000';
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {
@@ -76,6 +76,9 @@ function getFriendlyApiErrorMessage(status, fallbackMessage) {
   }
   if (status === 429) {
     return 'Too many requests right now. Please wait a moment and try again.';
+  }
+  if (/Smile&Pay|SmilePay/i.test(String(fallbackMessage || ''))) {
+    return fallbackMessage;
   }
   if (status >= 500) {
     return 'Something went wrong on our side. Please try again in a moment.';

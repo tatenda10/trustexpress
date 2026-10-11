@@ -42,6 +42,16 @@ function normalizeCardDetails(cardDetails = {}) {
   return { pan, expMonth, expYear, securityCode };
 }
 
+function normalizeEcoCashMsisdn(value) {
+  const raw = String(value || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 12 && digits.startsWith('263')) return `0${digits.slice(3)}`;
+  if (digits.length === 13 && digits.startsWith('2630')) return `0${digits.slice(4)}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `0${digits}`;
+  return digits;
+}
+
 function getEnvironment() {
   const value = String(process.env.SMILEPAY_ENVIRONMENT || 'sandbox').trim().toLowerCase();
   return value === 'live' || value === 'production' ? 'live' : 'sandbox';
@@ -133,22 +143,48 @@ function logSmilePay(event, details = {}) {
 async function smilePayRequest(path, { method = 'GET', body } = {}) {
   const { apiKey, apiSecret } = getCredentials();
   const url = `${getBaseUrl()}${path}`;
+  const timeoutMs = Math.max(5000, Math.min(Number(process.env.SMILEPAY_REQUEST_TIMEOUT_MS || 25000) || 25000, 60000));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   logSmilePay('request.start', {
     environment: getEnvironment(),
     method,
     path,
     url,
+    timeoutMs,
     body: redactSmilePayPayload(body || null),
   });
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'x-api-secret': apiSecret,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'x-api-secret': apiSecret,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const timedOut = error?.name === 'AbortError';
+    const nextError = buildError(
+      timedOut
+        ? 'Smile&Pay did not respond in time. Please check if an approval prompt arrived on the phone, then try again.'
+        : error?.message || 'Smile&Pay request failed',
+      timedOut ? 504 : 502
+    );
+    nextError.code = timedOut ? 'SMILEPAY_TIMEOUT' : 'SMILEPAY_NETWORK_ERROR';
+    logSmilePay('request.error', {
+      path,
+      timedOut,
+      timeoutMs,
+      message: error?.message || String(error),
+    });
+    throw nextError;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const rawText = await res.text().catch(() => '');
   let data = {};
@@ -344,8 +380,10 @@ export const smilePayProvider = {
     if (checkoutMode === 'hosted') {
       requestBody.paymentMethod = 'WALLETPLUS';
     } else if (checkoutMode === 'express_ecocash') {
+      const msisdn = normalizeEcoCashMsisdn(mobilePhoneNumber);
       requestBody.paymentMethod = 'ECOCASH';
-      requestBody.msisdn = mobilePhoneNumber || undefined;
+      requestBody.mobilePhoneNumber = msisdn || undefined;
+      requestBody.msisdn = msisdn || undefined;
     } else if (checkoutMode === 'express_mpgs') {
       requestBody.paymentMethod = 'CARD';
       const card = normalizeCardDetails(cardDetails);

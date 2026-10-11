@@ -392,8 +392,11 @@ export async function initializeDriverWalletTopup({
   return {
     reference,
     provider: providerId,
+    checkoutMode: initializeResult.checkoutMode || null,
+    nextAction: initializeResult.nextAction || null,
     authorizationUrl: initializeResult.authorizationUrl || null,
     accessCode: initializeResult.accessCode || null,
+    externalTransactionId: initializeResult.externalTransactionId || null,
     amount: normalizedAmount,
     currency,
   };
@@ -553,6 +556,7 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
   const provider = getPaymentProvider(providerId);
   const verification = await provider.verifyTopup({
     reference: safeReference,
+    alternateReference: existingTopup.provider_transaction_id || null,
     expectedAmount: existingTopup.requested_amount,
     expectedCurrency: existingTopup.currency || currency,
   });
