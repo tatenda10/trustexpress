@@ -9,8 +9,8 @@ export const DEFAULT_MINIMUM_BALANCE_USD = 1;
 export const DEFAULT_COMMISSION_RATE_PERCENT = 9.5;
 export const DEFAULT_TOPUP_MIN_AMOUNT = 1;
 export const DEFAULT_TOPUP_MAX_AMOUNT = 500;
-export const DEFAULT_WALLET_CURRENCY = 'ZAR';
-export const DEFAULT_PAYMENT_PROVIDER = 'paystack';
+export const DEFAULT_WALLET_CURRENCY = 'USD';
+export const DEFAULT_PAYMENT_PROVIDER = 'smilepay';
 export { PAYMENT_PROVIDER_OPTIONS };
 
 const SETTINGS_CACHE_TTL_MS = 15_000;

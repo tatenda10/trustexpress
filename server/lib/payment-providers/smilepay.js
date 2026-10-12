@@ -46,10 +46,18 @@ function normalizeEcoCashMsisdn(value) {
   const raw = String(value || '').trim();
   const digits = raw.replace(/\D/g, '');
   if (!digits) return '';
-  if (digits.length === 12 && digits.startsWith('263')) return `0${digits.slice(3)}`;
-  if (digits.length === 13 && digits.startsWith('2630')) return `0${digits.slice(4)}`;
-  if (digits.length === 9 && digits.startsWith('7')) return `0${digits}`;
-  return digits;
+  const local = (() => {
+    if (digits.length === 12 && digits.startsWith('263')) return `0${digits.slice(3)}`;
+    if (digits.length === 13 && digits.startsWith('2630')) return `0${digits.slice(4)}`;
+    if (digits.length === 9 && digits.startsWith('7')) return `0${digits}`;
+    return digits;
+  })();
+  const format = String(process.env.SMILEPAY_ECOCASH_MSISDN_FORMAT || 'local').trim().toLowerCase();
+  if (format === 'international' || format === '263') {
+    const localDigits = local.replace(/\D/g, '');
+    if (localDigits.length === 10 && localDigits.startsWith('0')) return `263${localDigits.slice(1)}`;
+  }
+  return local;
 }
 
 function getEnvironment() {
@@ -67,7 +75,7 @@ export function normalizeSmilePayCheckoutMode(value, fallback = 'express_mpgs') 
     : 'express_mpgs';
   const key = String(value || '').trim().toLowerCase();
   if (!key) return normalizedFallback;
-  if (['standard', 'hosted', 'walletplus', 'wallet_plus'].includes(key)) return 'hosted';
+  if (['standard', 'hosted', 'walletplus', 'wallet_plus', 'express_wallet', 'wallet', 'smilepay_wallet', 'smile_wallet'].includes(key)) return 'hosted';
   if (['express_ecocash', 'ecocash'].includes(key)) return 'express_ecocash';
   if (['express_mpgs', 'mpgs', 'card', 'express_card'].includes(key)) return 'express_mpgs';
   return normalizedFallback;
@@ -381,7 +389,14 @@ export const smilePayProvider = {
       requestBody.paymentMethod = 'WALLETPLUS';
     } else if (checkoutMode === 'express_ecocash') {
       const msisdn = normalizeEcoCashMsisdn(mobilePhoneNumber);
+      logSmilePay('ecocash.msisdn.normalized', {
+        inputFormat: String(mobilePhoneNumber || '').startsWith('+') ? 'plus_prefixed' : 'digits',
+        outputFormat: String(msisdn || '').startsWith('263') ? 'international' : 'local',
+        configuredFormat: String(process.env.SMILEPAY_ECOCASH_MSISDN_FORMAT || 'local').trim().toLowerCase(),
+        last4: msisdn ? String(msisdn).slice(-4) : null,
+      });
       requestBody.paymentMethod = 'ECOCASH';
+      requestBody.ecocashMobile = msisdn || undefined;
       requestBody.mobilePhoneNumber = msisdn || undefined;
       requestBody.msisdn = msisdn || undefined;
     } else if (checkoutMode === 'express_mpgs') {

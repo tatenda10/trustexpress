@@ -36,6 +36,14 @@ router.get('/', requireAuth, async (req, res) => {
 
 router.post('/top-ups/initiate', requireAuth, async (req, res) => {
   try {
+    console.log('[driver.wallet.topup] initiate route entered', {
+      driverUserId: req.userId || null,
+      bodyKeys: Object.keys(req.body || {}),
+      amount: req.body?.amount ?? null,
+      checkoutMode: req.body?.checkoutMode || req.body?.paymentMethod || null,
+      hasMobilePhoneNumber: Boolean(req.body?.mobilePhoneNumber),
+      hasCardDetails: Boolean(req.body?.card || req.body?.cardDetails),
+    });
     const user = await requireDriver(req, res);
     if (!user) return;
     const amount = Number(req.body?.amount);
@@ -59,6 +67,15 @@ router.post('/top-ups/initiate', requireAuth, async (req, res) => {
       checkoutMode,
       cardDetails: req.body?.card || req.body?.cardDetails || null,
     });
+    console.log('[driver.wallet.topup] initiate response', {
+      driverUserId: req.userId,
+      reference: result?.reference || null,
+      provider: result?.provider || null,
+      checkoutMode: result?.checkoutMode || null,
+      nextAction: result?.nextAction || null,
+      hasAuthorizationUrl: Boolean(result?.authorizationUrl),
+      externalTransactionId: result?.externalTransactionId || null,
+    });
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('POST /api/drivers/wallet/top-ups/initiate', err);
@@ -72,10 +89,26 @@ router.post('/top-ups/initiate', requireAuth, async (req, res) => {
 
 router.post('/top-ups/verify', requireAuth, async (req, res) => {
   try {
+    console.log('[driver.wallet.topup] verify route entered', {
+      driverUserId: req.userId || null,
+      bodyKeys: Object.keys(req.body || {}),
+      reference: req.body?.reference || null,
+    });
     const user = await requireDriver(req, res);
     if (!user) return;
     const reference = String(req.body?.reference || '').trim();
+    console.log('[driver.wallet.topup] verify request', {
+      driverUserId: req.userId,
+      reference,
+    });
     const result = await verifyDriverWalletTopup(req.userId, reference);
+    console.log('[driver.wallet.topup] verify response', {
+      driverUserId: req.userId,
+      reference,
+      topupStatus: result?.topup?.status || null,
+      walletBalance: result?.wallet?.availableBalance ?? null,
+      alreadyVerified: Boolean(result?.alreadyVerified),
+    });
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('POST /api/drivers/wallet/top-ups/verify', err);
@@ -113,6 +146,12 @@ router.post('/cash-outs', requireAuth, async (req, res) => {
 // Smile&Pay server-to-server webhook (resultUrl). No auth — verify by looking up the order reference.
 router.post('/webhooks/smilepay', async (req, res) => {
   try {
+    console.log('[driver.wallet.topup] smilepay webhook route', {
+      responseCode: req.body?.responseCode || req.body?.code || null,
+      status: req.body?.status || req.body?.transactionStatus || req.body?.paymentStatus || null,
+      orderReference: req.body?.orderReference || req.body?.order_reference || null,
+      transactionReference: req.body?.transactionReference || req.body?.reference || null,
+    });
     const result = await handleSmilePayWalletWebhook(req.body || {});
     return res.status(200).json({ ok: true, alreadyVerified: !!result?.alreadyVerified });
   } catch (err) {

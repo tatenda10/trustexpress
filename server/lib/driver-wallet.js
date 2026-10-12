@@ -11,10 +11,14 @@ import { createSmileCashPayoutPublicId, executeSmileCashExternalCashout, isCompa
 /** @deprecated Use getDriverWalletSettings().commissionRatePercent */
 export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
 /** @deprecated Use getDriverWalletSettings().currency */
-export const DRIVER_WALLET_CURRENCY = 'ZAR';
+export const DRIVER_WALLET_CURRENCY = 'USD';
 const LOW_BALANCE_MESSAGE = 'Your Trust Express Wallet balance is too low. Please top up your wallet to continue receiving ride requests.';
 const PAYMENTS_UNAVAILABLE_MESSAGE = 'Wallet top-ups are not available yet. Please check back soon.';
 const CAPTAIN_PROMO_CURRENCY = 'USD';
+const PENDING_TOPUP_ABANDON_MINUTES = Math.max(
+  10,
+  Math.min(Number(process.env.DRIVER_WALLET_PENDING_TOPUP_ABANDON_MINUTES || 30) || 30, 24 * 60)
+);
 
 function normalizeMoney(value) {
   const amount = Number(value || 0);
@@ -231,7 +235,36 @@ function mapTopupRow(row, settings = null) {
   };
 }
 
+async function abandonStalePendingTopups(driverUserId = null) {
+  const params = [PENDING_TOPUP_ABANDON_MINUTES];
+  let driverFilter = '';
+  if (driverUserId) {
+    driverFilter = ' AND driver_user_id = ?';
+    params.push(driverUserId);
+  }
+  const result = await query(
+    `UPDATE driver_wallet_topups
+     SET status = 'abandoned',
+         verified_at = COALESCE(verified_at, CURRENT_TIMESTAMP),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE status = 'pending'
+       AND created_at < (CURRENT_TIMESTAMP - INTERVAL ? MINUTE)
+       ${driverFilter}`,
+    params
+  );
+  const affectedRows = Number(result?.affectedRows || 0);
+  if (affectedRows > 0) {
+    console.log('[driver.wallet.topup] stale pending abandoned', {
+      driverUserId: driverUserId || null,
+      affectedRows,
+      abandonAfterMinutes: PENDING_TOPUP_ABANDON_MINUTES,
+    });
+  }
+  return affectedRows;
+}
+
 export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}) {
+  await abandonStalePendingTopups(driverUserId);
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const [wallet, settings] = await Promise.all([
     ensureDriverWallet(driverUserId),
@@ -351,6 +384,16 @@ export async function initializeDriverWalletTopup({
     mobilePhoneNumber,
     checkoutMode,
     cardDetails,
+  });
+
+  console.log('[driver.wallet.topup] provider initialized', {
+    driverUserId,
+    provider: providerId,
+    reference,
+    checkoutMode: initializeResult.checkoutMode || null,
+    nextAction: initializeResult.nextAction || null,
+    hasAuthorizationUrl: Boolean(initializeResult.authorizationUrl),
+    externalTransactionId: initializeResult.externalTransactionId || null,
   });
 
   await ensureDriverWallet(driverUserId);
@@ -554,11 +597,28 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
 
   const providerId = normalizePaymentProvider(existingTopup.provider || settings.paymentProvider, 'paystack');
   const provider = getPaymentProvider(providerId);
+  console.log('[driver.wallet.topup] verify start', {
+    driverUserId,
+    reference: safeReference,
+    provider: providerId,
+    providerTransactionId: existingTopup.provider_transaction_id || null,
+    currentStatus: existingTopup.status || null,
+  });
   const verification = await provider.verifyTopup({
     reference: safeReference,
     alternateReference: existingTopup.provider_transaction_id || null,
     expectedAmount: existingTopup.requested_amount,
     expectedCurrency: existingTopup.currency || currency,
+  });
+
+  console.log('[driver.wallet.topup] verify provider result', {
+    driverUserId,
+    reference: safeReference,
+    provider: providerId,
+    wasSuccessful: Boolean(verification.wasSuccessful),
+    nextStatus: verification.nextStatus || null,
+    externalTransactionId: verification.externalTransactionId || null,
+    paymentMethod: verification.paymentMethod || null,
   });
 
   return applyVerifiedTopupCredit({
@@ -569,7 +629,63 @@ export async function verifyDriverWalletTopup(driverUserId, reference) {
   });
 }
 
+export async function reconcilePendingDriverWalletTopups({ limit = 25 } = {}) {
+  await abandonStalePendingTopups();
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const pendingTopups = await query(
+    `SELECT driver_user_id, reference, provider_transaction_id, created_at
+     FROM driver_wallet_topups
+     WHERE status = 'pending'
+     ORDER BY created_at ASC
+     LIMIT ${safeLimit}`
+  );
+
+  if (!Array.isArray(pendingTopups) || pendingTopups.length === 0) {
+    return { checked: 0, success: 0, pending: 0, failed: 0, errors: 0 };
+  }
+
+  const summary = { checked: 0, success: 0, pending: 0, failed: 0, errors: 0 };
+  for (const topup of pendingTopups) {
+    const driverUserId = String(topup.driver_user_id || '').trim();
+    const reference = String(topup.reference || '').trim();
+    if (!driverUserId || !reference) continue;
+    summary.checked += 1;
+    try {
+      const result = await verifyDriverWalletTopup(driverUserId, reference);
+      const status = String(result?.topup?.status || '').toLowerCase();
+      if (status === 'success') summary.success += 1;
+      else if (status === 'failed' || status === 'cancelled' || status === 'abandoned') summary.failed += 1;
+      else summary.pending += 1;
+      console.log('[driver.wallet.topup.reconcile] checked', {
+        driverUserId,
+        reference,
+        providerTransactionId: topup.provider_transaction_id || null,
+        status: result?.topup?.status || null,
+        walletBalance: result?.wallet?.availableBalance ?? null,
+      });
+    } catch (error) {
+      summary.errors += 1;
+      console.warn('[driver.wallet.topup.reconcile] verify failed', {
+        driverUserId,
+        reference,
+        providerTransactionId: topup.provider_transaction_id || null,
+        message: error?.message || String(error),
+        status: error?.status || null,
+        code: error?.code || null,
+      });
+    }
+  }
+  console.log('[driver.wallet.topup.reconcile] summary', summary);
+  return summary;
+}
+
 export async function handleSmilePayWalletWebhook(body = {}) {
+  console.log('[driver.wallet.topup] smilepay webhook received', {
+    responseCode: body?.responseCode || body?.code || null,
+    status: body?.status || body?.transactionStatus || body?.paymentStatus || null,
+    orderReference: body?.orderReference || body?.order_reference || null,
+    transactionReference: body?.transactionReference || body?.reference || null,
+  });
   const settings = await getDriverWalletSettings();
   const provider = getPaymentProvider('smilepay');
   const parsed = provider.parseWebhook(body);

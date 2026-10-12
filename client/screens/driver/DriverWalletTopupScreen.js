@@ -119,8 +119,9 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
       if (!token) throw new Error('Not signed in');
 
       const callbackUrl = ExpoLinking.createURL('driver-wallet-topup');
-      const smilePayPayload = method === 'card'
-        ? {
+      const smilePayPayload = (() => {
+        if (method === 'card') {
+          return {
             checkoutMode: 'express_mpgs',
             card: {
               pan: cleanCardNumber,
@@ -128,16 +129,40 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
               expYear,
               securityCode: cvv,
             },
-          }
-        : {
-            checkoutMode: 'express_ecocash',
+          };
+        }
+        if (method === 'wallet') {
+          return {
+            checkoutMode: 'hosted',
             mobilePhoneNumber: cleanWalletMobile,
           };
+        }
+        return {
+            checkoutMode: 'express_ecocash',
+            mobilePhoneNumber: cleanWalletMobile,
+        };
+      })();
 
+      console.log('[driver.wallet.topup] client initiate start', {
+        amount: normalizedAmount,
+        provider: wallet.paymentProvider || null,
+        method,
+        checkoutMode: smilePayPayload?.checkoutMode || null,
+        hasMobileNumber: Boolean(cleanWalletMobile),
+        hasCardDetails: Boolean(cleanCardNumber && expMonth && expYear && cvv),
+      });
       const topup = await initiateDriverWalletTopup(token, {
         amount: normalizedAmount,
         callbackUrl,
         ...(wallet.paymentProvider === 'smilepay' ? smilePayPayload : {}),
+      });
+      console.log('[driver.wallet.topup] client initiate result', {
+        reference: topup?.reference || null,
+        provider: topup?.provider || null,
+        checkoutMode: topup?.checkoutMode || null,
+        nextAction: topup?.nextAction || null,
+        hasAuthorizationUrl: Boolean(topup?.authorizationUrl),
+        externalTransactionId: topup?.externalTransactionId || null,
       });
 
       if (!topup?.authorizationUrl) {
@@ -146,7 +171,26 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
           if (topup?.reference) {
             for (let attempt = 0; attempt < 8; attempt += 1) {
               if (attempt > 0) await wait(5000);
-              lastVerifyResult = await verifyDriverWalletTopup(token, topup.reference).catch(() => null);
+              console.log('[driver.wallet.topup] client verify attempt', {
+                reference: topup.reference,
+                attempt: attempt + 1,
+              });
+              lastVerifyResult = await verifyDriverWalletTopup(token, topup.reference).catch((verifyError) => {
+                console.log('[driver.wallet.topup] client verify error', {
+                  reference: topup.reference,
+                  attempt: attempt + 1,
+                  message: verifyError?.message || null,
+                  status: verifyError?.status || null,
+                  code: verifyError?.code || null,
+                });
+                return null;
+              });
+              console.log('[driver.wallet.topup] client verify result', {
+                reference: topup.reference,
+                attempt: attempt + 1,
+                topupStatus: lastVerifyResult?.topup?.status || null,
+                walletBalance: lastVerifyResult?.wallet?.availableBalance ?? null,
+              });
               if (isSuccessfulTopup(lastVerifyResult)) break;
             }
           }
@@ -158,7 +202,11 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
           }
           Alert.alert(
             'Payment pending',
-            'Smile&Pay Express has started. Approve the request on your phone. If no prompt arrives, check the mobile number and try again.',
+            [
+              'Smile&Pay Express has started. Approve the request on your phone.',
+              topup?.externalTransactionId ? `ZB reference: ${topup.externalTransactionId}` : '',
+              'If no prompt arrives, check the mobile number and ask ZB to confirm EcoCash merchant push is enabled for this merchant.',
+            ].filter(Boolean).join('\n\n'),
             [{ text: 'OK', onPress: () => navigation.goBack() }]
           );
           return;
@@ -335,7 +383,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
               <Text className="mt-2 text-sm leading-6 text-blue-800">
                 {method === 'ecocash'
                   ? 'Enter the EcoCash number. Smile&Pay will send an approval request to that phone.'
-                  : 'Enter the Smile&Pay Wallet number. Smile&Pay will send an approval request to that phone.'}
+                  : 'Enter your Smile&Pay Wallet number. We will open Smile&Pay hosted checkout to complete the wallet payment.'}
               </Text>
               <Text className="mt-4 text-xs font-semibold text-blue-900">
                 {method === 'ecocash' ? 'EcoCash mobile number' : 'Smile&Pay Wallet mobile number'}

@@ -9,6 +9,7 @@ import { verifyToken } from '@clerk/backend';
 import routes from './routes/index.js';
 import { getRealtimeUserRoom, setRealtimeServer } from './lib/realtime.js';
 import { buildAuthorityShareTrackingHtml } from './lib/admin-share-page.js';
+import { startDriverWalletTopupReconciler } from './lib/wallet-topup-reconciler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT);
@@ -251,4 +252,5 @@ setRealtimeServer(io);
 
 httpServer.listen(PORT, () => {
   console.log(`Trust Express API at http://localhost:${PORT}`);
+  startDriverWalletTopupReconciler();
 });
