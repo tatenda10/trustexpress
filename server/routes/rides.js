@@ -42,6 +42,7 @@ import {
   getDriverPushTokensByUserIds,
   upsertDriverPushTokens,
 } from '../lib/driver-push-tokens.js';
+import { getDriverWalletSummariesByUserIds } from '../lib/driver-wallet.js';
 
 const router = Router();
 
@@ -79,9 +80,20 @@ export function createPublicRideId() {
 
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
-const DRIVER_REQUEST_RADIUS_KM = 5;
-const MAX_DRIVER_OFFERS = 8;
+const DRIVER_REQUEST_RADIUS_KM = 12;
+const MAX_DRIVER_OFFERS = 500;
 const DRIVER_ONLINE_STALE_DAYS = 1;
+/** Drivers whose app polled or sent location within this window count as "app open". */
+const DRIVER_ACTIVE_SEEN_SECONDS = 180;
+/** While nobody has accepted, offer the ride to drivers who come online or move into range later. */
+const RIDE_OFFER_EXPANSION_INTERVAL_MS = 10 * 1000;
+const RIDE_OFFER_WAVE_MIN_GAP_SECONDS = 15;
+const RIDE_OFFER_WAVE_BATCH_SIZE = MAX_DRIVER_OFFERS;
+const RIDE_OFFER_MAX_TOTAL_DRIVERS = MAX_DRIVER_OFFERS;
+const RIDE_OFFER_EXPANSION_WINDOW_MINUTES = 10;
+const RIDE_OFFER_RADIUS_STEPS = [
+  { afterSeconds: 0, radiusKm: DRIVER_REQUEST_RADIUS_KM },
+];
 const DRIVER_LIVE_LOCATION_FRESH_SECONDS = Number(process.env.DRIVER_LIVE_LOCATION_FRESH_SECONDS || 45);
 const DRIVER_AUTO_ARRIVED_DISTANCE_KM = Number(process.env.DRIVER_AUTO_ARRIVED_DISTANCE_KM || 0.15);
 const LOST_ITEM_MAX_LENGTH = 2000;
@@ -451,7 +463,21 @@ async function refreshOpenRideRequestState(rideId) {
   await refreshOpenRideOffers(rideId);
 }
 
-export async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount, tierKey }) {
+function isDriverRecentlyActive(lastSeenAt) {
+  const seenMs = lastSeenAt ? new Date(lastSeenAt).getTime() : NaN;
+  if (!Number.isFinite(seenMs)) return false;
+  return Date.now() - seenMs <= DRIVER_ACTIVE_SEEN_SECONDS * 1000;
+}
+
+export async function loadEligibleDriversForRide({
+  pickupPoint,
+  estimatedAmount,
+  tierKey,
+  radiusKm = DRIVER_REQUEST_RADIUS_KM,
+  excludeDriverIds = [],
+  limit = MAX_DRIVER_OFFERS,
+}) {
+  const excluded = new Set((excludeDriverIds || []).map((id) => String(id)));
   const availabilityRows = await query(
     `SELECT da.*
      FROM driver_availability da
@@ -473,28 +499,48 @@ export async function loadEligibleDriversForRide({ pickupPoint, estimatedAmount,
      ORDER BY da.updated_at DESC`
   );
 
-  const driverStatsMap = await loadDriverRideStats(availabilityRows.map((row) => row.driver_user_id));
-  const eligibleDrivers = availabilityRows
+  const candidateRows = availabilityRows.filter((row) => !excluded.has(String(row.driver_user_id)));
+  const candidateIds = candidateRows.map((row) => row.driver_user_id);
+
+  // Drivers below the wallet minimum get an empty request list, so offering to them wastes a slot.
+  let walletById = new Map();
+  try {
+    walletById = await getDriverWalletSummariesByUserIds(candidateIds);
+  } catch (error) {
+    console.error('[rides.findDriver] wallet summary lookup failed', error?.message || error);
+  }
+
+  const driverStatsMap = await loadDriverRideStats(candidateIds);
+  const inRadius = candidateRows
+    .filter((row) => walletById.get(row.driver_user_id)?.sufficientBalance !== false)
     .map((row) => mapDriverAvailability(
       attachDriverRideStats({ ...row, estimated_amount: estimatedAmount }, driverStatsMap),
       pickupPoint
     ))
-    .filter((item) => item.driverDistanceKm <= DRIVER_REQUEST_RADIUS_KM)
-    .sort((a, b) => a.driverDistanceKm - b.driverDistanceKm)
-    .slice(0, MAX_DRIVER_OFFERS);
+    .filter((item) => item.driverDistanceKm !== null && item.driverDistanceKm <= radiusKm)
+    .map((item) => ({ ...item, recentlyActive: isDriverRecentlyActive(item.lastSeenAt) }));
+
+  // Drivers with the app open right now go first; drivers only reachable by push fill the rest.
+  const eligibleDrivers = inRadius
+    .sort((a, b) => (
+      (a.recentlyActive === b.recentlyActive ? 0 : a.recentlyActive ? -1 : 1)
+      || a.driverDistanceKm - b.driverDistanceKm
+    ))
+    .slice(0, limit);
 
   console.log('[rides.findDriver] eligible drivers', {
     requestedTierKey: String(tierKey || '').trim().toLowerCase(),
     pickupPoint,
+    radiusKm,
     totalAvailabilityRows: availabilityRows.length,
+    excludedCount: excluded.size,
+    inRadiusCount: inRadius.length,
+    recentlyActiveInRadius: inRadius.filter((driver) => driver.recentlyActive).length,
     eligibleCount: eligibleDrivers.length,
     eligibleDrivers: eligibleDrivers.map((driver) => ({
       id: driver.id,
-      tierKey: driver.tier?.tierKey || null,
-      tierName: driver.tier?.tierName || null,
+      recentlyActive: driver.recentlyActive,
       driverDistanceKm: Number(driver.driverDistanceKm.toFixed(2)),
-      etaMinutes: driver.etaMinutes,
-      coordinate: driver.coordinate,
     })),
   });
 
@@ -2869,5 +2915,177 @@ router.post('/:rideRequestId/messages', requireAuth, async (req, res) => {
     return res.status(500).json({ error: 'Server error' });
   }
 });
+
+const rideOfferLastWaveAt = new Map();
+
+function getRideOfferRadiusKm(elapsedSeconds) {
+  let radiusKm = RIDE_OFFER_RADIUS_STEPS[0].radiusKm;
+  for (const step of RIDE_OFFER_RADIUS_STEPS) {
+    if (elapsedSeconds >= step.afterSeconds) radiusKm = step.radiusKm;
+  }
+  return radiusKm;
+}
+
+async function expandOfferForRide(ride) {
+  const rideRequestId = Number(ride.id);
+  const elapsedSeconds = Math.max(0, Number(ride.elapsed_seconds || 0));
+  const lastWaveAt = rideOfferLastWaveAt.get(rideRequestId) || 0;
+  if (Date.now() - lastWaveAt < RIDE_OFFER_WAVE_MIN_GAP_SECONDS * 1000) return;
+  if (elapsedSeconds < RIDE_OFFER_WAVE_MIN_GAP_SECONDS) return;
+
+  const offeredRows = await query(
+    `SELECT driver_user_id
+     FROM ride_request_driver_responses
+     WHERE ride_request_id = ?`,
+    [rideRequestId]
+  );
+  const offeredIds = offeredRows.map((row) => String(row.driver_user_id));
+  const remainingCapacity = RIDE_OFFER_MAX_TOTAL_DRIVERS - offeredIds.length;
+  if (remainingCapacity <= 0) return;
+
+  const pickupPoint = toMapCoordinate(ride.pickup_lat, ride.pickup_lng);
+  if (!pickupPoint) return;
+
+  rideOfferLastWaveAt.set(rideRequestId, Date.now());
+  const radiusKm = getRideOfferRadiusKm(elapsedSeconds);
+  const finalAmount = Number(ride.final_estimated_amount || ride.estimated_amount || 0);
+  const nextDriversBase = await loadEligibleDriversForRide({
+    pickupPoint,
+    estimatedAmount: Number(ride.original_estimated_amount || ride.estimated_amount || 0),
+    tierKey: ride.requested_tier_key,
+    radiusKm,
+    excludeDriverIds: offeredIds,
+    limit: Math.min(RIDE_OFFER_WAVE_BATCH_SIZE, remainingCapacity),
+  });
+  if (!nextDriversBase.length) return;
+
+  const nextDrivers = nextDriversBase.map((driver) => ({
+    ...driver,
+    amount: finalAmount,
+    profileImageUrl: null,
+  }));
+
+  // Ride may have been accepted or cancelled while drivers were being loaded.
+  const [stillOpen] = await query(
+    `SELECT id FROM ride_requests
+     WHERE id = ? AND status = 'requested' AND driver_user_id IS NULL
+     LIMIT 1`,
+    [rideRequestId]
+  );
+  if (!stillOpen) return;
+
+  await createPendingDriverOffers(rideRequestId, nextDrivers);
+
+  const pickupLabel = String(ride.pickup_label || '').trim();
+  const dropoffLabel = String(ride.dropoff_label || '').trim();
+  const emittedAt = new Date().toISOString();
+  nextDrivers.forEach((driver) => {
+    emitRideRequestToDriver(driver.id, {
+      rideRequestId,
+      publicId: ride.public_id,
+      passengerUserId: ride.passenger_user_id,
+      passengerName: ride.passenger_name,
+      pickupLabel,
+      dropoffLabel,
+      requestedTierKey: ride.requested_tier_key,
+      requestedTierName: ride.requested_tier_name,
+      passengerCount: Number(ride.passenger_count || 1),
+      paymentMethod: ride.payment_method,
+      requestedAt: toIsoOrNull(ride.requested_at),
+      emittedAt,
+    });
+  });
+
+  console.log('[rides.offerExpansion] wave sent', {
+    rideRequestId,
+    elapsedSeconds,
+    radiusKm,
+    previouslyOffered: offeredIds.length,
+    newDriverIds: nextDrivers.map((driver) => driver.id),
+  });
+
+  notifyDriversAboutRideRequest({
+    drivers: nextDrivers,
+    passengerName: ride.passenger_name,
+    pickupLabel,
+    dropoffLabel,
+    intermediateStops: parseJsonArray(ride.intermediate_stops_json),
+    rideRequestId,
+    publicId: ride.public_id,
+    tierName: ride.requested_tier_name,
+    passengerCount: Number(ride.passenger_count || 1),
+  }).catch((error) => {
+    console.error('[rides.offerExpansion] notify failed', {
+      rideRequestId,
+      message: error?.message || String(error),
+    });
+  });
+}
+
+let rideOfferExpansionRunning = false;
+
+export async function expandOpenRideOffers() {
+  if (rideOfferExpansionRunning) return;
+  rideOfferExpansionRunning = true;
+  try {
+    const openRides = await query(
+      `SELECT
+         r.id,
+         r.public_id,
+         r.passenger_user_id,
+         r.passenger_name,
+         r.passenger_count,
+         r.requested_tier_key,
+         r.requested_tier_name,
+         r.pickup_label,
+         r.pickup_lat,
+         r.pickup_lng,
+         r.dropoff_label,
+         r.intermediate_stops_json,
+         r.estimated_amount,
+         r.original_estimated_amount,
+         r.final_estimated_amount,
+         r.payment_method,
+         r.requested_at,
+         TIMESTAMPDIFF(SECOND, r.requested_at, CURRENT_TIMESTAMP) AS elapsed_seconds
+       FROM ride_requests r
+       WHERE r.status = 'requested'
+         AND r.driver_user_id IS NULL
+         AND r.passenger_user_id IS NOT NULL
+         AND r.public_id NOT LIKE 'SIM-%'
+         AND r.requested_at >= (CURRENT_TIMESTAMP - INTERVAL ${RIDE_OFFER_EXPANSION_WINDOW_MINUTES} MINUTE)`
+    );
+
+    const openIds = new Set(openRides.map((ride) => Number(ride.id)));
+    for (const rideId of rideOfferLastWaveAt.keys()) {
+      if (!openIds.has(rideId)) rideOfferLastWaveAt.delete(rideId);
+    }
+
+    for (const ride of openRides) {
+      try {
+        await expandOfferForRide(ride);
+      } catch (error) {
+        console.error('[rides.offerExpansion] ride failed', {
+          rideRequestId: ride.id,
+          message: error?.message || String(error),
+        });
+      }
+    }
+  } catch (error) {
+    console.error('[rides.offerExpansion] sweep failed', error?.message || error);
+  } finally {
+    rideOfferExpansionRunning = false;
+  }
+}
+
+let rideOfferExpansionTimer = null;
+
+export function startRideOfferExpansionLoop() {
+  if (rideOfferExpansionTimer) return;
+  rideOfferExpansionTimer = setInterval(() => {
+    expandOpenRideOffers();
+  }, RIDE_OFFER_EXPANSION_INTERVAL_MS);
+  rideOfferExpansionTimer.unref?.();
+}
 
 export default router;

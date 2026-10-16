@@ -13,6 +13,13 @@
       ],
       "./plugins/withTrustOverlay",
       [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Allow Trust Express to use Face ID to sign you in.",
+          "configureAndroidBackup": false
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {
@@ -58,6 +65,7 @@
       },
       "permissions": [
         "VIBRATE",
+        "USE_BIOMETRIC",
         "WAKE_LOCK",
         "RECEIVE_BOOT_COMPLETED",
         "USE_FULL_SCREEN_INTENT"

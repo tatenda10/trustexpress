@@ -108,13 +108,42 @@ router.get('/me', requireAuth, async (req, res) => {
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
 
-    if (appUser.role !== 'passenger') {
-      return res.json(appUser);
+    // MySQL is the durable role source. Clerk metadata can briefly lag or get cleared,
+    // which used to make /me report "passenger" for real drivers and trigger client sign-out.
+    const [mysqlUser] = await query(
+      `SELECT role
+       FROM users
+       WHERE clerk_user_id = ?
+       LIMIT 1`,
+      [req.userId]
+    );
+    const mysqlRole = normalizeRole(mysqlUser?.role);
+    const resolvedRole = mysqlRole === 'driver' ? 'driver' : appUser.role;
+    if (resolvedRole === 'driver' && appUser.role !== 'driver') {
+      setRoleForUser(req.userId, 'driver').catch((error) => {
+        console.warn('[users.me] failed to repair Clerk driver role', {
+          userId: req.userId,
+          message: error?.message || String(error),
+        });
+      });
+    }
+
+    const resolvedUser = {
+      ...appUser,
+      role: resolvedRole,
+      publicMetadata: {
+        ...(appUser.publicMetadata || {}),
+        role: resolvedRole,
+      },
+    };
+
+    if (resolvedRole !== 'passenger') {
+      return res.json(resolvedUser);
     }
 
     const verification = await getPassengerVerificationFromMysql(req.userId);
     return res.json({
-      ...appUser,
+      ...resolvedUser,
       ...verification,
     });
   } catch (err) {

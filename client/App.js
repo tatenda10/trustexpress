@@ -241,10 +241,10 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
     const metaRole = String(profile?.publicMetadata?.role || '').trim().toLowerCase();
     if (metaRole === 'driver' || metaRole === 'passenger') return metaRole;
 
+    // /me always returns role; accept it even when Clerk publicMetadata.role is missing.
+    // Requiring publicMetadata here left signed-in users stuck on splash with no role.
     const directRole = String(profile?.role || '').trim().toLowerCase();
-    if ((directRole === 'driver' || directRole === 'passenger') && profile?.publicMetadata?.role) {
-      return directRole;
-    }
+    if (directRole === 'driver' || directRole === 'passenger') return directRole;
 
     return null;
   }, []);

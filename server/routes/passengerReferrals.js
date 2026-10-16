@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
-import { upsertClerkUserToMysql } from '../lib/user-sync.js';
+import { syncClerkUserForRequest } from '../lib/user-sync.js';
 import {
   attachPassengerPeerReferral,
   getPassengerReferralDashboard,
@@ -11,7 +11,7 @@ const router = Router();
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
-  await upsertClerkUserToMysql(user);
+  await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   if (normalizeRole(appUser.role) !== 'passenger') {
     res.status(403).json({ error: 'Only passenger accounts can use referrals' });

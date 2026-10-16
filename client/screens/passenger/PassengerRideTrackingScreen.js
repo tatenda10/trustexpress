@@ -21,7 +21,7 @@ import {
 } from '../../constants/rideRatingTags';
 import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../constants/serviceArea';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import { showLocalRideNotification } from '../../notifications';
+import { PASSENGER_ARRIVAL_VIBRATION_PATTERN, showLocalRideNotification } from '../../notifications';
 import { connectRealtime } from '../../realtime';
 import {
   PASSENGER_RIDE_MAP_MAX_DELTA,
@@ -808,7 +808,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     if (!announcementKey || lastArrivalAnnouncementRef.current === announcementKey) return undefined;
     lastArrivalAnnouncementRef.current = announcementKey;
     try {
-      Vibration.vibrate([0, 450, 180, 450], false);
+      Vibration.vibrate(PASSENGER_ARRIVAL_VIBRATION_PATTERN, false);
     } catch (_) {}
     try {
       Speech.stop();

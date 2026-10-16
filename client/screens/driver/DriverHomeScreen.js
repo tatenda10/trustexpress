@@ -9,6 +9,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import IncomingRidePreviewMap from '../../components/driver/IncomingRidePreviewMap';
+import IncomingRideRequestList from '../../components/driver/IncomingRideRequestList';
 import * as Location from 'expo-location';
 import { connectRealtime } from '../../realtime';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
@@ -343,6 +344,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const [showNewRequestBadge, setShowNewRequestBadge] = useState(false);
   const [activeRequest, setActiveRequest] = useState(null);
   const [availableRequests, setAvailableRequests] = useState([]);
+  const [requestListMode, setRequestListMode] = useState(true);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
   const [availabilityActionPending, setAvailabilityActionPending] = useState(false);
   const [walletStatus, setWalletStatus] = useState({
@@ -1305,12 +1307,28 @@ const DriverHomeScreen = ({ navigation, route }) => {
     return index >= 0 ? index : 0;
   }, [availableRequests, primaryIncomingRequest]);
 
-  const cycleToNextIncomingRequest = () => {
-    if (availableRequests.length <= 1) return;
-    const currentIndex = availableRequests.findIndex((request) => request.id === primaryIncomingRequest?.id);
-    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % availableRequests.length;
-    setActiveRequest(availableRequests[nextIndex]);
-  };
+  const showIncomingRequestList = requestListMode && availableRequests.length > 1;
+
+  useEffect(() => {
+    if (availableRequests.length <= 1 && !requestListMode) {
+      setRequestListMode(true);
+    }
+  }, [availableRequests.length, requestListMode]);
+
+  const handleSelectIncomingRequest = useCallback((request) => {
+    setActiveRequest(request);
+    setRequestListMode(false);
+  }, []);
+
+  const getIncomingRequestRemainingLabel = useCallback(
+    (request) => formatCountdown(getRemainingSeconds(
+      request?.expiresAt,
+      request?.remainingSeconds,
+      request?.remainingSecondsCapturedAt,
+    )),
+    // nowTick keeps the countdowns in the list ticking.
+    [nowTick],
+  );
 
   useEffect(() => {
     if (!pendingSelectionRide || currentRide?.id) return;
@@ -2170,6 +2188,21 @@ const DriverHomeScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             </View>
           </View>
+        ) : !showRideRequestModal && primaryIncomingRequest && showIncomingRequestList ? (
+          <View
+            className="absolute left-0 right-0 justify-end"
+            style={{ top: insets.top + 118, bottom: insets.bottom + 88, paddingHorizontal: 16 }}
+            pointerEvents="box-none"
+          >
+            <IncomingRideRequestList
+              requests={availableRequests}
+              nowMs={nowTick}
+              getRemainingLabel={getIncomingRequestRemainingLabel}
+              onSelect={handleSelectIncomingRequest}
+              onAccept={handleAcceptRequest}
+              acceptingRideId={acceptingRideId}
+            />
+          </View>
         ) : !showRideRequestModal && primaryIncomingRequest ? (
           <View
             className="absolute left-0 right-0 justify-end"
@@ -2178,12 +2211,13 @@ const DriverHomeScreen = ({ navigation, route }) => {
           >
             {availableRequests.length > 1 ? (
               <TouchableOpacity
-                onPress={cycleToNextIncomingRequest}
-                className="mb-3 self-center rounded-full bg-white/95 px-4 py-2"
+                onPress={() => setRequestListMode(true)}
+                className="mb-3 flex-row items-center self-center rounded-full bg-white/95 px-4 py-2"
                 style={{ borderWidth: 1, borderColor: '#d7dfec' }}
               >
-                <Text className="text-xs font-bold uppercase tracking-[1px] text-[#2f73c9]">
-                  Request {activeIncomingRequestIndex + 1} of {availableRequests.length} • Tap for next
+                <Ionicons name="list" size={14} color="#2f73c9" />
+                <Text className="ml-1.5 text-xs font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                  All requests ({availableRequests.length})
                 </Text>
               </TouchableOpacity>
             ) : null}
@@ -2362,6 +2396,29 @@ const DriverHomeScreen = ({ navigation, route }) => {
               paddingBottom: Math.max(insets.bottom, 16) + 28,
             }}
           >
+            {showIncomingRequestList ? (
+              <IncomingRideRequestList
+                requests={availableRequests}
+                nowMs={nowTick}
+                getRemainingLabel={getIncomingRequestRemainingLabel}
+                onSelect={handleSelectIncomingRequest}
+                onAccept={handleAcceptRequest}
+                acceptingRideId={acceptingRideId}
+                style={{ maxHeight: '90%', borderRadius: 28 }}
+              />
+            ) : (
+              <>
+              {availableRequests.length > 1 ? (
+                <TouchableOpacity
+                  onPress={() => setRequestListMode(true)}
+                  className="mb-3 flex-row items-center self-center rounded-full bg-white px-4 py-2"
+                >
+                  <Ionicons name="arrow-back" size={14} color="#2f73c9" />
+                  <Text className="ml-1.5 text-xs font-bold uppercase tracking-[1px] text-[#2f73c9]">
+                    All requests ({availableRequests.length})
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               <View
                 className="overflow-hidden rounded-[28px] bg-white"
                 style={{ maxHeight: '90%' }}
@@ -2539,6 +2596,8 @@ const DriverHomeScreen = ({ navigation, route }) => {
                   </TouchableOpacity>
                 </View>
               </View>
+              </>
+            )}
             </View>
         </View>
       </Modal>

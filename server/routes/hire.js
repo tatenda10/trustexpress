@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { query, withTransaction } from '../db/connection.js';
 import { getClerkUserById, toAppUser, normalizeRole } from '../lib/clerk-user.js';
-import { recordRoleChangeAudit, upsertClerkUserToMysql } from '../lib/user-sync.js';
+import { recordRoleChangeAudit, syncClerkUserForRequest } from '../lib/user-sync.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { emitHireBookingUpdated, emitHireQuoteToPassenger, emitHireRequestToDriver, emitToUser } from '../lib/realtime.js';
 import {
@@ -79,7 +79,7 @@ async function requireDriver(req, res) {
     [req.userId]
   );
   const appUser = toAppUser(user);
-  await upsertClerkUserToMysql(user);
+  await syncClerkUserForRequest(user);
   const isDriver = normalizeRole(appUser.role) === 'driver'
     || normalizeRole(existingUser?.role) === 'driver';
   if (normalizeRole(existingUser?.role) === 'driver' && normalizeRole(appUser.role) !== 'driver') {
@@ -108,7 +108,7 @@ async function requireDriver(req, res) {
 
 async function requirePassenger(req, res) {
   const user = await getClerkUserById(req.userId);
-  await upsertClerkUserToMysql(user);
+  await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   const role = normalizeRole(appUser.role);
   // Drivers can also book hire as consumers.

@@ -27,21 +27,24 @@ const DriverEmailLoginScreen = ({ navigation }) => {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   const ensureDriverRole = async () => {
-    const token = await getToken();
-    if (!token) return true;
-    const profile = await getMe(token);
-    if (profile?.role !== 'driver') {
-      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
-      await signOut().catch(() => {});
-      Alert.alert(
-        'This account is not registered as a driver',
-        profile?.role === 'passenger'
-          ? 'This email is already registered as a passenger account. Use the passenger app or a different email for driver login.'
-          : 'This account is not registered as a driver. Please create a driver account first.',
-      );
-      return false;
+    try {
+      const token = await getToken();
+      if (!token) return true;
+      const profile = await getMe(token);
+      if (profile?.role === 'driver') return true;
+      if (profile?.role === 'passenger') {
+        await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
+        await signOut().catch(() => {});
+        Alert.alert(
+          'This account is not registered as a driver',
+          'This email is already registered as a passenger account. Use the passenger app or a different email for driver login.',
+        );
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
     }
-    return true;
   };
 
   const handleForgotPassword = async () => {

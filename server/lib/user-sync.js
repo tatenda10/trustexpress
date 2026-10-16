@@ -135,3 +135,23 @@ export async function upsertClerkUserToMysql(clerkUser, options = {}) {
   await upsertAppUserToMysql(appUser, options);
   return appUser;
 }
+
+const REQUEST_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+const lastRequestSyncByUser = new Map();
+
+/** For per-request auth guards: skips the MySQL write when the Clerk user has not changed recently. */
+export async function syncClerkUserForRequest(clerkUser) {
+  if (!clerkUser?.id) return null;
+  const marker = String(clerkUser.updatedAt || '');
+  const previous = lastRequestSyncByUser.get(clerkUser.id);
+  if (
+    previous
+    && previous.marker === marker
+    && Date.now() - previous.syncedAt < REQUEST_SYNC_INTERVAL_MS
+  ) {
+    return toAppUser(clerkUser);
+  }
+  const appUser = await upsertClerkUserToMysql(clerkUser);
+  lastRequestSyncByUser.set(clerkUser.id, { marker, syncedAt: Date.now() });
+  return appUser;
+}

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -20,11 +20,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AuthFeedbackModal from '../../../components/AuthFeedbackModal';
 import { getAuthErrorContent } from '../../../services/authFeedback';
 import { useAgentInvite } from '../../../context/AgentInviteContext';
+import {
+  BIOMETRIC_LABEL,
+  clearBiometricCredentials,
+  getBiometricAccount,
+  isWrongPasswordError,
+  offerBiometricSignIn,
+  readBiometricCredentials,
+} from '../../../services/biometricSignIn';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HEADER_IMAGE_HEIGHT = Dimensions.get('window').height * 0.36;
 const AUTH_HEADER_IMAGE = require('../../../assets/everyday-driving.jpg');
 const ROLE_STORAGE_KEY = 'trust_express_role';
+const BIOMETRIC_ROLE = 'driver';
 
 const DriverLoginScreen = ({ navigation }) => {
   const { signIn, setActive, isLoaded } = useSignIn();
@@ -47,6 +56,8 @@ const DriverLoginScreen = ({ navigation }) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [modalState, setModalState] = useState({ visible: false, title: '', message: '', tone: 'error' });
+  const [biometricAccount, setBiometricAccount] = useState(null);
+  const pendingBiometricOfferRef = useRef(null);
   const headerHeight = insets.top + 48;
   const bottomPadding = Math.max(insets.bottom, 24);
 
@@ -58,24 +69,79 @@ const DriverLoginScreen = ({ navigation }) => {
   };
 
   const ensureDriverRole = async () => {
-    const token = await getToken();
-    if (!token) return true;
-    const profile = await getMe(token);
-    if (profile?.role !== 'driver') {
-      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
-      await signOut().catch(() => {});
-      setModalState({
-        visible: true,
-        title: 'This account is not registered as a driver',
-        message:
-          profile?.role === 'passenger'
-            ? 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.'
-            : 'This account is not registered as a driver. Please create a driver account first.',
-        tone: 'error',
-      });
-      return false;
+    try {
+      const token = await getToken();
+      if (!token) return true;
+      const profile = await getMe(token);
+      if (profile?.role === 'driver') return true;
+      if (profile?.role === 'passenger') {
+        await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
+        await signOut().catch(() => {});
+        setModalState({
+          visible: true,
+          title: 'This account is not registered as a driver',
+          message: 'This email is already registered as a passenger account. Please use the passenger login side or use a different email for a driver account.',
+          tone: 'error',
+        });
+        return false;
+      }
+      // Unknown/missing role: keep the session; registerUser / bootstrap can repair it.
+      return true;
+    } catch {
+      // Network blips after a successful Clerk sign-in must not force logout.
+      return true;
     }
-    return true;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    getBiometricAccount(BIOMETRIC_ROLE).then((account) => {
+      if (cancelled) return;
+      setBiometricAccount(account);
+      if (account) setEmailOrPhone((current) => current || account);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const signInWithPassword = async (identifier, secret, { fromBiometric = false } = {}) => {
+    const result = await signIn.create({
+      strategy: 'password',
+      identifier: identifier.trim(),
+      password: secret,
+    });
+
+    if (result.status === 'complete') {
+      if (!fromBiometric) await offerBiometricSignIn(BIOMETRIC_ROLE, identifier, secret);
+      await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
+      await setActive({ session: result.createdSessionId });
+      try {
+        const token = await getToken();
+        if (token) {
+          await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
+        }
+      } catch (e) {}
+      await ensureDriverRole();
+      return;
+    }
+
+    if (result.status === 'needs_second_factor') {
+      const emailFactor = result.supportedSecondFactors?.find((factor) => factor.strategy === 'email_code');
+      if (emailFactor?.emailAddressId) {
+        await signIn.prepareSecondFactor({ strategy: 'email_code', emailAddressId: emailFactor.emailAddressId });
+        pendingBiometricOfferRef.current = fromBiometric ? null : { identifier, password: secret };
+        setShowEmailCode(true);
+        return;
+      }
+    }
+
+    setModalState({
+      visible: true,
+      title: 'Login not completed',
+      message: 'We could not finish signing you in. Please try again in a moment.',
+      tone: 'error',
+    });
   };
 
   const handleLogin = async () => {
@@ -92,42 +158,46 @@ const DriverLoginScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
-      const result = await signIn.create({
-        strategy: 'password',
-        identifier: emailOrPhone.trim(),
-        password,
-      });
+      await signInWithPassword(emailOrPhone, password);
+    } catch (error) {
+      showErrorModal(error, 'login');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      if (result.status === 'complete') {
-        await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
-        await setActive({ session: result.createdSessionId });
-        try {
-          const token = await getToken();
-          if (token) {
-            await registerUser(token, { role: 'driver', email: null, inviteToken: inviteToken || undefined });
-          }
-        } catch (e) {}
-        const allowed = await ensureDriverRole();
-        if (!allowed) return;
-        return;
-      }
-
-      if (result.status === 'needs_second_factor') {
-        const emailFactor = result.supportedSecondFactors?.find((factor) => factor.strategy === 'email_code');
-        if (emailFactor?.emailAddressId) {
-          await signIn.prepareSecondFactor({ strategy: 'email_code', emailAddressId: emailFactor.emailAddressId });
-          setShowEmailCode(true);
-          return;
-        }
-      }
-
+  const handleBiometricLogin = async () => {
+    if (!isLoaded || loading) return;
+    let credentials;
+    try {
+      credentials = await readBiometricCredentials(BIOMETRIC_ROLE);
+    } catch {
+      setBiometricAccount(null);
       setModalState({
         visible: true,
-        title: 'Login not completed',
-        message: 'We could not finish signing you in. Please try again in a moment.',
-        tone: 'error',
+        title: `${BIOMETRIC_LABEL} sign-in reset`,
+        message: `Sign in with your password once to turn ${BIOMETRIC_LABEL} sign-in back on.`,
+        tone: 'info',
       });
+      return;
+    }
+    if (!credentials) return;
+
+    setLoading(true);
+    try {
+      await signInWithPassword(credentials.identifier, credentials.password, { fromBiometric: true });
     } catch (error) {
+      if (isWrongPasswordError(error)) {
+        await clearBiometricCredentials(BIOMETRIC_ROLE);
+        setBiometricAccount(null);
+        setModalState({
+          visible: true,
+          title: 'Password changed',
+          message: `Your saved login no longer works. Sign in with your password to turn ${BIOMETRIC_LABEL} sign-in back on.`,
+          tone: 'error',
+        });
+        return;
+      }
       showErrorModal(error, 'login');
     } finally {
       setLoading(false);
@@ -149,6 +219,9 @@ const DriverLoginScreen = ({ navigation }) => {
     try {
       const result = await signIn.attemptSecondFactor({ strategy: 'email_code', code: code.trim() });
       if (result.status === 'complete') {
+        const pendingOffer = pendingBiometricOfferRef.current;
+        pendingBiometricOfferRef.current = null;
+        if (pendingOffer) await offerBiometricSignIn(BIOMETRIC_ROLE, pendingOffer.identifier, pendingOffer.password);
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActive({ session: result.createdSessionId });
         try {
@@ -241,6 +314,8 @@ const DriverLoginScreen = ({ navigation }) => {
       });
 
       if (result.status === 'complete') {
+        await clearBiometricCredentials(BIOMETRIC_ROLE);
+        await offerBiometricSignIn(BIOMETRIC_ROLE, emailOrPhone, newPassword);
         await AsyncStorage.setItem(ROLE_STORAGE_KEY, 'driver');
         await setActive({ session: result.createdSessionId });
         try {
@@ -573,6 +648,20 @@ const DriverLoginScreen = ({ navigation }) => {
                   </>
                 )}
               </TouchableOpacity>
+
+              {biometricAccount ? (
+                <TouchableOpacity
+                  className={`items-center rounded-xl border border-gray-200 bg-white p-4 ${loading ? 'opacity-60' : ''}`}
+                  onPress={handleBiometricLogin}
+                  disabled={loading}
+                >
+                  <View className="flex-row items-center gap-2">
+                    <Ionicons name="finger-print" size={22} color="#374151" />
+                    <Text className="text-base font-semibold text-gray-900">Sign in with {BIOMETRIC_LABEL}</Text>
+                  </View>
+                  <Text className="mt-1 text-xs text-gray-500" numberOfLines={1}>{biometricAccount}</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
           {/*

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/clerk-user.js';
-import { upsertClerkUserToMysql } from '../lib/user-sync.js';
+import { syncClerkUserForRequest } from '../lib/user-sync.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { loadVehicleCatalog } from '../lib/vehicle-catalog.js';
@@ -72,7 +72,8 @@ const DEADLOCK_RETRY_DELAY_MS = 120;
 const DEADLOCK_RETRY_ATTEMPTS = 3;
 const DRIVER_ONLINE_STALE_DAYS = 1;
 const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
-const DRIVER_REQUEST_RADIUS_KM = 5;
+// Must cover the widest radius rides.js expands offers to, or expanded offers get filtered out here.
+const DRIVER_REQUEST_RADIUS_KM = 12;
 const DEBUG_DRIVER_REQUESTS = String(process.env.DEBUG_DRIVER_REQUESTS || '').trim().toLowerCase() === 'true';
 /** How long an open ride request stays accept-able for drivers (incoming request countdown). */
 const OPEN_REQUEST_TTL_SECONDS = Math.max(120, Math.min(Number(DRIVER_PENDING_OFFER_TTL_SECONDS) || 180, 600));
@@ -134,7 +135,9 @@ function getPassengerDisplayName(value) {
   return raw;
 }
 
-async function notifyPassengerRideStatus(passengerUserId, { title, body, data = {} } = {}) {
+const PASSENGER_RIDE_ALERT_CHANNEL_ID = 'passenger-ride-alerts-v1';
+
+async function notifyPassengerRideStatus(passengerUserId, { title, body, data = {}, channelId = null } = {}) {
   if (!passengerUserId || String(passengerUserId).startsWith('dispatch:') || !title || !body) return;
   try {
     const passengerUser = await getClerkUserById(passengerUserId);
@@ -146,6 +149,7 @@ async function notifyPassengerRideStatus(passengerUserId, { title, body, data = 
       title,
       body,
       data,
+      ...(channelId ? { channelId } : {}),
     });
   } catch (error) {
     console.error('Failed to send passenger ride notification', error);
@@ -222,7 +226,7 @@ async function cleanupStaleActiveRides(driverUserId = null) {
 
 async function requireDriver(req, res) {
   const user = await getClerkUserById(req.userId);
-  await upsertClerkUserToMysql(user);
+  await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   if (normalizeRole(appUser.role) !== 'driver') {
     res.status(403).json({ error: 'Not a driver' });
@@ -921,6 +925,28 @@ router.post('/fcm-token', requireAuth, async (req, res) => {
   }
 });
 
+const DRIVER_LAST_SEEN_TOUCH_INTERVAL_MS = 30 * 1000;
+const driverLastSeenTouchedAt = new Map();
+
+/** Request polling proves the app is open even when a parked driver sends no location updates. */
+function touchDriverLastSeen(driverUserId) {
+  const key = String(driverUserId || '');
+  if (!key) return;
+  const now = Date.now();
+  if (now - (driverLastSeenTouchedAt.get(key) || 0) < DRIVER_LAST_SEEN_TOUCH_INTERVAL_MS) return;
+  driverLastSeenTouchedAt.set(key, now);
+  query(
+    `UPDATE driver_availability
+     SET last_seen_at = CURRENT_TIMESTAMP
+     WHERE driver_user_id = ?
+       AND is_online = 1`,
+    [key]
+  ).catch((error) => {
+    driverLastSeenTouchedAt.delete(key);
+    console.error('[drivers.ride-requests] last seen touch failed', error?.message || error);
+  });
+}
+
 router.get('/ride-requests', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
@@ -951,6 +977,10 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
        LIMIT 1`,
       [req.userId]
     );
+
+    if (availability?.is_online) {
+      touchDriverLastSeen(req.userId);
+    }
 
     if (!availability || !availability.is_online || availability.current_lat === null || availability.current_lng === null) {
       debugDriverRequests('empty:availability', {
@@ -1073,8 +1103,34 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       [req.userId]
     );
 
+    const passengerRatingById = new Map();
+    const passengerIds = [...new Set(rows.map((row) => row.passenger_user_id).filter(Boolean))];
+    if (passengerIds.length) {
+      try {
+        const ratingRows = await query(
+          `SELECT passenger_user_id,
+                  AVG(driver_passenger_rating) AS avg_rating,
+                  COUNT(driver_passenger_rating) AS rating_count
+           FROM ride_requests
+           WHERE passenger_user_id IN (${passengerIds.map(() => '?').join(', ')})
+             AND driver_passenger_rating IS NOT NULL
+           GROUP BY passenger_user_id`,
+          passengerIds
+        );
+        ratingRows.forEach((ratingRow) => {
+          passengerRatingById.set(ratingRow.passenger_user_id, {
+            rating: Number.isFinite(Number(ratingRow.avg_rating)) ? Number(Number(ratingRow.avg_rating).toFixed(2)) : null,
+            ratingCount: Number(ratingRow.rating_count || 0),
+          });
+        });
+      } catch (ratingError) {
+        console.error('[drivers.ride-requests] passenger rating lookup failed', ratingError?.message || ratingError);
+      }
+    }
+
     const baseRequests = await Promise.all(rows.map(async (row) => {
       const passengerProfileImageUrl = await getUserProfileImageUrl(row.passenger_user_id);
+      const passengerRating = passengerRatingById.get(row.passenger_user_id) || { rating: null, ratingCount: 0 };
       const pickupCoordinate = {
         latitude: Number(row.pickup_lat),
         longitude: Number(row.pickup_lng),
@@ -1100,6 +1156,8 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         passengerName: getPassengerDisplayName(row.passenger_name),
         passengerPhone: row.passenger_phone || null,
         passengerCount: Number(row.passenger_count || 1),
+        passengerRating: passengerRating.rating,
+        passengerRatingCount: passengerRating.ratingCount,
         passengerProfile: {
           firstName: null,
           lastName: null,
@@ -1686,9 +1744,10 @@ router.patch('/current-ride/:rideRequestId/arrived', requireAuth, async (req, re
         driverUserId: req.userId,
         ...passengerSafetyPinPayload,
       });
-      await notifyPassengerRideStatus(ride.passenger_user_id, {
+      notifyPassengerRideStatus(ride.passenger_user_id, {
         title: 'Driver has arrived',
         body: 'Your driver is waiting at the pickup point.',
+        channelId: PASSENGER_RIDE_ALERT_CHANNEL_ID,
         data: {
           type: 'ride_status',
           status: 'driver_arrived',

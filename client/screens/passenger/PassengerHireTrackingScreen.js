@@ -11,6 +11,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { hireContactHref, isLiveHireBooking } from '../../constants/hire';
 import { paymentMethodLabel } from '../../constants/payment';
 import { connectRealtime } from '../../realtime';
+import { PASSENGER_ARRIVAL_VIBRATION_PATTERN } from '../../notifications';
 import {
   PASSENGER_RIDE_MAP_MAX_DELTA,
   PASSENGER_RIDE_MAP_MIN_DELTA,
@@ -69,7 +70,7 @@ export default function PassengerHireTrackingScreen({ navigation, route }) {
     if (!announcementKey || lastArrivalAnnouncementRef.current === announcementKey) return undefined;
     lastArrivalAnnouncementRef.current = announcementKey;
     try {
-      Vibration.vibrate([0, 450, 180, 450], false);
+      Vibration.vibrate(PASSENGER_ARRIVAL_VIBRATION_PATTERN, false);
     } catch (_) {}
     try {
       Speech.stop();

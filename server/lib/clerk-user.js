@@ -2,7 +2,35 @@ import { getClerkClient } from './clerk-client.js';
 
 // Short TTL so driver approval from admin is visible soon after refetch (e.g. multi-instance).
 const USER_CACHE_TTL_MS = 15 * 1000;
+// Past the TTL, serve the cached user immediately and refresh in the background, up to this age.
+const USER_CACHE_MAX_STALE_MS = 10 * 60 * 1000;
 const clerkUserCache = new Map();
+const clerkUserInflight = new Map();
+
+function fetchClerkUser(userId) {
+  const existing = clerkUserInflight.get(userId);
+  if (existing) return existing;
+  const request = getClerkClient().users.getUser(userId)
+    .then((user) => {
+      if (clerkUserInflight.get(userId) === request) {
+        clerkUserCache.set(userId, { user, cachedAt: Date.now() });
+      }
+      return user;
+    })
+    .finally(() => {
+      if (clerkUserInflight.get(userId) === request) {
+        clerkUserInflight.delete(userId);
+      }
+    });
+  clerkUserInflight.set(userId, request);
+  return request;
+}
+
+function invalidateClerkUserCache(userId) {
+  const key = String(userId || '').trim();
+  clerkUserCache.delete(key);
+  clerkUserInflight.delete(key);
+}
 
 export function normalizeRole(value) {
   return value === 'driver' ? 'driver' : 'passenger';
@@ -98,18 +126,24 @@ export async function getClerkUserById(userId, opts = {}) {
     return null;
   }
   const skipCache = opts.skipCache === true;
-  const cached = clerkUserCache.get(userId);
-  if (!skipCache && cached && (Date.now() - cached.cachedAt) < USER_CACHE_TTL_MS) {
+  if (skipCache) {
+    return fetchClerkUser(normalizedUserId);
+  }
+
+  const cached = clerkUserCache.get(normalizedUserId);
+  const ageMs = cached ? Date.now() - cached.cachedAt : Infinity;
+  if (ageMs < USER_CACHE_TTL_MS) {
+    return cached.user;
+  }
+  if (ageMs < USER_CACHE_MAX_STALE_MS) {
+    fetchClerkUser(normalizedUserId).catch(() => {});
     return cached.user;
   }
 
-  const clerkClient = getClerkClient();
   try {
-    const user = await clerkClient.users.getUser(userId);
-    if (!skipCache) clerkUserCache.set(userId, { user, cachedAt: Date.now() });
-    return user;
+    return await fetchClerkUser(normalizedUserId);
   } catch (error) {
-    if (cached && !skipCache) {
+    if (cached) {
       return cached.user;
     }
     throw error;
@@ -124,7 +158,7 @@ export async function setRoleForUser(userId, role) {
       role: normalizedRole,
     },
   });
-  clerkUserCache.delete(userId);
+  invalidateClerkUserCache(userId);
   return normalizedRole;
 }
 
@@ -140,7 +174,7 @@ export async function mergePrivateMetadata(userId, patch) {
     privateMetadata: nextPrivate,
   });
 
-  clerkUserCache.delete(userId);
+  invalidateClerkUserCache(userId);
 
   return nextPrivate;
 }
@@ -232,7 +266,7 @@ export async function clearRecruitmentPrivateMetadata(userId) {
       privateMetadata: nextPrivate,
     });
 
-    clerkUserCache.delete(userId);
+    invalidateClerkUserCache(userId);
 
     return { cleared: true, privateMetadata: nextPrivate };
   } catch (error) {

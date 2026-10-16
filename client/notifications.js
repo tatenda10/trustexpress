@@ -16,6 +16,9 @@ const DISTANT_RIDE_CHANNEL_ID = 'ride-requests-distant-sound-v6';
 const NEARBY_RIDE_CHANNEL_ID = 'ride-requests-nearby-sound-v6';
 const DISTANT_RIDE_SILENT_CHANNEL_ID = 'ride-requests-distant-silent-v6';
 const NEARBY_RIDE_SILENT_CHANNEL_ID = 'ride-requests-nearby-silent-v6';
+// Must match PASSENGER_RIDE_ALERT_CHANNEL_ID on the server.
+const PASSENGER_RIDE_ALERT_CHANNEL_ID = 'passenger-ride-alerts-v1';
+export const PASSENGER_ARRIVAL_VIBRATION_PATTERN = [0, 700, 250, 700, 250, 700];
 const RIDE_REQUEST_NOTIFICATION_TYPE = 'driver_new_ride_request';
 
 const rideRequestNotificationIdsByRide = new Map();
@@ -93,11 +96,12 @@ export async function clearRideRequestNotifications({ rideRequestId } = {}) {
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
     const data = notification?.request?.content?.data || {};
+    const isDriverArrivedAlert = String(data?.type || '') === 'ride_status'
+      && String(data?.status || '') === 'driver_arrived';
     return {
-      // Keep only the normal OS foreground banner behavior.
       shouldShowBanner: true,
       shouldShowList: true,
-      shouldPlaySound: false,
+      shouldPlaySound: isDriverArrivedAlert,
       shouldSetBadge: false,
     };
   },
@@ -182,6 +186,15 @@ export async function registerForPushNotificationsAsync() {
         sound: null,
         vibrationPattern: [0],
         lightColor: '#2f73c9',
+      });
+      await Notifications.setNotificationChannelAsync(PASSENGER_RIDE_ALERT_CHANNEL_ID, {
+        name: 'Driver arrival alerts',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+        enableVibrate: true,
+        vibrationPattern: PASSENGER_ARRIVAL_VIBRATION_PATTERN,
+        lightColor: '#2f73c9',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
     }
 

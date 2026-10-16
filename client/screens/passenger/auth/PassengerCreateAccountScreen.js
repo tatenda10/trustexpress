@@ -65,24 +65,26 @@ const PassengerCreateAccountScreen = ({ navigation }) => {
   };
 
   const ensurePassengerRole = async () => {
-    const token = await getToken();
-    if (!token) return true;
-    const profile = await getMe(token);
-    if (profile?.role !== 'passenger') {
-      await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
-      await signOut().catch(() => {});
-      setModalState({
-        visible: true,
-        title: 'This account is not registered as a passenger',
-        message:
-          profile?.role === 'driver'
-            ? 'This email is already registered as a driver account. Please use the driver login side or use a different email for a passenger account.'
-            : 'This account is not registered as a passenger. Please create a passenger account first.',
-        tone: 'error',
-      });
-      return false;
+    try {
+      const token = await getToken();
+      if (!token) return true;
+      const profile = await getMe(token);
+      if (profile?.role === 'passenger') return true;
+      if (profile?.role === 'driver') {
+        await AsyncStorage.removeItem(ROLE_STORAGE_KEY).catch(() => {});
+        await signOut().catch(() => {});
+        setModalState({
+          visible: true,
+          title: 'This account is not registered as a passenger',
+          message: 'This email is already registered as a driver account. Please use the driver login side or use a different email for a passenger account.',
+          tone: 'error',
+        });
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
     }
-    return true;
   };
 
   const buildReferralPayload = () => {
