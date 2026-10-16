@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { deleteMe, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import BiometricSignInSetting from '../../components/BiometricSignInSetting';
 
 const PassengerAccountScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
@@ -519,6 +520,11 @@ const PassengerAccountScreen = ({ navigation }) => {
                 ) : null}
               </View>
             ))}
+          </View>
+
+          <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Security</Text>
+          <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
+            <BiometricSignInSetting role="passenger" />
           </View>
 
           <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Safety</Text>

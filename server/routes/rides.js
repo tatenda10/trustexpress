@@ -90,7 +90,7 @@ const RIDE_OFFER_EXPANSION_INTERVAL_MS = 10 * 1000;
 const RIDE_OFFER_WAVE_MIN_GAP_SECONDS = 15;
 const RIDE_OFFER_WAVE_BATCH_SIZE = MAX_DRIVER_OFFERS;
 const RIDE_OFFER_MAX_TOTAL_DRIVERS = MAX_DRIVER_OFFERS;
-const RIDE_OFFER_EXPANSION_WINDOW_MINUTES = 10;
+const RIDE_OFFER_EXPANSION_WINDOW_MINUTES = 15;
 const RIDE_OFFER_RADIUS_STEPS = [
   { afterSeconds: 0, radiusKm: DRIVER_REQUEST_RADIUS_KM },
 ];
@@ -2934,12 +2934,18 @@ async function expandOfferForRide(ride) {
   if (elapsedSeconds < RIDE_OFFER_WAVE_MIN_GAP_SECONDS) return;
 
   const offeredRows = await query(
-    `SELECT driver_user_id
+    `SELECT driver_user_id, status
      FROM ride_request_driver_responses
      WHERE ride_request_id = ?`,
     [rideRequestId]
   );
-  const offeredIds = offeredRows.map((row) => String(row.driver_user_id));
+  // Expired offers are re-sent: the passenger keeps searching long after a single offer's countdown ends.
+  const expiredIds = new Set(
+    offeredRows.filter((row) => row.status === 'expired').map((row) => String(row.driver_user_id))
+  );
+  const offeredIds = offeredRows
+    .filter((row) => row.status !== 'expired')
+    .map((row) => String(row.driver_user_id));
   const remainingCapacity = RIDE_OFFER_MAX_TOTAL_DRIVERS - offeredIds.length;
   if (remainingCapacity <= 0) return;
 
@@ -3001,7 +3007,8 @@ async function expandOfferForRide(ride) {
     elapsedSeconds,
     radiusKm,
     previouslyOffered: offeredIds.length,
-    newDriverIds: nextDrivers.map((driver) => driver.id),
+    newDriverIds: nextDrivers.filter((driver) => !expiredIds.has(String(driver.id))).map((driver) => driver.id),
+    reofferedDriverIds: nextDrivers.filter((driver) => expiredIds.has(String(driver.id))).map((driver) => driver.id),
   });
 
   notifyDriversAboutRideRequest({
@@ -3028,6 +3035,11 @@ export async function expandOpenRideOffers() {
   if (rideOfferExpansionRunning) return;
   rideOfferExpansionRunning = true;
   try {
+    // Marks timed-out pending offers as expired so they can be re-offered below.
+    await refreshOpenRideOffers().catch((error) => {
+      console.error('[rides.offerExpansion] offer refresh failed', error?.message || error);
+    });
+
     const openRides = await query(
       `SELECT
          r.id,

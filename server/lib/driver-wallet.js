@@ -1099,6 +1099,14 @@ export async function creditCaptainPromotionalFloat({
   });
 }
 
+/**
+ * uk_driver_wallet_commission_source allows one row per (driver, source_type, source_id), so when a fee
+ * is split between promotional and cash balance the promo row needs its own source_id.
+ */
+function promoCommissionSourceId(sourceId) {
+  return `${sourceId}:promo`;
+}
+
 export async function deductCommissionForCompletedRide({
   driverUserId,
   rideRequestId,
@@ -1157,9 +1165,9 @@ export async function deductCommissionForCompletedRide({
        FROM driver_wallet_transactions
        WHERE driver_user_id = ?
          AND source_type = 'trip_commission'
-         AND source_id = ?
+         AND source_id IN (?, ?)
        ORDER BY id ASC`,
-      [driverUserId, String(rideRequestId)]
+      [driverUserId, String(rideRequestId), promoCommissionSourceId(rideRequestId)]
     );
     if (existingRows.length > 0) {
       const commissionAmount = existingRows.reduce(
@@ -1216,7 +1224,7 @@ export async function deductCommissionForCompletedRide({
           driverUserId,
           normalizeMoney(-promoUsed),
           currency,
-          String(rideRequestId),
+          promoCommissionSourceId(rideRequestId),
           Number(rideRequestId),
           passengerUserId,
           passengerName,
@@ -1343,9 +1351,9 @@ export async function deductCommissionForCompletedHire({
        FROM driver_wallet_transactions
        WHERE driver_user_id = ?
          AND source_type = ?
-         AND source_id = ?
+         AND source_id IN (?, ?)
        ORDER BY id ASC`,
-      [driverUserId, HIRE_COMMISSION_SOURCE_TYPE, String(hireBookingId)]
+      [driverUserId, HIRE_COMMISSION_SOURCE_TYPE, String(hireBookingId), promoCommissionSourceId(hireBookingId)]
     );
     if (existingRows.length > 0) {
       const commissionAmount = existingRows.reduce(
@@ -1406,7 +1414,7 @@ export async function deductCommissionForCompletedHire({
           normalizeMoney(-promoUsed),
           currency,
           HIRE_COMMISSION_SOURCE_TYPE,
-          String(hireBookingId),
+          promoCommissionSourceId(hireBookingId),
           passengerUserId,
           passengerName,
           fareAmount,

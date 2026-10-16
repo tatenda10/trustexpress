@@ -2071,17 +2071,28 @@ router.patch('/current-ride/:rideRequestId/complete', requireAuth, async (req, r
       status: 'completed',
     });
 
-    const commissionResult = await deductCommissionForCompletedRide({
-      driverUserId: req.userId,
-      rideRequestId,
-      tripFareAmount:
-        Number(rideBeforeComplete.final_estimated_amount
-          || rideBeforeComplete.original_estimated_amount
-          || rideBeforeComplete.estimated_amount
-          || 0),
-      passengerUserId: rideBeforeComplete.passenger_user_id || null,
-      passengerName: getPassengerDisplayName(rideBeforeComplete.passenger_name),
-    });
+    // The ride is already completed above; a failed charge here is retried by the commission reconciler.
+    let commissionResult = null;
+    try {
+      commissionResult = await deductCommissionForCompletedRide({
+        driverUserId: req.userId,
+        rideRequestId,
+        tripFareAmount:
+          Number(rideBeforeComplete.final_estimated_amount
+            || rideBeforeComplete.original_estimated_amount
+            || rideBeforeComplete.estimated_amount
+            || 0),
+        passengerUserId: rideBeforeComplete.passenger_user_id || null,
+        passengerName: getPassengerDisplayName(rideBeforeComplete.passenger_name),
+      });
+    } catch (commissionError) {
+      console.error('[ride.commission] charge on complete failed; reconciler will retry', {
+        rideRequestId,
+        driverUserId: req.userId,
+        message: commissionError?.message || String(commissionError),
+        code: commissionError?.code || null,
+      });
+    }
 
     recordCaptainQualifyingRide({
       driverUserId: req.userId,

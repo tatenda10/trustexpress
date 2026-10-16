@@ -710,15 +710,19 @@ const DriverHomeScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     let active = true;
+    let retryTimer = null;
+    let failedAttempts = 0;
 
     const loadAvailability = async () => {
       if (availabilityLoadInFlightRef.current) return;
       availabilityLoadInFlightRef.current = true;
+      let succeeded = false;
       try {
         const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
         const data = await getDriverMe(token, { suppressAuthErrorHandler: true });
         if (!active) return;
+        succeeded = true;
 
         setIsOnline(!!data?.availability?.isOnline);
         setWalletStatus({
@@ -761,17 +765,23 @@ const DriverHomeScreen = ({ navigation, route }) => {
           }
         }
       } catch (error) {
+        // A failed load must not show the driver as offline while the server still has them
+        // online and sending rides; keep retrying until the real state is known.
         if (!active) return;
-        setIsOnline(false);
+        failedAttempts += 1;
       } finally {
         availabilityLoadInFlightRef.current = false;
-        if (active) setLoadingAvailability(false);
+        if (active && !succeeded) {
+          retryTimer = setTimeout(loadAvailability, Math.min(15000, 2000 * failedAttempts));
+        }
+        if (active && (succeeded || failedAttempts >= 3)) setLoadingAvailability(false);
       }
     };
 
     loadAvailability();
     return () => {
       active = false;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, []);
 

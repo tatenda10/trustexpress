@@ -11,6 +11,7 @@ import { getRealtimeUserRoom, setRealtimeServer } from './lib/realtime.js';
 import { buildAuthorityShareTrackingHtml } from './lib/admin-share-page.js';
 import { startDriverWalletTopupReconciler } from './lib/wallet-topup-reconciler.js';
 import { startRideOfferExpansionLoop } from './routes/rides.js';
+import { startRideCommissionReconciler } from './lib/ride-commission-reconciler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT);
@@ -255,4 +256,5 @@ httpServer.listen(PORT, () => {
   console.log(`Trust Express API at http://localhost:${PORT}`);
   startDriverWalletTopupReconciler();
   startRideOfferExpansionLoop();
+  startRideCommissionReconciler();
 });

@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { deleteMe, getApiUrl, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import BiometricSignInSetting from '../../components/BiometricSignInSetting';
 import { getDriverVehicleRoute, isTruckDriver } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
@@ -777,6 +778,11 @@ const DriverAccountScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           ))}
         </View> */}
+
+        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Security</Text>
+        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
+          <BiometricSignInSetting role="driver" />
+        </View>
 
         <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Safety</Text>
         <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
