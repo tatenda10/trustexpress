@@ -70,8 +70,12 @@ function patchMainApplication(contents, androidPackage, language) {
 function overlayModuleSource(androidPackage) {
   return `package ${androidPackage}.overlay;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Handler;
+import android.os.Looper;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
@@ -126,6 +130,14 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
   private String currentTitle = "New ride request";
   private MediaPlayer requestSoundPlayer;
   private String currentBody = "A new ride request has arrived.";
+  private int currentAlertTimeoutSeconds = DEFAULT_ALERT_TIMEOUT_SECONDS;
+  private String lastAlertedRideRequestId = "";
+  private final Handler alertHandler = new Handler(Looper.getMainLooper());
+  private Runnable alertTimeoutRunnable;
+  private BroadcastReceiver screenOffReceiver;
+
+  private static final int DEFAULT_ALERT_TIMEOUT_SECONDS = 30;
+  private static final int MAX_ALERT_TIMEOUT_SECONDS = 45;
 
   private int initialX;
   private int initialY;
@@ -176,6 +188,19 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
     currentDropoffLabel = getMapString(config, "dropoffLabel", "");
     currentFareLabel = getMapString(config, "fareLabel", "");
     currentRideRequestId = getMapString(config, "rideRequestId", "");
+    currentAlertTimeoutSeconds = getAlertTimeoutSeconds(config);
+  }
+
+  private int getAlertTimeoutSeconds(ReadableMap config) {
+    int seconds = DEFAULT_ALERT_TIMEOUT_SECONDS;
+    try {
+      if (config != null && config.hasKey("alertTimeoutSeconds") && !config.isNull("alertTimeoutSeconds")) {
+        seconds = (int) Math.round(config.getDouble("alertTimeoutSeconds"));
+      }
+    } catch (Exception ignored) {
+      seconds = DEFAULT_ALERT_TIMEOUT_SECONDS;
+    }
+    return Math.max(5, Math.min(MAX_ALERT_TIMEOUT_SECONDS, seconds));
   }
 
   private void emitAction(String action) {
@@ -385,14 +410,56 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
       } catch (Exception ignored) {
         alreadyPlaying = false;
       }
-      if (!alreadyPlaying) startRequestAlert();
+      String requestId = currentRideRequestId == null ? "" : currentRideRequestId.trim();
+      boolean isNewRequest = requestId.isEmpty() || !requestId.equals(lastAlertedRideRequestId);
+      if (!alreadyPlaying && isNewRequest) {
+        lastAlertedRideRequestId = requestId;
+        startRequestAlert();
+      }
     } else {
       stopRequestAlert();
     }
   }
 
+  private void scheduleAlertTimeout() {
+    if (alertTimeoutRunnable != null) alertHandler.removeCallbacks(alertTimeoutRunnable);
+    alertTimeoutRunnable = () -> {
+      stopRequestAlert();
+      if ("request".equals(currentVariant) && overlayView instanceof FrameLayout) {
+        applyVariant("online", null);
+      }
+    };
+    alertHandler.postDelayed(alertTimeoutRunnable, currentAlertTimeoutSeconds * 1000L);
+  }
+
+  private void registerScreenOffReceiver() {
+    if (screenOffReceiver != null) return;
+    screenOffReceiver = new BroadcastReceiver() {
+      @Override
+      public void onReceive(Context context, Intent intent) {
+        stopRequestAlert();
+      }
+    };
+    try {
+      reactContext.registerReceiver(screenOffReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
+    } catch (Exception error) {
+      screenOffReceiver = null;
+    }
+  }
+
+  private void unregisterScreenOffReceiver() {
+    if (screenOffReceiver == null) return;
+    try {
+      reactContext.unregisterReceiver(screenOffReceiver);
+    } catch (Exception ignored) {
+    }
+    screenOffReceiver = null;
+  }
+
   private void startRequestAlert() {
     stopRequestAlert();
+    scheduleAlertTimeout();
+    registerScreenOffReceiver();
     try {
       int soundResId = reactContext.getResources().getIdentifier(
         "near_rides",
@@ -442,6 +509,11 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
   }
 
   private void stopRequestAlert() {
+    if (alertTimeoutRunnable != null) {
+      alertHandler.removeCallbacks(alertTimeoutRunnable);
+      alertTimeoutRunnable = null;
+    }
+    unregisterScreenOffReceiver();
     try {
       if (requestSoundPlayer != null) {
         if (requestSoundPlayer.isPlaying()) requestSoundPlayer.stop();
@@ -603,7 +675,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
 
   @Override
   public void onHostResume() {
-    Log.d(TAG, "onHostResume (no-op - overlay managed by JS)");
+    UiThreadUtil.runOnUiThread(() -> stopRequestAlert());
   }
 
   @Override
@@ -722,6 +794,7 @@ public class TrustOverlayModule extends ReactContextBaseJavaModule implements Li
       intent.putExtra("dropoffLabel", getMapString(config, "dropoffLabel", null));
       intent.putExtra("fareLabel", getMapString(config, "fareLabel", null));
       intent.putExtra("rideRequestId", getMapString(config, "rideRequestId", null));
+      intent.putExtra("alertTimeoutSeconds", getAlertTimeoutSeconds(config));
       reactContext.startActivity(intent);
       promise.resolve(true);
     } catch (Exception error) {
@@ -765,7 +838,13 @@ function fullScreenActivitySource(androidPackage) {
   return `package ${androidPackage}.overlay;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.KeyEvent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioAttributes;
@@ -787,6 +866,9 @@ import android.widget.TextView;
 public class RideRequestFullScreenActivity extends Activity {
   private String rideRequestId = "";
   private MediaPlayer requestSoundPlayer;
+  private final Handler alertHandler = new Handler(Looper.getMainLooper());
+  private Runnable alertTimeoutRunnable;
+  private BroadcastReceiver screenOffReceiver;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -911,10 +993,59 @@ public class RideRequestFullScreenActivity extends Activity {
 
     setContentView(root);
     startRequestAlert();
+
+    int timeoutSeconds = Math.max(5, Math.min(45, getIntent().getIntExtra("alertTimeoutSeconds", 30)));
+    alertTimeoutRunnable = () -> {
+      stopRequestAlert();
+      finish();
+    };
+    alertHandler.postDelayed(alertTimeoutRunnable, timeoutSeconds * 1000L);
+
+    screenOffReceiver = new BroadcastReceiver() {
+      @Override
+      public void onReceive(Context context, Intent intent) {
+        stopRequestAlert();
+      }
+    };
+    try {
+      registerReceiver(screenOffReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
+    } catch (Exception error) {
+      screenOffReceiver = null;
+    }
+  }
+
+  @Override
+  public boolean onKeyDown(int keyCode, KeyEvent event) {
+    if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+      stopRequestAlert();
+      return true;
+    }
+    return super.onKeyDown(keyCode, event);
+  }
+
+  @Override
+  protected void onUserLeaveHint() {
+    stopRequestAlert();
+    finish();
+    super.onUserLeaveHint();
+  }
+
+  @Override
+  public void onBackPressed() {
+    stopRequestAlert();
+    super.onBackPressed();
   }
 
   @Override
   protected void onDestroy() {
+    if (alertTimeoutRunnable != null) alertHandler.removeCallbacks(alertTimeoutRunnable);
+    if (screenOffReceiver != null) {
+      try {
+        unregisterReceiver(screenOffReceiver);
+      } catch (Exception ignored) {
+      }
+      screenOffReceiver = null;
+    }
     stopRequestAlert();
     super.onDestroy();
   }

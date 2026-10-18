@@ -1,8 +1,5 @@
-import { verifyToken } from '@clerk/backend';
-import { query } from '../db/connection.js';
 import { assertNoActiveRestriction, restrictionErrorResponse } from '../lib/account-restrictions.js';
-
-const ENFORCE_SINGLE_SESSION = String(process.env.ENFORCE_SINGLE_SESSION || 'false').toLowerCase() === 'true';
+import { isSessionActive, verifyJwt } from '../lib/auth/tokens.js';
 
 function getTokenFromRequest(req) {
   const authHeader = req.headers.authorization;
@@ -12,77 +9,75 @@ function getTokenFromRequest(req) {
   return null;
 }
 
+let legacyVerifyToken = null;
+
+/** Old app versions still send Clerk session tokens; accepted only while CLERK_SECRET_KEY is set. */
+async function verifyLegacyClerkToken(token) {
+  const secretKey = String(process.env.CLERK_SECRET_KEY || '').trim();
+  if (!secretKey) return null;
+  if (!legacyVerifyToken) {
+    ({ verifyToken: legacyVerifyToken } = await import('@clerk/backend'));
+  }
+  try {
+    const payload = await legacyVerifyToken(token, { secretKey });
+    return payload?.sub ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function authError(message, code, status = 401) {
+  return Object.assign(new Error(message), { status, code });
+}
+
+/**
+ * Resolves a bearer token to { userId, payload }. Throws an error with .status/.code when the
+ * token is missing, invalid, expired, or its session has ended.
+ */
+export async function verifyAuthToken(token) {
+  if (!token) throw authError('Missing or invalid authorization', 'TOKEN_MISSING');
+
+  let payload;
+  try {
+    payload = verifyJwt(token, 'access');
+  } catch (error) {
+    throw authError('Invalid or expired token', error?.code === 'TOKEN_EXPIRED' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID');
+  }
+
+  if (payload) {
+    let active;
+    try {
+      active = await isSessionActive(payload.sid);
+    } catch (error) {
+      console.error('[auth] session check failed', error?.message || error);
+      throw authError('Could not check your session. Please try again.', 'AUTH_UNAVAILABLE', 503);
+    }
+    if (!active) throw authError('Session has ended. Please sign in again.', 'SESSION_INVALID');
+    return { userId: payload.sub, payload };
+  }
+
+  const legacyPayload = await verifyLegacyClerkToken(token);
+  if (legacyPayload) return { userId: legacyPayload.sub, payload: legacyPayload };
+  throw authError('Invalid or expired token', 'TOKEN_INVALID');
+}
+
 export async function requireAuth(req, res, next) {
-  const token = getTokenFromRequest(req);
-  if (!token) {
-    return res.status(401).json({ error: 'Missing or invalid authorization' });
+  let verified;
+  try {
+    verified = await verifyAuthToken(getTokenFromRequest(req));
+  } catch (error) {
+    return res.status(error?.status || 401).json({ error: error?.message || 'Invalid or expired token', code: error?.code || null });
   }
 
   try {
-    const payload = await verifyToken(token, {
-      secretKey: process.env.CLERK_SECRET_KEY,
-    });
-
-    if (ENFORCE_SINGLE_SESSION) {
-      const sessionId = String(payload?.sid || '').trim();
-      const issuedAtSeconds = Number(payload?.iat || 0);
-      if (sessionId && Number.isFinite(issuedAtSeconds) && issuedAtSeconds > 0) {
-        try {
-          await query(
-            `INSERT INTO end_user_sessions (
-               clerk_user_id,
-               clerk_session_id,
-               session_issued_at,
-               last_seen_at
-             ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-             ON DUPLICATE KEY UPDATE
-               clerk_session_id = CASE
-                 WHEN VALUES(session_issued_at) >= session_issued_at THEN VALUES(clerk_session_id)
-                 ELSE clerk_session_id
-               END,
-               session_issued_at = GREATEST(session_issued_at, VALUES(session_issued_at)),
-               last_seen_at = CURRENT_TIMESTAMP`,
-            [payload.sub, sessionId, issuedAtSeconds]
-          );
-
-          const [resolved] = await query(
-            `SELECT clerk_session_id, session_issued_at
-             FROM end_user_sessions
-             WHERE clerk_user_id = ?
-             LIMIT 1`,
-            [payload.sub]
-          );
-
-          const resolvedSessionId = String(resolved?.clerk_session_id || '').trim();
-          const resolvedIssuedAt = Number(resolved?.session_issued_at || 0);
-          const supersededByNewerSession =
-            resolvedSessionId !== sessionId && resolvedIssuedAt > issuedAtSeconds;
-          if (supersededByNewerSession) {
-            return res.status(401).json({
-              error: 'This account is active on another device. Please sign in again.',
-              code: 'SESSION_REPLACED',
-            });
-          }
-        } catch (sessionError) {
-          if (sessionError?.code !== 'ER_NO_SUCH_TABLE') {
-            console.error('[auth] single-session check failed', sessionError);
-          }
-        }
-      }
+    await assertNoActiveRestriction(verified.userId, 'login');
+  } catch (restrictionError) {
+    if (restrictionError?.code !== 'ER_NO_SUCH_TABLE') {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
     }
-
-    try {
-      await assertNoActiveRestriction(payload.sub, 'login');
-    } catch (restrictionError) {
-      if (restrictionError?.code !== 'ER_NO_SUCH_TABLE') {
-        return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
-      }
-    }
-
-    req.auth = payload;
-    req.userId = payload.sub;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
   }
+
+  req.auth = verified.payload;
+  req.userId = verified.userId;
+  return next();
 }

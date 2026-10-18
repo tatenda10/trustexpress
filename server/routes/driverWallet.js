@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import {
   getDriverWalletDashboard,
   initializeDriverWalletTopup,
@@ -13,7 +13,7 @@ import { assertNoActiveRestriction, restrictionErrorResponse } from '../lib/acco
 const router = Router();
 
 async function requireDriver(req, res) {
-  const clerkUser = await getClerkUserById(req.userId).catch(() => null);
+  const clerkUser = await getUserById(req.userId).catch(() => null);
   const user = clerkUser ? toAppUser(clerkUser) : null;
   if (!user || normalizeRole(user.role) !== 'driver') {
     res.status(403).json({ error: 'Driver account required' });

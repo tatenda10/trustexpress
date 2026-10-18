@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useAuth, useUser } from '../../auth/AuthProvider';
 import { getMe, updateMe } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
@@ -63,27 +63,9 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
 
     try {
       setSaving(true);
-      let savedViaClerk = false;
-
-      if (user?.update) {
-        await user.update({
-          firstName: trimmedFirstName,
-          lastName: trimmedLastName,
-        });
-        savedViaClerk = true;
-      }
-
       const token = await getTokenRef.current();
-      if (token) {
-        try {
-          await updateMe(token, { firstName: trimmedFirstName, lastName: trimmedLastName });
-        } catch (error) {
-          if (!savedViaClerk) {
-            throw error;
-          }
-          console.warn('[CompleteProfileScreen] backend profile sync failed after Clerk save', error);
-        }
-      }
+      await updateMe(token, { firstName: trimmedFirstName, lastName: trimmedLastName });
+      await user?.reload?.().catch(() => {});
 
       if (typeof onCompleted === 'function') {
         await onCompleted();

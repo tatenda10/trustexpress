@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { query } from '../db/connection.js';
-import { getClerkClient } from '../lib/clerk-client.js';
-import { normalizeRole } from '../lib/clerk-user.js';
+import { getUserStore } from '../lib/user-store.js';
+import { normalizeRole } from '../lib/users.js';
 
 /**
  * Reconciles the dashboard "Verification queue" count against what the admin
@@ -94,7 +94,7 @@ function classify(entry) {
 
 async function main() {
   const shouldDelete = String(getArg('delete') || '').toLowerCase() === 'true';
-  const clerk = getClerkClient();
+  const clerk = getUserStore();
   const cache = new Map();
 
   const entries = [

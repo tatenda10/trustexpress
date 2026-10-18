@@ -10,9 +10,10 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { applyPassengerReferral, getPassengerReferralDashboard } from '../../api';
@@ -68,12 +69,38 @@ export default function PassengerReferralsScreen({ navigation }) {
     };
   }, [isFocused]);
 
+  const shareMessage = dashboard?.shareMessage || 'Join me on Trust Express!';
+
   const handleShareInvite = async () => {
     try {
-      await Share.share({ message: dashboard?.shareMessage || 'Join me on Trust Express!' });
+      await Share.share({ message: shareMessage });
     } catch {
       // User cancelled share sheet.
     }
+  };
+
+  const handleQuickShare = async (channel) => {
+    const text = encodeURIComponent(shareMessage);
+    const urls = {
+      whatsapp: `whatsapp://send?text=${text}`,
+      sms: Platform.OS === 'ios' ? `sms:&body=${text}` : `sms:?body=${text}`,
+      email: `mailto:?subject=${encodeURIComponent('Join me on Trust Express')}&body=${text}`,
+    };
+    const url = urls[channel];
+    if (!url) {
+      handleShareInvite();
+      return;
+    }
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+        return;
+      }
+    } catch {
+      // Fall through to the system share sheet.
+    }
+    handleShareInvite();
   };
 
   const handleApplyReferral = async () => {
@@ -137,23 +164,60 @@ export default function PassengerReferralsScreen({ navigation }) {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 24) + 24 }}
         >
-          <View className="rounded-[28px] bg-white px-5 py-5">
-            <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Your referral email</Text>
-            <Text className="mt-3 text-xl font-bold text-[#111827]">
-              {shareEmail || 'Add an email to your account to share referrals'}
-            </Text>
-            <Text className="mt-3 text-sm leading-6 text-gray-500">
-              Friends should enter this email when they create their passenger account.
-            </Text>
+          <View className="overflow-hidden rounded-[24px] bg-white">
+            <View className="px-5 pb-5 pt-5" style={{ backgroundColor: PRIMARY_BLUE }}>
+              <View className="h-11 w-11 items-center justify-center rounded-2xl bg-white/20">
+                <Ionicons name="gift" size={22} color="#fff" />
+              </View>
+              <Text className="mt-3 text-[20px] font-extrabold leading-7 text-white">Invite friends, ride together</Text>
+              <Text className="mt-1 text-[13px] leading-5 text-blue-100">
+                Friends enter your email when they create their passenger account.
+              </Text>
+            </View>
 
-            <TouchableOpacity
-              onPress={handleShareInvite}
-              disabled={!shareEmail}
-              className="mt-5 h-14 items-center justify-center rounded-[20px]"
-              style={{ backgroundColor: PRIMARY_BLUE, opacity: shareEmail ? 1 : 0.5 }}
-            >
-              <Text className="text-base font-bold text-white">Share invite message</Text>
-            </TouchableOpacity>
+            <View className="px-5 pb-5 pt-4">
+              <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Your referral email</Text>
+              <View className="mt-2 flex-row items-center rounded-[10px] border border-dashed border-[#c7d2fe] bg-[#f5f8ff] px-4 py-3">
+                <Ionicons name="mail-outline" size={18} color={PRIMARY_BLUE} />
+                <Text className="ml-2 flex-1 text-[15px] font-semibold text-gray-900" numberOfLines={1} selectable>
+                  {shareEmail || 'Add an email to your account first'}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={handleShareInvite}
+                disabled={!shareEmail}
+                activeOpacity={0.85}
+                className="mt-4 h-12 flex-row items-center justify-center rounded-[10px]"
+                style={{ backgroundColor: PRIMARY_BLUE, opacity: shareEmail ? 1 : 0.5 }}
+              >
+                <Ionicons name="share-social" size={18} color="#fff" />
+                <Text className="ml-2 text-[15px] font-bold text-white">Share invite</Text>
+              </TouchableOpacity>
+
+              <View className="mt-4 flex-row justify-between" style={{ opacity: shareEmail ? 1 : 0.5 }}>
+                {[
+                  { key: 'whatsapp', label: 'WhatsApp', icon: 'logo-whatsapp', color: '#16a34a', bg: '#dcfce7' },
+                  { key: 'sms', label: 'SMS', icon: 'chatbubble-ellipses-outline', color: '#1d4ed8', bg: '#e0ecff' },
+                  { key: 'email', label: 'Email', icon: 'mail-outline', color: '#b45309', bg: '#fef3c7' },
+                  { key: 'more', label: 'More', icon: 'ellipsis-horizontal', color: '#374151', bg: '#f3f4f6' },
+                ].map((option) => (
+                  <TouchableOpacity
+                    key={option.key}
+                    onPress={() => handleQuickShare(option.key)}
+                    disabled={!shareEmail}
+                    activeOpacity={0.75}
+                    className="items-center"
+                    style={{ width: '23%' }}
+                  >
+                    <View className="h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: option.bg }}>
+                      <Ionicons name={option.icon} size={21} color={option.color} />
+                    </View>
+                    <Text className="mt-1.5 text-[12px] font-medium text-gray-600">{option.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
           </View>
 
           <View className="mt-5 rounded-[28px] bg-white px-5 py-5">

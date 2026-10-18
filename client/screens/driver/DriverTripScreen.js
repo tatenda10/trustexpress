@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Image, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
@@ -34,6 +34,8 @@ import {
   DriverTripLoadingState,
   DriverTripMapPanel,
   DriverTripReceiptView,
+  DriverTripPreviewMap,
+  DriverTripTopBar,
 } from './components/DriverTripComponents';
 
 const ROUTE_REFRESH_DISTANCE_METERS = 10;
@@ -43,7 +45,7 @@ const LOCATION_UPDATE_INTERVAL_MS = 1000;
 const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
 const AUTO_ARRIVAL_STABLE_MS = 3500;
-const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.30);
+const TRIP_PANEL_MAX_HEIGHT = Math.round(Dimensions.get('window').height * 0.45);
 const TRIP_STATUS_REFRESH_MS = 3000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
 const DRIVER_VOICE_GUIDANCE_KEY = 'trust_express_driver_voice_guidance';
@@ -367,6 +369,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const [submittingPanicAlert, setSubmittingPanicAlert] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const pinInputRef = useRef(null);
   const [verifyingPin, setVerifyingPin] = useState(false);
 
   useEffect(() => {
@@ -783,6 +786,37 @@ export default function DriverTripScreen({ navigation, route }) {
     [resolvedLiveDriverCoordinate, resolvedRideDriverCoordinate, pickupCoordinate, dropoffCoordinate],
   );
   const passengerConfirmedPickup = Boolean(ride?.passengerConfirmedAt);
+  const [tripPreviewRoute, setTripPreviewRoute] = useState([]);
+  const tripPreviewKey = ride?.stage === 'waiting_for_customer' && pickupCoordinate && dropoffCoordinate
+    ? [pickupCoordinate, ...intermediateStops.map((stop) => stop?.coordinate), dropoffCoordinate]
+      .filter(Boolean)
+      .map((point) => `${Number(point.latitude).toFixed(5)},${Number(point.longitude).toFixed(5)}`)
+      .join('|')
+    : '';
+
+  useEffect(() => {
+    if (!tripPreviewKey) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await getTokenRef.current();
+        if (!token || cancelled) return;
+        const data = await getDirectionsRoute(token, {
+          origin: pickupCoordinate,
+          destination: dropoffCoordinate,
+          waypoints: intermediateStops.map((stop) => stop?.coordinate).filter(Boolean),
+          cacheTtlSeconds: 1800,
+        });
+        if (!cancelled) setTripPreviewRoute(normalizeCoordinates(data?.route?.coordinates));
+      } catch {
+        if (!cancelled) setTripPreviewRoute([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripPreviewKey]);
   const targetCoordinate = useMemo(
     () => (
       ride?.stage === 'on_trip' || (ride?.stage === 'waiting_for_customer' && passengerConfirmedPickup)
@@ -919,7 +953,7 @@ export default function DriverTripScreen({ navigation, route }) {
           edgePadding: {
             top: Math.max(insets.top + 88, 110),
             right: 36,
-            bottom: Math.max(TRIP_PANEL_MAX_HEIGHT + insets.bottom + 28, 220),
+            bottom: Math.max(TRIP_PANEL_MAX_HEIGHT + 28, 220),
             left: 36,
           },
           animated: true,
@@ -1457,7 +1491,7 @@ export default function DriverTripScreen({ navigation, route }) {
       fareText={formatCurrency(ride.estimatedAmount)}
       passengerProfileImageUrl={passengerProfileImageUrl}
       passengerName={ride.passengerName}
-      passengerSubtitle={[paymentMethodLabel(ride.paymentMethod), ride.passengerPhone || targetLabel].filter(Boolean).join(' · ')}
+      passengerSubtitle={paymentMethodLabel(ride.paymentMethod)}
       passengerConfirmationText={passengerConfirmationText}
       safetyPinReminderText={safetyPinReminderText}
       stopTimeline={stopTimeline}
@@ -1484,10 +1518,187 @@ export default function DriverTripScreen({ navigation, route }) {
       submittingPanicAlert={submittingPanicAlert}
     />
 
+    {ride.stage === 'waiting_for_customer' ? (
+      <View className="absolute inset-0 bg-white" style={{ paddingTop: insets.top + 8 }}>
+        <DriverTripTopBar
+          className="mx-4 bg-[#f3f4f6]"
+          roundedClassName="rounded-[10px]"
+          buttonRoundedClassName="rounded-[10px]"
+          targetLabel={targetLabel}
+          voiceGuidanceEnabled={voiceGuidanceEnabled}
+          onToggleVoiceGuidance={handleToggleVoiceGuidance}
+          showCallPassenger={Boolean(String(ride?.passengerPhone || '').trim())}
+          onCallPassenger={handleCallPassenger}
+          onSendPanicAlert={handleSendPanicAlert}
+          submittingPanicAlert={submittingPanicAlert}
+          onOpenChat={() => navigation.navigate('RideChat', {
+            rideRequestId: ride.id,
+            role: 'driver',
+            chatTitle: ride.passengerName || 'Passenger chat',
+          })}
+          onOpenExternalNavigation={handleOpenExternalNavigation}
+        />
+        <View className="mx-4 mt-3">
+          <DriverTripPreviewMap
+            height={220}
+            pickupCoordinate={pickupCoordinate}
+            dropoffCoordinate={dropoffCoordinate}
+            intermediateStops={intermediateStops}
+            routeCoordinates={tripPreviewRoute}
+          />
+        </View>
+
+        <KeyboardAvoidingView behavior="padding" className="flex-1">
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 }}
+          >
+            {ride?.safetyPinRequired && !ride?.safetyPinVerified ? (
+              <>
+                <Text className="mt-5 text-center text-sm text-gray-500">
+                  {ride?.safetyPinLocked
+                    ? 'Too many wrong PIN attempts. Confirm the passenger before starting.'
+                    : 'Type the safety PIN your passenger gives you'}
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={() => pinInputRef.current?.focus()}
+                  disabled={Boolean(ride?.safetyPinLocked)}
+                  className="mt-4 flex-row"
+                >
+                  {[0, 1, 2, 3].map((index) => {
+                    const isActive = index === pinInput.length && !verifyingPin && !ride?.safetyPinLocked;
+                    return (
+                      <View
+                        key={index}
+                        className="h-16 flex-1 items-center justify-center rounded-[10px] bg-[#f3f4f6]"
+                        style={{
+                          marginLeft: index ? 10 : 0,
+                          borderWidth: 2,
+                          borderColor: isActive ? PRIMARY_BLUE : 'transparent',
+                        }}
+                      >
+                        <Text className="text-3xl font-extrabold text-gray-900">{pinInput[index] || ''}</Text>
+                      </View>
+                    );
+                  })}
+                </TouchableOpacity>
+                <TextInput
+                  ref={pinInputRef}
+                  value={pinInput}
+                  onChangeText={(value) => setPinInput(String(value || '').replace(/\D/g, '').slice(0, 4))}
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  editable={!verifyingPin && !ride?.safetyPinLocked}
+                  caretHidden
+                  style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
+                />
+              </>
+            ) : null}
+
+            <View className="mt-5 flex-row">
+              <TouchableOpacity
+                onPress={handleCancelRide}
+                disabled={submitting || cancellingRide}
+                className="mr-2 h-14 flex-1 items-center justify-center rounded-[10px] border border-red-200 bg-red-50"
+                style={{ opacity: submitting || cancellingRide ? 0.7 : 1 }}
+              >
+                {cancellingRide ? (
+                  <ActivityIndicator size="small" color="#dc2626" />
+                ) : (
+                  <Text className="text-base font-bold text-red-600">Cancel Ride</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={ride?.safetyPinRequired && !ride?.safetyPinVerified ? handleVerifyPinAndStart : handleStartRide}
+                disabled={
+                  submitting
+                  || verifyingPin
+                  || Boolean(ride?.safetyPinLocked)
+                  || (ride?.safetyPinRequired && !ride?.safetyPinVerified && pinInput.length !== 4)
+                }
+                className="ml-2 h-14 flex-1 items-center justify-center rounded-[10px]"
+                style={{
+                  backgroundColor: PRIMARY_BLUE,
+                  opacity: submitting
+                    || verifyingPin
+                    || ride?.safetyPinLocked
+                    || (ride?.safetyPinRequired && !ride?.safetyPinVerified && pinInput.length !== 4)
+                    ? 0.5
+                    : 1,
+                }}
+              >
+                {submitting || verifyingPin ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text className="text-base font-extrabold text-white">Start Ride</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View className="mt-6 flex-row items-center">
+              <View
+                className="items-center justify-center overflow-hidden rounded-full bg-[#eef4ff]"
+                style={{ width: 48, height: 48 }}
+              >
+                {passengerProfileImageUrl ? (
+                  <Image source={{ uri: passengerProfileImageUrl }} style={{ width: 48, height: 48 }} />
+                ) : (
+                  <Ionicons name="person" size={22} color={PRIMARY_BLUE} />
+                )}
+              </View>
+              <View className="ml-3 min-w-0 flex-1">
+                <Text className="text-base font-bold text-gray-900" numberOfLines={1}>
+                  {ride.passengerName || 'Passenger'}
+                </Text>
+                <Text className="mt-0.5 text-xs text-gray-500" numberOfLines={1}>
+                  {ride.passengerConfirmedAt ? 'Coming to the car' : 'Waiting at pickup'}
+                </Text>
+              </View>
+            </View>
+
+            <View className="mt-6 flex-row items-center justify-between">
+              <Text className="text-sm text-gray-500">Fare</Text>
+              <Text className="text-lg font-bold text-gray-900">{formatCurrency(ride.estimatedAmount)}</Text>
+            </View>
+            <View className="mt-2 flex-row items-center justify-between">
+              <Text className="text-sm text-gray-500">Payment</Text>
+              <Text className="text-sm font-semibold text-gray-900">{paymentMethodLabel(ride.paymentMethod)}</Text>
+            </View>
+
+            <View className="mt-5">
+              {stopTimeline.map((label, index) => {
+                const isPickup = index === 0;
+                const isDropoff = index === stopTimeline.length - 1;
+                return (
+                  <View key={`driver-start-${label}-${index}`} className={index ? 'mt-4' : ''}>
+                    <Text
+                      className="text-xs font-bold uppercase"
+                      style={{ color: isPickup ? '#dc2626' : '#9ca3af' }}
+                    >
+                      {isPickup ? 'Pick up' : isDropoff ? 'Drop-off' : `Stop ${index}`}
+                    </Text>
+                    <View className="mt-1.5 flex-row items-start">
+                      <View
+                        className="mr-3 mt-1.5 h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: isPickup ? '#111827' : isDropoff ? '#dc2626' : '#f59e0b' }}
+                      />
+                      <Text className="flex-1 text-sm font-semibold text-gray-900">{label}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
+    ) : null}
+
     <Modal
       visible={showPinModal}
       transparent
-      animationType="fade"
+      animationType="slide"
       onRequestClose={() => {
         if (!verifyingPin) setShowPinModal(false);
       }}
@@ -1497,59 +1708,114 @@ export default function DriverTripScreen({ navigation, route }) {
         className="flex-1"
         keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
       >
-        <View className="flex-1 justify-center bg-black/60 px-5">
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            bounces={false}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{
-              flexGrow: 1,
-              justifyContent: 'center',
-              paddingTop: Math.max(insets.top + 28, 56),
-              paddingBottom: Math.max(insets.bottom + 300, 330),
+        <View className="flex-1 justify-end bg-black/30">
+          <TouchableOpacity
+            className="flex-1"
+            activeOpacity={1}
+            onPress={() => {
+              if (!verifyingPin) setShowPinModal(false);
             }}
+          />
+          <View
+            className="rounded-t-[28px] bg-white px-5 pt-5"
+            style={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
           >
-            <View className="self-stretch rounded-[30px] bg-white px-5 py-6">
-              <View className="items-center">
-                <View className="h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50">
-                  <Ionicons name="keypad" size={28} color="#4338ca" />
+            <Text className="text-center text-lg font-extrabold text-gray-900">Start ride</Text>
+            <Text className="mt-2 text-center text-sm text-gray-500">
+              Type the safety PIN your passenger gives you
+            </Text>
+
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => pinInputRef.current?.focus()}
+              className="mt-5 flex-row"
+            >
+              {[0, 1, 2, 3].map((index) => {
+                const isActive = index === pinInput.length && !verifyingPin;
+                return (
+                  <View
+                    key={index}
+                    className="h-16 flex-1 items-center justify-center rounded-[16px] bg-[#f3f4f6]"
+                    style={{
+                      marginLeft: index ? 10 : 0,
+                      borderWidth: 2,
+                      borderColor: isActive ? PRIMARY_BLUE : 'transparent',
+                    }}
+                  >
+                    <Text className="text-3xl font-extrabold text-gray-900">{pinInput[index] || ''}</Text>
+                  </View>
+                );
+              })}
+            </TouchableOpacity>
+            <TextInput
+              ref={pinInputRef}
+              value={pinInput}
+              onChangeText={(value) => setPinInput(String(value || '').replace(/\D/g, '').slice(0, 4))}
+              keyboardType="number-pad"
+              maxLength={4}
+              editable={!verifyingPin}
+              autoFocus
+              caretHidden
+              style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
+            />
+
+            <TouchableOpacity
+              onPress={handleVerifyPinAndStart}
+              disabled={verifyingPin || pinInput.length !== 4}
+              className="mt-5 h-14 flex-row items-center justify-center rounded-full"
+              style={{ backgroundColor: PRIMARY_BLUE, opacity: verifyingPin || pinInput.length !== 4 ? 0.5 : 1 }}
+            >
+              {verifyingPin ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="navigate" size={18} color="#fff" />
+                  <Text className="ml-2 text-base font-bold text-white">Start ride</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            <View className="mt-4 flex-row items-center">
+              <View className="min-w-0 flex-1 pr-3">
+                <Text className="text-xs font-bold uppercase text-[#dc2626]">Pick up</Text>
+                <View className="mt-1.5 flex-row items-center">
+                  <View className="mr-2 h-2 w-2 rounded-full bg-gray-900" />
+                  <Text className="flex-1 text-sm text-gray-900" numberOfLines={1}>
+                    {ride?.pickupLabel || 'Pickup point'}
+                  </Text>
                 </View>
-                <Text className="mt-4 text-xs font-bold uppercase tracking-[1.5px] text-indigo-700">Night safety PIN</Text>
-                <Text className="mt-2 text-center text-2xl font-extrabold text-gray-950">Enter passenger PIN</Text>
               </View>
-              <Text className="mt-3 text-center text-sm leading-6 text-gray-500">
-                Ask the passenger for their 4-digit PIN shown in their app before starting the trip.
-              </Text>
-              <TextInput
-                className="mt-6 rounded-[22px] border-2 border-indigo-100 bg-[#f8fafc] px-4 py-5 text-center text-3xl font-extrabold tracking-[12px] text-gray-950"
-                value={pinInput}
-                onChangeText={(value) => setPinInput(String(value || '').replace(/\D/g, '').slice(0, 4))}
-                keyboardType="number-pad"
-                maxLength={4}
-                placeholder="0000"
-                placeholderTextColor="#cbd5e1"
-                editable={!verifyingPin}
-                autoFocus
-              />
               <TouchableOpacity
-                onPress={handleVerifyPinAndStart}
-                disabled={verifyingPin || pinInput.length !== 4}
-                className="mt-5 h-14 items-center justify-center rounded-[22px]"
-                style={{ backgroundColor: PRIMARY_BLUE, opacity: verifyingPin || pinInput.length !== 4 ? 0.6 : 1 }}
+                onPress={() => {
+                  setShowPinModal(false);
+                  navigation.navigate('RideChat', {
+                    rideRequestId: ride.id,
+                    role: 'driver',
+                    chatTitle: ride.passengerName || 'Passenger chat',
+                  });
+                }}
+                className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]"
               >
-                <Text className="text-base font-bold text-white">
-                  {verifyingPin ? 'Verifying...' : 'Verify PIN and start ride'}
-                </Text>
+                <Ionicons name="chatbubble-ellipses" size={20} color="#111827" />
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowPinModal(false)}
-                disabled={verifyingPin}
-                className="mt-3 h-12 items-center justify-center"
-              >
-                <Text className="text-base font-bold text-gray-500">Cancel</Text>
-              </TouchableOpacity>
+              {String(ride?.passengerPhone || '').trim() ? (
+                <TouchableOpacity
+                  onPress={handleCallPassenger}
+                  className="ml-2 h-11 w-11 items-center justify-center rounded-full bg-[#fee2e2]"
+                >
+                  <Ionicons name="call" size={20} color="#dc2626" />
+                </TouchableOpacity>
+              ) : null}
             </View>
-          </ScrollView>
+
+            <TouchableOpacity
+              onPress={() => setShowPinModal(false)}
+              disabled={verifyingPin}
+              className="mt-5 h-12 items-center justify-center rounded-full border border-[#fca5a5]"
+            >
+              <Text className="text-base font-bold text-[#dc2626]">Cancel</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>

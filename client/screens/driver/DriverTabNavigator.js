@@ -3,6 +3,7 @@ import { Alert, DeviceEventEmitter } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DriverHomeStack from './DriverHomeStack';
 import DriverWalletStack from './DriverWalletStack';
 import DriverHireStack from './DriverHireStack';
@@ -15,7 +16,7 @@ import {
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
 const Tab = createBottomTabNavigator();
-const ICON_SIZE = 24;
+
 const HIDDEN_TAB_BAR_ROUTES = new Set([
   'DriverHireTrip',
   'DriverWalletTopup',
@@ -25,7 +26,15 @@ const HIDDEN_TAB_BAR_ROUTES = new Set([
   'DriverSupportChat',
 ]);
 
+const TAB_ICONS = {
+  DriverHome: ['home', 'home-outline'],
+  DriverWallet: ['wallet', 'wallet-outline'],
+  DriverHireJobs: ['bus', 'bus-outline'],
+  DriverAccount: ['person', 'person-outline'],
+};
+
 export default function DriverTabNavigator({ route }) {
+  const insets = useSafeAreaInsets();
   const { driverStatus: contextDriverStatus } = useDriverStatus() || {};
   const driverStatus = contextDriverStatus ?? route?.params?.driverStatus ?? null;
   const canAcceptTrips = isDriverVerifiedForTrips(driverStatus);
@@ -38,6 +47,30 @@ export default function DriverTabNavigator({ route }) {
     return () => subscription.remove();
   }, []);
 
+  const tabBarStyle = {
+    height: 58 + insets.bottom,
+    paddingTop: 6,
+    paddingBottom: Math.max(insets.bottom, 6),
+    backgroundColor: '#ffffff',
+    borderTopColor: '#e5e7eb',
+    borderTopWidth: 1,
+    elevation: 0,
+    shadowOpacity: 0,
+    shadowColor: 'transparent',
+  };
+
+  const optionsFor = (title, extra = {}) => ({ route: tabRoute }) => ({
+    title,
+    tabBarIcon: ({ focused, color }) => {
+      const [filled, outline] = TAB_ICONS[tabRoute.name];
+      return <Ionicons name={focused ? filled : outline} size={23} color={color} />;
+    },
+    tabBarStyle: HIDDEN_TAB_BAR_ROUTES.has(getFocusedRouteNameFromRoute(tabRoute) ?? '')
+      ? { display: 'none' }
+      : tabBarStyle,
+    ...extra,
+  });
+
   return (
     <Tab.Navigator
       initialRouteName="DriverHome"
@@ -45,32 +78,12 @@ export default function DriverTabNavigator({ route }) {
         headerShown: false,
         tabBarActiveTintColor: PRIMARY_BLUE,
         tabBarInactiveTintColor: '#9ca3af',
-        tabBarStyle: { borderTopColor: '#f3f4f6' },
-        tabBarLabelStyle: { fontSize: 14, fontWeight: '500' },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+        tabBarStyle,
       }}
     >
-      <Tab.Screen
-        name="DriverHome"
-        component={DriverHomeStack}
-        options={({ route }) => ({
-          title: 'Home',
-          tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={ICON_SIZE} color={color} />,
-          tabBarStyle: HIDDEN_TAB_BAR_ROUTES.has(getFocusedRouteNameFromRoute(route) || '')
-            ? { display: 'none' }
-            : { borderTopColor: '#f3f4f6' },
-        })}
-      />
-      <Tab.Screen
-        name="DriverWallet"
-        component={DriverWalletStack}
-        options={({ route }) => ({
-          title: 'Wallet',
-          tabBarIcon: ({ color }) => <Ionicons name="wallet-outline" size={ICON_SIZE} color={color} />,
-          tabBarStyle: HIDDEN_TAB_BAR_ROUTES.has(getFocusedRouteNameFromRoute(route) || '')
-            ? { display: 'none' }
-            : { borderTopColor: '#f3f4f6' },
-        })}
-      />
+      <Tab.Screen name="DriverHome" component={DriverHomeStack} options={optionsFor('Home')} />
+      <Tab.Screen name="DriverWallet" component={DriverWalletStack} options={optionsFor('Wallet')} />
       <Tab.Screen
         name="DriverHireJobs"
         component={DriverHireStack}
@@ -83,25 +96,21 @@ export default function DriverTabNavigator({ route }) {
           },
           focus: () => setHiringBadgeCount(0),
         }}
-        options={({ route }) => ({
-          title: 'Hiring',
-          tabBarIcon: ({ color }) => <Ionicons name="bus-outline" size={ICON_SIZE} color={color} />,
+        options={optionsFor('Hiring', {
           tabBarBadge: hiringBadgeCount > 0 ? hiringBadgeCount : undefined,
-          tabBarStyle: HIDDEN_TAB_BAR_ROUTES.has(getFocusedRouteNameFromRoute(route) || '')
-            ? { display: 'none' }
-            : { borderTopColor: '#f3f4f6' },
+          tabBarBadgeStyle: { fontSize: 10, minWidth: 16, height: 16, lineHeight: 16 },
         })}
       />
       <Tab.Screen
         name="DriverAccount"
         component={DriverAccountStack}
         initialParams={{ driverStatus }}
-        options={({ route }) => ({
-          title: 'Account',
-          tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={ICON_SIZE} color={color} />,
-          tabBarStyle: HIDDEN_TAB_BAR_ROUTES.has(getFocusedRouteNameFromRoute(route) || '')
-            ? { display: 'none' }
-            : { borderTopColor: '#f3f4f6' },
+        options={optionsFor('Account')}
+        listeners={({ navigation }) => ({
+          tabPress: (event) => {
+            event.preventDefault();
+            navigation.navigate('DriverAccount', { screen: 'DriverAccountMain' });
+          },
         })}
       />
     </Tab.Navigator>

@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, TextInput, Platform, Modal, Dimensions, PanResponder, Linking, AppState, Vibration } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import MapView, { Polyline } from '../../components/maps/MapViewCompat';
+import { LetterMarker, PIN_COLORS, stopLetter } from '../../components/maps/LetterPin';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
 import { calculateDistanceKm, getHeadingAlongRoute, normalizeCoordinate, normalizeCoordinates } from '../../lib/mapVehicleHeading';
 import * as Location from 'expo-location';
@@ -12,6 +13,8 @@ import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, choosePassengerRideCashPayment, initiatePassengerRideSmilePay, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup, verifyPassengerRideSmilePay } from '../../api';
 import RideRatingTagPicker from '../../components/ride/RideRatingTagPicker';
+import { downloadReceiptPdf } from '../../services/receiptPrint';
+import { receiptPaymentMethodLabel } from '../../constants/payment';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import {
@@ -26,7 +29,6 @@ import { connectRealtime } from '../../realtime';
 import {
   PASSENGER_RIDE_MAP_MAX_DELTA,
   PASSENGER_RIDE_MAP_MIN_DELTA,
-  PASSENGER_RIDE_MAP_REFIT_MOVE_METERS,
   buildPassengerRideMapRegion,
   getPassengerTrackingFitCoordinates,
 } from '../../lib/passengerRideMap';
@@ -37,9 +39,11 @@ WebBrowser.maybeCompleteAuthSession();
 const TRACKING_STATUS_REFRESH_MS = 1500;
 const TRACKING_STATUS_REFRESH_ON_TRIP_MS = 2000;
 const PICKUP_WAIT_SECONDS = 5 * 60;
-const ROUTE_REFRESH_DISTANCE_METERS = 10;
-const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
-const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
+const ROUTE_OFF_ROUTE_REFETCH_METERS = 60;
+const ROUTE_PERIODIC_REFETCH_MS = 45000;
+const ROUTE_PERIODIC_REFETCH_MIN_MOVE_METERS = 150;
+const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 20;
+const MAP_USER_INTERACTION_GRACE_MS = 10000;
 const RIDE_STATUS_LOAD_TIMEOUT_MS = 8000;
 
 function withTimeout(promise, ms, label) {
@@ -105,6 +109,35 @@ function findNearestRouteIndex(routeCoordinates, coordinate) {
     }
   });
   return nearestIndex;
+}
+
+function distanceToRouteMeters(routeCoordinates, coordinate) {
+  const safeCoordinate = normalizeCoordinate(coordinate);
+  const safeRouteCoordinates = normalizeCoordinates(routeCoordinates);
+  if (!safeCoordinate || safeRouteCoordinates.length === 0) return Infinity;
+  return safeRouteCoordinates.reduce(
+    (best, routeCoordinate) => Math.min(best, calculateDistanceKm(routeCoordinate, safeCoordinate) * 1000),
+    Infinity,
+  );
+}
+
+function polylineLengthMeters(routeCoordinates) {
+  const points = normalizeCoordinates(routeCoordinates);
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    total += calculateDistanceKm(points[index - 1], points[index]) * 1000;
+  }
+  return total;
+}
+
+function isCoordinateInsideRegion(coordinate, region, insetRatio = 0.2) {
+  const safeCoordinate = normalizeCoordinate(coordinate);
+  if (!safeCoordinate || !region) return true;
+  const halfLat = (Number(region.latitudeDelta) / 2) * (1 - insetRatio);
+  const halfLng = (Number(region.longitudeDelta) / 2) * (1 - insetRatio);
+  if (!Number.isFinite(halfLat) || !Number.isFinite(halfLng)) return true;
+  return Math.abs(safeCoordinate.latitude - region.latitude) <= halfLat
+    && Math.abs(safeCoordinate.longitude - region.longitude) <= halfLng;
 }
 
 function buildImmediateRouteCoordinates(currentRouteCoordinates, origin, destination) {
@@ -179,17 +212,27 @@ function decodePolyline(encoded, precision = 5) {
   return coordinates;
 }
 
-function MapLetterMarker({ letter, color, muted = false }) {
-  return (
-    <View className="items-center">
-      <View
-        className="h-8 w-8 items-center justify-center rounded-full border-2 border-white"
-        style={{ backgroundColor: muted ? '#94a3b8' : color }}
-      >
-        <Text className="text-[13px] font-extrabold text-white">{letter}</Text>
-      </View>
-    </View>
-  );
+const EMPTY_COORDINATES = [];
+
+// Keeps the same array reference while the points are unchanged so map polylines are not redrawn on every poll.
+function useStableCoordinates(coordinates) {
+  const ref = useRef(coordinates);
+  const previous = ref.current;
+  const unchanged = previous.length === coordinates.length
+    && coordinates.every((point, index) => (
+      Math.abs(Number(point?.latitude) - Number(previous[index]?.latitude)) < 0.00001
+      && Math.abs(Number(point?.longitude) - Number(previous[index]?.longitude)) < 0.00001
+    ));
+  if (!unchanged) ref.current = coordinates;
+  return ref.current;
+}
+
+function formatClockTime(timestampMs) {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return '--:--';
+  const hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours % 12 || 12}:${minutes} ${hours >= 12 ? 'PM' : 'AM'}`;
 }
 
 function formatCountdown(totalSeconds) {
@@ -320,6 +363,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const lastRouteTargetRef = useRef(null);
   const lastRouteFetchedAtRef = useRef(0);
   const routeCoordinatesRef = useRef([]);
+  const fetchedRouteLengthRef = useRef(0);
   const routeRequestIdRef = useRef(0);
   const hasAutoFitMapRef = useRef(false);
   const lastAutoFitStageRef = useRef('');
@@ -364,6 +408,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [tipDraft, setTipDraft] = useState('');
+  const [downloadingTripReceipt, setDownloadingTripReceipt] = useState(false);
   const [statusSyncWarning, setStatusSyncWarning] = useState('');
   const statusPollFailuresRef = useRef(0);
   const driverCancelHandledRef = useRef(false);
@@ -371,6 +416,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
   const [rideSheetCollapsed, setRideSheetCollapsed] = useState(true);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [onTripPanelHeight, setOnTripPanelHeight] = useState(220);
   const [tripRouteCoordinates, setTripRouteCoordinates] = useState([]);
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
   const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
@@ -495,7 +541,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           const mergedCoordinate = preferFresherCoordinate(
             current.driverCoordinate,
             next.driverCoordinate,
-            data?.assignedDriver?.lastSeenAt || next.driverLocationUpdatedAt
+            next.driverLocationUpdatedAt || data?.assignedDriver?.locationUpdatedAt || null
           );
           const nextStage = next.stage || mapRideStatusToStage(next.status) || current.stage;
           const nextStatus = next.status || current.status;
@@ -531,7 +577,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           const mergedCoordinate = preferFresherCoordinate(
             current.coordinate,
             next.coordinate,
-            next.lastSeenAt
+            next.locationUpdatedAt || data?.rideRequest?.driverLocationUpdatedAt || null
           );
           return mergeAssignedDriver(current, next, mergedCoordinate);
         });
@@ -802,6 +848,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     [currentTargetCoordinate, dropoffCoordinate, passengerConfirmedPickup, pickupCoordinate, stage],
   );
   const driverProfileImageUrl = resolveUploadedMediaUrl(driver?.profileImageUrl);
+  const driverRatingValue = Number(driver?.ratingCount || 0) > 0 && Number(driver?.rating) > 0
+    ? Number(driver.rating)
+    : null;
+  const driverCarName = driver?.carName && driver.carName !== '-' ? driver.carName : '';
+  const driverPlate = driver?.plate && driver.plate !== '-' ? driver.plate : '';
 
   const triggerPassengerArrivalAlert = useCallback(() => {
     const announcementKey = String(rideRequestId || '');
@@ -866,11 +917,19 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       ? calculateDistanceKm(previousTarget, activeTarget) * 1000 >= 30
       : true;
     const routeAgeMs = Date.now() - lastRouteFetchedAtRef.current;
+    const currentRoute = routeCoordinatesRef.current;
+    const hasRoadRoute = currentRoute.length > 2;
+    const offRoute = hasRoadRoute
+      && distanceToRouteMeters(currentRoute, driverCoordinate) > ROUTE_OFF_ROUTE_REFETCH_METERS;
+    const periodicRefresh = routeAgeMs > ROUTE_PERIODIC_REFETCH_MS
+      && movedDistanceMeters > ROUTE_PERIODIC_REFETCH_MIN_MOVE_METERS;
+    const retryMissingRoute = !hasRoadRoute && routeAgeMs > 15000;
     if (
       !targetChanged &&
-      routeCoordinatesRef.current.length > 0 &&
-      movedDistanceMeters < ROUTE_REFRESH_DISTANCE_METERS &&
-      routeAgeMs < ROUTE_REFRESH_MIN_INTERVAL_MS
+      currentRoute.length > 0 &&
+      !offRoute &&
+      !periodicRefresh &&
+      !retryMissingRoute
     ) {
       setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, activeTarget));
       return undefined;
@@ -889,9 +948,21 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     const fallbackDurationSeconds = fallbackDistanceMeters > 0
       ? Math.max(60, Math.round((fallbackDistanceMeters / 1000) * 4 * 60))
       : 0;
-    setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, activeTarget));
-    setRouteDistanceMeters(fallbackDistanceMeters);
-    setRouteDurationSeconds(fallbackDurationSeconds);
+    const keepTrimmedRoadRoute = () => {
+      setRouteCoordinates((current) => (
+        !targetChanged && normalizeCoordinates(current).length > 2
+          ? nextRouteCoordinates(current, driverCoordinate, activeTarget)
+          : [driverCoordinate, activeTarget].filter(Boolean)
+      ));
+    };
+    if (targetChanged || routeCoordinatesRef.current.length === 0) {
+      fetchedRouteLengthRef.current = 0;
+      setRouteCoordinates((current) => nextRouteCoordinates(targetChanged ? [] : current, driverCoordinate, activeTarget));
+      setRouteDistanceMeters(fallbackDistanceMeters);
+      setRouteDurationSeconds(fallbackDurationSeconds);
+    } else {
+      setRouteCoordinates((current) => nextRouteCoordinates(current, driverCoordinate, activeTarget));
+    }
 
     const loadDirections = async () => {
       try {
@@ -901,17 +972,19 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         const route = await fetchTrackingDirections(token, driverCoordinate, activeTarget);
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
 
-        setRouteCoordinates(Array.isArray(route?.coordinates) && route.coordinates.length > 1
-          ? normalizeCoordinates(route.coordinates)
-          : [driverCoordinate, activeTarget].filter(Boolean));
-        setRouteDistanceMeters(route?.distanceMeters || 0);
-        setRouteDurationSeconds(route?.durationSeconds || 0);
-        setNextInstruction(route?.nextInstruction || '');
+        const fetchedRoute = Array.isArray(route?.coordinates) ? normalizeCoordinates(route.coordinates) : [];
+        if (fetchedRoute.length > 1) {
+          fetchedRouteLengthRef.current = fetchedRoute.length > 2 ? polylineLengthMeters(fetchedRoute) : 0;
+          setRouteCoordinates(fetchedRoute);
+          setRouteDistanceMeters(route?.distanceMeters || 0);
+          setRouteDurationSeconds(route?.durationSeconds || 0);
+          setNextInstruction(route?.nextInstruction || '');
+        } else {
+          keepTrimmedRoadRoute();
+        }
       } catch (error) {
         if (cancelled || routeRequestIdRef.current !== currentRequestId) return;
-        setRouteCoordinates([driverCoordinate, activeTarget].filter(Boolean));
-        setRouteDistanceMeters(fallbackDistanceMeters);
-        setRouteDurationSeconds(fallbackDurationSeconds);
+        keepTrimmedRoadRoute();
         setNextInstruction('');
         setRouteError(error?.message || 'Could not load road directions.');
       } finally {
@@ -988,26 +1061,34 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     rideStatus?.routePolyline,
   ]);
 
+  const remainingRouteMeters = useMemo(
+    () => (normalizeCoordinates(routeCoordinates).length > 2 ? polylineLengthMeters(routeCoordinates) : 0),
+    [routeCoordinates],
+  );
+  const fetchedRouteLengthMeters = fetchedRouteLengthRef.current;
+  const remainingRouteRatio = fetchedRouteLengthMeters > 0 && remainingRouteMeters > 0
+    ? Math.min(1, remainingRouteMeters / fetchedRouteLengthMeters)
+    : 1;
   const liveDriverDistanceKm = useMemo(
     () => {
-      if (routeDistanceMeters > 0) return routeDistanceMeters / 1000;
+      if (routeDistanceMeters > 0) return (routeDistanceMeters * remainingRouteRatio) / 1000;
       if (Number(rideStatus?.driverDistanceKm || 0) > 0 && stage !== 'on_trip') {
         return Number(rideStatus.driverDistanceKm);
       }
       return calculateDistanceKm(driverCoordinate, activeTarget);
     },
-    [activeTarget, driverCoordinate, rideStatus?.driverDistanceKm, routeDistanceMeters, stage]
+    [activeTarget, driverCoordinate, remainingRouteRatio, rideStatus?.driverDistanceKm, routeDistanceMeters, stage]
   );
 
   const liveEtaMinutes = useMemo(
     () => {
-      if (routeDurationSeconds > 0) return Math.max(1, Math.round(routeDurationSeconds / 60));
+      if (routeDurationSeconds > 0) return Math.max(1, Math.round((routeDurationSeconds * remainingRouteRatio) / 60));
       if (Number(rideStatus?.driverEtaMinutes || 0) > 0 && stage !== 'on_trip') {
         return Number(rideStatus.driverEtaMinutes);
       }
       return Math.max(1, Math.round(liveDriverDistanceKm * 4));
     },
-    [liveDriverDistanceKm, rideStatus?.driverEtaMinutes, routeDurationSeconds, stage]
+    [liveDriverDistanceKm, remainingRouteRatio, rideStatus?.driverEtaMinutes, routeDurationSeconds, stage]
   );
   const tripDistanceKm = useMemo(() => {
     if (tripDistanceMeters > 0) return tripDistanceMeters / 1000;
@@ -1045,13 +1126,17 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       (stage === 'on_trip' || (stage === 'waiting_at_pickup' && passengerConfirmedPickup)) &&
       tripLineCoordinates.length > 1
     ) {
-      const preview = getRoutePreviewCoordinates(tripLineCoordinates, driverCoordinate, activeTarget);
+      const preview = buildImmediateRouteCoordinates(tripLineCoordinates, driverCoordinate, activeTarget);
       if (preview.length > 1) return preview;
     }
     if (routed.length > 1) return routed;
     if (driverCoordinate && activeTarget) return [driverCoordinate, activeTarget];
     return [];
   }, [activeTarget, driverCoordinate, passengerConfirmedPickup, routeCoordinates, stage, tripLineCoordinates]);
+  const displayTripLine = useStableCoordinates(tripLineCoordinates);
+  const displayLiveRoute = useStableCoordinates(
+    stage === 'waiting_at_pickup' || isCompleted ? EMPTY_COORDINATES : liveRouteCoordinates
+  );
   const activeRouteCoordinates = useMemo(() => {
     if (liveRouteCoordinates.length > 1) return liveRouteCoordinates;
     if (driverCoordinate && activeTarget) return [driverCoordinate, activeTarget];
@@ -1095,6 +1180,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   );
   const currentMapRegionRef = useRef(trackingRegion);
   const lastFitDriverRef = useRef(null);
+  const lastUserMapInteractionAtRef = useRef(0);
+  const handleUserMapInteraction = () => {
+    lastUserMapInteractionAtRef.current = Date.now();
+  };
 
   const handleMapRegionChangeComplete = (nextRegion) => {
     currentMapRegionRef.current = nextRegion;
@@ -1130,15 +1219,27 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
     const stageKey = `${stage || ''}|${hasDriverCoordinate ? 'driver' : 'waiting'}|${passengerConfirmedPickup ? 'confirmed' : 'pending'}`;
     const stageChanged = lastAutoFitStageRef.current !== stageKey;
     const previousFitDriver = lastFitDriverRef.current;
-    const movedMeters = previousFitDriver && driverCoordinate
-      ? calculateDistanceKm(previousFitDriver, driverCoordinate) * 1000
-      : 0;
     const shouldFit = stageChanged
       || !hasAutoFitMapRef.current
-      || (!previousFitDriver && Boolean(driverCoordinate))
-      || movedMeters >= PASSENGER_RIDE_MAP_REFIT_MOVE_METERS;
+      || (!previousFitDriver && Boolean(driverCoordinate));
 
-    if (!shouldFit) return undefined;
+    if (!shouldFit) {
+      const userRecentlyMovedMap = Date.now() - lastUserMapInteractionAtRef.current < MAP_USER_INTERACTION_GRACE_MS;
+      if (
+        driverCoordinate
+        && !userRecentlyMovedMap
+        && !isCoordinateInsideRegion(driverCoordinate, currentMapRegionRef.current)
+        && mapRef.current?.animateCamera
+      ) {
+        lastFitDriverRef.current = driverCoordinate;
+        try {
+          mapRef.current.animateCamera({ center: driverCoordinate }, { duration: 600 });
+        } catch {
+          // ignore camera failures
+        }
+      }
+      return undefined;
+    }
 
     lastAutoFitStageRef.current = stageKey;
     hasAutoFitMapRef.current = true;
@@ -1283,16 +1384,27 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         passengerDriverRating: rating,
         passengerDriverReview: reviewText,
       } : current);
-      if (canPromptForTip) {
-        Alert.alert('Rating saved', 'You can add an optional tip now, or tap Finish to close this trip.');
-        return;
-      }
+      if (canPromptForTip) return;
       setShowDriverRatingModal(false);
       Alert.alert('Thanks', 'Your driver rating was saved.', [{ text: 'OK', onPress: exitToPassengerHome }]);
     } catch (error) {
       Alert.alert('Rating failed', error?.message || 'Could not save your rating.');
     } finally {
       setSubmittingRating(false);
+    }
+  };
+
+  const handleDownloadTripReceipt = async () => {
+    if (downloadingTripReceipt || !rideRequestId) return;
+    try {
+      setDownloadingTripReceipt(true);
+      const token = await getToken();
+      const result = await downloadReceiptPdf(token, rideRequestId);
+      Alert.alert('Receipt downloaded', `${result.fileName} was saved.`);
+    } catch (error) {
+      Alert.alert('Receipt download failed', error?.message || 'Could not download your ride receipt.');
+    } finally {
+      setDownloadingTripReceipt(false);
     }
   };
 
@@ -1360,7 +1472,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
       console.log('[smilepay] client.initiate.start', { rideRequestId, callbackUrl });
       const result = await initiatePassengerRideSmilePay(token, rideRequestId, {
         callbackUrl,
-        checkoutMode: 'express_mpgs',
+        checkoutMode: 'hosted',
       });
       const payment = result?.payment || {};
       console.log('[smilepay] client.initiate.result', {
@@ -1556,6 +1668,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           showsCompass={false}
           toolbarEnabled={false}
           onRegionChangeComplete={handleMapRegionChangeComplete}
+          onPanDrag={handleUserMapInteraction}
           scrollEnabled
           zoomEnabled
           rotateEnabled={false}
@@ -1569,39 +1682,33 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             />
           ) : null}
           {pickupCoordinate ? (
-            <Marker coordinate={pickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
-              <MapLetterMarker letter="A" color="#1d4ed8" />
-            </Marker>
+            <LetterMarker coordinate={pickupCoordinate} title="Pickup" letter="A" color={PIN_COLORS.start} />
           ) : null}
           {intermediateStops.map((stop, index) => {
             const stopCoordinate = normalizeCoordinate(stop?.coordinate);
-            const letter = String.fromCharCode(67 + index);
             return stopCoordinate ? (
-              <Marker
+              <LetterMarker
                 key={`passenger-stop-${index}`}
                 coordinate={stopCoordinate}
-                title={`${letter} · ${stop.label || `Stop ${index + 1}`}`}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <MapLetterMarker letter={letter} color="#f97316" muted={index < currentStopIndex} />
-              </Marker>
+                title={stop.label || `Stop ${index + 1}`}
+                letter={stopLetter(index)}
+                color={index < currentStopIndex ? '#94a3b8' : PIN_COLORS.stop}
+              />
             ) : null;
           })}
           {dropoffCoordinate ? (
-            <Marker coordinate={dropoffCoordinate} title="B · Drop-off" anchor={{ x: 0.5, y: 0.5 }}>
-              <MapLetterMarker letter="B" color="#111827" />
-            </Marker>
+            <LetterMarker coordinate={dropoffCoordinate} title="Drop-off" letter="B" color={PIN_COLORS.finish} />
           ) : null}
-          {tripLineCoordinates.length > 1 ? (
+          {displayTripLine.length > 1 ? (
             <Polyline
-              coordinates={tripLineCoordinates}
+              coordinates={displayTripLine}
               strokeColor="#94a3b8"
               strokeWidth={4}
             />
           ) : null}
-          {liveRouteCoordinates.length > 1 ? (
+          {displayLiveRoute.length > 1 ? (
             <Polyline
-              coordinates={liveRouteCoordinates}
+              coordinates={displayLiveRoute}
               strokeColor={PRIMARY_BLUE}
               strokeWidth={5}
             />
@@ -1613,7 +1720,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         <View
           pointerEvents="box-none"
           className="absolute right-5"
-          style={{ bottom: (rideSheetCollapsed ? collapsedSheetHeight : Math.min(expandedSheetMaxHeight, 360)) + 16 }}
+          style={{
+            bottom: (stage === 'on_trip'
+              ? onTripPanelHeight
+              : rideSheetCollapsed ? collapsedSheetHeight : Math.min(expandedSheetMaxHeight, 360)) + 16,
+          }}
         >
           <TouchableOpacity
             onPress={handleSendPanicAlert}
@@ -1644,40 +1755,143 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
 
-        <View pointerEvents="box-none" className="px-5" style={{ paddingTop: insets.top + 10 }}>
-          <View className="flex-row items-center justify-between rounded-[28px] bg-white/95 px-4 py-4">
-            <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-12 w-12 items-center justify-center rounded-full bg-[#f3f6fb]">
-              <Ionicons name="arrow-back" size={24} color="#111827" />
-            </TouchableOpacity>
-            <View className="flex-1">
-              <Text className="text-lg font-bold text-gray-900">
-                {isCompleted
-                  ? 'Trip completed'
-                  : stage === 'waiting_at_pickup'
-                    ? 'Your driver has arrived'
-                    : stage === 'on_trip'
-                      ? 'Trip in progress'
-                      : 'Driver is on the way'}
-              </Text>
-              <Text className="mt-1 text-sm text-gray-500">
-                {isCompleted
-                  ? 'You can rate your driver now or skip and do it later.'
-                  : stage === 'waiting_at_pickup'
-                    ? pickupWaitExpired
-                      ? 'Pickup wait time has ended. Please contact your driver.'
-                      : rideStatus?.passengerConfirmedAt
-                        ? `Confirmed! ${pickupWaitCountdownText} remaining.`
-                        : `${pickupWaitCountdownText} to meet your driver at pickup.`
-                    : stage === 'on_trip'
-                      ? (currentTargetLabel || dropoffLabel || 'Heading to your destination')
-                    : hasDriverCoordinate
-                      ? `${liveEtaText} away · ${liveDistanceText}`
-                      : 'Finding your driver on the map'}
-              </Text>
+        <View pointerEvents="box-none">
+          <View className="rounded-b-[24px] bg-white px-4 pb-3 pt-1">
+            <View className="flex-row items-center">
+              <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-12 w-12 items-center justify-center rounded-full bg-[#f3f6fb]">
+                <Ionicons name="arrow-back" size={24} color="#111827" />
+              </TouchableOpacity>
+              <View className="flex-1">
+                <Text className="text-lg font-bold text-gray-900">
+                  {isCompleted
+                    ? 'Trip completed'
+                    : driverHasArrived
+                      ? 'Your driver has arrived'
+                      : stage === 'on_trip'
+                        ? 'On trip'
+                        : 'Driver is on the way'}
+                </Text>
+                {!driverHasArrived ? (
+                  <Text className="mt-1 text-sm text-gray-500">
+                    {isCompleted
+                      ? 'You can rate your driver now or skip and do it later.'
+                      : stage === 'on_trip'
+                        ? (hasDriverCoordinate && driverLocationFresh
+                          ? `Arriving in ${liveEtaMinutes} min · ${liveDistanceText} to go`
+                          : liveDistanceText)
+                        : hasDriverCoordinate
+                          ? `${liveEtaText} away · ${liveDistanceText}`
+                          : 'Finding your driver on the map'}
+                  </Text>
+                ) : null}
+              </View>
             </View>
+
           </View>
         </View>
 
+        {stage === 'on_trip' ? (
+          <View
+            className="absolute bottom-0 left-0 right-0 rounded-t-[16px] bg-white px-5 pt-5"
+            style={{ paddingBottom: Math.max(insets.bottom, 12) + 8 }}
+            onLayout={(event) => setOnTripPanelHeight(Math.round(event.nativeEvent.layout.height))}
+          >
+            <View className="items-center">
+              <Text className="text-xs text-gray-500">Estimated arrival time</Text>
+              <Text className="mt-0.5 text-lg font-bold text-gray-900">
+                {hasDriverCoordinate && driverLocationFresh ? formatClockTime(Date.now() + liveEtaMinutes * 60000) : '--:--'}
+              </Text>
+            </View>
+
+            <View className="mt-4 flex-row items-center border-t border-gray-100 pt-4">
+              <View
+                className="items-center justify-center overflow-hidden rounded-full bg-[#eef4ff]"
+                style={{ width: 48, height: 48 }}
+              >
+                {driverProfileImageUrl ? (
+                  <Image source={{ uri: driverProfileImageUrl }} style={{ width: 48, height: 48 }} />
+                ) : (
+                  <Ionicons name="person" size={20} color={PRIMARY_BLUE} />
+                )}
+              </View>
+              <View className="ml-3 min-w-0 flex-1">
+                <Text className="text-sm font-bold text-gray-900" numberOfLines={1}>
+                  {driver?.driverName || 'Driver'}
+                </Text>
+                <View className="mt-0.5 flex-row items-center">
+                  {driverRatingValue ? (
+                    <>
+                      <Ionicons name="star" size={12} color="#f59e0b" />
+                      <Text className="ml-1 text-xs text-gray-500">{driverRatingValue.toFixed(1)}</Text>
+                    </>
+                  ) : null}
+                  {driverCarName || driverPlate ? (
+                    <Text className="text-xs text-gray-500" numberOfLines={1}>
+                      {driverRatingValue ? ' · ' : ''}{[driverCarName, driverPlate].filter(Boolean).join(' · ')}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('RideChat', {
+                  rideRequestId,
+                  role: 'passenger',
+                  chatTitle: driver?.driverName || 'Driver chat',
+                })}
+                className="h-11 w-11 items-center justify-center rounded-[10px] bg-[#eef4ff]"
+              >
+                <Ionicons name="chatbubble-ellipses" size={19} color={PRIMARY_BLUE} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCallDriver}
+                className="ml-2 h-11 w-11 items-center justify-center rounded-[10px]"
+                style={{ backgroundColor: PRIMARY_BLUE }}
+              >
+                <Ionicons name="call" size={19} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <View className="mt-4 border-t border-gray-100 pt-4">
+              {tripTimelineLabels.map((label, index) => {
+                const isPickup = index === 0;
+                const isDropoff = index === tripTimelineLabels.length - 1;
+                const isPassedStop = !isPickup && !isDropoff && index - 1 < currentStopIndex;
+                return (
+                  <View key={`on-trip-${label}-${index}`} className={`flex-row items-start ${index ? 'mt-3' : ''}`}>
+                    <View
+                      className="mr-3 h-6 w-6 items-center justify-center rounded-full"
+                      style={{
+                        backgroundColor: isPickup
+                          ? PIN_COLORS.start
+                          : isDropoff
+                            ? PIN_COLORS.finish
+                            : isPassedStop ? '#94a3b8' : PIN_COLORS.stop,
+                      }}
+                    >
+                      <Text className="text-[11px] font-extrabold text-white">
+                        {isPickup ? 'A' : isDropoff ? 'B' : stopLetter(index - 1)}
+                      </Text>
+                    </View>
+                    <View className="min-w-0 flex-1">
+                      <Text className="text-[11px] text-gray-400">
+                        {isPickup ? 'Pick up' : isDropoff ? 'Drop-off' : `Stop ${index}`}
+                      </Text>
+                      <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>{label}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity
+              onPress={handleCancelRide}
+              className="mt-4 h-12 flex-row items-center justify-center rounded-[10px] bg-red-50"
+            >
+              <Ionicons name="close-circle-outline" size={18} color="#dc2626" />
+              <Text className="ml-2 text-base font-bold text-red-600">Cancel ride</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={insets.top + 80}
@@ -1688,7 +1902,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
             className="mt-auto overflow-hidden rounded-t-[30px] bg-[#f8fafc]"
             style={
               rideSheetCollapsed
-                ? { height: collapsedSheetHeight }
+                ? { height: driverHasArrived ? collapsedSheetHeight - 20 : collapsedSheetHeight }
                 : { maxHeight: expandedSheetMaxHeight }
             }
           >
@@ -1699,7 +1913,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
               bounces={false}
               contentContainerStyle={{
                 paddingHorizontal: 20,
-                paddingTop: 16,
+                paddingTop: 10,
                 paddingBottom: isCompleted ? bottomActionInset + 12 : 12,
                 flexGrow: 0,
               }}
@@ -1710,8 +1924,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 className="items-center"
                 {...sheetPan.panHandlers}
               >
-                <View className="h-2 w-16 rounded-full bg-gray-300" />
-                <View className="mt-3 flex-row items-center">
+                <View className="h-1.5 w-12 rounded-full bg-gray-300" />
+                <View className="mt-1.5 flex-row items-center">
                   <Text className="text-sm font-semibold text-gray-500">
                     {rideSheetCollapsed ? 'Show trip details' : 'Hide trip details'}
                   </Text>
@@ -1724,18 +1938,18 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 </View>
               </TouchableOpacity>
 
-              {showSafetyPinBanner ? (
-                <View className="mt-4 rounded-[22px] border border-indigo-200 bg-indigo-50 px-4 py-4">
+              {showSafetyPinBanner && !driverHasArrived ? (
+                <View className="mt-4 rounded-[22px] border border-[#dbeafe] bg-[#eef4ff] px-4 py-4">
                   <View className="flex-row items-center">
-                    <Ionicons name="moon" size={20} color="#4338ca" />
-                    <Text className="ml-2 text-xs font-bold uppercase text-indigo-700">
+                    <Ionicons name="shield-checkmark" size={18} color={PRIMARY_BLUE} />
+                    <Text className="ml-2 text-xs font-bold uppercase" style={{ color: PRIMARY_BLUE }}>
                       Night safety PIN
                     </Text>
                   </View>
-                  <Text className="mt-3 text-4xl font-extrabold text-indigo-950" style={{ letterSpacing: 6 }}>
+                  <Text className="mt-3 text-4xl font-extrabold text-gray-900" style={{ letterSpacing: 6 }}>
                     {safetyPinValue}
                   </Text>
-                  <Text className="mt-3 text-sm leading-6 text-indigo-900">
+                  <Text className="mt-3 text-sm leading-6 text-gray-600">
                     Share this PIN with your driver only when you are at the car. Do not share it in chat.
                   </Text>
                   {safetyPinLocked ? (
@@ -1750,7 +1964,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                 </View>
               ) : null}
 
-              {stage !== 'on_trip' && rideSheetCollapsed ? (
+              {stage !== 'on_trip' && !driverHasArrived && rideSheetCollapsed ? (
                 <View className="mt-4 rounded-[22px] bg-white px-4 py-3">
                   <Text className="text-xs font-semibold uppercase text-gray-400">
                     {stage === 'waiting_at_pickup' ? 'Pickup status' : 'Driver status'}
@@ -1786,23 +2000,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
               {!rideSheetCollapsed ? (
                 <>
-                  {stage === 'waiting_at_pickup' ? (
-                    <View className="mt-4 rounded-[22px] border border-amber-200 bg-[#fff7ed] px-4 py-3">
-                      <Text className="text-xs font-semibold uppercase text-amber-600">
-                        Pickup timer
-                      </Text>
-                      <Text className="mt-1 text-3xl font-bold text-gray-900">{pickupWaitCountdownText}</Text>
-                      <Text className="mt-1 text-sm text-gray-600">
-                        {pickupWaitExpired
-                          ? 'The pickup wait time has ended. Message or call your driver now.'
-                          : rideStatus?.passengerConfirmedAt
-                            ? 'You confirmed you\'re coming. Your driver is waiting.'
-                            : 'Please meet your driver at the pickup point.'}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {stage !== 'on_trip' ? (
+                  {stage !== 'on_trip' && !driverHasArrived ? (
                     <View className="mt-4 rounded-[22px] bg-white px-4 py-4">
                       <View className="flex-row items-center justify-between">
                         <Text className="text-xs font-semibold uppercase text-gray-400">
@@ -1838,7 +2036,8 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     </View>
                   ) : null}
 
-                  <View className="mt-5 rounded-[28px] border border-gray-100 bg-white p-5">
+                  <View className="mt-5 rounded-[24px] bg-white p-5">
+                    {!driverHasArrived ? (
                     <View className="mb-2 flex-row items-center pb-3">
                       <View className="mr-4 min-w-0 flex-1">
                         <Text className="text-xl font-bold text-gray-900">{driver?.driverName || 'Driver'}</Text>
@@ -1867,7 +2066,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                           />
                         </View>
                         <View
-                          className="absolute items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#e0e7ff]"
+                          className="absolute items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#eef4ff]"
                           style={{ width: 52, height: 52, borderRadius: 26, right: -6, bottom: -10 }}
                         >
                           {driverProfileImageUrl ? (
@@ -1881,8 +2080,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         </View>
                       </View>
                     </View>
+                    ) : null}
 
-                    <View className="mt-5 rounded-[22px] border border-[#dbeafe] bg-white px-4 py-4">
+                    {!driverHasArrived ? (
+                    <View className="mt-4 rounded-[18px] bg-[#f8fafc] px-4 py-4">
                       {stage === 'on_trip' ? (
                         <View className="items-center">
                           <Text className="text-sm font-medium text-gray-500">
@@ -1924,9 +2125,10 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         </View>
                       )}
                     </View>
+                    ) : null}
 
                     {stage === 'on_trip' && (intermediateStops.length > 0 || tipAmount > 0) ? (
-                      <View className="mt-5 border-t border-gray-100 pt-4">
+                      <View className="mt-4">
                         {intermediateStops.length ? (
                           <Text className="text-sm text-gray-500">
                             {remainingIntermediateStopsCount > 0
@@ -1943,29 +2145,37 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                     ) : null}
 
                     {!rideSheetCollapsed && stage !== 'on_trip' ? (
-                      <View className="mt-5 border-t border-gray-100 pt-4">
+                      <View className={`flex-row items-center justify-between ${driverHasArrived ? '' : 'mt-4'}`}>
                         <Text className="text-sm font-medium text-gray-500">Fare</Text>
-                        <Text className="mt-1 text-3xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
-                        {tipAmount > 0 ? (
-                          <Text className="mt-2 text-sm font-medium text-green-600">
-                            Includes ${tipAmount.toFixed(2)} tip
-                          </Text>
-                        ) : null}
+                        <View className="items-end">
+                          <Text className="text-2xl font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
+                          {tipAmount > 0 ? (
+                            <Text className="text-xs font-medium text-green-600">
+                              Includes ${tipAmount.toFixed(2)} tip
+                            </Text>
+                          ) : null}
+                        </View>
                       </View>
                     ) : null}
 
-                    {stage !== 'on_trip' ? (
-                      <View className="mt-5 rounded-[22px] bg-[#f8fafc] p-4">
-                        <Text className="text-sm font-medium text-gray-500">Trip</Text>
-                        <Text className="mt-2 text-base font-bold text-gray-900">{pickupLabel}</Text>
-                        <Text className="mt-1 text-sm text-gray-500">to</Text>
-                        <Text className="mt-1 text-base font-bold text-gray-900">{dropoffLabel}</Text>
+                    {stage !== 'on_trip' && tripTimelineLabels.length <= 2 ? (
+                      <View className="mt-4">
+                        <Text className="text-xs font-bold uppercase" style={{ color: PIN_COLORS.finish }}>Pick up</Text>
+                        <View className="mt-1.5 flex-row items-start">
+                          <View className="mr-3 mt-1.5 h-2.5 w-2.5 rounded-full bg-gray-900" />
+                          <Text className="flex-1 text-sm font-semibold text-gray-900">{pickupLabel}</Text>
+                        </View>
+                        <Text className="mt-4 text-xs font-bold uppercase text-gray-400">Drop-off</Text>
+                        <View className="mt-1.5 flex-row items-start">
+                          <View className="mr-3 mt-1.5 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIN_COLORS.finish }} />
+                          <Text className="flex-1 text-sm font-semibold text-gray-900">{dropoffLabel}</Text>
+                        </View>
                       </View>
                     ) : null}
 
                     {tripTimelineLabels.length > 2 ? (
-                      <View className="mt-5 rounded-[22px] bg-[#f8fafc] p-4">
-                        <Text className="text-sm font-medium text-gray-500">Stops</Text>
+                      <View className="mt-4">
+                        <Text className="text-xs font-bold uppercase text-gray-400">Trip</Text>
                         <View className="mt-3">
                           {tripTimelineLabels.map((label, index) => {
                             const isPickup = index === 0;
@@ -2004,7 +2214,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   </View>
 
                   {showPaymentCard ? (
-                    <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+                    <View className="mt-5 rounded-[24px] bg-white px-5 py-5">
                       <View className="flex-row items-center justify-between">
                         <View className="flex-1 pr-3">
                           <Text className="text-xl font-bold text-gray-900">
@@ -2070,7 +2280,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   {isCompleted ? (
                     <>
                       {((rideStatus?.canTipDriver && paymentStatus !== 'paid') || tipAmount > 0) ? (
-                        <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+                        <View className="mt-5 rounded-[24px] bg-white px-5 py-5">
                           <Text className="text-xl font-bold text-gray-900">Tip driver</Text>
                           <Text className="mt-2 text-sm text-gray-500">
                             Add an optional thank-you tip for {driver?.driverName || 'your driver'}.
@@ -2112,7 +2322,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         </View>
                       ) : null}
 
-                      <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+                      <View className="mt-5 rounded-[24px] bg-white px-5 py-5">
                         <Text className="text-xl font-bold text-gray-900">Lost item</Text>
                         <Text className="mt-2 text-sm text-gray-500">
                           Left something in the car? Send the details to support.
@@ -2164,7 +2374,7 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
 
               {!isCompleted ? (
                 <View
-                  className="border-t border-gray-200 bg-[#f8fafc] px-5 pt-4"
+                  className="bg-[#f8fafc] px-5 pt-3"
                   style={{ paddingBottom: bottomActionInset }}
                 >
                   {stage === 'on_trip' ? (
@@ -2189,11 +2399,11 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                             {confirmingPickup ? (
                               <ActivityIndicator size="small" color="#fff" />
                             ) : (
-                              <Text className="text-lg font-bold text-white">Confirm I'm coming</Text>
+                              <Text className="text-lg font-bold text-white">I'm coming</Text>
                             )}
                           </TouchableOpacity>
                         ) : driverHasArrived && rideStatus?.passengerConfirmedAt ? (
-                          <View className="flex-1 h-14 rounded-[22px] items-center justify-center border border-green-200 bg-green-50 px-3">
+                          <View className="flex-1 h-14 rounded-[22px] items-center justify-center bg-green-50 px-3">
                             <Text className="text-base font-bold text-green-700">You're on your way</Text>
                           </View>
                         ) : (
@@ -2210,32 +2420,210 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                             role: 'passenger',
                             chatTitle: driver?.driverName || 'Driver chat',
                           })}
-                          className="h-14 w-14 rounded-[22px] items-center justify-center bg-white border border-blue-200"
+                          className="h-14 w-14 rounded-full items-center justify-center bg-[#eef4ff]"
                         >
                           <Ionicons name="chatbubble-ellipses" size={22} color={PRIMARY_BLUE} />
                         </TouchableOpacity>
                         <TouchableOpacity
                           onPress={handleCallDriver}
-                          className="h-14 w-14 rounded-[22px] items-center justify-center"
+                          className="h-14 w-14 rounded-full items-center justify-center"
                           style={{ backgroundColor: PRIMARY_BLUE }}
                         >
                           <Ionicons name="call" size={22} color="#fff" />
                         </TouchableOpacity>
+                        {driverHasArrived ? (
+                          <TouchableOpacity
+                            onPress={handleCancelRide}
+                            accessibilityLabel="Cancel ride"
+                            className="h-14 w-14 rounded-full items-center justify-center bg-red-50"
+                          >
+                            <Ionicons name="close" size={24} color="#dc2626" />
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
-                      {driverHasArrived ? (
-                        <TouchableOpacity
-                          onPress={handleCancelRide}
-                          className="mt-3 h-14 rounded-[22px] border-2 border-red-300 items-center justify-center bg-red-50"
-                        >
-                          <Text className="text-base font-extrabold text-red-700">Cancel ride</Text>
-                        </TouchableOpacity>
-                      ) : null}
                     </View>
                   )}
                 </View>
               ) : null}
           </View>
         </KeyboardAvoidingView>
+        )}
+
+        {driverHasArrived ? (
+          <View className="absolute inset-0 bg-white">
+            <View className="flex-row items-center px-4 pb-2 pt-1">
+              <TouchableOpacity
+                onPress={() => navigation.goBack()}
+                className="h-10 w-10 items-center justify-center rounded-[10px]"
+              >
+                <Ionicons name="arrow-back" size={22} color="#111827" />
+              </TouchableOpacity>
+              <Text className="ml-1 flex-1 text-base font-bold text-gray-900" numberOfLines={1}>
+                Your driver has arrived
+              </Text>
+              <TouchableOpacity
+                onPress={handleSendPanicAlert}
+                disabled={submittingPanicAlert}
+                activeOpacity={0.85}
+                className="h-10 w-10 items-center justify-center rounded-[10px] bg-[#dc2626]"
+                style={{ opacity: submittingPanicAlert ? 0.7 : 1 }}
+              >
+                {submittingPanicAlert ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="warning" size={20} color="#fff" />
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 24 }}
+            >
+              <View className="flex-row">
+                {showSafetyPinBanner ? (
+                  <View className="mr-3 flex-1 rounded-[10px] bg-[#eef4ff] px-3 py-2.5">
+                    <Text className="text-[10px] font-bold uppercase" style={{ color: PRIMARY_BLUE }}>
+                      Safety PIN
+                    </Text>
+                    <Text className="mt-0.5 text-2xl font-extrabold text-gray-900" style={{ letterSpacing: 4 }}>
+                      {safetyPinValue}
+                    </Text>
+                  </View>
+                ) : null}
+                <View className={`flex-1 rounded-[10px] px-3 py-2.5 ${pickupWaitExpired ? 'bg-red-50' : 'bg-gray-100'}`}>
+                  <Text className="text-[10px] font-bold uppercase text-gray-500">Wait time</Text>
+                  <Text className={`mt-0.5 text-2xl font-extrabold ${pickupWaitExpired ? 'text-red-600' : 'text-gray-900'}`}>
+                    {pickupWaitCountdownText}
+                  </Text>
+                </View>
+              </View>
+              {showSafetyPinBanner && (safetyPinLocked || Number(rideStatus?.safetyPinAttempts || 0) > 0) ? (
+                <Text className={`mt-2 text-xs font-semibold ${safetyPinLocked ? 'text-red-600' : 'text-amber-700'}`}>
+                  {safetyPinLocked ? 'Too many wrong PIN attempts.' : 'Someone entered the wrong PIN.'}
+                </Text>
+              ) : null}
+
+              <Text className="mt-6 text-[11px] font-bold uppercase text-gray-400">Your driver</Text>
+              <View className="mt-3 flex-row items-center">
+                <View
+                  className="items-center justify-center overflow-hidden rounded-full bg-[#eef4ff]"
+                  style={{ width: 44, height: 44 }}
+                >
+                  {driverProfileImageUrl ? (
+                    <Image source={{ uri: driverProfileImageUrl }} style={{ width: 44, height: 44 }} />
+                  ) : (
+                    <Ionicons name="person" size={20} color={PRIMARY_BLUE} />
+                  )}
+                </View>
+                <View className="ml-3 min-w-0 flex-1">
+                  <Text className="text-sm font-bold text-gray-900" numberOfLines={1}>
+                    {driver?.driverName || 'Driver'}
+                  </Text>
+                  {driverRatingValue ? (
+                    <View className="mt-0.5 flex-row items-center">
+                      <Ionicons name="star" size={12} color="#f59e0b" />
+                      <Text className="ml-1 text-xs text-gray-500">{driverRatingValue.toFixed(1)}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+              <View className="mt-3 flex-row items-center rounded-[10px] bg-gray-100 px-3 py-3">
+                <Ionicons name="car-sport-outline" size={18} color="#111827" />
+                <Text className="ml-2 min-w-0 flex-1 text-sm font-semibold text-gray-900" numberOfLines={1}>
+                  {driverCarName || 'Vehicle'}
+                </Text>
+                {driverPlate ? (
+                  <View className="ml-2 rounded-[10px] bg-white px-2 py-1">
+                    <Text className="text-xs font-extrabold tracking-wider text-gray-900">{driverPlate}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Text className="mt-6 text-[11px] font-bold uppercase text-gray-400">Trip details</Text>
+              <View className="mt-3 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-500">Fare</Text>
+                <Text className="text-base font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
+              </View>
+              <View className="mt-2 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-500">Payment</Text>
+                <Text className="text-sm font-semibold text-gray-900">
+                  {paymentMethod === 'cash' ? 'Cash' : 'Online'}
+                </Text>
+              </View>
+              <View className="mt-5">
+                {tripTimelineLabels.map((label, index) => {
+                  const isPickup = index === 0;
+                  const isDropoff = index === tripTimelineLabels.length - 1;
+                  return (
+                    <View key={`arrived-${label}-${index}`} className={index ? 'mt-4' : ''}>
+                      <Text
+                        className="text-xs font-bold uppercase"
+                        style={{ color: isPickup ? PIN_COLORS.finish : '#9ca3af' }}
+                      >
+                        {isPickup ? 'Pick up' : isDropoff ? 'Drop-off' : `Stop ${index}`}
+                      </Text>
+                      <View className="mt-1.5 flex-row items-start">
+                        <View
+                          className="mr-3 mt-1.5 h-2.5 w-2.5 rounded-full"
+                          style={{
+                            backgroundColor: isPickup ? '#111827' : isDropoff ? PIN_COLORS.finish : PIN_COLORS.stop,
+                          }}
+                        />
+                        <Text className="flex-1 text-sm font-semibold text-gray-900">{label}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+
+            <View className="flex-row items-center gap-3 px-5 pt-3" style={{ paddingBottom: bottomActionInset }}>
+              {!rideStatus?.passengerConfirmedAt ? (
+                <TouchableOpacity
+                  onPress={handleConfirmPickup}
+                  disabled={confirmingPickup}
+                  className="h-12 flex-1 items-center justify-center rounded-[10px]"
+                  style={{ backgroundColor: PRIMARY_BLUE, opacity: confirmingPickup ? 0.7 : 1 }}
+                >
+                  {confirmingPickup ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-base font-bold text-white">I'm coming</Text>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <View className="h-12 flex-1 items-center justify-center rounded-[10px] bg-green-50 px-3">
+                  <Text className="text-sm font-bold text-green-700">You're on your way</Text>
+                </View>
+              )}
+              <TouchableOpacity
+                onPress={() => navigation.navigate('RideChat', {
+                  rideRequestId,
+                  role: 'passenger',
+                  chatTitle: driver?.driverName || 'Driver chat',
+                })}
+                className="h-12 w-12 items-center justify-center rounded-[10px] bg-[#eef4ff]"
+              >
+                <Ionicons name="chatbubble-ellipses" size={20} color={PRIMARY_BLUE} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCallDriver}
+                className="h-12 w-12 items-center justify-center rounded-[10px]"
+                style={{ backgroundColor: PRIMARY_BLUE }}
+              >
+                <Ionicons name="call" size={20} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCancelRide}
+                accessibilityLabel="Cancel ride"
+                className="h-12 w-12 items-center justify-center rounded-[10px] bg-red-50"
+              >
+                <Ionicons name="close" size={22} color="#dc2626" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <Modal visible={showCancelReasonModal} transparent animationType="slide">
@@ -2269,25 +2657,45 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         </TouchableOpacity>
       </Modal>
 
-      <Modal visible={showDriverRatingModal} transparent animationType="fade" onRequestClose={handleSkipRating}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1">
-          <View className="flex-1 items-center justify-center bg-black/20 px-5">
-            <View className="w-full max-w-[380px] max-h-[88%] rounded-[28px] bg-white px-5 pt-5 pb-5">
+      <Modal visible={showDriverRatingModal} animationType="slide" onRequestClose={handleSkipRating}>
+        <SafeAreaView className="flex-1 bg-white" edges={['top', 'bottom', 'left', 'right']}>
+          <View className="flex-row items-center px-4 pb-2 pt-1">
+            <TouchableOpacity
+              onPress={handleSkipRating}
+              disabled={submittingRating}
+              hitSlop={10}
+              className="h-10 w-10 items-center justify-center rounded-[10px] bg-gray-100"
+            >
+              <Ionicons name="close" size={20} color="#111827" />
+            </TouchableOpacity>
+            <Text className="flex-1 text-center text-base font-bold text-gray-900">
+              {shouldPromptForRating ? 'Rate your trip' : 'Trip complete'}
+            </Text>
+            <View className="h-10 w-10" />
+          </View>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1">
               <ScrollView
+                className="flex-1"
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: 8 }}
+                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
               >
-                <Text className="text-2xl font-bold text-gray-900">
-                  {shouldPromptForRating ? 'Rate & Tip Driver' : 'Trip Complete'}
-                </Text>
-                <Text className="mt-2 text-sm text-gray-500">
-                  {shouldPromptForRating
-                    ? 'Tell us how this trip went and add an optional tip before you finish.'
-                    : 'Add an optional thank-you tip for your driver, or finish your trip now.'}
-                </Text>
+                <View className="mt-2 items-center">
+                  {driverProfileImageUrl ? (
+                    <Image source={{ uri: driverProfileImageUrl }} className="h-16 w-16 rounded-full bg-gray-100" />
+                  ) : (
+                    <View className="h-16 w-16 items-center justify-center rounded-full bg-[#eef4ff]">
+                      <Ionicons name="person" size={28} color={PRIMARY_BLUE} />
+                    </View>
+                  )}
+                  <Text className="mt-2 text-base font-bold text-gray-900">{driver?.driverName || 'Your driver'}</Text>
+                  {[driverCarName, driverPlate].filter(Boolean).length ? (
+                    <Text className="mt-0.5 text-xs text-gray-500">{[driverCarName, driverPlate].filter(Boolean).join(' · ')}</Text>
+                  ) : null}
+                </View>
+
                 {shouldPromptForRating ? (
-                  <View className="mt-4">
+                  <View className="mt-5">
                     <RideRatingTagPicker
                       rating={rating}
                       onChangeRating={(value) => {
@@ -2305,79 +2713,152 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                         ratingDraftTouchedRef.current = true;
                         setReview(value);
                       }}
-                      title="Please rate your Trust Express Captain"
-                      subtitle="Tell us how this trip went. You can select every option that applies."
+                      title="How was your trip?"
                     />
                   </View>
-                ) : null}
+                ) : (
+                  <View className="mt-5 flex-row items-center justify-center rounded-[10px] bg-green-50 px-3 py-3">
+                    <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
+                    <Text className="ml-2 text-sm font-semibold text-green-700">Thanks, your rating was saved</Text>
+                  </View>
+                )}
+
                 {((rideStatus?.canTipDriver && paymentStatus !== 'paid') || tipAmount > 0) ? (
-                  <View className={`${shouldPromptForRating ? 'mt-4' : 'mt-5'} rounded-[22px] bg-[#f8fafc] px-4 py-4`}>
-                    <Text className="text-sm font-semibold uppercase text-gray-500">Optional tip</Text>
+                  <View className="mt-6">
+                    <Text className="text-sm font-bold text-gray-900">Add a tip</Text>
                     {tipAmount > 0 ? (
-                      <Text className="mt-2 text-base font-bold text-green-600">
-                        Tip added: ${tipAmount.toFixed(2)}
-                      </Text>
-                    ) : (
-                      <View className="mt-3">
-                        <Text className="mb-2 text-xs text-gray-500">
-                          Type any amount (e.g. 0.50).
+                      <View className="mt-2 flex-row items-center rounded-[10px] bg-green-50 px-3 py-3">
+                        <Ionicons name="heart" size={16} color="#16a34a" />
+                        <Text className="ml-2 text-sm font-semibold text-green-700">
+                          ${tipAmount.toFixed(2)} tip sent. Thank you!
                         </Text>
-                        <View className="flex-row items-center">
-                          <Text className="mr-2 text-base font-bold text-gray-900">$</Text>
-                          <TextInput
-                            value={tipDraft}
-                            onChangeText={setTipDraft}
-                            placeholder="0.00"
-                            keyboardType="decimal-pad"
-                            editable={!submittingTip}
-                            className="h-11 flex-1 rounded-[16px] bg-white px-3 text-base text-gray-900"
-                          />
+                      </View>
+                    ) : (
+                      <>
+                        <View className="mt-2 flex-row">
+                          {['0.50', '1.00', '2.00', '5.00'].map((amount) => {
+                            const selected = tipDraft === amount;
+                            return (
+                              <TouchableOpacity
+                                key={amount}
+                                onPress={() => setTipDraft(selected ? '' : amount)}
+                                disabled={submittingTip}
+                                className="mr-2 h-10 flex-1 items-center justify-center rounded-[10px]"
+                                style={{ backgroundColor: selected ? PRIMARY_BLUE : '#f3f4f6' }}
+                              >
+                                <Text className={`text-sm font-bold ${selected ? 'text-white' : 'text-gray-800'}`}>${amount}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                        <View className="mt-2 flex-row items-center">
+                          <View className="h-11 flex-1 flex-row items-center rounded-[10px] bg-[#f8fafc] px-3">
+                            <Text className="text-sm font-bold text-gray-500">$</Text>
+                            <TextInput
+                              value={tipDraft}
+                              onChangeText={setTipDraft}
+                              placeholder="Other amount"
+                              placeholderTextColor="#9ca3af"
+                              keyboardType="decimal-pad"
+                              editable={!submittingTip}
+                              className="ml-1 flex-1 text-sm text-gray-900"
+                            />
+                          </View>
                           <TouchableOpacity
                             onPress={handleSendTip}
-                            disabled={submittingTip}
-                            className="ml-2 h-11 items-center justify-center rounded-[16px] px-4"
-                            style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingTip ? 0.7 : 1 }}
+                            disabled={submittingTip || !String(tipDraft || '').trim()}
+                            className="ml-2 h-11 items-center justify-center rounded-[10px] px-5"
+                            style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingTip || !String(tipDraft || '').trim() ? 0.5 : 1 }}
                           >
-                            <Text className="text-sm font-bold text-white">Send</Text>
+                            {submittingTip ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Text className="text-sm font-bold text-white">Send tip</Text>
+                            )}
                           </TouchableOpacity>
                         </View>
-                      </View>
+                      </>
                     )}
-                    {submittingTip ? (
-                      <View className="mt-2 flex-row items-center">
-                        <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-                        <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
-                      </View>
-                    ) : null}
                   </View>
                 ) : null}
+
+                <View className="mt-6 rounded-[10px] bg-[#f8fafc] px-4 py-4">
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-sm font-bold text-gray-900">Trip receipt</Text>
+                    <TouchableOpacity onPress={handleDownloadTripReceipt} disabled={downloadingTripReceipt} hitSlop={8} className="flex-row items-center">
+                      {downloadingTripReceipt ? (
+                        <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+                      ) : (
+                        <>
+                          <Ionicons name="download-outline" size={16} color={PRIMARY_BLUE} />
+                          <Text className="ml-1 text-xs font-bold" style={{ color: PRIMARY_BLUE }}>PDF</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                  <View className="mt-3">
+                    {tripTimelineLabels.map((label, index) => {
+                      const isLast = index === tripTimelineLabels.length - 1;
+                      return (
+                        <View key={`receipt-stop-${index}`} className="flex-row">
+                          <View className="mr-3 items-center" style={{ width: 10 }}>
+                            <View
+                              className="mt-1.5 h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: index === 0 ? PIN_COLORS.start : isLast ? PIN_COLORS.finish : PIN_COLORS.stop }}
+                            />
+                            {!isLast ? <View className="w-px flex-1 bg-gray-300" style={{ minHeight: 14 }} /> : null}
+                          </View>
+                          <Text className={`flex-1 text-sm text-gray-800 ${isLast ? '' : 'pb-3'}`} numberOfLines={2}>{label}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                  <View className="mt-3 border-t border-gray-200 pt-3">
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-sm text-gray-500">Trip fare</Text>
+                      <Text className="text-sm font-semibold text-gray-900">${estimatedAmount.toFixed(2)}</Text>
+                    </View>
+                    {tipAmount > 0 ? (
+                      <View className="mt-2 flex-row items-center justify-between">
+                        <Text className="text-sm text-gray-500">Tip</Text>
+                        <Text className="text-sm font-semibold text-green-600">${tipAmount.toFixed(2)}</Text>
+                      </View>
+                    ) : null}
+                    <View className="mt-2 flex-row items-center justify-between">
+                      <Text className="text-sm text-gray-500">Payment</Text>
+                      <Text className="text-sm font-semibold text-gray-900">{receiptPaymentMethodLabel(rideStatus?.paymentMethod) || '-'}</Text>
+                    </View>
+                    <View className="mt-3 flex-row items-center justify-between">
+                      <Text className="text-base font-bold text-gray-900">Total</Text>
+                      <Text className="text-lg font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
+                    </View>
+                  </View>
+                </View>
+              </ScrollView>
+
+              <View className="border-t border-gray-100 bg-white px-4 pb-2 pt-3">
                 <TouchableOpacity
                   onPress={shouldPromptForRating ? handleSubmitRating : handleSkipRating}
-                  disabled={submittingRating}
-                  className="mt-4 h-14 rounded-[22px] items-center justify-center"
-                  style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingRating ? 0.7 : 1 }}
+                  disabled={submittingRating || (shouldPromptForRating && rating < 1)}
+                  className="h-12 items-center justify-center rounded-[10px]"
+                  style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingRating || (shouldPromptForRating && rating < 1) ? 0.5 : 1 }}
                 >
                   {submittingRating ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text className="text-lg font-bold text-white">
-                      {shouldPromptForRating ? 'Save rating' : 'Finish'}
+                    <Text className="text-base font-bold text-white">
+                      {shouldPromptForRating ? 'Submit rating' : 'Done'}
                     </Text>
                   )}
                 </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleSkipRating}
-                  disabled={submittingRating}
-                  className="mt-3 h-12 items-center justify-center"
-                >
-                  <Text className="text-base font-semibold text-gray-500">
-                    {shouldPromptForRating ? 'Skip for now' : 'Close'}
-                  </Text>
-                </TouchableOpacity>
-              </ScrollView>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
+                {shouldPromptForRating ? (
+                  <TouchableOpacity onPress={handleSkipRating} disabled={submittingRating} className="h-10 items-center justify-center">
+                    <Text className="text-sm font-semibold text-gray-500">Skip for now</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
     </SafeAreaView>
   );

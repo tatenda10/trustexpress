@@ -74,6 +74,22 @@ export async function sendText(to, body) {
   });
 }
 
+/** Throws instead of skipping when unconfigured, since callers (e.g. login codes) must know it wasn't sent. */
+export async function sendTemplate(to, templateName, languageCode, components = []) {
+  if (!isConfigured()) {
+    throw Object.assign(new Error('WhatsApp is not configured on the server'), { status: 503 });
+  }
+  return sendWhatsAppPayload({
+    to,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components,
+    },
+  });
+}
+
 export async function sendButtons(to, body, buttons) {
   return sendWhatsAppPayload({
     to,

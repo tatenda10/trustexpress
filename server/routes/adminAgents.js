@@ -6,7 +6,7 @@ import { hashPassword } from '../lib/admin-password.js';
 import { attachDriverToAgentManual } from '../lib/agent-invites.js';
 import { detachDriverFromAgent, detachPassengerFromAgent, getExistingDriverReferral, resolveDriverByIdentifier } from '../lib/agent-driver-referrals.js';
 import { getAgentRecruitmentDashboard } from '../lib/agent-recruitment.js';
-import { clearRecruitmentPrivateMetadata, resolveClerkUserIdForMetadataSync, syncRecruitmentPrivateMetadata } from '../lib/clerk-user.js';
+import { clearRecruitmentPrivateMetadata, resolveUserIdForMetadataSync, syncRecruitmentPrivateMetadata } from '../lib/users.js';
 
 const router = Router();
 
@@ -250,7 +250,7 @@ router.post('/:agentId/referrals/drivers', requireAdminAuth, requirePermission('
       agentUserId: agentId,
     });
 
-    const clerkIdentity = await resolveClerkUserIdForMetadataSync({
+    const clerkIdentity = await resolveUserIdForMetadataSync({
       clerkUserId: driver.clerk_user_id,
       email: driver.email,
       role: driver.role,

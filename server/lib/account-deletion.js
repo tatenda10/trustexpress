@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getClerkClient } from './clerk-client.js';
+import { getUserStore } from './user-store.js';
 import { query, withTransaction } from '../db/connection.js';
 
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
@@ -277,7 +277,7 @@ export async function deleteEndUserAccount(userId, role, { email = null, fullNam
   });
 
   if (!isSyntheticUser) {
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     await clerkClient.users.deleteUser(userId);
   }
   if (uploadPaths.length > 0) {

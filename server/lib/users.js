@@ -1,36 +1,4 @@
-import { getClerkClient } from './clerk-client.js';
-
-// Short TTL so driver approval from admin is visible soon after refetch (e.g. multi-instance).
-const USER_CACHE_TTL_MS = 15 * 1000;
-// Past the TTL, serve the cached user immediately and refresh in the background, up to this age.
-const USER_CACHE_MAX_STALE_MS = 10 * 60 * 1000;
-const clerkUserCache = new Map();
-const clerkUserInflight = new Map();
-
-function fetchClerkUser(userId) {
-  const existing = clerkUserInflight.get(userId);
-  if (existing) return existing;
-  const request = getClerkClient().users.getUser(userId)
-    .then((user) => {
-      if (clerkUserInflight.get(userId) === request) {
-        clerkUserCache.set(userId, { user, cachedAt: Date.now() });
-      }
-      return user;
-    })
-    .finally(() => {
-      if (clerkUserInflight.get(userId) === request) {
-        clerkUserInflight.delete(userId);
-      }
-    });
-  clerkUserInflight.set(userId, request);
-  return request;
-}
-
-function invalidateClerkUserCache(userId) {
-  const key = String(userId || '').trim();
-  clerkUserCache.delete(key);
-  clerkUserInflight.delete(key);
-}
+import { getUserStore } from './user-store.js';
 
 export function normalizeRole(value) {
   return value === 'driver' ? 'driver' : 'passenger';
@@ -106,6 +74,7 @@ export function toAppUser(user) {
     isFlagged: normalizedStatus === 'flagged',
     isRestricted: normalizedStatus === 'blocked' || normalizedStatus === 'flagged',
     ratingRestrictionReason: privateMeta.ratingRestrictionReason || null,
+    passwordEnabled: user.passwordEnabled === true,
     settings: {
       phoneVisibleToDrivers: privateMeta.phoneVisibleToDrivers === true,
     },
@@ -115,169 +84,102 @@ export function toAppUser(user) {
   };
 }
 
-/**
- * @param {string} userId - Clerk user ID
- * @param {{ skipCache?: boolean }} [opts] - skipCache: true to always fetch from Clerk (e.g. for driver /me so approval status is fresh)
- */
-export async function getClerkUserById(userId, opts = {}) {
-  // Admin and WhatsApp rides can store synthetic passenger IDs; never hit Clerk for them.
+/** Synthetic passenger IDs (admin dispatch, WhatsApp bookings) have no user row. */
+export async function getUserById(userId) {
   const normalizedUserId = String(userId || '').trim();
   if (!normalizedUserId || normalizedUserId.startsWith('dispatch:') || normalizedUserId.startsWith('whatsapp:')) {
     return null;
   }
-  const skipCache = opts.skipCache === true;
-  if (skipCache) {
-    return fetchClerkUser(normalizedUserId);
-  }
-
-  const cached = clerkUserCache.get(normalizedUserId);
-  const ageMs = cached ? Date.now() - cached.cachedAt : Infinity;
-  if (ageMs < USER_CACHE_TTL_MS) {
-    return cached.user;
-  }
-  if (ageMs < USER_CACHE_MAX_STALE_MS) {
-    fetchClerkUser(normalizedUserId).catch(() => {});
-    return cached.user;
-  }
-
-  try {
-    return await fetchClerkUser(normalizedUserId);
-  } catch (error) {
-    if (cached) {
-      return cached.user;
-    }
-    throw error;
-  }
+  return getUserStore().users.getUser(normalizedUserId);
 }
 
 export async function setRoleForUser(userId, role) {
-  const clerkClient = getClerkClient();
   const normalizedRole = normalizeRole(role);
-  await clerkClient.users.updateUserMetadata(userId, {
-    publicMetadata: {
-      role: normalizedRole,
-    },
-  });
-  invalidateClerkUserCache(userId);
+  await getUserStore().users.updateUserMetadata(userId, { publicMetadata: { role: normalizedRole } });
   return normalizedRole;
 }
 
 export async function mergePrivateMetadata(userId, patch) {
-  const clerkClient = getClerkClient();
-  const user = await clerkClient.users.getUser(userId);
-  const nextPrivate = {
-    ...(user.privateMetadata || {}),
-    ...patch,
-  };
-
-  await clerkClient.users.updateUserMetadata(userId, {
-    privateMetadata: nextPrivate,
-  });
-
-  invalidateClerkUserCache(userId);
-
-  return nextPrivate;
+  const user = await getUserStore().users.updateUserMetadata(userId, { privateMetadata: patch });
+  return user.privateMetadata;
 }
 
-function isClerkUserNotFoundError(error) {
+function isUserNotFoundError(error) {
   if (!error) return false;
   if (Number(error.status) === 404) return true;
   const errors = Array.isArray(error.errors) ? error.errors : [];
   return errors.some((item) => item?.code === 'resource_not_found');
 }
 
-export async function resolveClerkUserIdForMetadataSync({ clerkUserId, email, role = 'driver' }) {
-  const mysqlClerkUserId = String(clerkUserId || '').trim();
+/** `clerkUserId` is the users.clerk_user_id column, which is now simply the user's ID. */
+export async function resolveUserIdForMetadataSync({ clerkUserId, email, role = 'driver' }) {
+  const mysqlUserId = String(clerkUserId || '').trim();
   const normalizedEmail = String(email || '').trim().toLowerCase();
 
-  if (mysqlClerkUserId) {
+  if (mysqlUserId) {
     try {
-      await getClerkUserById(mysqlClerkUserId, { skipCache: true });
-      return { clerkUserId: mysqlClerkUserId, repaired: false };
+      await getUserById(mysqlUserId);
+      return { clerkUserId: mysqlUserId, repaired: false };
     } catch (error) {
-      if (!isClerkUserNotFoundError(error)) {
+      if (!isUserNotFoundError(error)) {
         throw error;
       }
     }
   }
 
   if (!normalizedEmail) {
-    return {
-      clerkUserId: mysqlClerkUserId || null,
-      repaired: false,
-      notFoundInClerk: true,
-    };
+    return { clerkUserId: mysqlUserId || null, repaired: false, notFoundInClerk: true };
   }
 
-  const clerkClient = getClerkClient();
-  const list = await clerkClient.users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
+  const list = await getUserStore().users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
   const users = Array.isArray(list?.data) ? list.data : [];
   const expectedRole = normalizeRole(role);
   const match = users.find((user) => normalizeRole(user.publicMetadata?.role) === expectedRole) || users[0] || null;
 
   if (!match?.id) {
-    return {
-      clerkUserId: mysqlClerkUserId || null,
-      repaired: false,
-      notFoundInClerk: true,
-    };
+    return { clerkUserId: mysqlUserId || null, repaired: false, notFoundInClerk: true };
   }
 
   return {
     clerkUserId: match.id,
-    repaired: Boolean(mysqlClerkUserId && mysqlClerkUserId !== match.id),
-    staleMysqlClerkUserId: mysqlClerkUserId && mysqlClerkUserId !== match.id ? mysqlClerkUserId : null,
+    repaired: Boolean(mysqlUserId && mysqlUserId !== match.id),
+    staleMysqlClerkUserId: mysqlUserId && mysqlUserId !== match.id ? mysqlUserId : null,
   };
 }
 
 export async function syncRecruitmentPrivateMetadata(userId, { referredByAgentId, recruitmentSource }) {
   try {
-    await mergePrivateMetadata(userId, {
-      referredByAgentId,
-      recruitmentSource,
-    });
+    await mergePrivateMetadata(userId, { referredByAgentId, recruitmentSource });
     return { synced: true };
   } catch (error) {
-    if (isClerkUserNotFoundError(error)) {
+    if (isUserNotFoundError(error)) {
       return {
         synced: false,
-        reason: 'clerk_user_not_found',
-        message: 'Referral saved, but this Clerk user no longer exists — metadata was not synced.',
+        reason: 'user_not_found',
+        message: 'Referral saved, but this user no longer exists.',
       };
     }
     console.error('syncRecruitmentPrivateMetadata failed', { userId, error });
     return {
       synced: false,
-      reason: 'clerk_sync_failed',
-      message: 'Referral saved, but Clerk metadata could not be updated.',
+      reason: 'sync_failed',
+      message: 'Referral saved, but the user profile could not be updated.',
     };
   }
 }
 
 export async function clearRecruitmentPrivateMetadata(userId) {
-  const clerkClient = getClerkClient();
   try {
-    const user = await clerkClient.users.getUser(userId);
-    const nextPrivate = { ...(user.privateMetadata || {}) };
-    delete nextPrivate.referredByAgentId;
-    delete nextPrivate.recruitmentSource;
-
-    await clerkClient.users.updateUserMetadata(userId, {
-      privateMetadata: nextPrivate,
-    });
-
-    invalidateClerkUserCache(userId);
-
-    return { cleared: true, privateMetadata: nextPrivate };
+    const privateMetadata = await mergePrivateMetadata(userId, { referredByAgentId: null, recruitmentSource: null });
+    return { cleared: true, privateMetadata };
   } catch (error) {
-    if (isClerkUserNotFoundError(error)) {
+    if (isUserNotFoundError(error)) {
       return {
         cleared: false,
-        reason: 'clerk_user_not_found',
-        message: 'Referral removed from database. Clerk user was not found, so metadata was not cleared.',
+        reason: 'user_not_found',
+        message: 'Referral removed from database. The user was not found, so the profile was not updated.',
       };
     }
     throw error;
   }
 }
-

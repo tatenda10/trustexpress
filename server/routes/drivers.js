@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/users.js';
 import { syncClerkUserForRequest } from '../lib/user-sync.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
@@ -58,6 +58,7 @@ import {
 } from '../lib/smile-cash.js';
 import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger-payments.js';
 import { upsertDriverPushTokens } from '../lib/driver-push-tokens.js';
+import { findDriverByLocationKey, issueDriverLocationKey } from '../lib/driver-location-keys.js';
 import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
 import {
   notifyWhatsAppDriverArrived,
@@ -70,7 +71,6 @@ const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DEADLOCK_RETRY_DELAY_MS = 120;
 const DEADLOCK_RETRY_ATTEMPTS = 3;
-const DRIVER_ONLINE_STALE_DAYS = 1;
 const DRIVER_REVIEW_VISIBILITY_DELAY_MINUTES = 30;
 // Must cover the widest radius rides.js expands offers to, or expanded offers get filtered out here.
 const DRIVER_REQUEST_RADIUS_KM = 12;
@@ -140,7 +140,7 @@ const PASSENGER_RIDE_ALERT_CHANNEL_ID = 'passenger-ride-alerts-v1';
 async function notifyPassengerRideStatus(passengerUserId, { title, body, data = {}, channelId = null } = {}) {
   if (!passengerUserId || String(passengerUserId).startsWith('dispatch:') || !title || !body) return;
   try {
-    const passengerUser = await getClerkUserById(passengerUserId);
+    const passengerUser = await getUserById(passengerUserId);
     const pushToken = String(passengerUser?.privateMetadata?.pushToken || '').trim();
     if (!pushToken) return;
 
@@ -184,13 +184,6 @@ function shouldHideFreshPassengerReview(passengerDriverRatedAt) {
   return Date.now() < revealAtMs;
 }
 
-function isDriverAvailabilityFresh(lastSeenAt) {
-  if (!lastSeenAt) return false;
-  const lastSeenMs = new Date(lastSeenAt).getTime();
-  if (!Number.isFinite(lastSeenMs)) return false;
-  return (Date.now() - lastSeenMs) <= DRIVER_ONLINE_STALE_DAYS * 24 * 60 * 60 * 1000;
-}
-
 function computeRideExpiresAt() {
   return null;
 }
@@ -225,7 +218,7 @@ async function cleanupStaleActiveRides(driverUserId = null) {
 }
 
 async function requireDriver(req, res) {
-  const user = await getClerkUserById(req.userId);
+  const user = await getUserById(req.userId);
   await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   if (normalizeRole(appUser.role) !== 'driver') {
@@ -238,7 +231,7 @@ async function requireDriver(req, res) {
 async function getUserProfileImageUrl(userId) {
   if (!userId) return null;
   try {
-    const user = await getClerkUserById(userId);
+    const user = await getUserById(userId);
     return toAppUser(user)?.image_url || null;
   } catch {
     return null;
@@ -266,7 +259,7 @@ router.get('/me', requireAuth, async (req, res) => {
       ...verification,
       wallet: walletStatus,
       availability: availability ? {
-        isOnline: !!availability.is_online && isDriverAvailabilityFresh(availability.last_seen_at),
+        isOnline: !!availability.is_online,
         latitude: availability.current_lat === null ? null : Number(availability.current_lat),
         longitude: availability.current_lng === null ? null : Number(availability.current_lng),
         lastSeenAt: availability.last_seen_at || null,
@@ -765,9 +758,10 @@ router.post('/availability', requireAuth, async (req, res) => {
         car_photo_url,
         current_lat,
         current_lng,
+        location_updated_at,
         is_online,
         last_seen_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? IS NULL, NULL, CURRENT_TIMESTAMP), ?, CURRENT_TIMESTAMP)
       ON DUPLICATE KEY UPDATE
         driver_name = VALUES(driver_name),
         phone_number = VALUES(phone_number),
@@ -777,6 +771,7 @@ router.post('/availability', requireAuth, async (req, res) => {
         vehicle_model = VALUES(vehicle_model),
         number_plate = VALUES(number_plate),
         car_photo_url = VALUES(car_photo_url),
+        location_updated_at = IF(VALUES(current_lat) IS NULL, location_updated_at, CURRENT_TIMESTAMP),
         current_lat = VALUES(current_lat),
         current_lng = VALUES(current_lng),
         is_online = ${forHire ? '0' : 'VALUES(is_online)'},
@@ -793,53 +788,13 @@ router.post('/availability', requireAuth, async (req, res) => {
         vehicle?.carPhotoFrontUrl || vehicle?.carPhotoUrls?.[0] || null,
         Number.isFinite(latitude) ? latitude : null,
         Number.isFinite(longitude) ? longitude : null,
+        Number.isFinite(latitude) && Number.isFinite(longitude) ? 1 : null,
         forHire ? 0 : (isOnline ? 1 : 0),
       ]
     );
 
     if (isOnline && Number.isFinite(latitude) && Number.isFinite(longitude)) {
-      const [activeRide] = await query(
-        `SELECT id, passenger_user_id, status
-         FROM ride_requests
-         WHERE driver_user_id = ?
-           AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-         ORDER BY COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC, id DESC
-         LIMIT 1`,
-        [req.userId]
-      );
-
-      if (activeRide?.passenger_user_id) {
-        emitRideStatusToPassenger(activeRide.passenger_user_id, {
-          rideRequestId: activeRide.id,
-          status: activeRide.status,
-          driverUserId: req.userId,
-          driverCoordinate: { latitude, longitude },
-          driverLocationUpdatedAt: new Date().toISOString(),
-        });
-      } else {
-        const [activeHire] = await query(
-          `SELECT id, hire_request_id, passenger_user_id, driver_user_id, status
-           FROM hire_bookings
-           WHERE driver_user_id = ?
-             AND status IN ('confirmed', 'driver_arrived', 'in_progress')
-           ORDER BY COALESCE(started_at, arrived_at, created_at) DESC, id DESC
-           LIMIT 1`,
-          [req.userId]
-        );
-        if (activeHire?.passenger_user_id) {
-          const livePayload = {
-            hireBookingId: activeHire.id,
-            hireRequestId: activeHire.hire_request_id,
-            status: activeHire.status,
-            driverStage: mapHireDriverStage(activeHire.status),
-            passengerStage: mapHirePassengerStage(activeHire.status),
-            driverCoordinate: { latitude, longitude },
-            driverLocationUpdatedAt: new Date().toISOString(),
-          };
-          emitHireBookingUpdated(activeHire.passenger_user_id, livePayload);
-          emitHireBookingUpdated(activeHire.driver_user_id, livePayload);
-        }
-      }
+      await emitDriverLiveLocation(req.userId, latitude, longitude);
     }
 
     return res.json({
@@ -925,6 +880,109 @@ router.post('/fcm-token', requireAuth, async (req, res) => {
   }
 });
 
+/** Pushes a driver's new position to the passenger of their active ride or hire booking. */
+async function emitDriverLiveLocation(driverUserId, latitude, longitude) {
+  const [activeRide] = await query(
+    `SELECT id, passenger_user_id, status
+     FROM ride_requests
+     WHERE driver_user_id = ?
+       AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+     ORDER BY COALESCE(started_at, arrived_at, assigned_at, requested_at) DESC, id DESC
+     LIMIT 1`,
+    [driverUserId]
+  );
+
+  if (activeRide?.passenger_user_id) {
+    emitRideStatusToPassenger(activeRide.passenger_user_id, {
+      rideRequestId: activeRide.id,
+      status: activeRide.status,
+      driverUserId,
+      driverCoordinate: { latitude, longitude },
+      driverLocationUpdatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const [activeHire] = await query(
+    `SELECT id, hire_request_id, passenger_user_id, driver_user_id, status
+     FROM hire_bookings
+     WHERE driver_user_id = ?
+       AND status IN ('confirmed', 'driver_arrived', 'in_progress')
+     ORDER BY COALESCE(started_at, arrived_at, created_at) DESC, id DESC
+     LIMIT 1`,
+    [driverUserId]
+  );
+  if (activeHire?.passenger_user_id) {
+    const livePayload = {
+      hireBookingId: activeHire.id,
+      hireRequestId: activeHire.hire_request_id,
+      status: activeHire.status,
+      driverStage: mapHireDriverStage(activeHire.status),
+      passengerStage: mapHirePassengerStage(activeHire.status),
+      driverCoordinate: { latitude, longitude },
+      driverLocationUpdatedAt: new Date().toISOString(),
+    };
+    emitHireBookingUpdated(activeHire.passenger_user_id, livePayload);
+    emitHireBookingUpdated(activeHire.driver_user_id, livePayload);
+  }
+}
+
+router.post('/location-key', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+    const key = await issueDriverLocationKey(req.userId);
+    return res.status(201).json({ key });
+  } catch (err) {
+    console.error('POST /api/drivers/location-key', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * Location from the driver app's background task. It runs without a Clerk session, so it
+ * authenticates with the per-device key from POST /location-key instead.
+ */
+router.post('/background-location', async (req, res) => {
+  try {
+    const driverUserId = await findDriverByLocationKey(req.get('x-driver-location-key'));
+    if (!driverUserId) {
+      return res.status(401).json({ error: 'Invalid location key' });
+    }
+
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+    if (
+      !Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || Math.abs(latitude) > 90 || Math.abs(longitude) > 180
+    ) {
+      return res.status(400).json({ error: 'A valid location is required' });
+    }
+
+    const result = await query(
+      `UPDATE driver_availability
+       SET current_lat = ?,
+           current_lng = ?,
+           location_updated_at = CURRENT_TIMESTAMP,
+           last_seen_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?
+         AND is_online = 1`,
+      [latitude, longitude, driverUserId]
+    );
+    const isOnline = Number(result?.affectedRows || 0) > 0;
+    if (isOnline) {
+      await emitDriverLiveLocation(driverUserId, latitude, longitude).catch((error) => {
+        console.error('[drivers.background-location] live emit failed', error?.message || error);
+      });
+    }
+
+    return res.json({ isOnline });
+  } catch (err) {
+    console.error('POST /api/drivers/background-location', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 const DRIVER_LAST_SEEN_TOUCH_INTERVAL_MS = 30 * 1000;
 const driverLastSeenTouchedAt = new Map();
 
@@ -973,7 +1031,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       `SELECT driver_user_id, current_lat, current_lng, vehicle_tier_key, is_online
        FROM driver_availability
        WHERE driver_user_id = ?
-         AND last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
        LIMIT 1`,
       [req.userId]
     );
@@ -1305,7 +1362,6 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
       `SELECT *
        FROM driver_availability
        WHERE driver_user_id = ?
-         AND last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
        LIMIT 1`,
       [req.userId]
     );
@@ -2174,7 +2230,7 @@ router.post('/ride-requests/:rideRequestId/rate-passenger', requireAuth, async (
     );
 
     try {
-      const passengerUser = await getClerkUserById(ride.passenger_user_id);
+      const passengerUser = await getUserById(ride.passenger_user_id);
       const pushToken = passengerUser?.privateMetadata?.pushToken;
       if (pushToken) {
         await sendExpoPushNotifications({

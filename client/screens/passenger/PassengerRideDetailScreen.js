@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, TextInput, Alert, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -43,6 +43,26 @@ function getFareBreakdown(ride) {
   return { originalFare, discountAmount, fareAfterDiscount, tipAmount, totalAmount };
 }
 
+function DetailRow({ icon, label, value, last }) {
+  return (
+    <View className={`flex-row items-center py-3 ${last ? '' : 'border-b border-gray-100'}`}>
+      <Ionicons name={icon} size={17} color="#9ca3af" />
+      <Text className="ml-2.5 flex-1 text-[14px] text-gray-500">{label}</Text>
+      <Text className="max-w-[60%] text-right text-[14px] font-semibold text-gray-900" numberOfLines={1}>{value}</Text>
+    </View>
+  );
+}
+
+function stripPrefix(label) {
+  return String(label || '').replace(/^(Pickup|Drop-off):\s*/i, '');
+}
+
+const STATUS_HERO = {
+  Completed: { icon: 'checkmark', color: '#16a34a', bg: '#dcfce7', title: 'Trip completed', subtitle: 'Thanks for riding with Trust Express!' },
+  Cancelled: { icon: 'close', color: '#dc2626', bg: '#fee2e2', title: 'Trip cancelled', subtitle: 'This ride did not go ahead.' },
+  default: { icon: 'time', color: PRIMARY_BLUE, bg: '#dbeafe', title: 'Trip in progress', subtitle: 'Your ride is still active.' },
+};
+
 export default function PassengerRideDetailScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -66,6 +86,9 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const [lostItemDescription, setLostItemDescription] = useState('');
   const [lostItemContactPhone, setLostItemContactPhone] = useState('');
   const [tipDraft, setTipDraft] = useState('');
+  const [showFareBreakdown, setShowFareBreakdown] = useState(false);
+  const [showRating, setShowRating] = useState(false);
+  const [showLostItem, setShowLostItem] = useState(false);
 
   const loadRide = useCallback(async ({ silent = false } = {}) => {
     if (!rideRequestId) {
@@ -231,7 +254,7 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
       const callbackUrl = ExpoLinking.createURL('passenger-ride-payment');
       const result = await initiatePassengerRideSmilePay(token, rideRequestId, {
         callbackUrl,
-        checkoutMode: 'express_mpgs',
+        checkoutMode: 'hosted',
       });
       const payment = result?.payment || {};
       if (!payment.authorizationUrl && String(payment.nextAction || '').toLowerCase() !== 'poll') {
@@ -358,26 +381,44 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
   const isRefundedPayment = paymentStatus === 'refunded' || paymentStatus === 'refund_pending';
   const canPayWithSmilePay = Boolean(ride?.canPayWithSmilePay) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
   const canPayCash = Boolean(ride?.canPayCash) && paymentStatus !== 'paid' && paymentMethod !== 'cash' && !isRefundedPayment;
+  const hero = STATUS_HERO[ride.status] || STATUS_HERO.default;
+  const paymentLabel = paymentStatus === 'paid'
+    ? 'Paid by card'
+    : paymentStatus === 'refunded'
+      ? 'Refunded'
+      : paymentStatus === 'refund_pending'
+        ? 'Refund in progress'
+        : paymentMethod === 'cash'
+          ? 'Cash'
+          : 'Not paid yet';
+  const paymentIcon = paymentMethod === 'cash' ? 'cash' : paymentStatus === 'paid' ? 'card' : 'wallet-outline';
+  const distanceKm = Number(ride.estimatedDistanceKm || 0);
+  const minutes = Number(ride.estimatedMinutes || 0);
+  const detailRows = [
+    distanceKm > 0 ? { icon: 'navigate-outline', label: 'Distance', value: `${distanceKm.toFixed(1)} km` } : null,
+    minutes > 0 ? { icon: 'time-outline', label: 'Time', value: `${minutes} min` } : null,
+    { icon: 'person-outline', label: 'Driver', value: ride.driverName || 'No driver assigned' },
+    ride.tierName ? { icon: 'car-outline', label: 'Ride type', value: ride.tierName } : null,
+    { icon: 'calendar-outline', label: 'Date', value: formatDate(ride.completedAt || ride.requestedAt) },
+  ].filter(Boolean);
 
   return (
     <View className="flex-1 bg-white">
-      <View className="border-b border-gray-100 bg-white px-5 pb-3" style={{ paddingTop: insets.top + 8 }}>
-        <View className="flex-row items-center">
-          <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-11 w-11 items-center justify-center rounded-full bg-[#f3f6fb]">
-            <Ionicons name="arrow-back" size={22} color="#111827" />
-          </TouchableOpacity>
-          <Text className="text-lg font-bold text-gray-900">Ride Details</Text>
-        </View>
+      <View className="flex-row items-center px-4 pb-2" style={{ paddingTop: insets.top + 6 }}>
+        <TouchableOpacity onPress={() => navigation.goBack()} className="h-10 w-10 items-center justify-center rounded-full">
+          <Ionicons name="arrow-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text className="ml-1 text-[16px] font-semibold text-gray-900">Ride details</Text>
       </View>
 
       <ScrollView
-        contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 140, flexGrow: 1 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40, flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
         {loadError ? (
-          <View className="mb-4 flex-row items-center rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3">
+          <View className="mb-4 flex-row items-center rounded-2xl bg-amber-50 px-4 py-3">
             <View className="min-w-0 flex-1 pr-3">
               <Text className="text-sm font-semibold text-amber-900">Could not refresh details</Text>
               <Text className="mt-1 text-xs text-amber-800">{loadError}</Text>
@@ -395,117 +436,125 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
         ) : null}
-        <View className="rounded-[28px] border border-gray-100 bg-white px-5 py-5">
-          <Text className="text-lg font-bold text-gray-900">{ride.pickupLabel}</Text>
-          <Text className="mt-1 text-sm text-gray-500">to {ride.dropoffLabel}</Text>
-          <Text className="mt-4 text-3xl font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
-          {tipAmount > 0 ? (
-            <Text className="mt-2 text-sm font-medium text-green-600">
-              Includes {formatCurrency(tipAmount)} tip
-            </Text>
-          ) : null}
 
-          <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm text-gray-500">Ride fare</Text>
-              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(fareAfterDiscount || originalFare)}</Text>
-            </View>
-            <View className="mt-2 flex-row items-center justify-between">
-              <Text className="text-sm text-gray-500">Tip</Text>
-              <Text className="text-sm font-semibold text-gray-900">{formatCurrency(tipAmount)}</Text>
-            </View>
-            <View className="mt-3 flex-row items-center justify-between border-t border-gray-200 pt-3">
-              <Text className="text-sm font-bold text-gray-900">Passenger total</Text>
-              <Text className="text-base font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
-            </View>
+        <View className="items-center pb-5 pt-2">
+          <View className="h-16 w-16 items-center justify-center rounded-full" style={{ backgroundColor: hero.color }}>
+            <Ionicons name={hero.icon} size={34} color="#fff" />
           </View>
+          <Text className="mt-3 text-[22px] font-extrabold text-gray-950">{hero.title}</Text>
+          <Text className="mt-1 text-[14px] text-gray-500">{hero.subtitle}</Text>
+        </View>
 
-          <View className="mt-5 border-t border-gray-100 pt-4">
-            <Text className="text-sm text-gray-500">Driver</Text>
-            <Text className="mt-1 text-base font-bold text-gray-900">{ride.driverName || 'No driver assigned'}</Text>
-            <Text className="mt-1 text-sm text-gray-500">{formatDate(ride.completedAt || ride.requestedAt)}</Text>
-          </View>
-
-          <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm font-semibold text-gray-900">Ride payment</Text>
-              <Text className={`text-xs font-bold uppercase ${
-                paymentStatus === 'paid'
-                  ? 'text-emerald-700'
-                  : isRefundedPayment
-                    ? 'text-slate-700'
-                  : paymentMethod === 'cash'
-                    ? 'text-blue-700'
-                    : 'text-amber-700'
-              }`}
-              >
-                {paymentStatus === 'paid' ? 'Paid online' : paymentStatus === 'refunded' ? 'Refunded' : paymentStatus === 'refund_pending' ? 'Refunding' : paymentMethod === 'cash' ? 'Cash' : 'Unpaid'}
-              </Text>
+        <TouchableOpacity
+          onPress={() => setShowFareBreakdown((current) => !current)}
+          activeOpacity={0.8}
+          className="rounded-2xl border border-gray-200 px-4 py-4"
+        >
+          <View className="flex-row items-center">
+            <View className="flex-1">
+              <Text className="text-[13px] text-gray-500">Total fare</Text>
+              <Text className="mt-0.5 text-[28px] font-extrabold text-gray-950">{formatCurrency(totalAmount)}</Text>
+              {tipAmount > 0 ? (
+                <Text className="text-[12px] font-medium text-green-600">Includes {formatCurrency(tipAmount)} tip</Text>
+              ) : null}
             </View>
-            {(canPayCash || canPayWithSmilePay) ? (
-              <View className="mt-4 flex-row gap-3">
-                {canPayCash ? (
-                  <TouchableOpacity
-                    onPress={handlePayCash}
-                    disabled={startingPayment}
-                    className="h-12 flex-1 items-center justify-center rounded-[16px] bg-slate-200"
-                    style={{ opacity: startingPayment ? 0.7 : 1 }}
-                  >
-                    <Text className="text-sm font-bold uppercase text-gray-800">Pay cash</Text>
-                  </TouchableOpacity>
-                ) : null}
-                {canPayWithSmilePay ? (
-                  <TouchableOpacity
-                    onPress={handlePayWithSmilePay}
-                    disabled={startingPayment}
-                    className="h-12 flex-1 items-center justify-center rounded-[16px]"
-                    style={{ backgroundColor: PRIMARY_BLUE, opacity: startingPayment ? 0.7 : 1 }}
-                  >
-                    {startingPayment ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text className="text-sm font-bold uppercase text-white">Pay by card</Text>
-                    )}
-                  </TouchableOpacity>
-                ) : null}
+            <Ionicons name={showFareBreakdown ? 'chevron-up' : 'chevron-forward'} size={20} color="#9ca3af" />
+          </View>
+          {showFareBreakdown ? (
+            <View className="mt-3 border-t border-gray-100 pt-3">
+              <View className="flex-row justify-between">
+                <Text className="text-[14px] text-gray-500">Ride fare</Text>
+                <Text className="text-[14px] font-semibold text-gray-900">{formatCurrency(fareAfterDiscount || originalFare)}</Text>
               </View>
-            ) : null}
-          </View>
+              {Number(ride.discountAmount || 0) > 0 ? (
+                <View className="mt-2 flex-row justify-between">
+                  <Text className="text-[14px] text-gray-500">Discount</Text>
+                  <Text className="text-[14px] font-semibold text-green-600">-{formatCurrency(ride.discountAmount)}</Text>
+                </View>
+              ) : null}
+              <View className="mt-2 flex-row justify-between">
+                <Text className="text-[14px] text-gray-500">Tip</Text>
+                <Text className="text-[14px] font-semibold text-gray-900">{formatCurrency(tipAmount)}</Text>
+              </View>
+            </View>
+          ) : null}
+        </TouchableOpacity>
 
-          <View className="mt-5 flex-row items-center justify-between gap-3">
-            <TouchableOpacity
-              onPress={handleDownloadReceipt}
-              disabled={downloadingReceipt}
-              className="flex-1 h-12 items-center justify-center rounded-[16px] border border-blue-200 bg-white"
-              style={{ opacity: downloadingReceipt ? 0.6 : 1 }}
-            >
-              {downloadingReceipt ? (
-                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-              ) : (
-                <Text className="text-sm font-bold uppercase" style={{ color: PRIMARY_BLUE }}>
-                  Download receipt
-                </Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handlePrintReceipt}
-              disabled={printingReceipt}
-              className="flex-1 h-12 items-center justify-center rounded-[16px] bg-[#206EFF]"
-              style={{ opacity: printingReceipt ? 0.6 : 1 }}
-            >
-              {printingReceipt ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text className="text-sm font-bold uppercase text-white">
-                  Print receipt
-                </Text>
-              )}
-            </TouchableOpacity>
+        <View className="mt-3 rounded-2xl border border-gray-200 px-4 py-3.5">
+          <View className="flex-row items-center">
+            <View className="h-9 w-9 items-center justify-center rounded-lg bg-green-50">
+              <Ionicons name={paymentIcon} size={19} color="#16a34a" />
+            </View>
+            <Text className="ml-3 flex-1 text-[15px] font-semibold text-gray-900">{paymentLabel}</Text>
+            {paymentStatus === 'paid' ? <Ionicons name="checkmark-circle" size={20} color="#16a34a" /> : null}
+          </View>
+          {(canPayCash || canPayWithSmilePay) ? (
+            <View className="mt-3 flex-row gap-2.5">
+              {canPayCash ? (
+                <TouchableOpacity
+                  onPress={handlePayCash}
+                  disabled={startingPayment}
+                  className="h-11 flex-1 items-center justify-center rounded-xl bg-[#f3f4f6]"
+                  style={{ opacity: startingPayment ? 0.7 : 1 }}
+                >
+                  <Text className="text-[14px] font-bold text-gray-800">Pay cash</Text>
+                </TouchableOpacity>
+              ) : null}
+              {canPayWithSmilePay ? (
+                <TouchableOpacity
+                  onPress={handlePayWithSmilePay}
+                  disabled={startingPayment}
+                  className="h-11 flex-1 items-center justify-center rounded-xl"
+                  style={{ backgroundColor: PRIMARY_BLUE, opacity: startingPayment ? 0.7 : 1 }}
+                >
+                  {startingPayment ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-[14px] font-bold text-white">Pay by card</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+
+        <View className="mt-3 rounded-2xl border border-gray-200 px-4 py-3.5">
+          <View className="flex-row">
+            <View className="mr-3 items-center pt-1.5">
+              <View className="h-2.5 w-2.5 rounded-full bg-green-600" />
+              <View className="my-1 w-0.5 flex-1 bg-gray-200" />
+              <View className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PRIMARY_BLUE }} />
+            </View>
+            <View className="flex-1">
+              <Text className="text-[12px] text-gray-400">Pickup</Text>
+              <Text className="text-[14px] font-semibold text-gray-900">{stripPrefix(ride.pickupLabel)}</Text>
+              <Text className="mt-3 text-[12px] text-gray-400">Drop-off</Text>
+              <Text className="text-[14px] font-semibold text-gray-900">{stripPrefix(ride.dropoffLabel)}</Text>
+            </View>
           </View>
         </View>
 
-        {ride.canRateDriver ? (
-          <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
+        <Text className="mb-1 mt-5 text-[16px] font-bold text-gray-900">Ride details</Text>
+        {detailRows.map((row, index) => (
+          <DetailRow key={row.label} {...row} last={index === detailRows.length - 1} />
+        ))}
+
+        {ride.passengerDriverRating && !ride.canRateDriver ? (
+          <View className="mt-4 rounded-2xl bg-[#f9fafb] px-4 py-3.5">
+            <Text className="text-[13px] text-gray-500">Your rating</Text>
+            <View className="mt-1.5 flex-row">
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Ionicons key={value} name={value <= ride.passengerDriverRating ? 'star' : 'star-outline'} size={20} color={value <= ride.passengerDriverRating ? '#f59e0b' : '#d1d5db'} />
+              ))}
+            </View>
+            {ride.passengerDriverReview ? (
+              <Text className="mt-2 text-[14px] text-gray-700">{ride.passengerDriverReview}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {ride.canRateDriver && showRating ? (
+          <View className="mt-4 rounded-2xl border border-gray-200 px-4 py-4">
             <RideRatingTagPicker
               rating={rating}
               onChangeRating={setRating}
@@ -514,106 +563,126 @@ export default function PassengerRideDetailScreen({ navigation, route }) {
               onToggleTag={(tag) => setSelectedRatingTags((current) => toggleRatingTag(current, tag))}
               review={review}
               onChangeReview={setReview}
-              title="Please rate your Trust Express Captain"
+              title="Rate your Trust Express Captain"
               subtitle={`How was your trip with ${ride.driverName || 'your driver'}?`}
             />
-
             <TouchableOpacity
               onPress={handleSubmitRating}
               disabled={submitting}
-              className="mt-5 h-14 items-center justify-center rounded-[22px]"
+              className="mt-4 h-12 items-center justify-center rounded-xl"
               style={{ backgroundColor: PRIMARY_BLUE, opacity: submitting ? 0.7 : 1 }}
             >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Save Rating</Text>}
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-[15px] font-bold text-white">Save rating</Text>}
             </TouchableOpacity>
-          </View>
-        ) : ride.passengerDriverRating ? (
-          <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
-            <Text className="text-xl font-bold text-gray-900">Your Rating</Text>
-            <View className="mt-4 flex-row">
-              {[1, 2, 3, 4, 5].map((value) => (
-                <Ionicons key={value} name={value <= ride.passengerDriverRating ? 'star' : 'star-outline'} size={24} color={value <= ride.passengerDriverRating ? '#f59e0b' : '#9ca3af'} />
-              ))}
-            </View>
-            {ride.passengerDriverReview ? (
-              <Text className="mt-4 text-base text-gray-700">{ride.passengerDriverReview}</Text>
-            ) : null}
           </View>
         ) : null}
 
         {ride.canTipDriver && paymentStatus !== 'paid' ? (
-          <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
-            <Text className="text-xl font-bold text-gray-900">Tip Driver</Text>
-            <Text className="mt-2 text-sm text-gray-500">
-              Add an optional thank-you tip for {ride.driverName || 'your driver'}. Type any amount (e.g. 0.50).
-            </Text>
-            <View className="mt-5 flex-row items-center">
-              <Text className="mr-2 text-xl font-bold text-gray-900">$</Text>
-              <TextInput
-                value={tipDraft}
-                onChangeText={setTipDraft}
-                placeholder="0.00"
-                keyboardType="decimal-pad"
-                editable={!submittingTip}
-                className="h-12 flex-1 rounded-[18px] bg-[#f8fafc] px-4 text-base text-gray-900"
-              />
+          <View className="mt-4 rounded-2xl border border-gray-200 px-4 py-4">
+            <Text className="text-[15px] font-bold text-gray-900">Tip {ride.driverName || 'your driver'}</Text>
+            <Text className="mt-0.5 text-[13px] text-gray-500">Optional thank-you, any amount.</Text>
+            <View className="mt-3 flex-row items-center">
+              <View className="h-11 flex-1 flex-row items-center rounded-xl bg-[#f3f4f6] px-3">
+                <Text className="text-[16px] font-bold text-gray-700">$</Text>
+                <TextInput
+                  value={tipDraft}
+                  onChangeText={setTipDraft}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  editable={!submittingTip}
+                  className="ml-1 flex-1 text-[16px] text-gray-900"
+                />
+              </View>
               <TouchableOpacity
                 onPress={handleSendTip}
                 disabled={submittingTip}
-                className="ml-3 h-12 items-center justify-center rounded-[18px] px-5"
+                className="ml-2.5 h-11 items-center justify-center rounded-xl px-5"
                 style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingTip ? 0.7 : 1 }}
               >
-                <Text className="text-sm font-bold text-white">Send</Text>
+                {submittingTip ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-[14px] font-bold text-white">Send</Text>}
               </TouchableOpacity>
             </View>
-            {submittingTip ? (
-              <View className="mt-2 flex-row items-center">
-                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-                <Text className="ml-2 text-sm text-gray-500">Sending tip...</Text>
-              </View>
-            ) : null}
-          </View>
-        ) : Number(ride.tipAmount || 0) > 0 ? (
-          <View className="mt-5 rounded-[28px] border border-green-100 bg-white px-5 py-5">
-            <Text className="text-xl font-bold text-gray-900">Driver Tip</Text>
-            <Text className="mt-3 text-2xl font-bold text-green-600">{formatCurrency(ride.tipAmount)}</Text>
-            <Text className="mt-2 text-sm text-gray-500">Thanks for supporting your driver.</Text>
           </View>
         ) : null}
 
-        <View className="mt-5 rounded-[28px] border border-gray-100 bg-white px-5 py-5">
-          <Text className="text-xl font-bold text-gray-900">Lost item</Text>
-          <Text className="mt-2 text-sm text-gray-500">
-            Left something in the car? Report it here and support will follow up.
-          </Text>
-          <TextInput
-            value={lostItemDescription}
-            onChangeText={setLostItemDescription}
-            placeholder="Describe the item you lost"
-            multiline
-            textAlignVertical="top"
-            className="mt-4 min-h-[110px] rounded-[18px] bg-[#f8fafc] px-4 py-4 text-base text-gray-900"
-          />
-          <TextInput
-            value={lostItemContactPhone}
-            onChangeText={setLostItemContactPhone}
-            placeholder="Contact phone (optional)"
-            keyboardType="phone-pad"
-            className="mt-3 h-12 rounded-[18px] bg-[#f8fafc] px-4 text-base text-gray-900"
-          />
-          <TouchableOpacity
-            onPress={handleReportLostItem}
-            disabled={submittingLostItem}
-            className="mt-4 h-12 items-center justify-center rounded-[18px]"
-            style={{ backgroundColor: PRIMARY_BLUE, opacity: submittingLostItem ? 0.7 : 1 }}
-          >
-            {submittingLostItem ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text className="text-sm font-bold uppercase text-white">Report lost item</Text>
-            )}
-          </TouchableOpacity>
+        <View className="mt-6 gap-2.5">
+          {ride.canRateDriver && !showRating ? (
+            <TouchableOpacity
+              onPress={() => setShowRating(true)}
+              className="h-12 items-center justify-center rounded-xl border-[1.5px]"
+              style={{ borderColor: PRIMARY_BLUE, backgroundColor: '#eef4ff' }}
+            >
+              <Text className="text-[15px] font-bold" style={{ color: PRIMARY_BLUE }}>Rate driver</Text>
+            </TouchableOpacity>
+          ) : null}
+          <View className="flex-row gap-2.5">
+            <TouchableOpacity
+              onPress={handleDownloadReceipt}
+              disabled={downloadingReceipt}
+              className="h-12 flex-1 items-center justify-center rounded-xl border border-gray-200"
+              style={{ opacity: downloadingReceipt ? 0.6 : 1 }}
+            >
+              {downloadingReceipt ? (
+                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+              ) : (
+                <Text className="text-[15px] font-bold text-gray-900">View receipt</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handlePrintReceipt}
+              disabled={printingReceipt}
+              className="h-12 w-12 items-center justify-center rounded-xl border border-gray-200"
+              style={{ opacity: printingReceipt ? 0.6 : 1 }}
+            >
+              {printingReceipt ? (
+                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+              ) : (
+                <Ionicons name="print-outline" size={20} color="#111827" />
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
+
+        <TouchableOpacity
+          onPress={() => setShowLostItem((current) => !current)}
+          activeOpacity={0.7}
+          className="mt-5 flex-row items-center py-3"
+        >
+          <Ionicons name="briefcase-outline" size={18} color="#6b7280" />
+          <Text className="ml-2.5 flex-1 text-[14px] font-semibold text-gray-700">Report a lost item</Text>
+          <Ionicons name={showLostItem ? 'chevron-up' : 'chevron-down'} size={18} color="#9ca3af" />
+        </TouchableOpacity>
+        {showLostItem ? (
+          <View>
+            <TextInput
+              value={lostItemDescription}
+              onChangeText={setLostItemDescription}
+              placeholder="Describe the item you lost"
+              multiline
+              textAlignVertical="top"
+              className="min-h-[96px] rounded-xl bg-[#f3f4f6] px-4 py-3 text-[15px] text-gray-900"
+            />
+            <TextInput
+              value={lostItemContactPhone}
+              onChangeText={setLostItemContactPhone}
+              placeholder="Contact phone (optional)"
+              keyboardType="phone-pad"
+              className="mt-2.5 h-11 rounded-xl bg-[#f3f4f6] px-4 text-[15px] text-gray-900"
+            />
+            <TouchableOpacity
+              onPress={handleReportLostItem}
+              disabled={submittingLostItem}
+              className="mt-3 h-11 items-center justify-center rounded-xl bg-gray-900"
+              style={{ opacity: submittingLostItem ? 0.7 : 1 }}
+            >
+              {submittingLostItem ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text className="text-[14px] font-bold text-white">Send report</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );

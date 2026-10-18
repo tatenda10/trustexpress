@@ -5,13 +5,14 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server as SocketIOServer } from 'socket.io';
-import { verifyToken } from '@clerk/backend';
+import { verifyAuthToken } from './middleware/auth.js';
 import routes from './routes/index.js';
 import { getRealtimeUserRoom, setRealtimeServer } from './lib/realtime.js';
 import { buildAuthorityShareTrackingHtml } from './lib/admin-share-page.js';
 import { startDriverWalletTopupReconciler } from './lib/wallet-topup-reconciler.js';
 import { startRideOfferExpansionLoop } from './routes/rides.js';
 import { startRideCommissionReconciler } from './lib/ride-commission-reconciler.js';
+import { ensureDriverLocationUpdatedAtColumn } from './lib/driver-location-schema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT);
@@ -229,11 +230,8 @@ io.use(async (socket, next) => {
       return next(new Error('Missing socket auth token'));
     }
 
-    const payload = await verifyToken(token, {
-      secretKey: process.env.CLERK_SECRET_KEY,
-    });
-
-    socket.data.userId = payload.sub;
+    const { userId } = await verifyAuthToken(token);
+    socket.data.userId = userId;
     return next();
   } catch {
     return next(new Error('Invalid or expired socket token'));
@@ -251,6 +249,8 @@ io.on('connection', (socket) => {
 });
 
 setRealtimeServer(io);
+
+await ensureDriverLocationUpdatedAtColumn();
 
 httpServer.listen(PORT, () => {
   console.log(`Trust Express API at http://localhost:${PORT}`);

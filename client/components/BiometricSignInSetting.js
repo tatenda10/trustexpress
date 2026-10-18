@@ -10,8 +10,9 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useSession, useUser } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth, useUser } from '../auth/AuthProvider';
+import { getAuthErrorMessage, verifyCurrentPassword } from '../auth/authApi';
 import { PRIMARY_BLUE } from '../constants/colors';
 import {
   BIOMETRIC_LABEL,
@@ -20,12 +21,11 @@ import {
   isBiometricSignInSupported,
   isWrongPasswordError,
   saveBiometricCredentials,
-  verifyPasswordForSession,
 } from '../services/biometricSignIn';
 
 export default function BiometricSignInSetting({ role }) {
   const { user } = useUser();
-  const { session } = useSession();
+  const { getToken } = useAuth();
   const email = String(user?.primaryEmailAddress?.emailAddress || '').trim().toLowerCase();
   const supported = isBiometricSignInSupported();
   const hasPassword = user?.passwordEnabled !== false;
@@ -73,13 +73,13 @@ export default function BiometricSignInSetting({ role }) {
     setBusy(true);
     setError('');
     try {
-      await verifyPasswordForSession(session, password);
+      await verifyCurrentPassword(await getToken(), password);
     } catch (verifyError) {
       setBusy(false);
       setError(
         isWrongPasswordError(verifyError)
           ? 'That password is not correct.'
-          : verifyError?.errors?.[0]?.longMessage || verifyError?.message || 'Could not check your password. Try again.'
+          : getAuthErrorMessage(verifyError, 'Could not check your password. Try again.')
       );
       return;
     }

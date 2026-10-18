@@ -3,8 +3,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool, { query } from '../db/connection.js';
-import { getClerkClient } from '../lib/clerk-client.js';
-import { toAppUser } from '../lib/clerk-user.js';
+import { getUserStore } from '../lib/user-store.js';
+import { toAppUser } from '../lib/users.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,7 +80,7 @@ async function loadRowsFromDatabase() {
 }
 
 async function loadRowsFromClerk() {
-  const clerk = getClerkClient();
+  const clerk = getUserStore();
   const rawRows = [];
   let offset = 0;
   const limit = 100;

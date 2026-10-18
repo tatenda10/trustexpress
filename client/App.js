@@ -3,17 +3,14 @@ import { Alert, AppState, DeviceEventEmitter, Platform, Text, View } from 'react
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { ClerkProvider, useAuth, useUser } from '@clerk/clerk-expo';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import "./global.css"
 
-// Config
-import { CLERK_PUBLISHABLE_KEY, tokenCache } from './config/clerk';
+import { AuthProvider, useAuth, useUser } from './auth/AuthProvider';
 import { getDriverCurrentRide, getDriverRideRequests, setApiAuthErrorHandler } from './api';
 
 // Screens - Shared
@@ -26,12 +23,7 @@ import BlockedAccountScreen from './screens/shared/BlockedAccountScreen';
 import PassengerWelcomeScreen from './screens/passenger/PassengerWelcomeScreen';
 import PassengerOnboardingScreen from './screens/passenger/onboarding/PassengerOnboardingScreen';
 import PassengerTabNavigator from './screens/passenger/PassengerTabNavigator';
-import PassengerCreateAccountScreen from './screens/passenger/auth/PassengerCreateAccountScreen';
-import PassengerLoginScreen from './screens/passenger/auth/PassengerLoginScreen';
-import PassengerEmailSignUpScreen from './screens/passenger/auth/PassengerEmailSignUpScreen';
-import PassengerPhoneSignUpScreen from './screens/passenger/auth/PassengerPhoneSignUpScreen';
-import PassengerEmailLoginScreen from './screens/passenger/auth/PassengerEmailLoginScreen';
-import PassengerPhoneLoginScreen from './screens/passenger/auth/PassengerPhoneLoginScreen';
+import AuthScreen from './screens/shared/auth/AuthScreen';
 import PassengerEnableLocationScreen from './screens/passenger/PassengerEnableLocationScreen';
 import PassengerIdentityVerificationScreen from './screens/passenger/PassengerIdentityVerificationScreen';
 import { passengerPhoneVerificationTabsParams, replaceWithPassengerPhoneVerification, replaceWithPassengerTabs } from './navigation/passengerNavigation';
@@ -44,16 +36,13 @@ import DriverRegisterCarScreen from './screens/driver/DriverRegisterCarScreen';
 import DriverTypeSelectionScreen from './screens/driver/onboarding/DriverTypeSelectionScreen';
 import DriverTabNavigator from './screens/driver/DriverTabNavigator';
 import DriverOnboardingScreen from './screens/driver/onboarding/DriverOnboardingScreen';
-import DriverCreateAccountScreen from './screens/driver/auth/DriverCreateAccountScreen';
-import DriverLoginScreen from './screens/driver/auth/DriverLoginScreen';
-import DriverEmailLoginScreen from './screens/driver/auth/DriverEmailLoginScreen';
-import DriverPhoneLoginScreen from './screens/driver/auth/DriverPhoneLoginScreen';
 import { DriverStatusProvider } from './context/DriverStatusContext';
 import { AgentInviteProvider, useAgentInvite } from './context/AgentInviteContext';
 import { PassengerReferralProvider, usePassengerReferral } from './context/PassengerReferralContext';
 import { restoreAgentInviteFromAndroidInstallReferrer } from './services/agentInstallReferrer';
 import { navigationRef } from './navigationRef';
 import * as Location from 'expo-location';
+import { clearDriverBackgroundLocation } from './services/driverBackgroundLocation';
 import {
   isTripOverlaySupported,
   showTripOverlay,
@@ -104,20 +93,22 @@ function AuthStack() {
       {/* Passenger Routes */}
       <Stack.Screen name="PassengerWelcome" component={PassengerWelcomeScreen} />
       <Stack.Screen name="PassengerOnboarding" component={PassengerOnboardingScreen} />
-      <Stack.Screen name="PassengerCreateAccount" component={PassengerCreateAccountScreen} />
-      <Stack.Screen name="PassengerLogin" component={PassengerLoginScreen} />
-      <Stack.Screen name="PassengerEmailSignUp" component={PassengerEmailSignUpScreen} />
-      <Stack.Screen name="PassengerPhoneSignUp" component={PassengerPhoneSignUpScreen} />
-      <Stack.Screen name="PassengerEmailLogin" component={PassengerEmailLoginScreen} />
-      <Stack.Screen name="PassengerPhoneLogin" component={PassengerPhoneLoginScreen} />
+      <Stack.Screen name="PassengerCreateAccount">
+        {(props) => <AuthScreen {...props} role="passenger" mode="sign_up" />}
+      </Stack.Screen>
+      <Stack.Screen name="PassengerLogin">
+        {(props) => <AuthScreen {...props} role="passenger" mode="sign_in" />}
+      </Stack.Screen>
       
       {/* Driver Routes */}
       <Stack.Screen name="DriverWelcome" component={DriverWelcomeScreen} />
       <Stack.Screen name="DriverOnboarding" component={DriverOnboardingScreen} />
-      <Stack.Screen name="DriverCreateAccount" component={DriverCreateAccountScreen} />
-      <Stack.Screen name="DriverLogin" component={DriverLoginScreen} />
-      <Stack.Screen name="DriverEmailLogin" component={DriverEmailLoginScreen} />
-      <Stack.Screen name="DriverPhoneLogin" component={DriverPhoneLoginScreen} />
+      <Stack.Screen name="DriverCreateAccount">
+        {(props) => <AuthScreen {...props} role="driver" mode="sign_up" />}
+      </Stack.Screen>
+      <Stack.Screen name="DriverLogin">
+        {(props) => <AuthScreen {...props} role="driver" mode="sign_in" />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
@@ -133,7 +124,7 @@ import { clearPendingDriverKind, getDriverVehicleRoute, mergePendingDriverKind, 
 const ROLE_STORAGE_KEY = 'trust_express_role';
 const getDriverStatusCacheKey = (userId) => `trust_express_driver_status:${userId}`;
 
-/** Survives AppStack remounts so Clerk reloads do not replay full role/driver bootstrap. */
+/** Survives AppStack remounts so session refreshes do not replay full role/driver bootstrap. */
 let sessionRoleBootstrapUserId = null;
 let sessionRoleBootstrapSnapshot = null;
 let sessionDriverStatusUserId = null;
@@ -241,7 +232,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
     const metaRole = String(profile?.publicMetadata?.role || '').trim().toLowerCase();
     if (metaRole === 'driver' || metaRole === 'passenger') return metaRole;
 
-    // /me always returns role; accept it even when Clerk publicMetadata.role is missing.
+    // /me always returns role; accept it even when publicMetadata.role is missing.
     // Requiring publicMetadata here left signed-in users stuck on splash with no role.
     const directRole = String(profile?.role || '').trim().toLowerCase();
     if (directRole === 'driver' || directRole === 'passenger') return directRole;
@@ -428,6 +419,8 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
       fareLabel: payload?.fareLabel,
       estimatedAmount: payload?.estimatedAmount,
       rideRequestId,
+      expiresAt: payload?.expiresAt,
+      remainingSeconds: payload?.remainingSeconds,
     };
 
     if (backgroundOverlayVisibleRef.current) {
@@ -1615,7 +1608,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
 
 // Main App Component – use isSignedIn so setActive() correctly switches to AppStack (no manual navigate)
 function AppContent() {
-  const { isLoaded, isSignedIn, signOut } = useAuth();
+  const { isLoaded, isSignedIn, signOut, getToken } = useAuth();
   const { setInviteFromToken, hydrateStoredInvite } = useAgentInvite();
   const { setReferrerEmailFromDeepLink, hydrateStoredReferral } = usePassengerReferral();
   const pendingInviteNavigationRef = useRef(null);
@@ -1732,13 +1725,19 @@ function AppContent() {
     }
   }, [isSignedIn]);
 
+  useEffect(() => {
+    if (isLoaded && !isSignedIn) {
+      clearDriverBackgroundLocation().catch(() => {});
+    }
+  }, [isLoaded, isSignedIn]);
+
   // Preload notification module during startup so signup/login does not trigger a mid-session bundle reload.
   useEffect(() => {
     import('./notifications').catch(() => {});
   }, []);
 
-  // Avoid hard auto-logout on a single backend 401. Mobile networks can briefly
-  // return transient auth errors while Clerk session is still valid.
+  // Never sign out on a single API 401: refresh the session instead. The provider only signs out
+  // when the refresh endpoint itself says the session has ended.
   useEffect(() => {
     setApiAuthErrorHandler((authError) => {
       const authCode = String(authError?.code || '').trim().toUpperCase();
@@ -1754,6 +1753,10 @@ function AppContent() {
           message: authError?.message || null,
           restriction,
         });
+        return;
+      }
+      if (authError?.status === 401 && authCode !== 'SESSION_REPLACED') {
+        getToken({ skipCache: true }).catch(() => {});
         return;
       }
       if (authCode !== 'SESSION_REPLACED') return;
@@ -1778,12 +1781,9 @@ function AppContent() {
       );
     });
     return () => setApiAuthErrorHandler(null);
-  }, [signOut]);
+  }, [getToken, signOut]);
 
   useEffect(() => {
-    // Complete OAuth session when app opens from redirect (Clerk Google/Apple sign-in)
-    WebBrowser.maybeCompleteAuthSession();
-
     let cancelled = false;
     hydrateStoredInvite().catch(() => {});
     hydrateStoredReferral().catch(() => {});
@@ -1795,16 +1795,12 @@ function AppContent() {
       }
     };
 
-    // When app is opened via deep link (e.g. trustexpress://oauth-callback?...) complete the auth session
     const sub = Linking.addEventListener('url', ({ url }) => {
-      WebBrowser.maybeCompleteAuthSession();
       handleInviteUrl(url).catch(() => {});
     });
 
-    // Handle cold start: app opened from closed state with OAuth redirect URL
     Linking.getInitialURL?.().then((url) => {
       if (url) {
-        WebBrowser.maybeCompleteAuthSession();
         handleInviteUrl(url).catch(() => {});
         return;
       }
@@ -1861,37 +1857,14 @@ function AppContent() {
   );
 }
 
-// Root App with Clerk Provider
 export default function App() {
-  // ClerkProvider throws on an undefined key, which shows up as an instant crash
-  // on launch for any build where EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY wasn't injected.
-  if (!CLERK_PUBLISHABLE_KEY) {
-    return (
-      <SafeAreaProvider>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#ffffff' }}>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827', textAlign: 'center' }}>
-            App configuration missing
-          </Text>
-          <Text style={{ marginTop: 8, fontSize: 14, color: '#4b5563', textAlign: 'center' }}>
-            EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is not set for this build. Add it to the build profile
-            environment and rebuild.
-          </Text>
-        </View>
-        <StatusBar style="auto" />
-      </SafeAreaProvider>
-    );
-  }
-
   return (
-    <ClerkProvider
-      publishableKey={CLERK_PUBLISHABLE_KEY}
-      tokenCache={tokenCache}
-    >
+    <AuthProvider>
       <AgentInviteProvider>
         <PassengerReferralProvider>
           <AppContent />
         </PassengerReferralProvider>
       </AgentInviteProvider>
-    </ClerkProvider>
+    </AuthProvider>
   );
 }

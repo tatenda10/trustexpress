@@ -1,5 +1,5 @@
 import { query } from '../db/connection.js';
-import { getClerkUserById, getPrimaryEmail, getPrimaryPhone, resolveClerkUserIdForMetadataSync } from './clerk-user.js';
+import { getUserById, getPrimaryEmail, getPrimaryPhone, resolveUserIdForMetadataSync } from './users.js';
 import { getAgentRewardProgress } from './agent-rewards.js';
 import { repairStaleDriverClerkUserId } from './agent-driver-referrals.js';
 
@@ -205,13 +205,13 @@ async function listAgentDriverRecruitmentApplications(agentUserId) {
       let clerkUser = null;
 
       try {
-        clerkUser = await getClerkUserById(driverUserId, { skipCache: true });
+        clerkUser = await getUserById(driverUserId, { skipCache: true });
       } catch {
         clerkUser = null;
       }
 
       if (!clerkUser && row.user_email) {
-        const identity = await resolveClerkUserIdForMetadataSync({
+        const identity = await resolveUserIdForMetadataSync({
           clerkUserId: driverUserId,
           email: row.user_email,
           role: 'driver',
@@ -257,13 +257,13 @@ async function listAgentDriverRecruitmentApplications(agentUserId) {
           );
           identityRow = { ...row, ...(refreshedRows[0] || {}), driver_user_id: driverUserId };
           try {
-            clerkUser = await getClerkUserById(driverUserId, { skipCache: true });
+            clerkUser = await getUserById(driverUserId, { skipCache: true });
           } catch {
             clerkUser = null;
           }
         } else if (identity.clerkUserId) {
           try {
-            clerkUser = await getClerkUserById(identity.clerkUserId, { skipCache: true });
+            clerkUser = await getUserById(identity.clerkUserId, { skipCache: true });
           } catch {
             clerkUser = null;
           }
@@ -339,7 +339,7 @@ async function listAgentPassengerRecruitmentApplications(agentUserId) {
     rows.map(async (row) => {
       let clerkUser = null;
       try {
-        clerkUser = await getClerkUserById(row.passenger_user_id, { skipCache: true });
+        clerkUser = await getUserById(row.passenger_user_id, { skipCache: true });
       } catch {
         clerkUser = null;
       }

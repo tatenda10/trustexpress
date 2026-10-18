@@ -1,5 +1,5 @@
 import { query } from '../db/connection.js';
-import { getClerkUserById, toAppUser } from './clerk-user.js';
+import { getUserById, toAppUser } from './users.js';
 import { upsertClerkUserToMysql } from './user-sync.js';
 
 export function normalizeReferrerEmail(value) {
@@ -88,14 +88,14 @@ export async function attachPassengerPeerReferral({
     throw buildReferralError('You cannot refer yourself');
   }
 
-  const referredUser = await getClerkUserById(referredId);
+  const referredUser = await getUserById(referredId);
   const referredAppUser = toAppUser(referredUser);
   if (referredAppUser.role !== 'passenger') {
     throw buildReferralError('Only passenger accounts can use passenger referrals');
   }
   await upsertClerkUserToMysql(referredUser);
 
-  const referrerUser = await getClerkUserById(referrerUserId);
+  const referrerUser = await getUserById(referrerUserId);
   const referrerAppUser = toAppUser(referrerUser);
   if (referrerAppUser.role !== 'passenger') {
     throw buildReferralError('Referrer must be a passenger account');

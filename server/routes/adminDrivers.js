@@ -3,8 +3,8 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { upload } from '../middleware/upload.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
-import { getClerkClient } from '../lib/clerk-client.js';
-import { getDriverProfileImageReview, getPrimaryEmail, getPrimaryPhone, mergePrivateMetadata, normalizeRole } from '../lib/clerk-user.js';
+import { getUserStore } from '../lib/user-store.js';
+import { getDriverProfileImageReview, getPrimaryEmail, getPrimaryPhone, mergePrivateMetadata, normalizeRole } from '../lib/users.js';
 import { evaluateVehicleAgainstTiers, loadVehicleTierRules } from '../lib/vehicle-tier-matching.js';
 import { query } from '../db/connection.js';
 import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib/driver-verification-mysql.js';
@@ -123,7 +123,7 @@ function mapOnlineDriverRow(row) {
 }
 
 async function loadAllClerkUsers(orderBy = '-created_at') {
-  const clerkClient = getClerkClient();
+  const clerkClient = getUserStore();
   const limit = 100;
   let offset = 0;
   const users = [];
@@ -638,7 +638,7 @@ router.get('/online', requireAdminAuth, requirePermission('drivers.read'), async
 
 router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
   try {
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const user = await clerkClient.users.getUser(req.params.driverId);
     if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
       return res.status(404).json({ error: 'Driver not found' });
@@ -859,7 +859,7 @@ router.post(
         return res.status(400).json({ error: 'Upload at least one document or enter an ID/licence number' });
       }
 
-      const clerkClient = getClerkClient();
+      const clerkClient = getUserStore();
       const user = await clerkClient.users.getUser(driverId);
       if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
         return res.status(404).json({ error: 'Driver not found' });
@@ -1037,7 +1037,7 @@ router.patch(
         return res.status(400).json({ error: 'photoUrl is required' });
       }
 
-      const clerkClient = getClerkClient();
+      const clerkClient = getUserStore();
       const user = await clerkClient.users.getUser(driverId);
       if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
         return res.status(404).json({ error: 'Driver not found' });
@@ -1136,7 +1136,7 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
       return res.status(400).json({ error: 'rejectionReason is required when rejecting' });
     }
 
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const user = await clerkClient.users.getUser(driverId);
     if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
       return res.status(404).json({ error: 'Driver not found' });
@@ -1273,7 +1273,7 @@ router.delete('/:driverId', requireAdminAuth, requirePermission('drivers.delete'
       return res.status(400).json({ error: 'Invalid driver id' });
     }
 
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const user = await clerkClient.users.getUser(driverId);
     if (normalizeRole(user.publicMetadata?.role) !== 'driver') {
       return res.status(404).json({ error: 'Driver not found' });

@@ -9,14 +9,13 @@ import {
   Alert,
   Modal,
   Animated,
-  Dimensions,
-  PanResponder,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import MapView, { Circle, Polyline } from '../../components/maps/MapViewCompat';
+import { LetterMarker, PIN_COLORS } from '../../components/maps/LetterPin';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import {
   cancelRideRequest,
   declineRideDriver,
@@ -25,6 +24,7 @@ import {
   getNearbyPassengerDrivers,
   getPassengerRideRequestStatus,
   selectRideDriver,
+  updateRideFare,
 } from '../../api';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -40,7 +40,6 @@ import {
 
 const REQUEST_EXPIRY_POLL_MS = 2000;
 const NEARBY_DRIVER_POLL_MS = 4000;
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 const EMPTY_ROUTE_COORDINATES = [];
 
 function normalizeRouteCoordinate(value) {
@@ -65,19 +64,6 @@ function normalizeNearbyDriver(driver) {
     driverName: driver?.driverName || 'Driver',
     coordinate,
   };
-}
-
-function LetterMarker({ letter, color }) {
-  return (
-    <View className="items-center">
-      <View
-        className="h-8 w-8 items-center justify-center rounded-full border-2 border-white"
-        style={{ backgroundColor: color }}
-      >
-        <Text className="text-[13px] font-extrabold text-white">{letter}</Text>
-      </View>
-    </View>
-  );
 }
 
 function normalizeVehicleImageUrl(url) {
@@ -165,7 +151,7 @@ function SearchProgressBar() {
 
   return (
     <View className="mt-3 h-[3px] overflow-hidden rounded-full bg-gray-100">
-      <Animated.View style={{ height: 3, width, backgroundColor: '#111827', borderRadius: 99 }} />
+      <Animated.View style={{ height: 3, width, backgroundColor: PRIMARY_BLUE, borderRadius: 99 }} />
     </View>
   );
 }
@@ -200,106 +186,86 @@ function ViewingAvatar({ driver, size = 32, overlap = false }) {
   );
 }
 
-// ── Driver card ──────────────────────────────────────────────────────────────
-function DriverCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDecline, isSubmitting, isBusy }) {
+// ── Driver offer card ────────────────────────────────────────────────────────
+function OfferCard({ driver, estimatedAmount, remainingSeconds, onAccept, onDecline, isSubmitting, isBusy }) {
   const faceUri = normalizeDriverProfileImageUrl(driver.profileImageUrl);
-  const carUri =
-    normalizeVehicleImageUrl(driver.carImage) ||
-    'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=400&q=80';
+  const carUri = normalizeVehicleImageUrl(driver.carImage);
+  const photoUri = faceUri || carUri;
+  const hasRating = Number(driver.ratingCount || 0) > 0 && Number(driver.rating) > 0;
+  const distance = Number.isFinite(Number(driver.driverDistanceKm)) ? `${Number(driver.driverDistanceKm).toFixed(1)} km` : null;
+  const eta = driver.etaMinutes ? `${driver.etaMinutes} min` : null;
 
   return (
-    <View className="mb-3 overflow-hidden rounded-2xl border border-gray-100 bg-white">
-      {/* Status strip */}
-      <View className="flex-row items-center justify-between border-b border-gray-100 px-4 py-2.5">
-        <View className="flex-row items-center gap-1.5">
-          <View className="h-2 w-2 rounded-full bg-green-500" />
-          <Text className="text-[11px] font-bold uppercase tracking-widest text-green-600">Driver accepted</Text>
+    <View className="mb-2.5 rounded-[22px] border border-gray-200 bg-white px-4 pb-4 pt-3.5">
+      <View className="flex-row items-center">
+        <View className="items-center">
+          <View className="h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-gray-100">
+            {photoUri ? (
+              <Image source={{ uri: photoUri }} resizeMode="cover" style={{ width: 56, height: 56 }} />
+            ) : (
+              <Ionicons name="person" size={26} color="#9ca3af" />
+            )}
+          </View>
+          <View className="-mt-2 flex-row items-center rounded-full border border-gray-100 bg-white px-1.5 py-0.5">
+            <Ionicons name="star" size={10} color="#f59e0b" />
+            <Text className="ml-0.5 text-[10px] font-bold text-gray-700">
+              {hasRating ? Number(driver.rating).toFixed(1) : 'New'}
+            </Text>
+          </View>
         </View>
-        <View className="flex-row items-center gap-1">
-          <Ionicons name="time-outline" size={12} color="#6b7280" />
-          <Text className="text-[11px] font-semibold text-gray-500">
-            {remainingSeconds > 0 ? `${formatCountdown(remainingSeconds)} to select` : 'Offer expired'}
+
+        <View className="ml-3 flex-1">
+          <Text className="text-[16px] font-bold text-gray-900" numberOfLines={1}>{driver.driverName}</Text>
+          <Text className="mt-0.5 text-[13px] text-gray-500" numberOfLines={1}>
+            {[driver.carName, String(driver.plate || '').toUpperCase()].filter(Boolean).join(' · ')}
+          </Text>
+          <View className="mt-1 flex-row items-center">
+            {eta ? <Text className="text-[12px] font-semibold text-gray-700">{eta}</Text> : null}
+            {eta && distance ? <Text className="mx-1.5 text-[12px] text-gray-300">•</Text> : null}
+            {distance ? (
+              <View className="flex-row items-center">
+                <Ionicons name="navigate-outline" size={11} color="#6b7280" />
+                <Text className="ml-0.5 text-[12px] text-gray-600">{distance}</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        <View className="items-end">
+          <View className="rounded-lg px-2.5 py-1" style={{ backgroundColor: PRIMARY_BLUE }}>
+            <Text className="text-[14px] font-extrabold text-white">
+              {formatOfferPrice(driver.amount || estimatedAmount)}
+            </Text>
+          </View>
+          <Text className="mt-1.5 text-[11px] text-gray-400">
+            {remainingSeconds > 0 ? formatCountdown(remainingSeconds) : 'Expired'}
           </Text>
         </View>
       </View>
 
-      {/* Body */}
-      <View className="px-4 py-3">
-        <View className="flex-row items-center">
-          {/* Car image */}
-          {faceUri ? (
-            <Image
-              source={{ uri: faceUri }}
-              resizeMode="cover"
-              className="h-16 w-16 rounded-xl bg-gray-100"
-            />
+      <View className="mt-3.5 flex-row gap-2.5">
+        <TouchableOpacity
+          onPress={onDecline}
+          disabled={isBusy}
+          className="h-11 flex-1 items-center justify-center rounded-full border border-gray-300"
+          style={{ opacity: isBusy ? 0.6 : 1 }}
+          activeOpacity={0.75}
+        >
+          <Text className="text-[15px] font-semibold text-gray-800">Decline</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => onAccept(driver)}
+          disabled={isBusy}
+          className="h-11 flex-1 items-center justify-center rounded-full"
+          style={{ backgroundColor: PRIMARY_BLUE, opacity: isBusy && !isSubmitting ? 0.6 : 1 }}
+          activeOpacity={0.85}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Image
-              source={{ uri: carUri }}
-              resizeMode="cover"
-              className="h-16 w-16 rounded-xl bg-gray-100"
-            />
+            <Text className="text-[15px] font-bold text-white">Accept</Text>
           )}
-
-          {/* Driver info */}
-          <View className="ml-3 flex-1">
-            <Text className="text-base font-bold text-gray-900" numberOfLines={1}>
-              {driver.driverName}
-            </Text>
-            <Text className="mt-0.5 text-xs text-gray-500" numberOfLines={1}>
-              {driver.carName} · {String(driver.plate || '').toUpperCase()}
-            </Text>
-            <View className="mt-1.5 flex-row items-center gap-1">
-              <Ionicons name="star" size={12} color="#f59e0b" />
-              <Text className="text-[11px] font-semibold text-gray-600">
-                {Number(driver.ratingCount || 0) > 0 && Number.isFinite(Number(driver.rating)) && Number(driver.rating) > 0
-                  ? `${Number(driver.rating).toFixed(2)}`
-                  : 'New'} · {driver.trips || 0} rides
-              </Text>
-            </View>
-          </View>
-
-          {/* Price + ETA */}
-          <View className="items-end">
-            <Text className="text-[22px] font-extrabold tracking-tight text-gray-900">
-              ${Number(driver.amount || estimatedAmount || 0).toFixed(2)}
-            </Text>
-            <Text className="mt-0.5 text-xs font-semibold text-gray-700">
-              {driver.etaMinutes ? `${driver.etaMinutes} min away` : 'Locating…'}
-            </Text>
-            <Text className="mt-0.5 text-[11px] text-gray-400">
-              {Number.isFinite(Number(driver.driverDistanceKm))
-                ? `${Number(driver.driverDistanceKm).toFixed(1)} km`
-                : '—'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Actions */}
-        <View className="mt-3 flex-row gap-2">
-          <TouchableOpacity
-            onPress={onDecline}
-            disabled={isBusy}
-            className="h-11 flex-1 items-center justify-center rounded-xl border border-gray-200 bg-gray-50"
-            style={{ opacity: isBusy ? 0.6 : 1 }}
-            activeOpacity={0.75}
-          >
-            <Text className="text-sm font-semibold text-gray-600">Decline</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => onAccept(driver)}
-            disabled={isBusy}
-            className="h-11 flex-[1.6] items-center justify-center rounded-xl"
-            style={{ backgroundColor: PRIMARY_BLUE, opacity: isBusy && !isSubmitting ? 0.6 : 1 }}
-            activeOpacity={0.85}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text className="text-sm font-bold text-white">Choose driver</Text>
-            )}
-          </TouchableOpacity>
-        </View>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -506,8 +472,12 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     [acceptedDriverMarkers, dropoffCoordinate, pickupCoordinate, routeCoordinates, routeStopMarkers]
   );
 
+  const fitKey = `${routeCoordinates.length > 1 ? 'route' : 'points'}:${acceptedDriverMarkers.length}`;
+  const lastFitKeyRef = useRef('');
+
   useEffect(() => {
     if (!mapRef.current || !mapRegion) return undefined;
+    if (lastFitKeyRef.current === fitKey) return undefined;
     const fitCoordinates = [
       pickupCoordinate,
       dropoffCoordinate,
@@ -521,21 +491,23 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
       try {
         if (fitCoordinates.length >= 2 && mapRef.current?.fitToCoordinates) {
           mapRef.current.fitToCoordinates(fitCoordinates, {
-            edgePadding: { top: 100, right: 36, bottom: 280, left: 36 },
-            animated: !hasAutoFitMapRef.current,
+            edgePadding: { top: acceptedDriverMarkers.length ? 260 : 110, right: 40, bottom: 360, left: 40 },
+            animated: hasAutoFitMapRef.current,
           });
           hasAutoFitMapRef.current = true;
+          lastFitKeyRef.current = fitKey;
           return;
         }
         mapRef.current?.animateToRegion?.(mapRegion, hasAutoFitMapRef.current ? 250 : 400);
         hasAutoFitMapRef.current = true;
+        lastFitKeyRef.current = fitKey;
       } catch {
         // Keep nearby-cars map resilient if a fit request fails.
       }
     }, 200);
 
     return () => clearTimeout(timeout);
-  }, [acceptedDriverMarkers, dropoffCoordinate, mapRegion, pickupCoordinate, routeCoordinates, routeStopMarkers]);
+  }, [fitKey]);
 
   // ── Poll ride status ──
   useEffect(() => {
@@ -767,63 +739,36 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
 
   const hasDrivers = acceptedDrivers.length > 0 && !assignedDriver;
   const paymentLabel = paymentMethodLabel(rideStatus?.paymentMethod || rideRequest?.paymentMethod) || 'Cash';
-  const availableDriversCount = Math.max(driversViewingCount, acceptedDrivers.length, liveDriverMarkers.length);
   const bottomSafeInset = Math.max(insets.bottom, 12);
-  const collapsedSheetHeight = Math.round(Math.min(430, SCREEN_HEIGHT * 0.5) + bottomSafeInset);
-  const expandedSheetHeight = Math.round(SCREEN_HEIGHT * 0.92);
-  const sheetHeight = useRef(new Animated.Value(collapsedSheetHeight)).current;
-  const sheetHeightValue = useRef(collapsedSheetHeight);
-  const sheetDragStart = useRef(collapsedSheetHeight);
-  const sheetScrollOffsetRef = useRef(0);
-  const [sheetExpanded, setSheetExpanded] = useState(false);
+  const minimumFare = Number(rideStatus?.minimumFareAmount ?? rideRequest?.minimumFareAmount ?? finalEstimatedAmount ?? 0);
+  const maximumFare = Math.ceil(Math.max(minimumFare * 2, minimumFare + 5));
+  const [fareDraft, setFareDraft] = useState(null);
+  const [savingFare, setSavingFare] = useState(false);
+  const shownFare = fareDraft ?? finalEstimatedAmount;
+  const fareChanged = fareDraft !== null && Math.abs(fareDraft - finalEstimatedAmount) >= 0.01;
 
-  useEffect(() => {
-    const listener = sheetHeight.addListener(({ value }) => {
-      sheetHeightValue.current = value;
-    });
-    return () => sheetHeight.removeListener(listener);
-  }, [sheetHeight]);
+  const changeFareDraft = (delta) => {
+    const next = Math.round((shownFare + delta) * 100) / 100;
+    setFareDraft(Math.min(maximumFare, Math.max(minimumFare, next)));
+  };
 
-  const snapSheet = useCallback((expand) => {
-    setSheetExpanded(!!expand);
-    Animated.spring(sheetHeight, {
-      toValue: expand ? expandedSheetHeight : collapsedSheetHeight,
-      useNativeDriver: false,
-      bounciness: 2,
-      speed: 16,
-    }).start();
-  }, [collapsedSheetHeight, expandedSheetHeight, sheetHeight]);
-
-  const sheetPan = useMemo(() => {
-    const isSheetDrag = (_event, gesture) => {
-      const vertical = Math.abs(gesture.dy) > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
-      if (!vertical) return false;
-      if (sheetHeightValue.current < expandedSheetHeight - 12) return true;
-      if (gesture.dy > 0 && sheetScrollOffsetRef.current <= 2) return true;
-      return false;
-    };
-
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: isSheetDrag,
-      onMoveShouldSetPanResponderCapture: isSheetDrag,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: () => {
-        sheetDragStart.current = sheetHeightValue.current;
-      },
-      onPanResponderMove: (_event, gesture) => {
-        const next = Math.min(
-          expandedSheetHeight,
-          Math.max(collapsedSheetHeight, sheetDragStart.current - gesture.dy)
-        );
-        sheetHeight.setValue(next);
-      },
-      onPanResponderRelease: (_event, gesture) => {
-        const mid = (collapsedSheetHeight + expandedSheetHeight) / 2;
-        snapSheet(gesture.vy < -0.7 || sheetHeightValue.current > mid);
-      },
-    });
-  }, [collapsedSheetHeight, expandedSheetHeight, sheetHeight, snapSheet]);
+  const handleSaveFare = async () => {
+    if (!fareChanged || savingFare || !rideRequest?.id) return;
+    try {
+      setSavingFare(true);
+      const token = await getAuthToken();
+      if (!token) throw new Error('Not signed in');
+      const data = await updateRideFare(token, rideRequest.id, fareDraft);
+      const nextFare = Number(data?.fareAmount ?? fareDraft);
+      setRideStatus((current) => ({ ...(current || {}), estimatedAmount: nextFare, finalEstimatedAmount: nextFare }));
+      setFareDraft(null);
+      refreshRideStatus({ silent: true });
+    } catch (error) {
+      Alert.alert('Could not update fare', error?.message || 'Please try again.');
+    } finally {
+      setSavingFare(false);
+    }
+  };
 
   const mapPickupCoordinate = normalizeRouteCoordinate(pickupCoordinate);
   const mapDropoffCoordinate = normalizeRouteCoordinate(dropoffCoordinate);
@@ -846,10 +791,15 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     );
   }
 
+  const viewingText = acceptedDrivers.length > 0
+    ? `${acceptedDrivers.length} driver${acceptedDrivers.length === 1 ? '' : 's'} sent you an offer`
+    : driversViewingCount > 0
+      ? `${driversViewingCount} driver${driversViewingCount === 1 ? ' is' : 's are'} viewing your request`
+      : 'Sending your request to nearby drivers';
+
   return (
     <View className="flex-1 bg-white">
       <View className="flex-1">
-        {/* ── Map ── */}
         <MapView
           ref={mapRef}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -865,33 +815,27 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           rotateEnabled={false}
           pitchEnabled={false}
         >
-          <Marker coordinate={mapPickupCoordinate} title="A · Pickup" anchor={{ x: 0.5, y: 0.5 }}>
-            <LetterMarker letter="A" color={PRIMARY_BLUE} />
-          </Marker>
-          <Marker
-            coordinate={mapDropoffCoordinate}
-            title="B · Drop-off"
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <LetterMarker letter="B" color="#111827" />
-          </Marker>
+          <Circle
+            center={mapPickupCoordinate}
+            radius={1200}
+            fillColor="rgba(37,99,235,0.10)"
+            strokeColor="rgba(37,99,235,0.25)"
+            strokeWidth={1}
+          />
+          {routeCoordinates.length > 1 ? (
+            <Polyline coordinates={routeCoordinates} strokeColor={PRIMARY_BLUE} strokeWidth={5} />
+          ) : null}
+          <LetterMarker coordinate={mapPickupCoordinate} title="Pickup" letter="A" color={PIN_COLORS.start} />
           {routeStopMarkers.map((stop) => (
-            <Marker
+            <LetterMarker
               key={stop.key}
               coordinate={stop.coordinate}
-              title={`${stop.letter} · ${stop.label}`}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <LetterMarker letter={stop.letter} color="#f97316" />
-            </Marker>
-          ))}
-          {routeCoordinates.length > 1 ? (
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeColor={PRIMARY_BLUE}
-              strokeWidth={5}
+              title={stop.label}
+              letter={stop.letter}
+              color={PIN_COLORS.stop}
             />
-          ) : null}
+          ))}
+          <LetterMarker coordinate={mapDropoffCoordinate} title="Drop-off" letter="B" color={PIN_COLORS.finish} />
           {liveDriverMarkers.map((driver) => (
             <DriverVehicleMapMarker
               key={`live-driver-${driver.id}`}
@@ -911,160 +855,116 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
           ))}
         </MapView>
 
-        <View className="absolute left-4" style={{ top: insets.top + 8 }}>
-          <TouchableOpacity
-            onPress={handleCancelRequest}
-            className="h-11 w-11 items-center justify-center rounded-full bg-white"
-            style={{ elevation: 3, shadowColor: '#0f172a', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } }}
-          >
-            <Ionicons name="chevron-back" size={22} color="#111827" />
-          </TouchableOpacity>
-        </View>
-
-        <Animated.View
-          className="absolute left-0 right-0 overflow-hidden rounded-t-[28px] bg-white"
-          style={{ bottom: 0, height: sheetHeight }}
-          {...sheetPan.panHandlers}
-        >
-          <View className="px-5 pt-3">
-            <View className="items-center py-2">
-              <View className="h-1.5 w-12 rounded-full bg-gray-200" />
-            </View>
-            <View className="flex-row items-center justify-between">
-              <Text className="flex-1 pr-3 text-[15px] text-gray-800">
-                {acceptedDrivers.length > 0
-                  ? `${acceptedDrivers.length} driver${acceptedDrivers.length === 1 ? '' : 's'} accepted. Choose one to continue.`
-                  : driversViewingCount > 0
-                    ? `${driversViewingCount} driver${driversViewingCount === 1 ? '' : 's'} viewed. Waiting for an accept.`
-                    : 'Drivers will see your request nearby'}
-              </Text>
-              <View className="flex-row items-center">
-                {visibleDriversPreview.slice(0, 3).map((driver, index) => (
-                  <ViewingAvatar key={driver.id} driver={driver} overlap={index > 0} />
-                ))}
-                {Math.max(0, driversViewingCount - Math.min(visibleDriversPreview.length, 3)) > 0 ? (
-                  <View
-                    className="h-8 items-center justify-center rounded-full bg-gray-100 px-2"
-                    style={{ marginLeft: visibleDriversPreview.length ? -8 : 0 }}
-                  >
-                    <Text className="text-xs font-semibold text-gray-700">
-                      +{Math.max(0, driversViewingCount - Math.min(visibleDriversPreview.length, 3))}
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-            </View>
+        {hasDrivers ? (
+          <View className="absolute left-0 right-0 px-3" style={{ top: insets.top + 8, maxHeight: '48%' }}>
+            <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
+              {acceptedDrivers.map((driver) => (
+                <OfferCard
+                  key={driver.id}
+                  driver={driver}
+                  estimatedAmount={finalEstimatedAmount}
+                  remainingSeconds={getEffectiveRemainingSeconds(
+                    driver.offerExpiresAt,
+                    driver.remainingSeconds,
+                    rideStatus?.remainingSecondsCapturedAt ?? rideRequest?.remainingSecondsCapturedAt,
+                  )}
+                  onAccept={handleAccept}
+                  onDecline={() => handleDeclineDriver(driver)}
+                  isSubmitting={isSubmittingDriverId === driver.id}
+                  isBusy={Boolean(isSubmittingDriverId)}
+                />
+              ))}
+            </ScrollView>
           </View>
-
-          <ScrollView
-            className="flex-1 px-5"
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled
-            scrollEnabled={sheetExpanded}
-            contentContainerStyle={{ paddingBottom: 16 }}
-            onScroll={(event) => {
-              sheetScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
-            }}
-            scrollEventThrottle={16}
-          >
-            <Text className="text-[28px] font-semibold leading-8 text-gray-900">Searching for drivers</Text>
-            <Text className="mt-1 text-[16px] text-gray-500">
-              {availableDriversCount > 0
-                ? `${availableDriversCount} driver${availableDriversCount === 1 ? '' : 's'} are available`
-                : driversViewingCount > 0
-                  ? 'If nobody accepts quickly, we move on.'
-                  : 'Drivers see your request'}
-            </Text>
-            <SearchProgressBar />
-
-            {hasDrivers ? (
-              <View className="mt-5">
-                {acceptedDrivers.map((driver) => (
-                  <DriverCard
-                    key={driver.id}
-                    driver={driver}
-                    estimatedAmount={finalEstimatedAmount}
-                    remainingSeconds={getEffectiveRemainingSeconds(
-                      driver.offerExpiresAt,
-                      driver.remainingSeconds,
-                      rideStatus?.remainingSecondsCapturedAt ?? rideRequest?.remainingSecondsCapturedAt,
-                    )}
-                    onAccept={handleAccept}
-                    onDecline={() => handleDeclineDriver(driver)}
-                    isSubmitting={isSubmittingDriverId === driver.id}
-                    isBusy={Boolean(isSubmittingDriverId)}
-                  />
-                ))}
-              </View>
-            ) : null}
-
-            <View className="mt-5 flex-row items-center">
-              <View className="h-2 w-2 rounded-full bg-gray-900" />
-              <Text className="ml-3 text-[16px] font-medium text-gray-900">
-                {formatOfferPrice(finalEstimatedAmount)} {paymentLabel}
-              </Text>
-            </View>
-
-            <View className="mt-4 flex-row items-start">
-              <Ionicons name="person-outline" size={18} color="#111827" style={{ marginTop: 2 }} />
-              <Text className="ml-3 flex-1 text-[16px] text-gray-900">{pickupLabel}</Text>
-            </View>
-            <View className="mt-3 flex-row items-start">
-              <Ionicons name="flag-outline" size={18} color="#111827" style={{ marginTop: 2 }} />
-              <Text className="ml-3 flex-1 text-[16px] text-gray-900">{dropoffLabel}</Text>
-            </View>
-
-            {sheetExpanded ? (
-              <View className="mt-5 rounded-[22px] bg-[#f8fafc] px-4 py-4">
-                <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">
-                  Extra details
-                </Text>
-                {Array.isArray(intermediateStops) && intermediateStops.length ? (
-                  intermediateStops.map((stop, index) => (
-                    <View key={`${stop?.label || 'stop'}-${index}`} className="mt-3 flex-row items-start">
-                      <Ionicons name="ellipse-outline" size={16} color="#64748b" style={{ marginTop: 3 }} />
-                      <View className="ml-3 flex-1">
-                        <Text className="text-xs text-gray-500">Stop {index + 1}</Text>
-                        <Text className="mt-0.5 text-[16px] text-gray-900">{stop?.label || 'Stop'}</Text>
-                      </View>
-                    </View>
-                  ))
-                ) : null}
-                <View className="mt-3 flex-row flex-wrap">
-                  {Number(distanceKm) > 0 ? (
-                    <Text className="mr-4 mt-1 text-[15px] text-gray-700">
-                      {Number(distanceKm).toFixed(1)} km
-                    </Text>
-                  ) : null}
-                  {Number(estimatedMinutes) > 0 ? (
-                    <Text className="mr-4 mt-1 text-[15px] text-gray-700">
-                      ~{Math.round(Number(estimatedMinutes))} min
-                    </Text>
-                  ) : null}
-                  {selectedTier?.tierName || selectedTier?.tierKey ? (
-                    <Text className="mr-4 mt-1 text-[15px] text-gray-700">
-                      {String(selectedTier.tierName || selectedTier.tierKey).replace(/_/g, ' ')}
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-            ) : null}
-          </ScrollView>
-
-          <View
-            className="border-t border-gray-100 bg-white px-5 pt-3"
-            style={{ paddingBottom: bottomSafeInset }}
-          >
+        ) : (
+          <View className="absolute left-4" style={{ top: insets.top + 8 }}>
             <TouchableOpacity
               onPress={handleCancelRequest}
-              className="h-20 items-center justify-center rounded-[24px] bg-[#e5e7eb]"
-              activeOpacity={0.75}
+              className="h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white"
             >
-              <Text className="text-[20px] font-bold text-gray-800">Cancel request</Text>
+              <Ionicons name="chevron-back" size={22} color="#111827" />
             </TouchableOpacity>
           </View>
-        </Animated.View>
+        )}
+
+        <View
+          className="absolute bottom-0 left-0 right-0 rounded-t-[28px] border-t border-gray-200 bg-white px-5 pt-4"
+          style={{ paddingBottom: bottomSafeInset }}
+        >
+          <View className="flex-row items-center justify-between">
+            <Text className="flex-1 pr-3 text-[14px] text-gray-700">{viewingText}</Text>
+            <View className="flex-row items-center">
+              {visibleDriversPreview.slice(0, 3).map((driver, index) => (
+                <ViewingAvatar key={driver.id} driver={driver} size={30} overlap={index > 0} />
+              ))}
+            </View>
+          </View>
+          <SearchProgressBar />
+
+          <Text className="mt-4 text-[20px] font-bold text-gray-900">
+            {hasDrivers ? 'Choose your driver' : 'Locating driver nearby'}
+          </Text>
+
+          <View className="mt-3 flex-row items-center rounded-2xl border border-gray-200 px-3 py-3">
+            <TouchableOpacity
+              onPress={() => changeFareDraft(-1)}
+              disabled={savingFare || shownFare <= minimumFare}
+              className="h-11 w-12 items-center justify-center rounded-xl border border-gray-200"
+              style={{ opacity: shownFare <= minimumFare ? 0.4 : 1 }}
+            >
+              <Text className="text-[16px] font-bold text-gray-800">-1</Text>
+            </TouchableOpacity>
+            <View className="flex-1 items-center">
+              <Text className="text-[22px] font-extrabold text-gray-900">{formatOfferPrice(shownFare)}</Text>
+              <Text className="mt-0.5 text-[11px] text-gray-500">
+                Recommended fare: {formatOfferPrice(minimumFare)} · {paymentLabel}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => changeFareDraft(1)}
+              disabled={savingFare || shownFare >= maximumFare}
+              className="h-11 w-12 items-center justify-center rounded-xl border border-gray-200"
+              style={{ opacity: shownFare >= maximumFare ? 0.4 : 1 }}
+            >
+              <Text className="text-[16px] font-bold text-gray-800">+1</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            onPress={handleSaveFare}
+            disabled={!fareChanged || savingFare}
+            className="mt-3 h-12 items-center justify-center rounded-full"
+            style={{ backgroundColor: fareChanged ? PRIMARY_BLUE : '#e5e7eb' }}
+            activeOpacity={0.85}
+          >
+            {savingFare ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text className="text-[15px] font-bold" style={{ color: fareChanged ? '#fff' : '#9ca3af' }}>
+                {fareChanged && fareDraft < finalEstimatedAmount ? 'Lower fare' : 'Raise fare'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <View className="mt-3 flex-row items-center">
+            <View className="h-5 w-5 items-center justify-center rounded-full" style={{ backgroundColor: PIN_COLORS.start }}>
+              <Text className="text-[10px] font-extrabold text-white">A</Text>
+            </View>
+            <Text className="ml-2.5 flex-1 text-[13px] text-gray-700" numberOfLines={1}>{pickupLabel}</Text>
+          </View>
+          <View className="mt-1.5 flex-row items-center">
+            <View className="h-5 w-5 items-center justify-center rounded-full" style={{ backgroundColor: PIN_COLORS.finish }}>
+              <Text className="text-[10px] font-extrabold text-white">B</Text>
+            </View>
+            <Text className="ml-2.5 flex-1 text-[13px] text-gray-700" numberOfLines={1}>{dropoffLabel}</Text>
+          </View>
+
+          <TouchableOpacity onPress={handleCancelRequest} className="mt-2 items-center py-2.5" activeOpacity={0.7}>
+            <Text className="text-[14px] font-semibold text-red-600">
+              {isCancellingRequest ? 'Cancelling...' : 'Cancel request'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ── Cancel reason modal ── */}

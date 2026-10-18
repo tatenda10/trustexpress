@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { updateDriverKind } from '../../../api';
 import { PRIMARY_BLUE } from '../../../constants/colors';

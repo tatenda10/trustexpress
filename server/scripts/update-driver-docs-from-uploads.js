@@ -2,7 +2,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import mysql from 'mysql2/promise';
-import { getClerkClient } from '../lib/clerk-client.js';
+import { getUserStore } from '../lib/user-store.js';
 
 function arg(name, fallback = '') {
   const prefix = `--${name}=`;
@@ -19,7 +19,7 @@ function toUploadPath(filename) {
 }
 
 async function resolveDriverUserId(email) {
-  const clerk = getClerkClient();
+  const clerk = getUserStore();
   const list = await clerk.users.getUserList({ emailAddress: [email], limit: 10 });
   const user = (list.data || [])[0];
   if (!user) {

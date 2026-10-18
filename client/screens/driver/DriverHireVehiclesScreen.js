@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { listHireVehicles, resolveUploadedMediaUrl } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';

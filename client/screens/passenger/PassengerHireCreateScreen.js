@@ -8,7 +8,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
@@ -399,15 +399,15 @@ export default function PassengerHireCreateScreen({ navigation, route }) {
 
       <KeyboardAwareScrollView
         style={{ flex: 1 }}
-        bottomOffset={tabBarHeight + 24}
-        extraKeyboardSpace={tabBarHeight + 140}
+        bottomOffset={24}
+        extraKeyboardSpace={140}
         disableScrollOnKeyboardHide
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingBottom: tabBarHeight + insets.bottom + 48,
+          paddingBottom: 48,
         }}
       >
           <View className="rounded-[28px] bg-white px-5 py-5">

@@ -42,6 +42,7 @@ import agentRewardsRouter from './agentRewards.js';
 import publicShareRouter from './publicShare.js';
 import hireRouter from './hire.js';
 import whatsappRouter from './whatsapp.js';
+import authRouter from './auth.js';
 
 const router = Router();
 
@@ -49,6 +50,7 @@ router.get('/health', (req, res) => {
   res.json({ ok: true, service: 'trust-express-api' });
 });
 
+router.use('/auth', authRouter);
 router.use('/public', publicShareRouter);
 router.use('/users', usersRouter);
 router.use('/passengers', passengersRouter);

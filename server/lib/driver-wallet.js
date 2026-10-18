@@ -1505,9 +1505,9 @@ export async function getAdminDriverWalletLedger({
     } else {
       // Fall back to Clerk for live accounts that have not been snapshotted yet.
       try {
-        const { getClerkClient } = await import('./clerk-client.js');
-        const { toAppUser } = await import('./clerk-user.js');
-        const clerk = getClerkClient();
+        const { getUserStore } = await import('./user-store.js');
+        const { toAppUser } = await import('./users.js');
+        const clerk = getUserStore();
         const list = await clerk.users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
         const users = Array.isArray(list?.data) ? list.data : [];
         const driver = users

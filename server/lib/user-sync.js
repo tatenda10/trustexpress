@@ -1,5 +1,5 @@
 import { query } from '../db/connection.js';
-import { toAppUser } from './clerk-user.js';
+import { toAppUser } from './users.js';
 
 function normalizeRole(value) {
   return value === 'driver' ? 'driver' : 'passenger';

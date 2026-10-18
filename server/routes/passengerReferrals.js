@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import { syncClerkUserForRequest } from '../lib/user-sync.js';
 import {
   attachPassengerPeerReferral,
@@ -10,7 +10,7 @@ import {
 const router = Router();
 
 async function requirePassenger(req, res) {
-  const user = await getClerkUserById(req.userId);
+  const user = await getUserById(req.userId);
   await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   if (normalizeRole(appUser.role) !== 'passenger') {

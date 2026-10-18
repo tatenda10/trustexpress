@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
-import { getClerkClient } from '../lib/clerk-client.js';
-import { normalizeRole } from '../lib/clerk-user.js';
+import { getUserStore } from '../lib/user-store.js';
+import { normalizeRole } from '../lib/users.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { query } from '../db/connection.js';
 
@@ -10,7 +10,7 @@ const router = Router();
 const AUDIENCES = new Set(['drivers', 'passengers', 'all']);
 
 async function loadAllClerkUsers() {
-  const clerkClient = getClerkClient();
+  const clerkClient = getUserStore();
   const limit = 100;
   let offset = 0;
   const users = [];

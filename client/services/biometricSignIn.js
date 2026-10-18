@@ -121,27 +121,6 @@ export async function offerBiometricSignIn(role, identifier, password) {
   }
 }
 
-/**
- * Checks the signed-in user's password without signing them out (Clerk session reverification).
- * Returns true if correct; throws Clerk errors (e.g. form_password_incorrect) otherwise.
- */
-export async function verifyPasswordForSession(session, password) {
-  if (!session?.startVerification || !session?.attemptFirstFactorVerification) {
-    throw Object.assign(new Error('Password check is not available. Please update the app.'), {
-      code: 'verification_unavailable',
-    });
-  }
-  await session.startVerification({ level: 'first_factor' });
-  const result = await session.attemptFirstFactorVerification({ strategy: 'password', password });
-  if (result?.status !== 'complete') {
-    throw Object.assign(new Error('Incorrect password'), {
-      errors: [{ code: 'form_password_incorrect' }],
-    });
-  }
-  return true;
-}
-
 export function isWrongPasswordError(error) {
-  const code = error?.errors?.[0]?.code || '';
-  return ['form_password_incorrect', 'form_identifier_not_found', 'form_password_pwned'].includes(code);
+  return error?.code === 'INVALID_CREDENTIALS';
 }

@@ -1,12 +1,10 @@
 import { query } from '../db/connection.js';
-import { getClerkUserById, toAppUser } from './clerk-user.js';
-
-const DRIVER_ONLINE_STALE_DAYS = 1;
+import { getUserById, toAppUser } from './users.js';
 
 async function getUserProfileImageUrl(userId) {
   if (!userId) return null;
   try {
-    const user = await getClerkUserById(userId);
+    const user = await getUserById(userId);
     return toAppUser(user)?.image_url || null;
   } catch {
     return null;
@@ -22,7 +20,6 @@ function buildViewingEligibilitySql(rideRequestId, { includeVehicle = false } = 
        AND da.is_online = 1
        AND da.current_lat IS NOT NULL
        AND da.current_lng IS NOT NULL
-       AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
       ${includeVehicle ? 'LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id' : ''}
       LEFT JOIN ride_requests active_ride
         ON active_ride.driver_user_id = rr.driver_user_id

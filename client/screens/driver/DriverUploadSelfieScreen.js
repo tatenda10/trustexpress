@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useUser } from '@clerk/clerk-expo';
+import { useUser } from '../../auth/AuthProvider';
 
 const STORAGE_KEY_PREFIX = 'trust_express_driver_docs_';
 

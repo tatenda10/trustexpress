@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Platform, Text, TouchableOpacity, View, Vibration } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Speech from 'expo-speech';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import { LetterMarker, PIN_COLORS } from '../../components/maps/LetterPin';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
 import { getDirectionsRoute, getHireRequest } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -239,10 +240,10 @@ export default function PassengerHireTrackingScreen({ navigation, route }) {
       >
         {driverCoordinate ? <DriverVehicleMapMarker coordinate={driverCoordinate} /> : null}
         {pickupCoordinate ? (
-          <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#1d4ed8" tracksViewChanges={false} />
+          <LetterMarker coordinate={pickupCoordinate} title="Pickup" letter="A" color={PIN_COLORS.start} />
         ) : null}
         {dropoffCoordinate ? (
-          <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" tracksViewChanges={false} />
+          <LetterMarker coordinate={dropoffCoordinate} title="Drop-off" letter="B" color={PIN_COLORS.finish} />
         ) : null}
         {routeCoordinates.length > 1 ? (
           <Polyline coordinates={routeCoordinates} strokeColor="#4c1d95" strokeWidth={6} />

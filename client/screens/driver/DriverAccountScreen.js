@@ -1,15 +1,80 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Image, Linking, Modal } from 'react-native';
-import { useUser, useClerk, useAuth } from '@clerk/clerk-expo';
+import { useUser, useClerk, useAuth } from '../../auth/AuthProvider';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import Constants from 'expo-constants';
 import { deleteMe, getApiUrl, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import BiometricSignInSetting from '../../components/BiometricSignInSetting';
 import { getDriverVehicleRoute, isTruckDriver } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
+
+const STATUS_TONES = {
+  done: { bg: '#dcfce7', text: '#166534', label: 'Verified' },
+  review: { bg: '#e0ecff', text: '#1d4ed8', label: 'Under review' },
+  action: { bg: '#fef3c7', text: '#92400e', label: 'Action needed' },
+  rejected: { bg: '#fee2e2', text: '#b91c1c', label: 'Resubmit' },
+};
+
+function SectionTitle({ children }) {
+  return (
+    <Text className="mb-2 mt-1 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">{children}</Text>
+  );
+}
+
+function StatusPill({ tone }) {
+  const colors = STATUS_TONES[tone] || STATUS_TONES.action;
+  return (
+    <View className="rounded-full px-2.5 py-1" style={{ backgroundColor: colors.bg }}>
+      <Text className="text-[11px] font-semibold" style={{ color: colors.text }}>{colors.label}</Text>
+    </View>
+  );
+}
+
+function Row({ icon, title, subtitle, onPress, right, danger, disabled, last, iconColor }) {
+  return (
+    <TouchableOpacity
+      className="flex-row items-center px-4 py-3.5"
+      activeOpacity={0.7}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <View className={`h-10 w-10 items-center justify-center rounded-2xl ${danger ? 'bg-red-50' : 'bg-[#f3f4f6]'}`}>
+        <Ionicons name={icon} size={20} color={danger ? '#dc2626' : iconColor || '#1f2937'} />
+      </View>
+      <View className="ml-3 flex-1 pr-2">
+        <Text className={`text-[15px] font-medium ${danger ? 'text-red-600' : 'text-gray-900'}`}>{title}</Text>
+        {subtitle ? <Text className="mt-0.5 text-[13px] text-gray-500" numberOfLines={1}>{subtitle}</Text> : null}
+      </View>
+      {right !== undefined ? right : <Ionicons name="chevron-forward" size={18} color="#c0c4cc" />}
+      {!last ? <View className="absolute bottom-0 left-[68px] right-4 bg-gray-100" style={{ height: 1 }} /> : null}
+    </TouchableOpacity>
+  );
+}
+
+function Card({ children, className = '' }) {
+  return <View className={`mb-5 overflow-hidden rounded-[24px] bg-white ${className}`}>{children}</View>;
+}
+
+function StatTile({ value, label, icon, iconColor, onPress }) {
+  return (
+    <TouchableOpacity
+      className="flex-1 items-center rounded-2xl bg-[#f6f7f3] px-2 py-3"
+      activeOpacity={onPress ? 0.7 : 1}
+      onPress={onPress}
+      disabled={!onPress}
+    >
+      <View className="flex-row items-center">
+        <Ionicons name={icon} size={14} color={iconColor} />
+        <Text className="ml-1 text-[16px] font-bold text-gray-900" numberOfLines={1}>{value}</Text>
+      </View>
+      <Text className="mt-0.5 text-[11px] font-medium text-gray-500" numberOfLines={1}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
 
 const DriverAccountScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
@@ -30,6 +95,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   const [profileData, setProfileData] = useState(null);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
   const [showProfileImagePreview, setShowProfileImagePreview] = useState(false);
+  const [showEmergencySheet, setShowEmergencySheet] = useState(false);
   const refetchRef = useRef(refetchDriverStatus);
   refetchRef.current = refetchDriverStatus;
   const getTokenRef = useRef(getToken);
@@ -390,125 +456,103 @@ const DriverAccountScreen = ({ navigation, route }) => {
     },
   ];
 
-  // const accountRows = [
-  //   {
-  //     key: 'docs',
-  //     title: 'Documentation',
-  //     subtitle: profileApproved ? 'Approved and active' : 'Submit or update your verification documents',
-  //     icon: 'document-outline',
-  //     onPress: () => navigation.getParent()?.getParent()?.navigate?.('DriverUploadDocuments'),
-  //     rightText: profileApproved ? 'Done' : null,
-  //   },
-  //   {
-  //     key: 'vehicle',
-  //     title: 'Car registration',
-  //     subtitle: vehicleApproved ? 'Vehicle verified for trips' : 'Update your car and tier details',
-  //     icon: 'car-outline',
-  //     onPress: () => navigation.navigate('DriverCarRegistration', { driverStatus }),
-  //     rightText: vehicleApproved ? 'Done' : null,
-  //   },
-  // ];
-
-  const supportRows = [
+  const earningsRows = [
     {
       key: 'smile-cash',
       title: 'Online wallet',
       subtitle: driverStatus?.driverProfile?.smileCashStatus === 'active'
         ? driverStatus.driverProfile.smileCashMobile
-        : null,
+        : 'Link your SmileCash wallet',
       icon: 'wallet-outline',
       onPress: () => navigation.navigate('DriverSmileCash'),
-      danger: false,
-    },
-    {
-      key: 'hire-vehicles',
-      title: 'Hire vehicles',
-      icon: 'bus-outline',
-      onPress: () => navigation.navigate('DriverHireVehicles'),
-      danger: false,
     },
     {
       key: 'income',
       title: 'Income',
+      subtitle: 'Earnings and weekly goal',
       icon: 'stats-chart-outline',
       onPress: () => navigation.navigate('DriverIncomeStack'),
-      danger: false,
     },
     {
       key: 'ride-history',
       title: 'Ride history',
+      subtitle: completedRides > 0 ? `${completedRides} completed` : null,
       icon: 'time-outline',
       onPress: () => navigation.navigate('DriverRideHistory'),
-      danger: false,
     },
-    // {
-    //   key: 'discounts',
-    //   title: 'Discounts',
-    //   icon: 'cash-outline',
-    //   onPress: () => navigation.navigate('DriverDiscounts'),
-    //   danger: false,
-    // },
     {
       key: 'reviews',
       title: 'Reviews',
-      subtitle: ratingCount > 0 ? `${ratingCount} review${ratingCount === 1 ? '' : 's'}` : null,
+      subtitle: ratingCount > 0 ? `${ratingCount} review${ratingCount === 1 ? '' : 's'}` : 'No reviews yet',
       icon: 'star-outline',
       onPress: () => navigation.navigate('DriverReviews'),
-      danger: false,
     },
+    {
+      key: 'hire-vehicles',
+      title: 'Hire vehicles',
+      subtitle: 'Trucks and vans you offer for hire',
+      icon: 'bus-outline',
+      onPress: () => navigation.navigate('DriverHireVehicles'),
+    },
+  ];
+
+  const helpRows = [
     {
       key: 'support',
       title: 'Support',
+      subtitle: 'Chat with the support team',
       icon: 'headset-outline',
       onPress: () => navigation.navigate('DriverSupportChat'),
-      danger: false,
     },
+    {
+      key: 'emergency',
+      title: 'Emergency numbers',
+      subtitle: 'Police, ambulance, fire brigade',
+      icon: 'alert-circle-outline',
+      iconColor: '#dc2626',
+      onPress: () => setShowEmergencySheet(true),
+    },
+  ];
+
+  const legalRows = [
     {
       key: 'privacy',
       title: 'Privacy policy',
       icon: 'shield-outline',
       onPress: () => navigation.navigate('DriverLegalDocument', { document: 'privacy' }),
-      danger: false,
     },
     {
       key: 'terms',
       title: 'Terms of use',
       icon: 'document-text-outline',
       onPress: () => navigation.navigate('DriverLegalDocument', { document: 'terms' }),
-      danger: false,
-    },
-    {
-      key: 'delete',
-      title: 'Delete account',
-      icon: 'trash-outline',
-      onPress: handleDeleteAccount,
-      danger: true,
     },
   ];
 
-  const safetyRows = [
-    {
-      key: 'police',
-      title: 'Police emergency',
-      subtitle: '995',
-      icon: 'shield-checkmark-outline',
-      onPress: () => handleEmergencyCall('Police emergency', '995'),
-    },
-    {
-      key: 'ambulance',
-      title: 'Ambulance',
-      subtitle: '994',
-      icon: 'medkit-outline',
-      onPress: () => handleEmergencyCall('Ambulance', '994'),
-    },
-    {
-      key: 'fire',
-      title: 'Fire brigade',
-      subtitle: '993',
-      icon: 'flame-outline',
-      onPress: () => handleEmergencyCall('Fire brigade', '993'),
-    },
+  const emergencyContacts = [
+    { key: 'police', label: 'Police', number: '995', icon: 'shield-checkmark-outline' },
+    { key: 'ambulance', label: 'Ambulance', number: '994', icon: 'medkit-outline' },
+    { key: 'fire', label: 'Fire brigade', number: '993', icon: 'flame-outline' },
   ];
+
+  const verificationRowTone = (row) => {
+    if (row.key === 'phone') return phoneVerified ? 'done' : 'action';
+    const status = String((row.key === 'docs' ? profile?.status : vehicle?.status) || '').trim().toLowerCase();
+    if (row.key === 'car' && !vehicle) return 'action';
+    if (row.key === 'docs' && (!hasSubmittedProfileDocs || onlyEnhancedSelfieMissing)) return 'action';
+    if (status === 'approved' || status === 'verified') return 'done';
+    if (status === 'rejected') return 'rejected';
+    if (status === 'pending') return 'review';
+    return 'action';
+  };
+  const verifiedCount = verificationRows.filter((row) => verificationRowTone(row) === 'done').length;
+  const driverContact = user?.primaryEmailAddress?.emailAddress || user?.primaryPhoneNumber?.phoneNumber || profileData?.email || '';
+  const appVersion = Constants.expoConfig?.version || null;
+  const captainTierLabel = loadingCaptainStatus && !captainStatus
+    ? '…'
+    : captainStatus?.enabled === false
+      ? 'Off'
+      : captainStatus?.tierName || 'None';
 
   const handleChangeProfilePhoto = async () => {
     try {
@@ -552,8 +596,8 @@ const DriverAccountScreen = ({ navigation, route }) => {
   return (
     <View className="flex-1 bg-[#f6f7f3]">
       <View
-        className="flex-row items-center justify-between bg-[#f6f7f3]"
-        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
+        className="flex-row items-center bg-[#f6f7f3]"
+        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 10 }}
       >
         <TouchableOpacity
           activeOpacity={0.75}
@@ -562,295 +606,230 @@ const DriverAccountScreen = ({ navigation, route }) => {
         >
           <Ionicons name="chevron-back" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text className="text-[18px] font-bold text-gray-900">Account info</Text>
-        <View className="h-10 w-10" />
+        <Text className="ml-3 text-[22px] font-bold text-gray-900">Account</Text>
       </View>
+
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: insets.bottom + 40 }}
         showsVerticalScrollIndicator={false}
       >
-        <View className="items-center px-4 pb-6 pt-2">
-          <View className="relative">
-            <View className="h-[108px] w-[108px] items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#e8f1ff] shadow-sm">
-              {displayProfileImageUrl ? (
-                <Image
-                  source={{ uri: displayProfileImageUrl }}
-                  style={{ width: 108, height: 108 }}
-                  resizeMode="cover"
-                />
-              ) : (
-                <Ionicons name="person" size={36} color="#1f2937" />
-              )}
-            </View>
-            {allVerified ? (
-              <View className="absolute right-1 top-1 h-4 w-4 rounded-full border-2 border-white bg-[#25D366]" />
-            ) : null}
+        <Card className="p-4">
+          <View className="flex-row items-center">
             <TouchableOpacity
-              className="absolute bottom-0 right-0 h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
               activeOpacity={0.8}
-              onPress={handleChangeProfilePhoto}
+              onPress={() => (profileImagePreviewUrl ? setShowProfileImagePreview(true) : handleChangeProfilePhoto())}
               disabled={updatingProfileImage}
+              className="relative"
             >
-              {updatingProfileImage ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="camera" size={18} color="#fff" />
-              )}
+              <View className="h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-full bg-[#e8f1ff]">
+                {displayProfileImageUrl ? (
+                  <Image source={{ uri: displayProfileImageUrl }} style={{ width: 72, height: 72 }} resizeMode="cover" />
+                ) : (
+                  <Ionicons name="person" size={30} color="#1f2937" />
+                )}
+              </View>
+              <TouchableOpacity
+                className="absolute -bottom-1 -right-1 h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
+                activeOpacity={0.8}
+                onPress={handleChangeProfilePhoto}
+                disabled={updatingProfileImage}
+              >
+                {updatingProfileImage ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="camera" size={14} color="#fff" />
+                )}
+              </TouchableOpacity>
             </TouchableOpacity>
+
+            <View className="ml-4 flex-1">
+              <Text className="text-[19px] font-bold text-gray-950" numberOfLines={1}>{driverName}</Text>
+              {driverContact ? (
+                <Text className="mt-0.5 text-[13px] text-gray-500" numberOfLines={1}>{driverContact}</Text>
+              ) : null}
+              <View className="mt-2 flex-row">
+                <View className="flex-row items-center rounded-full px-2.5 py-1" style={{ backgroundColor: verificationTone.bg }}>
+                  <Ionicons
+                    name={allVerified ? 'checkmark-circle' : 'time-outline'}
+                    size={13}
+                    color={verificationTone.text}
+                  />
+                  <Text className="ml-1 text-[11px] font-semibold" style={{ color: verificationTone.text }}>
+                    {verificationHeadline}
+                  </Text>
+                </View>
+              </View>
+            </View>
           </View>
-          <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() => {
-              if (profileImagePreviewUrl) {
-                setShowProfileImagePreview(true);
-              } else {
-                handleChangeProfilePhoto();
-              }
-            }}
-            disabled={updatingProfileImage}
-          >
-            <Text className="mt-3 text-sm font-semibold text-[#2f73c9]">
-              {profileImagePreviewUrl ? (hasPendingProfileImageReview ? 'View pending profile picture' : 'View profile picture') : 'Add profile picture'}
-            </Text>
-          </TouchableOpacity>
+
           {hasPendingProfileImageReview ? (
-            <View className="mt-3 rounded-full bg-amber-50 px-4 py-2">
-              <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-amber-700">
-                New profile picture pending admin approval
+            <View className="mt-4 flex-row items-center rounded-2xl bg-amber-50 px-3 py-2.5">
+              <Ionicons name="hourglass-outline" size={16} color="#b45309" />
+              <Text className="ml-2 flex-1 text-[13px] font-medium text-amber-800">
+                New profile picture is waiting for approval
               </Text>
             </View>
           ) : null}
           {hasRejectedProfileImageReview ? (
-            <View className="mt-3 rounded-2xl bg-red-50 px-4 py-3">
-              <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-red-700">
-                Profile picture update rejected
-              </Text>
-              <Text className="mt-1 text-sm text-red-600">
-                {profileImageReviewRejectionReason || 'Upload a clearer photo and submit it again for review.'}
+            <View className="mt-4 rounded-2xl bg-red-50 px-3 py-2.5">
+              <Text className="text-[13px] font-semibold text-red-700">Profile picture not approved</Text>
+              <Text className="mt-0.5 text-[13px] text-red-600">
+                {profileImageReviewRejectionReason || 'Upload a clearer photo and submit it again.'}
               </Text>
             </View>
           ) : null}
-          <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{driverName}</Text>
-          <View className="mt-2 flex-row flex-wrap items-center justify-center gap-2">
-            {averageRating !== null ? (
-              <View className="flex-row items-center rounded-full bg-white px-3 py-1.5">
-                <Ionicons name="star" size={14} color="#f59e0b" />
-                <Text className="ml-1 text-sm font-semibold text-gray-700">{averageRating.toFixed(1)}</Text>
-                <Text className="ml-1 text-sm text-gray-400">({ratingCount})</Text>
-              </View>
-            ) : null}
-            <View className="flex-row items-center rounded-full bg-white px-3 py-1.5">
-              <Ionicons name="checkmark-done-outline" size={14} color={PRIMARY_BLUE} />
-              <Text className="ml-1 text-sm font-semibold text-gray-700">{completedRides}</Text>
-              <Text className="ml-1 text-sm text-gray-400">
-                completed ride{completedRides === 1 ? '' : 's'}
-              </Text>
-            </View>
+
+          <View className="mt-4 flex-row gap-2">
+            <StatTile
+              icon="star"
+              iconColor="#f59e0b"
+              value={averageRating !== null ? averageRating.toFixed(1) : '–'}
+              label={ratingCount > 0 ? `${ratingCount} rating${ratingCount === 1 ? '' : 's'}` : 'Rating'}
+              onPress={() => navigation.navigate('DriverReviews')}
+            />
+            <StatTile
+              icon="car-sport"
+              iconColor={PRIMARY_BLUE}
+              value={String(completedRides)}
+              label="Trips"
+              onPress={() => navigation.navigate('DriverRideHistory')}
+            />
+            <StatTile
+              icon="ribbon"
+              iconColor={captainStatus?.badgeColor || '#7c3aed'}
+              value={captainTierLabel}
+              label="Captain tier"
+              onPress={captainStatus && captainStatus.enabled !== false ? () => navigation.navigate('DriverCaptainRewards') : undefined}
+            />
           </View>
           {vehicleApproved && approvedTierName ? (
-            <Text className="mt-2 text-center text-sm font-medium text-gray-500">
+            <Text className="mt-3 text-center text-[12px] font-medium text-gray-500">
               Approved for {approvedTierName}
             </Text>
           ) : null}
-          <View className="mt-3 rounded-full bg-white px-4 py-2">
-            <Text className="text-sm font-medium text-gray-500">{driverEmail}</Text>
-          </View>
-          <View className="mt-4 rounded-full px-4 py-2" style={{ backgroundColor: verificationTone.bg }}>
-            <Text
-              className="text-xs font-semibold uppercase tracking-[1.2px]"
-              style={{ color: verificationTone.text }}
-            >
-              {verificationHeadline}
+        </Card>
+
+        <View className="flex-row items-end justify-between">
+          <SectionTitle>Verification</SectionTitle>
+          {!loading ? (
+            <Text className="mb-2 px-1 text-xs font-medium text-gray-400">
+              {verifiedCount} of {verificationRows.length} done
             </Text>
-          </View>
+          ) : null}
         </View>
-
-        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Captain rewards</Text>
-        <TouchableOpacity
-          className="mb-5 overflow-hidden rounded-[28px] bg-white px-5 py-5"
-          activeOpacity={0.75}
-          disabled={
-            (loadingCaptainStatus && !captainStatus)
-            || (captainStatusError && !captainStatus)
-            || captainStatus?.enabled === false
-          }
-          onPress={() => navigation.navigate('DriverCaptainRewards')}
-        >
-          {loadingCaptainStatus && !captainStatus ? (
-            <View className="items-center py-2">
-              <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-            </View>
-          ) : captainStatusError && !captainStatus ? (
-            <Text className="text-sm text-gray-500">{captainStatusError}</Text>
-          ) : captainStatus?.enabled === false ? (
-            <Text className="text-sm text-gray-500">
-              {captainStatus?.unavailableMessage || 'Captain rewards are not active right now.'}
-            </Text>
-          ) : (
-            <View className="flex-row items-center">
-              <View
-                className="h-11 w-11 items-center justify-center rounded-full"
-                style={{ backgroundColor: `${captainStatus?.badgeColor || PRIMARY_BLUE}22` }}
-              >
-                <Ionicons name="ribbon-outline" size={22} color={captainStatus?.badgeColor || PRIMARY_BLUE} />
-              </View>
-              <View className="ml-3 flex-1">
-                <Text className="text-xs font-semibold uppercase tracking-[1.1px] text-gray-500">Current tier</Text>
-                <Text className="mt-0.5 text-[17px] font-bold text-gray-900">{captainStatus?.tierName || 'No tier yet'}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-            </View>
-          )}
-        </TouchableOpacity>
-
-        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Verification</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
+        <Card>
           {loading ? (
             <View className="items-center py-8">
               <ActivityIndicator size="small" color={PRIMARY_BLUE} />
             </View>
           ) : (
-            <>
-              {verificationRows.map((row) => (
-                <TouchableOpacity
-                  key={row.key}
-                  className="flex-row items-center px-5 py-4"
-                  onPress={() => {
-                    if (row.onPress) {
-                      row.onPress();
-                      return;
-                    }
-                    navigation.navigate(row.screen, { driverStatus });
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <View className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]">
-                    <Ionicons name={row.icon} size={22} color="#374151" />
+            verificationRows.map((row, index) => (
+              <Row
+                key={row.key}
+                icon={row.icon}
+                title={row.title}
+                subtitle={row.subtitle}
+                last={index === verificationRows.length - 1}
+                onPress={() => (row.onPress ? row.onPress() : navigation.navigate(row.screen, { driverStatus }))}
+                right={(
+                  <View className="flex-row items-center">
+                    <StatusPill tone={verificationRowTone(row)} />
+                    {row.changeableWhenVerified || verificationRowTone(row) !== 'done' ? (
+                      <Ionicons name="chevron-forward" size={18} color="#c0c4cc" style={{ marginLeft: 4 }} />
+                    ) : null}
                   </View>
-                  <View className="ml-3 flex-1">
-                    <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                    <Text className={`mt-0.5 text-sm ${row.verified ? 'text-green-600' : 'text-gray-500'}`}>{row.subtitle}</Text>
-                  </View>
-                  {row.changeableWhenVerified ? (
-                    <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-                  ) : row.verified ? (
-                    <View className="h-8 w-8 items-center justify-center rounded-full bg-green-100">
-                      <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
-                    </View>
-                  ) : row.documentationReviewOnly || row.vehicleRegistrationReviewOnly ? (
-                    <Ionicons name="information-circle-outline" size={22} color="#9ca3af" />
-                  ) : (
-                    <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </>
+                )}
+              />
+            ))
           )}
-        </View>
+        </Card>
 
-        {/* <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Account</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-          {accountRows.map((row, index) => (
-            <TouchableOpacity
-              key={row.key}
-              className="flex-row items-center px-5 py-4"
-              activeOpacity={0.75}
-              onPress={row.onPress}
-              disabled={row.danger && deleting}
-            >
-              <View className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]">
-                <Ionicons name={row.icon} size={22} color="#111827" />
-              </View>
-              <View className="ml-3 flex-1 pr-3">
-                <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
-              </View>
-              {row.rightText ? <Text className="mr-2 text-sm font-medium text-gray-400">{row.rightText}</Text> : null}
-              {row.danger && deleting ? (
-                <ActivityIndicator size="small" color="#dc2626" />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-              )}
-              {index < accountRows.length - 1 ? (
-                <View className="absolute bottom-0 left-20 right-5 bg-gray-100" style={{ height: 1 }} />
-              ) : null}
-            </TouchableOpacity>
+        <SectionTitle>Earnings & trips</SectionTitle>
+        <Card>
+          {earningsRows.map((row, index) => (
+            <Row key={row.key} {...row} last={index === earningsRows.length - 1} />
           ))}
-        </View> */}
+        </Card>
 
-        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Security</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
+        <SectionTitle>Security</SectionTitle>
+        <Card>
           <BiometricSignInSetting role="driver" />
-        </View>
+        </Card>
 
-        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Safety</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-          {safetyRows.map((row, index) => (
-            <TouchableOpacity
-              key={row.key}
-              className="flex-row items-center px-5 py-4"
-              activeOpacity={0.75}
-              onPress={row.onPress}
-            >
-              <View className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]">
-                <Ionicons name={row.icon} size={22} color="#111827" />
-              </View>
-              <View className="ml-3 flex-1 pr-3">
-                <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                {row.subtitle ? (
-                  <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
-                ) : null}
-              </View>
-              <Ionicons name="call-outline" size={20} color="#9ca3af" />
-              {index < safetyRows.length - 1 ? (
-                <View className="absolute bottom-0 left-20 right-5 bg-gray-100" style={{ height: 1 }} />
-              ) : null}
-            </TouchableOpacity>
+        <SectionTitle>Help & safety</SectionTitle>
+        <Card>
+          {helpRows.map((row, index) => (
+            <Row key={row.key} {...row} last={index === helpRows.length - 1} />
           ))}
-        </View>
+        </Card>
 
-        <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Legal</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-          {supportRows.map((row, index) => (
-            <TouchableOpacity
-              key={row.key}
-              className="flex-row items-center px-5 py-4"
-              activeOpacity={0.75}
-              onPress={row.onPress}
-              disabled={row.danger && deleting}
-            >
-              <View className={`h-11 w-11 items-center justify-center rounded-full ${row.danger ? 'bg-red-50' : 'bg-[#f3f4f6]'}`}>
-                <Ionicons name={row.icon} size={22} color={row.danger ? '#dc2626' : '#111827'} />
-              </View>
-              <View className="ml-3 flex-1 pr-3">
-                <Text className={`text-[15px] font-medium ${row.danger ? 'text-red-600' : 'text-gray-900'}`}>{row.title}</Text>
-                {row.subtitle ? (
-                  <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
-                ) : null}
-              </View>
-              {row.danger && deleting ? (
-                <ActivityIndicator size="small" color="#dc2626" />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-              )}
-              {index < supportRows.length - 1 ? (
-                <View className="absolute bottom-0 left-20 right-5 bg-gray-100" style={{ height: 1 }} />
-              ) : null}
-            </TouchableOpacity>
+        <SectionTitle>Legal</SectionTitle>
+        <Card>
+          {legalRows.map((row, index) => (
+            <Row key={row.key} {...row} last={index === legalRows.length - 1} />
           ))}
-        </View>
+        </Card>
 
         <TouchableOpacity
-          className="mb-4 flex-row items-center justify-center rounded-[24px] bg-white px-5 py-5"
+          className="mb-4 flex-row items-center justify-center rounded-[24px] bg-white px-5 py-4"
           onPress={() => signOut()}
           activeOpacity={0.8}
         >
-          <Ionicons name="log-out-outline" size={22} color="#dc2626" />
-          <Text className="ml-3 text-base font-semibold text-red-600">Sign out</Text>
+          <Ionicons name="log-out-outline" size={20} color="#dc2626" />
+          <Text className="ml-2 text-base font-semibold text-red-600">Sign out</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity
+          className="items-center py-2"
+          onPress={handleDeleteAccount}
+          disabled={deleting}
+          activeOpacity={0.7}
+        >
+          {deleting ? (
+            <ActivityIndicator size="small" color="#dc2626" />
+          ) : (
+            <Text className="text-[13px] font-medium text-gray-400">Delete account</Text>
+          )}
+        </TouchableOpacity>
+        {appVersion ? (
+          <Text className="mt-1 text-center text-[12px] text-gray-300">Trust Express v{appVersion}</Text>
+        ) : null}
       </ScrollView>
+
+      <Modal
+        visible={showEmergencySheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowEmergencySheet(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/40"
+          activeOpacity={1}
+          onPress={() => setShowEmergencySheet(false)}
+        />
+        <View className="rounded-t-[28px] bg-white px-5 pt-3" style={{ paddingBottom: insets.bottom + 16 }}>
+          <View className="mb-4 h-1 w-10 self-center rounded-full bg-gray-200" />
+          <Text className="text-lg font-bold text-gray-900">Emergency numbers</Text>
+          <Text className="mb-4 mt-1 text-sm text-gray-500">Tap a service to call it.</Text>
+          {emergencyContacts.map((contact) => (
+            <TouchableOpacity
+              key={contact.key}
+              className="mb-2 flex-row items-center rounded-2xl bg-[#fef2f2] px-4 py-3.5"
+              activeOpacity={0.75}
+              onPress={() => {
+                setShowEmergencySheet(false);
+                handleEmergencyCall(contact.label, contact.number);
+              }}
+            >
+              <Ionicons name={contact.icon} size={22} color="#dc2626" />
+              <Text className="ml-3 flex-1 text-[15px] font-semibold text-gray-900">{contact.label}</Text>
+              <Text className="mr-3 text-[15px] font-bold text-red-600">{contact.number}</Text>
+              <Ionicons name="call" size={18} color="#dc2626" />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Modal>
 
       <Modal
         visible={showProfileImagePreview}
@@ -858,9 +837,9 @@ const DriverAccountScreen = ({ navigation, route }) => {
         animationType="fade"
         onRequestClose={() => setShowProfileImagePreview(false)}
       >
-        <View className="flex-1 bg-black/90 items-center justify-center">
+        <View className="flex-1 items-center justify-center bg-black/90">
           <TouchableOpacity
-            className="absolute top-14 right-6 h-10 w-10 items-center justify-center rounded-full bg-black/40"
+            className="absolute right-6 top-14 h-10 w-10 items-center justify-center rounded-full bg-black/40"
             onPress={() => setShowProfileImagePreview(false)}
           >
             <Ionicons name="close" size={24} color="#fff" />
@@ -872,6 +851,17 @@ const DriverAccountScreen = ({ navigation, route }) => {
               resizeMode="cover"
             />
           ) : null}
+          <TouchableOpacity
+            className="mt-8 flex-row items-center rounded-full bg-white px-5 py-3"
+            activeOpacity={0.8}
+            onPress={() => {
+              setShowProfileImagePreview(false);
+              handleChangeProfilePhoto();
+            }}
+          >
+            <Ionicons name="camera-outline" size={18} color="#111827" />
+            <Text className="ml-2 text-sm font-semibold text-gray-900">Change photo</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
     </View>

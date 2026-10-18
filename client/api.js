@@ -4,8 +4,9 @@
 import { getRegistrationCityPayload } from './lib/registrationCity';
 import { configureServiceAreas } from './constants/serviceArea';
 
-export const BASE_URL = 'https://ridehailcarsserver.online';
-//export const BASE_URL = 'http://192.168.100.171:5000';
+const PRODUCTION_BASE_URL = 'https://ridehailcarsserver.online';
+const DEVELOPMENT_BASE_URL = 'http://192.168.100.171:5000';
+export const BASE_URL = __DEV__ ? DEVELOPMENT_BASE_URL : PRODUCTION_BASE_URL;
 // Optional global auth error handler (set from App.js) – e.g. to auto sign the user out on 401.
 let authErrorHandler = null;
 export function setApiAuthErrorHandler(handler) {
@@ -546,6 +547,7 @@ export async function getPassengerRideHistory(token, options = {}) {
   const params = new URLSearchParams();
   if (options.page) params.set('page', String(options.page));
   if (options.limit) params.set('limit', String(options.limit));
+  if (options.status) params.set('status', String(options.status));
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return apiFetch(`/api/rides/passenger/history${suffix}`, {}, token);
 }
@@ -722,6 +724,13 @@ export async function cancelRideRequest(token, rideRequestId, reason) {
   }, token);
 }
 
+export async function updateRideFare(token, rideRequestId, amount) {
+  return apiFetch(`/api/rides/passenger/${rideRequestId}/fare`, {
+    method: 'PATCH',
+    body: JSON.stringify({ amount }),
+  }, token);
+}
+
 export async function submitDriverPassengerRating(token, rideRequestId, payload) {
   return apiFetch(`/api/drivers/ride-requests/${rideRequestId}/rate-passenger`, {
     method: 'POST',
@@ -757,6 +766,24 @@ export async function getDriverVehicleOptions(token) {
 
 export async function updateDriverAvailability(token, payload) {
   return apiFetch('/api/drivers/availability', { method: 'POST', body: JSON.stringify(payload) }, token);
+}
+
+export async function issueDriverLocationKey(token) {
+  return apiFetch('/api/drivers/location-key', { method: 'POST', body: JSON.stringify({}) }, token);
+}
+
+/** Called from the background location task, which has no signed-in session; authenticates with the device key. */
+export async function postDriverBackgroundLocation(locationKey, payload) {
+  const res = await fetch(getApiUrl('/api/drivers/background-location'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Driver-Location-Key': locationKey,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, data };
 }
 
 export async function submitDriverDocuments(token, payload, options = {}) {

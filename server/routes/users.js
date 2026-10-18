@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkClient } from '../lib/clerk-client.js';
+import { getUserStore } from '../lib/user-store.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
-import { getClerkUserById, mergePrivateMetadata, normalizeRole, setRoleForUser, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, mergePrivateMetadata, normalizeRole, setRoleForUser, toAppUser } from '../lib/users.js';
 import { attachDriverToAgentInvite, attachPassengerToAgentInvite } from '../lib/agent-invites.js';
 import { attachPassengerPeerReferral } from '../lib/passenger-referrals.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
@@ -77,7 +77,7 @@ router.post('/lookup-role', async (req, res) => {
       return res.status(400).json({ error: 'identifier is required' });
     }
 
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     let users = [];
     if (identifier.includes('@')) {
       const list = await clerkClient.users.getUserList({ emailAddress: [identifier], limit: 10 });
@@ -104,7 +104,7 @@ router.post('/lookup-role', async (req, res) => {
 
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const user = await getClerkUserById(req.userId);
+    const user = await getUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
 
@@ -218,7 +218,7 @@ router.post('/register', requireAuth, async (req, res) => {
       });
     }
 
-    const user = await getClerkUserById(req.userId);
+    const user = await getUserById(req.userId);
     await upsertClerkUserToMysql(user);
     await saveRegistrationCity(req.userId, registrationCity);
     return res.status(201).json({
@@ -242,7 +242,7 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'inviteToken is required' });
     }
 
-    const user = await getClerkUserById(req.userId);
+    const user = await getUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
     let referral = null;
@@ -291,8 +291,8 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
 
 router.patch('/me', requireAuth, async (req, res) => {
   try {
-    const clerkClient = getClerkClient();
-    const currentUser = await getClerkUserById(req.userId);
+    const clerkClient = getUserStore();
+    const currentUser = await getUserById(req.userId);
     const role = normalizeRole(currentUser.publicMetadata?.role);
     const firstName = req.body?.firstName === undefined ? currentUser.firstName : String(req.body.firstName || '').trim();
     const lastName = req.body?.lastName === undefined ? currentUser.lastName : String(req.body.lastName || '').trim();
@@ -327,7 +327,7 @@ router.patch('/me', requireAuth, async (req, res) => {
       await mergePrivateMetadata(req.userId, nextPrivateMetadataPatch);
     }
 
-    const nextUser = await getClerkUserById(req.userId);
+    const nextUser = await getUserById(req.userId);
     await upsertClerkUserToMysql(nextUser);
     return res.json(toAppUser(nextUser));
   } catch (err) {
@@ -363,7 +363,7 @@ router.post('/push-token', requireAuth, async (req, res) => {
 router.get('/support/thread', requireAuth, async (req, res) => {
   try {
     await autoCloseInactiveSupportThreads();
-    const user = await getClerkUserById(req.userId);
+    const user = await getUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
     const thread = await getSupportThreadForUser(req.userId, appUser.role);
@@ -377,7 +377,7 @@ router.get('/support/thread', requireAuth, async (req, res) => {
 router.get('/support/messages', requireAuth, async (req, res) => {
   try {
     await autoCloseInactiveSupportThreads();
-    const user = await getClerkUserById(req.userId);
+    const user = await getUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
     // Do not create a thread on open — only after the user actually sends a message.
@@ -401,7 +401,7 @@ router.post('/support/messages', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'message or photo is required' });
     }
 
-    const user = await getClerkUserById(req.userId);
+    const user = await getUserById(req.userId);
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
     const thread = await getOrCreateSupportThreadForUser(req.userId, appUser.role);
@@ -472,7 +472,7 @@ router.post('/support/messages', requireAuth, async (req, res) => {
 
 router.delete('/me', requireAuth, async (req, res) => {
   try {
-    const user = await getClerkUserById(req.userId, { skipCache: true });
+    const user = await getUserById(req.userId, { skipCache: true });
     const appUser = toAppUser(user);
     await upsertClerkUserToMysql(user);
     await deleteEndUserAccount(req.userId, appUser.role, {

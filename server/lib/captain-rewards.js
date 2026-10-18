@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/connection.js';
-import { getClerkUserById } from './clerk-user.js';
+import { getUserById } from './users.js';
 import { getDriverVerificationFromMysql } from '../lib/driver-verification-mysql.js';
 import { getAccountStatusFromUser } from './rating-performance.js';
 import { creditCaptainPromotionalFloat } from './driver-wallet.js';
@@ -287,7 +287,7 @@ function isMissingCaptainSchemaError(err) {
 }
 
 export async function isDriverCaptainEligible(driverUserId, user = null) {
-  const clerkUser = user || await getClerkUserById(driverUserId).catch(() => null);
+  const clerkUser = user || await getUserById(driverUserId).catch(() => null);
   if (!clerkUser) return { eligible: false, reason: 'missing_user' };
 
   const account = getAccountStatusFromUser(clerkUser, 'driver');

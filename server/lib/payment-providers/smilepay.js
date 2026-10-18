@@ -366,6 +366,8 @@ export const smilePayProvider = {
     itemDescription = '',
     checkoutMode: checkoutModeOverride = null,
     cardDetails = null,
+    // Hosted page only: null lets the payer choose card, EcoCash, wallet etc. on Smile&Pay's page.
+    hostedPaymentMethod = 'WALLETPLUS',
   }) {
     const currencyCode = toSmilePayCurrencyCode(currency);
     const resultUrl = String(customResultUrl || '').trim() || getSmilePayWebhookUrl();
@@ -386,7 +388,7 @@ export const smilePayProvider = {
       mobilePhoneNumber: mobilePhoneNumber || undefined,
     };
     if (checkoutMode === 'hosted') {
-      requestBody.paymentMethod = 'WALLETPLUS';
+      if (hostedPaymentMethod) requestBody.paymentMethod = hostedPaymentMethod;
     } else if (checkoutMode === 'express_ecocash') {
       const msisdn = normalizeEcoCashMsisdn(mobilePhoneNumber);
       logSmilePay('ecocash.msisdn.normalized', {

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { query, withTransaction } from '../db/connection.js';
-import { getClerkUserById, toAppUser, normalizeRole } from '../lib/clerk-user.js';
+import { getUserById, toAppUser, normalizeRole } from '../lib/users.js';
 import { recordRoleChangeAudit, syncClerkUserForRequest } from '../lib/user-sync.js';
 import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
 import { emitHireBookingUpdated, emitHireQuoteToPassenger, emitHireRequestToDriver, emitToUser } from '../lib/realtime.js';
@@ -73,7 +73,7 @@ async function chargeCommissionForAcceptedHire({ booking, request, vehicle }) {
 }
 
 async function requireDriver(req, res) {
-  const user = await getClerkUserById(req.userId);
+  const user = await getUserById(req.userId);
   const [existingUser] = await query(
     `SELECT role FROM users WHERE clerk_user_id = ? LIMIT 1`,
     [req.userId]
@@ -107,7 +107,7 @@ async function requireDriver(req, res) {
 }
 
 async function requirePassenger(req, res) {
-  const user = await getClerkUserById(req.userId);
+  const user = await getUserById(req.userId);
   await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   const role = normalizeRole(appUser.role);
@@ -255,7 +255,7 @@ async function notifyDriversAboutHireRequest(request, passengerName = 'Passenger
   const destinations = (
     await Promise.all(drivers.map(async (driver) => {
       try {
-        const driverUser = await getClerkUserById(driver.driver_user_id);
+        const driverUser = await getUserById(driver.driver_user_id);
         return {
           driverId: driver.driver_user_id,
           expoToken: String(driverUser?.privateMetadata?.pushToken || '').trim() || null,
@@ -343,7 +343,7 @@ async function notifyPassengerAboutHireQuote({ request, quote, vehicle, driverNa
   emitHireQuoteToPassenger(request.passenger_user_id, payload);
 
   try {
-    const passengerUser = await getClerkUserById(request.passenger_user_id);
+    const passengerUser = await getUserById(request.passenger_user_id);
     const expoToken = String(passengerUser?.privateMetadata?.pushToken || '').trim();
     const fcmToken = String(passengerUser?.privateMetadata?.fcmToken || '').trim();
     const pushJobs = [];
@@ -384,7 +384,7 @@ async function notifyAboutHireBooking({ request, booking, recipientUserId, title
   emitToUser(recipientUserId, 'hire_booking:confirmed', payload);
 
   try {
-    const user = await getClerkUserById(recipientUserId);
+    const user = await getUserById(recipientUserId);
     const expoToken = String(user?.privateMetadata?.pushToken || '').trim();
     const fcmToken = String(user?.privateMetadata?.fcmToken || '').trim();
     const pushJobs = [];

@@ -8,11 +8,13 @@ import {
   Alert,
   StyleSheet,
   Animated,
+  BackHandler,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import { LetterMarker, PIN_COLORS, stopLetter } from '../../components/maps/LetterPin';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useAuth } from '../../auth/AuthProvider';
 import { findNearbyDrivers, getPassengerCurrentRide, getPassengerRideOptions, validatePassengerDiscount } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { PAYMENT_METHOD_CASH, PAYMENT_METHOD_ONLINE } from '../../constants/payment';
@@ -89,90 +91,39 @@ function getDiscountedAmount(amount, discount) {
   return Number((fare - reduction).toFixed(2));
 }
 
-function TierCard({ tier, selected, onPress, distanceKm, appliedDiscount }) {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
+function placeLabel(label) {
+  return String(label || '').replace(/^(Pickup|Drop-off):\s*/i, '').trim();
+}
 
-  const handlePressIn = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 0.97,
-      useNativeDriver: true,
-      speed: 50,
-      bounciness: 4,
-    }).start();
-  };
-
-  const handlePressOut = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 1,
-      useNativeDriver: true,
-      speed: 50,
-      bounciness: 4,
-    }).start();
-  };
-
-  const tierAmount = getTierAmount(tier, distanceKm);
-  const visibleTierAmount = getDiscountedAmount(tierAmount, appliedDiscount);
-  const tierCapacityLabel = getTierCapacityLabel(tier);
+function TierRow({ tier, selected, onPress, distanceKm, appliedDiscount }) {
+  const visibleTierAmount = getDiscountedAmount(getTierAmount(tier, distanceKm), appliedDiscount);
+  const meta = [tier.estimatedArrival, `Fits ${getTierMaxPassengerCount(tier)}`].filter(Boolean).join(' · ');
 
   return (
-    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-      <TouchableOpacity
-        onPress={onPress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        activeOpacity={1}
-        style={[styles.tierCard, selected && styles.tierCardSelected]}
-      >
-        {/* Selected indicator bar */}
-        {selected && <View style={styles.selectedBar} />}
-
-        <View style={styles.tierInner}>
-          <View style={styles.tierIconWrap}>
-            <RideTierCarIcon tier={tier} size={44} />
-          </View>
-
-          {/* Info */}
-          <View style={styles.tierInfo}>
-            <Text style={styles.tierName}>{tier.tierName}</Text>
-            <Text style={styles.tierSub}>
-              {tier.regionName || `${Number(distanceKm || 0).toFixed(1)} km trip`}
-            </Text>
-            <View style={styles.capacityBadge}>
-              <Ionicons name="people-outline" size={11} color="#0f766e" />
-              <Text style={styles.capacityBadgeText}>{tierCapacityLabel}</Text>
-            </View>
-            {tier.estimatedArrival && (
-              <View style={styles.etaBadge}>
-                <Ionicons name="time-outline" size={11} color={PRIMARY_BLUE} />
-                <Text style={styles.etaText}>{tier.estimatedArrival}</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Price */}
-          <View style={styles.tierPriceWrap}>
-            <Text style={styles.tierPrice}>${visibleTierAmount.toFixed(2)}</Text>
-            {tier.surgeMultiplier && Number(tier.surgeMultiplier) > 1 && (
-              <View style={styles.surgeBadge}>
-                <Text style={styles.surgeText}>{tier.surgeMultiplier}×</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {selected && (
-          <View style={styles.checkmarkWrap}>
-            <Ionicons name="checkmark-circle" size={20} color={PRIMARY_BLUE} />
-          </View>
-        )}
-      </TouchableOpacity>
-    </Animated.View>
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[styles.tierRow, selected && styles.tierRowSelected]}
+    >
+      <View style={styles.tierIconWrap}>
+        <RideTierCarIcon tier={tier} size={40} />
+      </View>
+      <View style={styles.tierInfo}>
+        <Text style={styles.tierName}>{tier.tierName}</Text>
+        <Text style={styles.tierSub}>{meta}</Text>
+      </View>
+      <View style={styles.tierPriceWrap}>
+        <Text style={styles.tierPrice}>${visibleTierAmount.toFixed(2)}</Text>
+        {tier.surgeMultiplier && Number(tier.surgeMultiplier) > 1 ? (
+          <Text style={styles.surgeText}>{tier.surgeMultiplier}× busy</Text>
+        ) : null}
+      </View>
+    </TouchableOpacity>
   );
 }
 
 export default function PassengerChooseRideScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   const {
@@ -194,6 +145,8 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
   const [isSubmittingRide, setIsSubmittingRide] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState(null);
   const [appliedDiscount, setAppliedDiscount] = useState(null);
+  const [step, setStep] = useState('options');
+  const mapRef = useRef(null);
 
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -477,656 +430,389 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
     }
   };
 
-  const isDisabled = loadingTiers || isSubmittingRide || tiers.length === 0 || !passengerCount;
+  const isDisabled = loadingTiers || isSubmittingRide || tiers.length === 0 || !passengerCount || !paymentMethod;
+  const hasDiscount = finalEstimatedAmount > 0 && finalEstimatedAmount < originalEstimatedAmount;
+
+  useEffect(() => {
+    if (step !== 'confirm') return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setStep('options');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [step]);
+
+  const fitMap = () => {
+    const fitCoordinates = [
+      pickupCoordinate,
+      dropoffCoordinate,
+      ...(Array.isArray(intermediateStops) ? intermediateStops.map((stop) => stop?.coordinate) : []),
+      ...(Array.isArray(routeCoordinates) ? routeCoordinates.filter((_, index) => index % 10 === 0) : []),
+    ].filter(Boolean);
+    if (fitCoordinates.length < 2) return;
+    try {
+      mapRef.current?.fitToCoordinates?.(fitCoordinates, {
+        edgePadding: { top: insets.top + 70, right: 50, bottom: 40, left: 50 },
+        animated: false,
+      });
+    } catch {
+      // initialRegion keeps the route roughly in view.
+    }
+  };
+
+  const initialRegion = pickupCoordinate && dropoffCoordinate
+    ? {
+      latitude: (Number(pickupCoordinate.latitude) + Number(dropoffCoordinate.latitude)) / 2,
+      longitude: (Number(pickupCoordinate.longitude) + Number(dropoffCoordinate.longitude)) / 2,
+      latitudeDelta: Math.max(Math.abs(pickupCoordinate.latitude - dropoffCoordinate.latitude) * 1.8, 0.02),
+      longitudeDelta: Math.max(Math.abs(pickupCoordinate.longitude - dropoffCoordinate.longitude) * 1.8, 0.02),
+    }
+    : undefined;
+
+  const handleBack = () => {
+    if (step === 'confirm') setStep('options');
+    else navigation.goBack();
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      {/* ── Header ── */}
-      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="chevron-back" size={24} color="#111827" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Choose a ride</Text>
-        <View style={styles.backBtn} />
-      </View>
-
-      {/* ── Route Summary ── */}
-      <View style={styles.routeCard}>
-        {/* Destination row */}
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.routeRow} activeOpacity={0.7}>
-          <View style={styles.routeDot}>
-            <View style={styles.routeDotInnerDest} />
-          </View>
-          <Text numberOfLines={1} style={styles.routeLabel}>
-            {dropoffLabel?.replace('Drop-off: ', '') || 'Destination'}
-          </Text>
-          <Ionicons name="pencil-outline" size={15} color="#9ca3af" style={{ marginLeft: 4 }} />
-        </TouchableOpacity>
-
-        <View style={styles.routeDivider} />
-
-        {/* Trip meta row */}
-        <View style={styles.routeMetaRow}>
-          <View style={styles.routeMeta}>
-            <Ionicons name="navigate-circle-outline" size={15} color={PRIMARY_BLUE} />
-            <Text style={styles.routeMetaText}>{Number(distanceKm || 0).toFixed(1)} km</Text>
-          </View>
-          <View style={styles.routeMetaDot} />
-          <View style={styles.routeMeta}>
-            <Ionicons name="time-outline" size={15} color={PRIMARY_BLUE} />
-            <Text style={styles.routeMetaText}>{estimatedMinutes} min</Text>
-          </View>
-          <View style={styles.routeMetaDot} />
-          <Text style={styles.routeMetaPrice}>${finalEstimatedAmount.toFixed(2)}</Text>
-        </View>
-        {Array.isArray(intermediateStops) && intermediateStops.length ? (
-          <View style={styles.discountSummaryWrap}>
-            <Text style={styles.discountSummaryTextStrong}>
-              {intermediateStops.length} stop{intermediateStops.length === 1 ? '' : 's'} added
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      {/* ── Tiers ── */}
-      <View style={styles.tiersSection}>
-        <Text style={styles.sectionLabel}>How many people?</Text>
-        <View style={styles.peopleRow}>
-          {passengerCountOptions.map((count) => {
-            const selected = passengerCount === count;
-            return (
-              <TouchableOpacity
-                key={count}
-                onPress={() => setPassengerCount(count)}
-                style={[styles.peopleChip, selected && styles.peopleChipSelected]}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.peopleChipText, selected && styles.peopleChipTextSelected]}>{count}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <Text style={styles.sectionLabel}>Available options</Text>
-
-        {loadingTiers ? (
-          <View style={styles.loadingWrap}>
-            {[1, 2, 3].map((i) => (
-              <View key={i} style={[styles.skeletonCard, { opacity: 1 - i * 0.2 }]} />
-            ))}
-            <ActivityIndicator size="small" color={PRIMARY_BLUE} style={{ marginTop: 12 }} />
-          </View>
-        ) : tiersError ? (
-          <View style={styles.errorCard}>
-            <View style={styles.errorIconWrap}>
-              <Ionicons name="warning-outline" size={26} color="#f59e0b" />
-            </View>
-            <Text style={styles.errorTitle}>Unavailable</Text>
-            <Text style={styles.errorBody}>{tiersError}</Text>
-          </View>
-        ) : (
-          <Animated.ScrollView
-            style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}
-            contentContainerStyle={styles.tierList}
-            showsVerticalScrollIndicator={false}
-          >
-            {tiers.map((tier) => (
-              <TierCard
-                key={tier.tierKey}
-                tier={tier}
-                selected={selectedTierKey === tier.tierKey}
-                onPress={() => setSelectedTierKey(tier.tierKey)}
-                distanceKm={distanceKm}
-                appliedDiscount={appliedDiscount}
+    <View style={styles.screen}>
+      <View style={styles.mapWrap}>
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={initialRegion}
+          onMapReady={fitMap}
+          onLayout={fitMap}
+          showsCompass={false}
+          toolbarEnabled={false}
+          rotateEnabled={false}
+          pitchEnabled={false}
+        >
+          {Array.isArray(routeCoordinates) && routeCoordinates.length > 1 ? (
+            <Polyline coordinates={routeCoordinates} strokeColor={PRIMARY_BLUE} strokeWidth={5} />
+          ) : null}
+          {pickupCoordinate ? (
+            <LetterMarker coordinate={pickupCoordinate} title="Pickup" letter="A" color={PIN_COLORS.start} />
+          ) : null}
+          {(Array.isArray(intermediateStops) ? intermediateStops : []).map((stop, index) => (
+            stop?.coordinate ? (
+              <LetterMarker
+                key={`stop-${index}`}
+                coordinate={stop.coordinate}
+                title={stop.label || `Stop ${index + 1}`}
+                letter={stopLetter(index)}
+                color={PIN_COLORS.stop}
               />
-            ))}
-          </Animated.ScrollView>
+            ) : null
+          ))}
+          {dropoffCoordinate ? (
+            <LetterMarker coordinate={dropoffCoordinate} title="Drop-off" letter="B" color={PIN_COLORS.finish} />
+          ) : null}
+        </MapView>
+
+        <TouchableOpacity
+          onPress={handleBack}
+          style={[styles.backBtn, { top: insets.top + 10 }]}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="chevron-back" size={22} color="#111827" />
+        </TouchableOpacity>
+      </View>
+
+      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
+        <View style={styles.handle} />
+
+        {step === 'options' ? (
+          <>
+            <Text style={styles.sheetTitle}>Choose a ride</Text>
+            <Text style={styles.sheetSub}>
+              {Number(distanceKm || 0).toFixed(1)} km · {estimatedMinutes} min
+              {Array.isArray(intermediateStops) && intermediateStops.length
+                ? ` · ${intermediateStops.length} stop${intermediateStops.length === 1 ? '' : 's'}`
+                : ''}
+            </Text>
+
+            {loadingTiers ? (
+              <View style={styles.loadingWrap}>
+                {[1, 2, 3].map((i) => (
+                  <View key={i} style={[styles.skeletonRow, { opacity: 1 - i * 0.2 }]} />
+                ))}
+              </View>
+            ) : tiersError ? (
+              <View style={styles.errorCard}>
+                <Ionicons name="warning-outline" size={24} color="#f59e0b" />
+                <Text style={styles.errorTitle}>Unavailable</Text>
+                <Text style={styles.errorBody}>{tiersError}</Text>
+              </View>
+            ) : (
+              <Animated.ScrollView
+                style={[styles.tierList, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
+                showsVerticalScrollIndicator={false}
+              >
+                {tiers.map((tier) => (
+                  <TierRow
+                    key={tier.tierKey}
+                    tier={tier}
+                    selected={selectedTierKey === tier.tierKey}
+                    onPress={() => setSelectedTierKey(tier.tierKey)}
+                    distanceKm={distanceKm}
+                    appliedDiscount={appliedDiscount}
+                  />
+                ))}
+              </Animated.ScrollView>
+            )}
+
+            <TouchableOpacity
+              onPress={() => setStep('confirm')}
+              disabled={loadingTiers || !selectedTier}
+              style={[styles.ctaBtn, (loadingTiers || !selectedTier) && styles.ctaBtnDisabled]}
+              activeOpacity={0.88}
+            >
+              <Text style={styles.ctaText}>
+                {selectedTier ? `Continue with ${selectedTier.tierName}` : 'Continue'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={styles.sheetTitle}>Confirm your ride</Text>
+
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryTop}>
+                <View style={styles.summaryIcon}>
+                  <RideTierCarIcon tier={selectedTier} size={36} />
+                </View>
+                <Text style={[styles.summaryName, { flex: 1 }]}>{selectedTier?.tierName || 'Ride'}</Text>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.summaryPrice}>${finalEstimatedAmount.toFixed(2)}</Text>
+                  {hasDiscount ? (
+                    <Text style={styles.summaryOldPrice}>${originalEstimatedAmount.toFixed(2)}</Text>
+                  ) : null}
+                </View>
+              </View>
+              {[
+                { letter: 'A', color: PIN_COLORS.start, label: placeLabel(pickupLabel) || 'Pickup' },
+                ...(Array.isArray(intermediateStops) ? intermediateStops : [])
+                  .filter((stop) => stop?.label)
+                  .map((stop, index) => ({ letter: stopLetter(index), color: PIN_COLORS.stop, label: placeLabel(stop.label) })),
+                { letter: 'B', color: PIN_COLORS.finish, label: placeLabel(dropoffLabel) || 'Destination' },
+              ].map((point) => (
+                <View key={point.letter} style={styles.summaryPoint}>
+                  <View style={[styles.summaryBadge, { backgroundColor: point.color }]}>
+                    <Text style={styles.summaryBadgeText}>{point.letter}</Text>
+                  </View>
+                  <Text style={styles.summaryRoute} numberOfLines={1}>{point.label}</Text>
+                </View>
+              ))}
+            </View>
+
+            <Text style={styles.sectionLabel}>How many people?</Text>
+            <View style={styles.peopleRow}>
+              {passengerCountOptions.map((count) => {
+                const selected = passengerCount === count;
+                return (
+                  <TouchableOpacity
+                    key={count}
+                    onPress={() => setPassengerCount(count)}
+                    style={[styles.peopleChip, selected && styles.peopleChipSelected]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.peopleChipText, selected && styles.peopleChipTextSelected]}>{count}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={styles.sectionLabel}>How will you pay?</Text>
+            {[
+              { value: PAYMENT_METHOD_CASH, label: 'Cash', hint: 'Pay the driver at the end', icon: 'cash-outline' },
+              { value: PAYMENT_METHOD_ONLINE, label: 'Pay online', hint: 'Card or Smile&Pay after the trip', icon: 'card-outline' },
+            ].map((option) => {
+              const active = paymentMethod === option.value;
+              return (
+                <TouchableOpacity
+                  key={option.value}
+                  onPress={() => setPaymentMethod(option.value)}
+                  style={[styles.payRow, active && styles.payRowActive]}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.payIcon}>
+                    <Ionicons name={option.icon} size={20} color={active ? PRIMARY_BLUE : '#374151'} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.payLabel}>{option.label}</Text>
+                    <Text style={styles.payHint}>{option.hint}</Text>
+                  </View>
+                  <Ionicons
+                    name={active ? 'radio-button-on' : 'radio-button-off'}
+                    size={22}
+                    color={active ? PRIMARY_BLUE : '#c0c4cc'}
+                  />
+                </TouchableOpacity>
+              );
+            })}
+
+            <TouchableOpacity
+              onPress={handleFindRide}
+              disabled={isDisabled}
+              style={[styles.ctaBtn, isDisabled && styles.ctaBtnDisabled]}
+              activeOpacity={0.88}
+            >
+              {isSubmittingRide ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.ctaText}>
+                  {selectedTier ? `Request ${selectedTier.tierName}` : 'Request ride'}
+                </Text>
+              )}
+            </TouchableOpacity>
+            {!passengerCount || !paymentMethod ? (
+              <Text style={styles.ctaHint}>
+                {!passengerCount ? 'Choose how many people are riding' : 'Choose how you will pay'}
+              </Text>
+            ) : null}
+          </>
         )}
       </View>
-
-      {/* ── CTA ── */}
-      <View
-        style={[
-          styles.ctaContainer,
-          { paddingBottom: Math.max(tabBarHeight + insets.bottom + 8, 36) },
-        ]}
-      >
-        <Text style={styles.paymentTitle}>How will you pay?</Text>
-        <View style={styles.paymentRow}>
-          {[
-            { value: PAYMENT_METHOD_CASH, label: 'Cash' },
-            { value: PAYMENT_METHOD_ONLINE, label: 'Pay online' },
-          ].map((option) => {
-            const active = paymentMethod === option.value;
-            return (
-              <TouchableOpacity
-                key={option.value}
-                onPress={() => setPaymentMethod(option.value)}
-                style={[styles.paymentChip, active && styles.paymentChipActive]}
-                activeOpacity={0.85}
-              >
-                <Ionicons
-                  name={active ? 'checkbox' : 'square-outline'}
-                  size={16}
-                  color={active ? '#fff' : '#334155'}
-                />
-                <Text style={[styles.paymentChipText, active && styles.paymentChipTextActive]}>
-                  {option.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {paymentMethod ? (
-          <TouchableOpacity
-            onPress={handleFindRide}
-            disabled={isDisabled}
-            style={[styles.ctaBtn, isDisabled && styles.ctaBtnDisabled]}
-            activeOpacity={0.88}
-          >
-            {isSubmittingRide ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <View style={styles.ctaInner}>
-                <Text style={styles.ctaText}>
-                  {selectedTier ? `Request ${selectedTier.tierName}` : 'Find a driver'}
-                </Text>
-                {selectedTier && !isDisabled && (
-                  <View style={styles.ctaChevron}>
-                    <Ionicons name="arrow-forward" size={18} color={PRIMARY_BLUE} />
-                  </View>
-                )}
-              </View>
-            )}
-          </TouchableOpacity>
-        ) : null}
-      </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#f2f2f7',
-  },
-
-  // ── Header ──
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: '#f2f2f7',
-  },
+  screen: { flex: 1, backgroundColor: '#ffffff' },
+  mapWrap: { flex: 1, minHeight: 220, backgroundColor: '#eef4ff' },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    position: 'absolute',
+    left: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-    letterSpacing: -0.3,
-  },
-
-  // ── Route Card ──
-  routeCard: {
-    marginHorizontal: 16,
+  sheet: {
+    marginTop: -24,
     backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 20,
-    borderWidth: 1,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1,
     borderColor: '#e5e7eb',
+    paddingHorizontal: 20,
+    paddingTop: 10,
   },
-  routeRow: {
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#e5e7eb',
+    marginBottom: 12,
+  },
+  sheetTitle: { fontSize: 22, fontWeight: '800', color: '#0f172a' },
+  sheetSub: { marginTop: 2, fontSize: 13, color: '#6b7280' },
+
+  tierList: { maxHeight: 290, marginTop: 12 },
+  tierRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    marginBottom: 6,
   },
-  routeDot: {
+  tierRowSelected: { borderColor: PRIMARY_BLUE, backgroundColor: '#eef4ff' },
+  tierIconWrap: { width: 60, height: 44, alignItems: 'center', justifyContent: 'center' },
+  tierInfo: { flex: 1, marginLeft: 10 },
+  tierName: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  tierSub: { marginTop: 2, fontSize: 13, color: '#6b7280' },
+  tierPriceWrap: { alignItems: 'flex-end' },
+  tierPrice: { fontSize: 17, fontWeight: '800', color: '#111827' },
+  surgeText: { marginTop: 2, fontSize: 11, fontWeight: '700', color: '#d97706' },
+
+  loadingWrap: { marginTop: 12, gap: 8 },
+  skeletonRow: { height: 64, borderRadius: 16, backgroundColor: '#f3f4f6' },
+  errorCard: { marginTop: 12, alignItems: 'center', padding: 20, borderRadius: 16, backgroundColor: '#fffbeb' },
+  errorTitle: { marginTop: 6, fontSize: 16, fontWeight: '700', color: '#111827' },
+  errorBody: { marginTop: 4, fontSize: 14, color: '#6b7280', textAlign: 'center' },
+
+  summaryCard: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: '#f9fafb',
+  },
+  summaryTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  summaryIcon: { width: 54, alignItems: 'center', marginRight: 10 },
+  summaryName: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  summaryPoint: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
+  summaryBadge: {
     width: 20,
     height: 20,
     borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 10,
   },
-  routeDotInnerDest: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#111827',
-  },
-  routeLabel: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111827',
-    letterSpacing: -0.2,
-  },
-  routeDivider: {
-    height: 1,
-    backgroundColor: '#f3f4f6',
-    marginVertical: 12,
-    marginLeft: 32,
-  },
-  routeMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 2,
-  },
-  routeMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  routeMetaText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#6b7280',
-  },
-  routeMetaDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: '#d1d5db',
-    marginHorizontal: 8,
-  },
-  routeMetaPrice: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#111827',
-    marginLeft: 'auto',
-  },
-  discountSummaryWrap: {
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#eef2f7',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  discountSummaryText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  discountSummaryTextStrong: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#15803d',
-  },
+  summaryBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  summaryRoute: { flex: 1, fontSize: 14, color: '#374151' },
+  summaryPrice: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  summaryOldPrice: { fontSize: 12, color: '#9ca3af', textDecorationLine: 'line-through' },
 
-  // ── Tiers Section ──
-  tiersSection: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  sectionLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#9ca3af',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  peopleRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 16,
-  },
+  sectionLabel: { marginTop: 18, marginBottom: 8, fontSize: 15, fontWeight: '700', color: '#111827' },
+  peopleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   peopleChip: {
-    minWidth: 44,
+    minWidth: 46,
     height: 44,
     borderRadius: 12,
     borderWidth: 1.5,
     borderColor: '#e5e7eb',
-    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  peopleChipSelected: {
-    borderColor: PRIMARY_BLUE,
-    backgroundColor: '#eff6ff',
-  },
-  peopleChipText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#374151',
-  },
-  peopleChipTextSelected: {
-    color: PRIMARY_BLUE,
-  },
-  tierList: {
-    paddingBottom: 8,
-  },
+  peopleChipSelected: { borderColor: PRIMARY_BLUE, backgroundColor: '#eef4ff' },
+  peopleChipText: { fontSize: 16, fontWeight: '700', color: '#374151' },
+  peopleChipTextSelected: { color: PRIMARY_BLUE },
 
-  // ── Tier Card ──
-  tierCard: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    marginBottom: 10,
+  payRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 16,
     borderWidth: 1.5,
     borderColor: '#e5e7eb',
-    overflow: 'hidden',
-  },
-  tierCardSelected: {
-    borderColor: PRIMARY_BLUE,
-    backgroundColor: '#f8fbff',
-  },
-  selectedBar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: PRIMARY_BLUE,
-    borderTopLeftRadius: 18,
-    borderBottomLeftRadius: 18,
-  },
-  tierInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    paddingLeft: 18,
-  },
-  tierIconWrap: {
-    width: 76,
-    height: 56,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tierInfo: {
-    flex: 1,
-    marginLeft: 14,
-    paddingRight: 8,
-  },
-  tierName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    letterSpacing: -0.3,
-  },
-  tierSub: {
-    fontSize: 14,
-    color: '#9ca3af',
-    marginTop: 2,
-    fontWeight: '400',
-  },
-  etaBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 5,
-    backgroundColor: '#eff6ff',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 20,
-    gap: 3,
-  },
-  capacityBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 5,
-    backgroundColor: '#ecfeff',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 20,
-    gap: 3,
-  },
-  capacityBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0f766e',
-  },
-  etaText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: PRIMARY_BLUE,
-  },
-  tierPriceWrap: {
-    alignItems: 'flex-end',
-  },
-  tierPrice: {
-    fontSize: 23,
-    fontWeight: '800',
-    color: '#111827',
-    letterSpacing: -0.5,
-  },
-  surgeBadge: {
-    backgroundColor: '#fef3c7',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginTop: 4,
-  },
-  surgeText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#d97706',
-  },
-  checkmarkWrap: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-  },
-
-  // ── Loading ──
-  loadingWrap: {
-    gap: 10,
-  },
-  skeletonCard: {
-    height: 80,
-    borderRadius: 18,
-    backgroundColor: '#e5e7eb',
-  },
-
-  // ── Error ──
-  errorCard: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 24,
-    alignItems: 'center',
-  },
-  errorIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#fef3c7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  errorTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 6,
-  },
-  errorBody: {
-    fontSize: 15,
-    color: '#6b7280',
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  // ── CTA ──
-  ctaContainer: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    backgroundColor: '#f2f2f7',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  discountCard: {
-    marginBottom: 14,
-    borderRadius: 18,
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  discountCardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 10,
-  },
-  discountHintText: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginBottom: 10,
-    lineHeight: 18,
-  },
-  discountInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  discountInput: {
-    flex: 1,
-    height: 44,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    backgroundColor: '#f9fafb',
-    color: '#111827',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  discountApplyBtn: {
-    marginLeft: 10,
-    height: 44,
-    minWidth: 78,
-    borderRadius: 14,
-    backgroundColor: PRIMARY_BLUE,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-  },
-  discountApplyBtnDisabled: {
-    opacity: 0.65,
-  },
-  discountApplyBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  discountBreakdown: {
-    marginTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#eef2f7',
-    paddingTop: 12,
-    gap: 8,
-  },
-  discountBreakdownRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  discountBreakdownLabel: {
-    fontSize: 15,
-    color: '#6b7280',
-    fontWeight: '600',
-  },
-  discountBreakdownValue: {
-    fontSize: 15,
-    color: '#111827',
-    fontWeight: '700',
-  },
-  discountBreakdownValueGreen: {
-    color: '#15803d',
-  },
-  discountBreakdownTotalLabel: {
-    fontSize: 16,
-    color: '#111827',
-    fontWeight: '800',
-  },
-  discountBreakdownTotalValue: {
-    fontSize: 18,
-    color: '#111827',
-    fontWeight: '900',
-  },
-  paymentTitle: {
     marginBottom: 8,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    color: '#64748b',
   },
-  paymentRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  paymentChip: {
-    flex: 1,
-    flexDirection: 'row',
+  payRowActive: { borderColor: PRIMARY_BLUE, backgroundColor: '#eef4ff' },
+  payIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: '#f1f5f9',
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
   },
-  paymentChipActive: {
-    backgroundColor: PRIMARY_BLUE,
-  },
-  paymentChipText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  paymentChipTextActive: {
-    color: '#fff',
-  },
+  payLabel: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  payHint: { marginTop: 1, fontSize: 12, color: '#6b7280' },
+
   ctaBtn: {
-    height: 56,
-    backgroundColor: PRIMARY_BLUE,
+    marginTop: 14,
+    height: 54,
     borderRadius: 16,
+    backgroundColor: PRIMARY_BLUE,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ctaBtnDisabled: {
-    backgroundColor: '#93c5fd',
-  },
-  ctaInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  ctaText: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: -0.3,
-  },
-  ctaChevron: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  ctaBtnDisabled: { backgroundColor: '#93c5fd' },
+  ctaText: { fontSize: 17, fontWeight: '700', color: '#fff' },
+  ctaHint: { marginTop: 8, textAlign: 'center', fontSize: 12, color: '#6b7280' },
 });

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 
 const SUPPORT_EMAIL = 'support@trustexpress.co.za';
 

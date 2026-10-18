@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator, Animated, Easing, ScrollView, Vibration, Linking, Modal, Image, Platform, AppState, DeviceEventEmitter } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { Audio } from 'expo-av';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useIsFocused } from '@react-navigation/native';
@@ -48,6 +48,11 @@ import {
   setOverlayRideRequest,
   subscribeDriverRideOverlayState,
 } from '../../services/driverRideOverlayState';
+import {
+  setDriverBackgroundLocationMode,
+  startDriverBackgroundLocation,
+  stopDriverBackgroundLocation,
+} from '../../services/driverBackgroundLocation';
 
 const DRIVER_ALERTS_ASKED_KEY = 'trust_express_asked_ride_alerts';
 const REQUEST_REFRESH_INTERVAL_MS = 800;
@@ -67,6 +72,7 @@ const INITIAL_REGION = {
 const DRIVER_IDLE_REGION = { latitudeDelta: 0.05, longitudeDelta: 0.05 };
 const DRIVER_KEEP_AWAKE_TAG = 'driver-home-online';
 const MIN_ACCEPTABLE_REQUEST_SECONDS = 8;
+const INCOMING_ALERT_MAX_DURATION_MS = 30000;
 const REQUEST_REAPPEAR_DELAY_MS = 5000;
 const PRIORITY_DRIVER_DISTANCE_KM = 1.5;
 
@@ -373,8 +379,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const idleLocationWatcherRef = useRef(null);
   const incomingRideSoundRef = useRef(null);
-  const incomingAlertInFlightRef = useRef(false);
-  const incomingAlertActiveRef = useRef(false);
+  const incomingAlertGenerationRef = useRef(0);
+  const alertedIncomingRequestIdsRef = useRef(new Set());
+  const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
   const locationWatcherRef = useRef(null);
   const locationSyncInFlightRef = useRef(false);
   const manualAvailabilityRequestRef = useRef(null);
@@ -979,6 +986,11 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 dropoffLabel: newestRequest?.dropoff || newestRequest?.dropoffLabel || '',
                 estimatedAmount: newestRequest?.estimatedAmount,
                 rideRequestId: newestRequest?.id || null,
+                remainingSeconds: getRemainingSeconds(
+                  newestRequest?.expiresAt,
+                  newestRequest?.remainingSeconds,
+                  newestRequest?.remainingSecondsCapturedAt,
+                ),
                 variant: 'request',
               };
               const updated = await updateTripOverlay(requestPayload).catch(() => false);
@@ -1121,76 +1133,60 @@ const DriverHomeScreen = ({ navigation, route }) => {
   );
 
   useEffect(() => {
-    const hasLiveIncomingRequest = Boolean(liveIncomingRequestIds);
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      setIsAppActive(nextState === 'active');
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    const liveIds = liveIncomingRequestIds ? liveIncomingRequestIds.split(',') : [];
+    const hasLiveIncomingRequest = liveIds.length > 0;
+    const alertedIds = alertedIncomingRequestIdsRef.current;
+    Array.from(alertedIds).forEach((id) => {
+      if (!liveIds.includes(id)) alertedIds.delete(id);
+    });
+    const hasUnalertedRequest = liveIds.some((id) => !alertedIds.has(id));
+    // The native overlay owns the alert while backgrounded; each request rings at most once here.
     const shouldAlertForIncomingRide =
+      isAppActive &&
       isFocused &&
       isOnline &&
       !currentRide &&
       !pendingSelectionRide &&
-      hasLiveIncomingRequest;
+      hasUnalertedRequest;
 
-    const playIncomingAlert = async () => {
-      if (incomingAlertInFlightRef.current) return;
-      incomingAlertInFlightRef.current = true;
+    const generation = incomingAlertGenerationRef.current + 1;
+    incomingAlertGenerationRef.current = generation;
+    const isCurrentGeneration = () => incomingAlertGenerationRef.current === generation;
+    let maxDurationTimer = null;
+
+    const releaseSound = async (sound) => {
       try {
-        if (incomingAlertActiveRef.current) return;
-        incomingAlertActiveRef.current = true;
-        try {
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: true,
-            shouldDuckAndroid: false,
-            playThroughEarpieceAndroid: false,
-          });
-        } catch {
-          // Continue even if audio mode cannot be changed.
-        }
-        if (!incomingRideSoundRef.current) {
-          const { sound } = await Audio.Sound.createAsync(
-            require('../../assets/near_rides.mpeg'),
-            { shouldPlay: false, volume: 1.0, isLooping: true },
-          );
-          incomingRideSoundRef.current = sound;
-        }
-
-        const sound = incomingRideSoundRef.current;
-        if (sound) {
-          await sound.setIsLoopingAsync(true);
-          await sound.setVolumeAsync(1.0);
-          const status = await sound.getStatusAsync().catch(() => null);
-          if (!status?.isLoaded) {
-            await sound.playAsync();
-          } else if (!status.isPlaying) {
-            await sound.playFromPositionAsync(0);
-          }
-        }
-        Vibration.vibrate([0, 500, 180, 500, 180, 500, 1200], true);
+        await sound.stopAsync();
       } catch {
-        incomingAlertActiveRef.current = false;
-        // Keep request flow working even if audio playback fails.
-      } finally {
-        incomingAlertInFlightRef.current = false;
+        // ignore
+      }
+      try {
+        await sound.unloadAsync();
+      } catch {
+        // ignore
       }
     };
 
     const stopIncomingAlert = async ({ clearNativeOverlay = false } = {}) => {
-      incomingAlertActiveRef.current = false;
-      try {
-        if (incomingRideSoundRef.current) {
-          await incomingRideSoundRef.current.stopAsync();
-          await incomingRideSoundRef.current.unloadAsync();
-        }
-      } catch {
-        // ignore cleanup failures
-      } finally {
-        incomingRideSoundRef.current = null;
+      if (maxDurationTimer) {
+        clearTimeout(maxDurationTimer);
+        maxDurationTimer = null;
       }
       try {
         Vibration.cancel();
       } catch {
         // ignore
       }
+      const sound = incomingRideSoundRef.current;
+      incomingRideSoundRef.current = null;
+      if (sound) await releaseSound(sound);
       if (clearNativeOverlay) {
         clearOverlayRideRequest();
         updateTripOverlay({
@@ -1199,6 +1195,49 @@ const DriverHomeScreen = ({ navigation, route }) => {
           subtitle: 'Online - Ready for rides',
         }).catch(() => {});
       }
+    };
+
+    const playIncomingAlert = async () => {
+      liveIds.forEach((id) => alertedIds.add(id));
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
+        });
+      } catch {
+        // Continue even if audio mode cannot be changed.
+      }
+      if (!isCurrentGeneration()) return;
+
+      let sound = null;
+      try {
+        ({ sound } = await Audio.Sound.createAsync(
+          require('../../assets/near_rides.mpeg'),
+          { shouldPlay: false, volume: 1.0, isLooping: true },
+        ));
+      } catch {
+        sound = null;
+      }
+      if (!isCurrentGeneration()) {
+        if (sound) releaseSound(sound);
+        return;
+      }
+      if (sound) {
+        incomingRideSoundRef.current = sound;
+        sound.playAsync().catch(() => {});
+      }
+      try {
+        Vibration.vibrate([0, 500, 180, 500, 180, 500, 1200], true);
+      } catch {
+        // ignore
+      }
+      maxDurationTimer = setTimeout(() => {
+        maxDurationTimer = null;
+        stopIncomingAlert();
+      }, INCOMING_ALERT_MAX_DURATION_MS);
     };
 
     if (shouldAlertForIncomingRide) {
@@ -1210,9 +1249,10 @@ const DriverHomeScreen = ({ navigation, route }) => {
     }
 
     return () => {
+      incomingAlertGenerationRef.current += 1;
       stopIncomingAlert();
     };
-  }, [currentRide, isFocused, isOnline, liveIncomingRequestIds, pendingSelectionRide]);
+  }, [currentRide, isAppActive, isFocused, isOnline, liveIncomingRequestIds, pendingSelectionRide]);
 
   useEffect(() => {
     if (!isOnline || activeRequest || currentRide || pendingSelectionRide) {
@@ -1605,7 +1645,13 @@ const DriverHomeScreen = ({ navigation, route }) => {
       await syncAvailability(true);
       setDismissedRequestIds([]);
       setIsOnline(true);
-      ensureDisplayOverlayReady().catch(() => {});
+      // Sequential so the background-location and overlay permission prompts don't stack.
+      backgroundLocationPromptedRef.current = true;
+      startDriverBackgroundLocation(() => getTokenRef.current(), { prompt: true })
+        .catch(() => {})
+        .finally(() => {
+          ensureDisplayOverlayReady().catch(() => {});
+        });
     } catch (error) {
       Alert.alert('Could not go online', getAvailabilityErrorMessage(true, error));
     } finally {
@@ -1619,12 +1665,30 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setAvailabilityActionPending(true);
       await syncAvailability(false);
       setIsOnline(false);
+      stopDriverBackgroundLocation().catch(() => {});
     } catch (error) {
       Alert.alert('Could not go offline', getAvailabilityErrorMessage(false, error));
     } finally {
       setAvailabilityActionPending(false);
     }
   };
+
+  // Drivers already online when the app opens (after an update, reboot, or a killed task)
+  // need background location restarted; ask for permission at most once per app session.
+  const backgroundLocationPromptedRef = useRef(false);
+  useEffect(() => {
+    if (!isOnline || loadingAvailability || availabilityActionPending) return;
+    const prompt = !backgroundLocationPromptedRef.current;
+    backgroundLocationPromptedRef.current = true;
+    startDriverBackgroundLocation(() => getTokenRef.current(), { prompt }).catch(() => {});
+  }, [isOnline, loadingAvailability, availabilityActionPending]);
+
+  const hasActiveRideForLocation = Boolean(currentRide?.id);
+  useEffect(() => {
+    if (!isOnline) return;
+    setDriverBackgroundLocationMode(hasActiveRideForLocation ? 'trip' : 'idle', () => getTokenRef.current())
+      .catch(() => {});
+  }, [hasActiveRideForLocation, isOnline]);
 
   // While the driver is online, continuously track their location and
   // push updates to the backend so driver_availability stays fresh.
@@ -2210,6 +2274,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
               getRemainingLabel={getIncomingRequestRemainingLabel}
               onSelect={handleSelectIncomingRequest}
               onAccept={handleAcceptRequest}
+              onDecline={handleDeclineRequest}
               acceptingRideId={acceptingRideId}
             />
           </View>
@@ -2413,8 +2478,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
                 getRemainingLabel={getIncomingRequestRemainingLabel}
                 onSelect={handleSelectIncomingRequest}
                 onAccept={handleAcceptRequest}
+                onDecline={handleDeclineRequest}
                 acceptingRideId={acceptingRideId}
-                style={{ maxHeight: '90%', borderRadius: 28 }}
+                style={{ borderRadius: 28 }}
               />
             ) : (
               <>

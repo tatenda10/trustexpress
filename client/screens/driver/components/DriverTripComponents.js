@@ -1,7 +1,8 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, Image } from 'react-native';
+import React, { useRef } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, Image, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline } from '../../../components/maps/MapViewCompat';
+import { LetterMarker, PIN_COLORS, stopLetter } from '../../../components/maps/LetterPin';
 import DriverVehicleMapMarker from '../../../components/maps/DriverVehicleMapMarker';
 import { receiptPaymentMethodLabel } from '../../../constants/payment';
 import RideRatingTagPicker from '../../../components/ride/RideRatingTagPicker';
@@ -17,10 +18,6 @@ export function DriverTripLoadingState({ color }) {
       <Text className="mt-4 text-base text-gray-500">Loading live trip route...</Text>
     </View>
   );
-}
-
-function getStopDisplayNumber(index) {
-  return Number(index) + 1;
 }
 
 function RouteLetterMarker({ letter, color, muted = false }) {
@@ -70,100 +67,273 @@ export function DriverTripReceiptView({
   formatCurrency,
   formatDateTime,
 }) {
-  return (
-    <ScrollView
-      className="flex-1 bg-white px-5"
-      contentContainerStyle={{ paddingTop: insets.top + 24, paddingBottom: insets.bottom + 28 }}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text className="text-xl font-bold text-gray-900">Trip receipt</Text>
-      <Text className="mt-1 text-base text-gray-500">Saved to your driver activity.</Text>
+  const passengerName = ratingRide.passengerName || 'Passenger';
+  const routeLabels = [
+    ratingRide.pickupLabel || 'Pickup',
+    ...(Array.isArray(ratingRide.intermediateStops)
+      ? ratingRide.intermediateStops.map((stop, index) => stop?.label || `Stop ${index + 1}`)
+      : []),
+    ratingRide.dropoffLabel || 'Drop-off',
+  ];
+  const hasDiscount = Number(discountAmount || 0) > 0;
+  const hasTip = Number(tipAmount || 0) > 0;
+  const paymentLabel = receiptPaymentMethodLabel(ratingRide.paymentMethod) || '-';
 
-      <View className="mt-5 rounded-[28px] border border-gray-100 bg-[#f8fafc] px-5 py-5">
-        <Text className="text-sm font-semibold uppercase tracking-wide text-gray-400">Passenger</Text>
-        <Text className="mt-1 text-xl font-bold text-gray-900">{ratingRide.passengerName || 'Passenger'}</Text>
-        <Text className="mt-4 text-sm font-semibold uppercase tracking-wide text-gray-400">Route</Text>
-        <Text className="mt-1 text-base font-bold text-gray-900">{ratingRide.pickupLabel || 'Pickup'}</Text>
-        {Array.isArray(ratingRide.intermediateStops) && ratingRide.intermediateStops.length ? (
-          ratingRide.intermediateStops.map((stop, index) => (
-            <React.Fragment key={`receipt-stop-${index}`}>
-              <Text className="mt-1 text-sm text-gray-500">via</Text>
-              <Text className="mt-1 text-base font-bold text-gray-900">{stop?.label || `Stop ${index + 1}`}</Text>
-            </React.Fragment>
-          ))
-        ) : null}
-        <Text className="mt-1 text-sm text-gray-500">to</Text>
-        <Text className="mt-1 text-base font-bold text-gray-900">{ratingRide.dropoffLabel || 'Drop-off'}</Text>
-        <View className="mt-5 rounded-[22px] bg-white px-4 py-4">
-          <View className="flex-row items-center justify-between">
-            <Text className="text-sm text-gray-500">Fare</Text>
-            <Text className="text-base font-bold text-gray-900">{formatCurrency(fareAmount)}</Text>
+  const receiptRow = (label, value, valueClassName = 'text-gray-900') => (
+    <View className="mt-2 flex-row items-center justify-between">
+      <Text className="text-sm text-gray-500">{label}</Text>
+      <Text className={`text-sm font-semibold ${valueClassName}`}>{value}</Text>
+    </View>
+  );
+
+  return (
+    <View className="flex-1 bg-white" style={{ paddingTop: insets.top }}>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View className="items-center">
+          <View className="h-12 w-12 items-center justify-center rounded-full bg-green-50">
+            <Ionicons name="checkmark" size={26} color="#16a34a" />
           </View>
-          {Number(discountAmount || 0) > 0 ? (
-            <>
-              <View className="mt-3 flex-row items-center justify-between">
-                <Text className="text-sm text-gray-500">Passenger promo</Text>
-                <Text className="text-base font-bold text-amber-600">-{formatCurrency(discountAmount)}</Text>
-              </View>
-              <View className="mt-3 flex-row items-center justify-between">
-                <Text className="text-sm text-gray-500">Passenger paid</Text>
-                <Text className="text-base font-bold text-gray-900">{formatCurrency(passengerFareAmount)}</Text>
-              </View>
-              <View className="mt-3 flex-row items-center justify-between">
-                <Text className="text-sm text-gray-500">Admin reimbursement</Text>
-                <Text className="text-base font-bold text-indigo-700">{formatCurrency(driverReimbursementAmount)}</Text>
-              </View>
-              {discountCode ? (
-                <Text className="mt-2 text-xs font-semibold text-gray-500">Code applied: {discountCode}</Text>
-              ) : null}
-            </>
-          ) : null}
-          <View className="mt-3 flex-row items-center justify-between">
-            <Text className="text-sm text-gray-500">Passenger tip</Text>
-            <Text className={`text-base font-bold ${Number(tipAmount || 0) > 0 ? 'text-green-600' : 'text-gray-900'}`}>
-              {formatCurrency(tipAmount)}
-            </Text>
+          <Text className="mt-2 text-sm font-semibold text-gray-500">Trip completed</Text>
+          <Text className="mt-1 text-3xl font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
+          <Text className="mt-1 text-xs text-gray-400">
+            {formatDateTime(ratingRide.completedAt) || 'Just now'}
+          </Text>
+        </View>
+
+        <View className="mt-5 rounded-[10px] bg-[#f8fafc] px-4 py-4">
+          <View className="flex-row items-center">
+            <View className="h-10 w-10 items-center justify-center rounded-full bg-[#eef4ff]">
+              <Ionicons name="person" size={18} color="#2f73c9" />
+            </View>
+            <Text className="ml-3 flex-1 text-sm font-bold text-gray-900" numberOfLines={1}>{passengerName}</Text>
+            <View className="rounded-full bg-white px-2.5 py-1">
+              <Text className="text-xs font-semibold text-gray-700">{paymentLabel}</Text>
+            </View>
           </View>
-          <View className="mt-3 flex-row items-center justify-between">
-            <Text className="text-sm text-gray-500">Payment</Text>
-            <Text className="text-base font-bold text-gray-900">
-              {receiptPaymentMethodLabel(ratingRide.paymentMethod) || '-'}
-            </Text>
+
+          <View className="mt-4">
+            {routeLabels.map((label, index) => {
+              const isLast = index === routeLabels.length - 1;
+              return (
+                <View key={`receipt-stop-${index}`} className="flex-row">
+                  <View className="mr-3 items-center" style={{ width: 10 }}>
+                    <View
+                      className="mt-1.5 h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: index === 0 ? PIN_COLORS.start : isLast ? PIN_COLORS.finish : PIN_COLORS.stop }}
+                    />
+                    {!isLast ? <View className="w-px flex-1 bg-gray-300" style={{ minHeight: 14 }} /> : null}
+                  </View>
+                  <Text className={`flex-1 text-sm text-gray-800 ${isLast ? '' : 'pb-3'}`} numberOfLines={2}>{label}</Text>
+                </View>
+              );
+            })}
           </View>
-          <View className="mt-4 border-t border-gray-100 pt-4 flex-row items-center justify-between">
-            <Text className="text-base font-bold text-gray-900">Total</Text>
-            <Text className="text-2xl font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
+
+          <View className="mt-3 border-t border-gray-200 pt-1">
+            {receiptRow('Trip fare', formatCurrency(fareAmount))}
+            {hasDiscount ? receiptRow('Passenger promo', `-${formatCurrency(discountAmount)}`, 'text-amber-600') : null}
+            {hasDiscount ? receiptRow('Passenger paid', formatCurrency(passengerFareAmount)) : null}
+            {hasDiscount ? receiptRow('Reimbursed to you', formatCurrency(driverReimbursementAmount), 'text-indigo-700') : null}
+            {hasDiscount && discountCode ? (
+              <Text className="mt-1 text-xs text-gray-400">Code applied: {discountCode}</Text>
+            ) : null}
+            {receiptRow('Tip', formatCurrency(tipAmount), hasTip ? 'text-green-600' : 'text-gray-900')}
+            <View className="mt-3 flex-row items-center justify-between">
+              <Text className="text-base font-bold text-gray-900">Total</Text>
+              <Text className="text-lg font-bold text-gray-900">{formatCurrency(totalAmount)}</Text>
+            </View>
           </View>
         </View>
-        <Text className="mt-4 text-sm text-gray-500">
-          {formatDateTime(ratingRide.completedAt) || 'Completed just now'}
-        </Text>
-      </View>
 
-      <RideRatingTagPicker
-        rating={passengerRating}
-        onChangeRating={onSetPassengerRating}
-        groups={DRIVER_PASSENGER_RATING_GROUPS}
-        selectedTags={selectedRatingTags}
-        onToggleTag={onTogglePassengerTag}
-        review={passengerReview}
-        onChangeReview={onSetPassengerReview}
-        title="Please rate your Trust Express Passenger"
-        subtitle={ratingRide.passengerName || 'Passenger'}
-        safetyNote={DRIVER_PASSENGER_RATING_SAFETY_NOTE}
-      />
-      <TouchableOpacity
-        onPress={onSubmit}
-        disabled={submittingRating || passengerRating < 1}
-        className="mt-6 h-14 items-center justify-center rounded-xl bg-[#2f73c9]"
-        style={{ opacity: passengerRating < 1 ? 0.6 : 1 }}
+        <View className="mt-6">
+          <RideRatingTagPicker
+            rating={passengerRating}
+            onChangeRating={onSetPassengerRating}
+            groups={DRIVER_PASSENGER_RATING_GROUPS}
+            selectedTags={selectedRatingTags}
+            onToggleTag={onTogglePassengerTag}
+            review={passengerReview}
+            onChangeReview={onSetPassengerReview}
+            title={`How was ${passengerName}?`}
+            safetyNote={DRIVER_PASSENGER_RATING_SAFETY_NOTE}
+          />
+        </View>
+      </ScrollView>
+
+      <View className="border-t border-gray-100 bg-white px-4 pb-2 pt-3">
+        <TouchableOpacity
+          onPress={onSubmit}
+          disabled={submittingRating || passengerRating < 1}
+          className="h-12 items-center justify-center rounded-[10px] bg-[#2f73c9]"
+          style={{ opacity: submittingRating || passengerRating < 1 ? 0.5 : 1 }}
+        >
+          {submittingRating ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Submit rating</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onSkip} disabled={submittingRating} className="h-10 items-center justify-center">
+          <Text className="text-sm font-semibold text-gray-500">Skip</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+export function DriverTripPreviewMap({
+  pickupCoordinate,
+  dropoffCoordinate,
+  intermediateStops,
+  routeCoordinates,
+  height = 210,
+}) {
+  const mapRef = useRef(null);
+  const stops = Array.isArray(intermediateStops) ? intermediateStops : [];
+  const points = [
+    pickupCoordinate,
+    ...stops.map((stop) => stop?.coordinate),
+    dropoffCoordinate,
+  ].filter(Boolean);
+  const hasRoute = Array.isArray(routeCoordinates) && routeCoordinates.length > 1;
+  const regionPoints = hasRoute ? [...points, ...routeCoordinates] : points;
+  const initialRegion = (() => {
+    if (!regionPoints.length) return undefined;
+    const latitudes = regionPoints.map((point) => Number(point.latitude));
+    const longitudes = regionPoints.map((point) => Number(point.longitude));
+    const minLat = Math.min(...latitudes);
+    const maxLat = Math.max(...latitudes);
+    const minLng = Math.min(...longitudes);
+    const maxLng = Math.max(...longitudes);
+    return {
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max((maxLat - minLat) * 1.6, 0.01),
+      longitudeDelta: Math.max((maxLng - minLng) * 1.6, 0.01),
+    };
+  })();
+
+  const fitMap = () => {
+    if (!mapRef.current) return;
+    if (regionPoints.length > 1) {
+      mapRef.current.fitToCoordinates(regionPoints, {
+        edgePadding: { top: 60, right: 40, bottom: 30, left: 40 },
+        animated: false,
+      });
+    } else if (points[0]) {
+      mapRef.current.animateToRegion({ ...points[0], latitudeDelta: 0.01, longitudeDelta: 0.01 }, 0);
+    }
+  };
+
+  return (
+    <View className="overflow-hidden bg-[#eef2f7]" style={{ height, borderRadius: 12 }}>
+      <MapView
+        key={hasRoute ? `route-${routeCoordinates.length}` : 'points'}
+        ref={mapRef}
+        style={{ flex: 1, borderRadius: 12 }}
+        liteMode={Platform.OS === 'android'}
+        initialRegion={initialRegion}
+        onMapReady={fitMap}
+        scrollEnabled={false}
+        zoomEnabled={false}
+        rotateEnabled={false}
+        pitchEnabled={false}
+        toolbarEnabled={false}
+        showsCompass={false}
       >
-        {submittingRating ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Done</Text>}
+        {hasRoute ? (
+          <Polyline coordinates={routeCoordinates} strokeColor="#2563eb" strokeWidth={4} />
+        ) : points.length > 1 ? (
+          <Polyline coordinates={points} strokeColor="#64748b" strokeWidth={3} lineDashPattern={[8, 6]} />
+        ) : null}
+        {pickupCoordinate ? (
+          <LetterMarker coordinate={pickupCoordinate} title="Pickup" letter="A" color={PIN_COLORS.start} />
+        ) : null}
+        {stops.map((stop, index) => (
+          stop?.coordinate ? (
+            <LetterMarker
+              key={`preview-stop-${index}`}
+              coordinate={stop.coordinate}
+              title={stop.label || `Stop ${index + 1}`}
+              letter={stopLetter(index)}
+              color={PIN_COLORS.stop}
+            />
+          ) : null
+        ))}
+        {dropoffCoordinate ? (
+          <LetterMarker coordinate={dropoffCoordinate} title="Drop-off" letter="B" color={PIN_COLORS.finish} />
+        ) : null}
+      </MapView>
+    </View>
+  );
+}
+
+export function DriverTripTopBar({
+  className = '',
+  roundedClassName = 'rounded-2xl',
+  buttonRoundedClassName = 'rounded-full',
+  style,
+  targetLabel,
+  voiceGuidanceEnabled,
+  onToggleVoiceGuidance,
+  showCallPassenger,
+  onCallPassenger,
+  onSendPanicAlert,
+  submittingPanicAlert,
+  onOpenChat,
+  onOpenExternalNavigation,
+}) {
+  return (
+    <View className={`flex-row items-center ${roundedClassName} bg-white px-3 py-3 ${className}`} style={style}>
+      <View className={`h-9 w-9 items-center justify-center ${buttonRoundedClassName} bg-red-50`}>
+        <Ionicons name="location" size={19} color="#dc2626" />
+      </View>
+      <Text className="ml-3 flex-1 text-lg font-bold text-gray-900" numberOfLines={1}>
+        {targetLabel}
+      </Text>
+      <TouchableOpacity
+        onPress={onToggleVoiceGuidance}
+        activeOpacity={0.85}
+        className={`ml-2 h-10 w-10 items-center justify-center ${buttonRoundedClassName} ${voiceGuidanceEnabled ? 'bg-orange-500' : 'bg-gray-100'}`}
+      >
+        <Ionicons name={voiceGuidanceEnabled ? 'volume-high' : 'volume-mute'} size={18} color={voiceGuidanceEnabled ? '#fff' : '#374151'} />
       </TouchableOpacity>
-      <TouchableOpacity onPress={onSkip} className="mt-4 items-center py-3">
-        <Text className="text-base text-gray-500">Skip</Text>
+      {showCallPassenger ? (
+        <TouchableOpacity
+          onPress={onCallPassenger}
+          activeOpacity={0.85}
+          className={`ml-2 h-10 w-10 items-center justify-center ${buttonRoundedClassName} bg-green-50`}
+        >
+          <Ionicons name="call-outline" size={19} color="#15803d" />
+        </TouchableOpacity>
+      ) : null}
+      <TouchableOpacity
+        onPress={onSendPanicAlert}
+        activeOpacity={0.85}
+        className={`ml-2 h-10 w-10 items-center justify-center ${buttonRoundedClassName} bg-red-50`}
+      >
+        {submittingPanicAlert ? (
+          <ActivityIndicator size="small" color="#dc2626" />
+        ) : (
+          <Ionicons name="warning-outline" size={19} color="#dc2626" />
+        )}
       </TouchableOpacity>
-    </ScrollView>
+      <TouchableOpacity
+        onPress={onOpenChat}
+        activeOpacity={0.85}
+        className={`ml-2 h-10 w-10 items-center justify-center ${buttonRoundedClassName} bg-gray-100`}
+      >
+        <Ionicons name="chatbubble-ellipses-outline" size={19} color="#111827" />
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={onOpenExternalNavigation}
+        activeOpacity={0.85}
+        className={`ml-2 h-10 w-10 items-center justify-center ${buttonRoundedClassName} bg-[#dbeafe]`}
+      >
+        <Ionicons name="navigate" size={19} color="#1d4ed8" />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -220,8 +390,6 @@ export function DriverTripMapPanel({
   onCancelRide,
   submittingPanicAlert,
 }) {
-  const isPinStartAction = /pin/i.test(String(startRideLabel || '')) && !startRideDisabled;
-
   return (
     <View className="flex-1 bg-[#eef2f7]">
       <MapView
@@ -236,7 +404,7 @@ export function DriverTripMapPanel({
         mapPadding={{
           top: Math.max(insets.top + 72, 96),
           right: 16,
-          bottom: Math.max(tripPanelMaxHeight + insets.bottom + 12, 200),
+          bottom: Math.max(tripPanelMaxHeight + 12, 200),
           left: 16,
         }}
       >
@@ -288,63 +456,24 @@ export function DriverTripMapPanel({
         ) : null}
       </MapView>
 
-      <View
-        className="absolute left-4 right-4 flex-row items-center rounded-2xl bg-white px-3 py-3"
+      <DriverTripTopBar
+        className="absolute left-4 right-4"
         style={{ top: insets.top + 10 }}
-      >
-        <View className="h-9 w-9 items-center justify-center rounded-full bg-red-50">
-          <Ionicons name="location" size={19} color="#dc2626" />
-        </View>
-        <Text className="ml-3 flex-1 text-lg font-bold text-gray-900" numberOfLines={1}>
-          {targetLabel}
-        </Text>
-        <TouchableOpacity
-          onPress={onToggleVoiceGuidance}
-          activeOpacity={0.85}
-          className={`ml-2 h-10 w-10 items-center justify-center rounded-full ${voiceGuidanceEnabled ? 'bg-orange-500' : 'bg-gray-100'}`}
-        >
-          <Ionicons name={voiceGuidanceEnabled ? 'volume-high' : 'volume-mute'} size={18} color={voiceGuidanceEnabled ? '#fff' : '#374151'} />
-        </TouchableOpacity>
-        {showCallPassenger ? (
-          <TouchableOpacity
-            onPress={onCallPassenger}
-            activeOpacity={0.85}
-            className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-green-50"
-          >
-            <Ionicons name="call-outline" size={19} color="#15803d" />
-          </TouchableOpacity>
-        ) : null}
-        <TouchableOpacity
-          onPress={onSendPanicAlert}
-          activeOpacity={0.85}
-          className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-red-50"
-        >
-          {submittingPanicAlert ? (
-            <ActivityIndicator size="small" color="#dc2626" />
-          ) : (
-            <Ionicons name="warning-outline" size={19} color="#dc2626" />
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={onOpenChat}
-          activeOpacity={0.85}
-          className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-gray-100"
-        >
-          <Ionicons name="chatbubble-ellipses-outline" size={19} color="#111827" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={onOpenExternalNavigation}
-          activeOpacity={0.85}
-          className="ml-2 h-10 w-10 items-center justify-center rounded-full bg-[#dbeafe]"
-        >
-          <Ionicons name="navigate" size={19} color="#1d4ed8" />
-        </TouchableOpacity>
-      </View>
+        targetLabel={targetLabel}
+        voiceGuidanceEnabled={voiceGuidanceEnabled}
+        onToggleVoiceGuidance={onToggleVoiceGuidance}
+        showCallPassenger={showCallPassenger}
+        onCallPassenger={onCallPassenger}
+        onSendPanicAlert={onSendPanicAlert}
+        submittingPanicAlert={submittingPanicAlert}
+        onOpenChat={onOpenChat}
+        onOpenExternalNavigation={onOpenExternalNavigation}
+      />
 
       <TouchableOpacity
         onPress={onCenterDriver}
         className="absolute right-4 h-14 w-14 items-center justify-center rounded-2xl bg-white"
-        style={{ bottom: tripPanelMaxHeight + insets.bottom + 20 }}
+        style={{ bottom: tripPanelMaxHeight + 20 }}
         activeOpacity={0.85}
       >
         <Ionicons name="locate" size={26} color="#4f46e5" />
@@ -353,8 +482,8 @@ export function DriverTripMapPanel({
       <View
         className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-white"
         style={{
-          maxHeight: tripPanelMaxHeight + Math.max(insets.bottom, 12),
-          paddingBottom: Math.max(insets.bottom, 12),
+          maxHeight: tripPanelMaxHeight + 8,
+          paddingBottom: 8,
           overflow: 'hidden',
         }}
       >
@@ -366,107 +495,94 @@ export function DriverTripMapPanel({
           contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 }}
         >
           <View className="mb-3 items-center">
-            <View className="h-1.5 w-14 rounded-full bg-gray-300" />
+            <View className="h-1.5 w-12 rounded-full bg-gray-300" />
           </View>
 
-          <View className="flex-row items-center justify-between">
-            <View className="flex-1 pr-3">
-              <Text className="text-xl font-extrabold text-gray-950" numberOfLines={1}>{stageTitle}</Text>
-              <Text className="mt-1 text-sm font-semibold text-gray-500" numberOfLines={1}>
-                {primaryMetric} - {secondaryMetric}
+          <View className="items-center">
+            <Text className="text-xs text-gray-500" numberOfLines={1}>{stageTitle}</Text>
+            <Text className="mt-0.5 text-lg font-bold text-gray-900" numberOfLines={1}>
+              {primaryMetric} · {secondaryMetric}
+            </Text>
+          </View>
+
+          {showGuidance ? (
+            <View className="mt-3 flex-row items-center rounded-[10px] bg-[#eef4ff] px-3 py-2.5">
+              <Ionicons name="navigate" size={16} color={primaryBlue} />
+              <Text className="ml-2 flex-1 text-sm font-semibold text-gray-900" numberOfLines={2}>
+                {guidanceText || 'Follow the route to your destination.'}
               </Text>
             </View>
-            <View className="items-end">
-              <Text className="text-xs font-bold uppercase tracking-widest text-gray-400">Fare</Text>
-              <Text className="mt-1 text-lg font-extrabold text-gray-950">{fareText}</Text>
-            </View>
-          </View>
+          ) : null}
 
-          <View className="mt-3 flex-row items-center rounded-2xl bg-gray-50 px-3 py-2.5">
-            {passengerProfileImageUrl ? (
-              <Image source={{ uri: passengerProfileImageUrl }} style={{ width: 40, height: 40, borderRadius: 20 }} />
-            ) : (
-              <View className="h-10 w-10 items-center justify-center rounded-full bg-[#e0e7ff]">
-                <Ionicons name="person" size={18} color={primaryBlue} />
-              </View>
-            )}
-            <View className="ml-3 flex-1">
-              <Text className="text-base font-bold text-gray-900" numberOfLines={1}>{passengerName}</Text>
-              <Text className="mt-0.5 text-sm text-gray-500" numberOfLines={1}>{passengerSubtitle}</Text>
+          <View className="mt-4 flex-row items-center border-t border-gray-100 pt-4">
+            <View
+              className="items-center justify-center overflow-hidden rounded-full bg-[#eef4ff]"
+              style={{ width: 48, height: 48 }}
+            >
+              {passengerProfileImageUrl ? (
+                <Image source={{ uri: passengerProfileImageUrl }} style={{ width: 48, height: 48 }} />
+              ) : (
+                <Ionicons name="person" size={20} color={primaryBlue} />
+              )}
             </View>
+            <View className="ml-3 min-w-0 flex-1">
+              <Text className="text-sm font-bold text-gray-900" numberOfLines={1}>{passengerName}</Text>
+              {passengerSubtitle ? (
+                <Text className="mt-0.5 text-xs text-gray-500" numberOfLines={1}>{passengerSubtitle}</Text>
+              ) : null}
+            </View>
+            <Text className="ml-3 text-base font-bold text-gray-900">{fareText}</Text>
           </View>
 
           {passengerConfirmationText ? (
-            <View className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-              <Text className="text-xs font-bold uppercase tracking-widest text-emerald-700">Passenger update</Text>
-              <Text className="mt-1 text-sm font-semibold text-emerald-900" numberOfLines={2}>{passengerConfirmationText}</Text>
+            <View className="mt-3 flex-row items-center rounded-[10px] bg-green-50 px-3 py-2">
+              <Ionicons name="checkmark-circle" size={16} color="#16a34a" />
+              <Text className="ml-2 flex-1 text-xs font-semibold text-green-800" numberOfLines={2}>
+                {passengerConfirmationText}
+              </Text>
             </View>
           ) : null}
 
           {safetyPinReminderText ? (
-            <View className="mt-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-3 py-2.5">
-              <Text className="text-xs font-bold uppercase tracking-widest text-indigo-700">Night safety PIN</Text>
-              <Text className="mt-1 text-sm font-semibold text-indigo-900" numberOfLines={2}>{safetyPinReminderText}</Text>
-            </View>
-          ) : null}
-
-          {showGuidance ? (
-            <View className="mt-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-3 py-2.5">
-              <View className="flex-row items-center">
-                <View className="h-9 w-9 items-center justify-center rounded-full bg-white">
-                  <Ionicons name="navigate" size={16} color="#4338ca" />
-                </View>
-                <View className="ml-3 flex-1">
-                  <Text className="text-xs font-bold uppercase tracking-widest text-indigo-500">Next direction</Text>
-                  <Text className="mt-0.5 text-sm font-bold text-gray-900" numberOfLines={2}>
-                    {guidanceText || 'Follow the route to your destination.'}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          ) : null}
-
-          {Array.isArray(stopTimeline) && stopTimeline.length > 2 ? (
-            <View className="mt-3 rounded-2xl border border-orange-100 bg-orange-50 px-3 py-3">
-              <Text className="text-xs font-bold uppercase tracking-widest text-orange-600">Trip stops</Text>
-              <Text className="mt-1 text-sm font-semibold text-orange-900">
-                {Number(remainingIntermediateStopsCount || 0) > 0
-                  ? `${remainingIntermediateStopsCount} stop${remainingIntermediateStopsCount === 1 ? '' : 's'} remaining before final destination`
-                  : 'Final destination leg'}
+            <View className="mt-2 flex-row items-center rounded-[10px] bg-[#eef4ff] px-3 py-2">
+              <Ionicons name="shield-checkmark" size={16} color={primaryBlue} />
+              <Text className="ml-2 flex-1 text-xs font-semibold text-gray-800" numberOfLines={2}>
+                {safetyPinReminderText}
               </Text>
-              <View className="mt-3">
-                {stopTimeline.map((label, index) => {
-                  const isPickup = index === 0
-                  const isDropoff = index === stopTimeline.length - 1
-                  const stopSequenceIndex = Math.max(0, index - 1)
-                  const isCompletedStop = !isPickup && !isDropoff && stopSequenceIndex < Number(currentStopIndex || 0)
-                  const isCurrentStop = !isPickup && !isDropoff && stopSequenceIndex === Number(currentStopIndex || 0)
-                  return (
-                    <View key={`${label}-${index}`} className="mb-2 flex-row items-start">
-                      <View
-                        className="mr-3 mt-1 h-3 w-3 rounded-full"
-                        style={{
-                          backgroundColor: isPickup
-                            ? '#2563eb'
-                            : isDropoff
-                              ? '#111827'
-                              : isCompletedStop
-                                ? '#94a3b8'
-                                : isCurrentStop
-                                  ? '#f97316'
-                                  : '#cbd5e1',
-                        }}
-                      />
-                      <View className="flex-1">
-                        <Text className="text-sm font-semibold text-gray-900">
-                          {isPickup ? 'Pickup' : isDropoff ? 'Final destination' : `Stop ${getStopDisplayNumber(stopSequenceIndex)}`}
-                        </Text>
-                        <Text className="mt-0.5 text-sm text-gray-600">{label}</Text>
-                      </View>
+            </View>
+          ) : null}
+
+          {Array.isArray(stopTimeline) && stopTimeline.length ? (
+            <View className="mt-4 border-t border-gray-100 pt-4">
+              {stopTimeline.map((label, index) => {
+                const isPickup = index === 0;
+                const isDropoff = index === stopTimeline.length - 1;
+                const isPassedStop = !isPickup && !isDropoff && index - 1 < Number(currentStopIndex || 0);
+                return (
+                  <View key={`${label}-${index}`} className={`flex-row items-start ${index ? 'mt-3' : ''}`}>
+                    <View
+                      className="mr-3 h-6 w-6 items-center justify-center rounded-full"
+                      style={{
+                        backgroundColor: isPickup
+                          ? PIN_COLORS.start
+                          : isDropoff
+                            ? PIN_COLORS.finish
+                            : isPassedStop ? '#94a3b8' : PIN_COLORS.stop,
+                      }}
+                    >
+                      <Text className="text-[11px] font-extrabold text-white">
+                        {isPickup ? 'A' : isDropoff ? 'B' : stopLetter(index - 1)}
+                      </Text>
                     </View>
-                  )
-                })}
-              </View>
+                    <View className="min-w-0 flex-1">
+                      <Text className="text-[11px] text-gray-400">
+                        {isPickup ? 'Pick up' : isDropoff ? 'Drop-off' : `Stop ${index}`}
+                      </Text>
+                      <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>{label}</Text>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           ) : null}
 
@@ -474,86 +590,61 @@ export function DriverTripMapPanel({
             <TouchableOpacity
               onPress={onMarkArrived}
               disabled={submitting}
-              className="mt-3 h-14 items-center justify-center rounded-[20px]"
+              className="mt-4 h-12 items-center justify-center rounded-[10px]"
               style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
             >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Mark Arrived</Text>}
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Mark Arrived</Text>}
             </TouchableOpacity>
           ) : null}
 
-          {showStartRide && showCancelRide ? (
-            <View className="mt-3 flex-row">
-              <TouchableOpacity
-                onPress={onCancelRide}
-                disabled={submitting || cancellingRide}
-                className="mr-2 h-14 flex-1 items-center justify-center rounded-[20px] border border-red-200 bg-red-50"
-                style={{ opacity: submitting || cancellingRide ? 0.7 : 1 }}
-              >
-                {cancellingRide ? <ActivityIndicator size="small" color="#dc2626" /> : <Text className="text-base font-bold text-red-600">Cancel Ride</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={onStartRide}
-                disabled={submitting || startRideDisabled}
-                className={`ml-2 h-14 flex-1 flex-row items-center justify-center rounded-[20px] ${isPinStartAction ? 'border border-indigo-200' : ''}`}
-                style={{
-                  backgroundColor: isPinStartAction ? '#eef2ff' : primaryBlue,
-                  opacity: submitting || startRideDisabled ? 0.7 : 1,
-                }}
-              >
-              {submitting ? (
-                <ActivityIndicator size="small" color={isPinStartAction ? '#4338ca' : '#fff'} />
-              ) : (
-                <>
-                  {isPinStartAction ? <Ionicons name="keypad" size={18} color="#4338ca" style={{ marginRight: 7 }} /> : null}
-                  <Text className={`text-base font-extrabold ${isPinStartAction ? 'text-indigo-800' : 'text-white'}`}>
-                    {startRideLabel}
-                  </Text>
-                </>
-              )}
+          {showStartRide ? (
+            <TouchableOpacity
+              onPress={onStartRide}
+              disabled={submitting || startRideDisabled}
+              className="mt-4 h-12 items-center justify-center rounded-[10px]"
+              style={{ backgroundColor: primaryBlue, opacity: submitting || startRideDisabled ? 0.6 : 1 }}
+            >
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">{startRideLabel}</Text>}
             </TouchableOpacity>
-          </View>
           ) : null}
 
           {showAdvanceStop ? (
             <TouchableOpacity
               onPress={onAdvanceStop}
               disabled={submitting}
-              className="mt-3 h-14 items-center justify-center rounded-[20px] bg-orange-500"
+              className="mt-4 h-12 items-center justify-center rounded-[10px] bg-orange-500"
               style={{ opacity: submitting ? 0.7 : 1 }}
             >
               {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">{advanceStopLabel || 'Reached stop'}</Text>}
             </TouchableOpacity>
           ) : null}
 
-          {showCompleteRide && showCancelRide && !showStartRide ? (
-            <View className="mt-3 flex-row">
-              <TouchableOpacity
-                onPress={onCancelRide}
-                disabled={submitting || cancellingRide}
-                className="mr-2 h-14 flex-1 items-center justify-center rounded-[20px] border border-red-200 bg-red-50"
-                style={{ opacity: submitting || cancellingRide ? 0.7 : 1 }}
-              >
-                {cancellingRide ? <ActivityIndicator size="small" color="#dc2626" /> : <Text className="text-base font-bold text-red-600">Cancel Ride</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={onCompleteRide}
-                disabled={submitting}
-                className="ml-2 h-14 flex-1 items-center justify-center rounded-[20px]"
-                style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
-              >
-                {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Complete Ride</Text>}
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {showCompleteRide && !showCancelRide ? (
+          {showCompleteRide ? (
             <TouchableOpacity
               onPress={onCompleteRide}
               disabled={submitting}
-              className="mt-3 h-14 items-center justify-center rounded-[20px]"
+              className="mt-4 h-12 items-center justify-center rounded-[10px]"
               style={{ backgroundColor: primaryBlue, opacity: submitting ? 0.7 : 1 }}
             >
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-lg font-bold text-white">Complete Ride</Text>}
+              {submitting ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-base font-bold text-white">Complete Ride</Text>}
+            </TouchableOpacity>
+          ) : null}
+
+          {showCancelRide ? (
+            <TouchableOpacity
+              onPress={onCancelRide}
+              disabled={submitting || cancellingRide}
+              className="mt-3 h-12 flex-row items-center justify-center rounded-[10px] bg-red-50"
+              style={{ opacity: submitting || cancellingRide ? 0.7 : 1 }}
+            >
+              {cancellingRide ? (
+                <ActivityIndicator size="small" color="#dc2626" />
+              ) : (
+                <>
+                  <Ionicons name="close-circle-outline" size={18} color="#dc2626" />
+                  <Text className="ml-2 text-base font-bold text-red-600">Cancel ride</Text>
+                </>
+              )}
             </TouchableOpacity>
           ) : null}
         </ScrollView>

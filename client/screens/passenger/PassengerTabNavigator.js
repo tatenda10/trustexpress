@@ -1,5 +1,4 @@
 import React from 'react';
-import { View, Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +12,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 const Tab = createBottomTabNavigator();
 
 const HIDDEN_TAB_BAR_ROUTES = new Set([
+  'PassengerChooseRide',
   'PassengerNearbyCars',
   'PassengerRideTracking',
   'PassengerHireTracking',
@@ -20,54 +20,44 @@ const HIDDEN_TAB_BAR_ROUTES = new Set([
   'PassengerSupportChat',
 ]);
 
-function TabLabel({ label, focused, color }) {
-  return (
-    <View className="items-center">
-      <Text
-        style={{
-          color,
-          fontSize: 13,
-          fontWeight: '800',
-          paddingBottom: 3,
-          borderBottomWidth: focused ? 3 : 0,
-          borderBottomColor: focused ? PRIMARY_BLUE : 'transparent',
-        }}
-      >
-        {label}
-      </Text>
-    </View>
-  );
-}
+const TAB_ICONS = {
+  PassengerHome: ['home', 'home-outline'],
+  PassengerHiring: ['bus', 'bus-outline'],
+  PassengerActivity: ['receipt', 'receipt-outline'],
+  PassengerAccount: ['person', 'person-outline'],
+};
 
 function shouldHideTabBar(route) {
-  const focusedRouteName = getFocusedRouteNameFromRoute(route) ?? 'PassengerBookingHome';
-  return HIDDEN_TAB_BAR_ROUTES.has(focusedRouteName);
+  const focusedRouteName = getFocusedRouteNameFromRoute(route) ?? '';
+  if (HIDDEN_TAB_BAR_ROUTES.has(focusedRouteName)) return true;
+  const nestedState = route.state;
+  const focusedNested = nestedState?.routes?.[nestedState.index ?? 0];
+  return Boolean(focusedNested?.params?.bookingMap);
 }
 
 export default function PassengerTabNavigator() {
   const insets = useSafeAreaInsets();
 
-  const baseTabBarStyle = {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: Math.max(insets.bottom, 6),
-    height: 30 + Math.max(insets.bottom, 1),
-    borderTopColor: '#f3f4f6',
+  const tabBarStyle = {
+    height: 58 + insets.bottom,
+    paddingTop: 6,
+    paddingBottom: Math.max(insets.bottom, 6),
+    backgroundColor: '#ffffff',
+    borderTopColor: '#e5e7eb',
     borderTopWidth: 1,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    paddingTop: 0,
-    paddingBottom: Math.max(insets.bottom, 0),
-    elevation: 12,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
+    elevation: 0,
+    shadowOpacity: 0,
+    shadowColor: 'transparent',
   };
+
+  const optionsFor = (title) => ({ route }) => ({
+    title,
+    tabBarIcon: ({ focused, color }) => {
+      const [filled, outline] = TAB_ICONS[route.name];
+      return <Ionicons name={focused ? filled : outline} size={23} color={color} />;
+    },
+    tabBarStyle: shouldHideTabBar(route) ? { display: 'none' } : tabBarStyle,
+  });
 
   return (
     <Tab.Navigator
@@ -75,52 +65,22 @@ export default function PassengerTabNavigator() {
         headerShown: false,
         tabBarActiveTintColor: PRIMARY_BLUE,
         tabBarInactiveTintColor: '#9ca3af',
-        tabBarStyle: baseTabBarStyle,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+        tabBarStyle,
       }}
     >
-      <Tab.Screen
-        name="PassengerHome"
-        component={PassengerHomeStack}
-        options={({ route }) => ({
-          title: 'Home',
-          tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={20} color={color} />,
-          tabBarLabel: ({ focused, color }) => <TabLabel label="Home" focused={focused} color={color} />,
-          tabBarStyle: shouldHideTabBar(route)
-            ? { display: 'none' }
-            : baseTabBarStyle,
-        })}
-      />
-      <Tab.Screen
-        name="PassengerHiring"
-        component={PassengerHireStack}
-        options={({ route }) => ({
-          title: 'Hiring',
-          tabBarIcon: ({ color }) => <Ionicons name="bus-outline" size={20} color={color} />,
-          tabBarLabel: ({ focused, color }) => <TabLabel label="Hiring" focused={focused} color={color} />,
-          tabBarStyle: shouldHideTabBar(route)
-            ? { display: 'none' }
-            : baseTabBarStyle,
-        })}
-      />
-      <Tab.Screen
-        name="PassengerActivity"
-        component={PassengerActivityStack}
-        options={{
-          title: 'Activity',
-          tabBarIcon: ({ color }) => <Ionicons name="time-outline" size={20} color={color} />,
-          tabBarLabel: ({ focused, color }) => <TabLabel label="Activity" focused={focused} color={color} />,
-        }}
-      />
+      <Tab.Screen name="PassengerHome" component={PassengerHomeStack} options={optionsFor('Home')} />
+      <Tab.Screen name="PassengerHiring" component={PassengerHireStack} options={optionsFor('Hiring')} />
+      <Tab.Screen name="PassengerActivity" component={PassengerActivityStack} options={optionsFor('Activity')} />
       <Tab.Screen
         name="PassengerAccount"
         component={PassengerAccountStack}
-        options={({ route }) => ({
-          title: 'Account',
-          tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={20} color={color} />,
-          tabBarLabel: ({ focused, color }) => <TabLabel label="Account" focused={focused} color={color} />,
-          tabBarStyle: shouldHideTabBar(route)
-            ? { display: 'none' }
-            : baseTabBarStyle,
+        options={optionsFor('Account')}
+        listeners={({ navigation }) => ({
+          tabPress: (event) => {
+            event.preventDefault();
+            navigation.navigate('PassengerAccount', { screen: 'PassengerAccountMain' });
+          },
         })}
       />
     </Tab.Navigator>

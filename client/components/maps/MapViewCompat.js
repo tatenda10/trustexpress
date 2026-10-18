@@ -1,8 +1,11 @@
 import React, { forwardRef } from 'react';
 import { Platform } from 'react-native';
 import RNMapView, {
+  AnimatedRegion,
+  MarkerAnimated,
   Marker as RNMarker,
   Polyline as RNPolyline,
+  Circle as RNCircle,
   PROVIDER_GOOGLE,
   PROVIDER_DEFAULT,
 } from 'react-native-maps';
@@ -71,4 +74,11 @@ function CompatUrlTile() {
 }
 
 export default MapView;
-export { RNMarker as Marker, RNPolyline as Polyline, CompatUrlTile as UrlTile };
+export {
+  RNMarker as Marker,
+  RNPolyline as Polyline,
+  RNCircle as Circle,
+  CompatUrlTile as UrlTile,
+  AnimatedRegion,
+  MarkerAnimated,
+};

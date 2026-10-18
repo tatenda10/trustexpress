@@ -36,7 +36,7 @@ module.exports = ({ config } = {}) => {
         NSLocationWhenInUseUsageDescription:
           'Trust Express uses your location while the app is open to set pickup points, find nearby drivers, and show live ride progress. For example, passengers can use their current location as pickup and drivers can share their live position during an active trip.',
         NSLocationAlwaysAndWhenInUseUsageDescription:
-          'Trust Express uses location during active driver sessions to keep trips updated and help passengers see driver progress. For example, when a driver is online or on a ride, their location helps calculate arrival time and update the passenger map.',
+          'While you are online as a driver, Trust Express uses your location in the background so you receive ride requests near where you are, even when the app is closed. For example, a driver who is online with the app closed still gets requests from passengers within 12 km of their current position.',
         NSSpeechRecognitionUsageDescription:
           'Allow $(PRODUCT_NAME) to convert your speech into text when using voice features in the app.',
       },

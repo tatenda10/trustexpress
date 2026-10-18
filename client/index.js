@@ -1,5 +1,6 @@
 import { registerRootComponent } from 'expo';
 import "./global.css"
+import './services/driverBackgroundLocation';
 
 import App from './App';
 

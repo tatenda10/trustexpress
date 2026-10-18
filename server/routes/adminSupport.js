@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
-import { getClerkUserById, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, toAppUser } from '../lib/users.js';
 import {
   autoCloseInactiveSupportThreads,
   createSupportMessage,
@@ -31,7 +31,7 @@ const router = Router();
 async function enrichThread(row) {
   const thread = shapeSupportThread(row);
   try {
-    const clerkUser = await getClerkUserById(thread.userId);
+    const clerkUser = await getUserById(thread.userId);
     const appUser = toAppUser(clerkUser);
     return {
       ...thread,
@@ -276,7 +276,7 @@ router.post('/threads/:threadId/messages', requireAdminAuth, requirePermission('
     });
 
     try {
-      const clerkUser = await getClerkUserById(threadRow.user_id);
+      const clerkUser = await getUserById(threadRow.user_id);
       const pushToken = String(clerkUser?.privateMetadata?.pushToken || '').trim();
       if (pushToken) {
         const pushBody = message

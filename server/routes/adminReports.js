@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
-import { getClerkClient } from '../lib/clerk-client.js';
-import { normalizeRole } from '../lib/clerk-user.js';
+import { getUserStore } from '../lib/user-store.js';
+import { normalizeRole } from '../lib/users.js';
 import { query } from '../db/connection.js';
 import { autoCloseInactiveSupportThreads } from '../lib/support-chat.js';
 
@@ -364,7 +364,7 @@ router.get('/summary', requireAdminAuth, requirePermission('reports.read'), asyn
 
 router.get('/export.csv', requireAdminAuth, requirePermission('reports.read'), async (req, res) => {
   try {
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const clerkPage = await clerkClient.users.getUserList({
       limit: 500,
       orderBy: '-created_at',

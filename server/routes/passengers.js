@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
 import { syncClerkUserForRequest } from '../lib/user-sync.js';
 import passengerReferralsRouter from './passengerReferrals.js';
@@ -10,7 +10,7 @@ const router = Router();
 const DRIVER_ONLINE_STALE_DAYS = 1;
 
 async function requirePassenger(req, res) {
-  const user = await getClerkUserById(req.userId);
+  const user = await getUserById(req.userId);
   await syncClerkUserForRequest(user);
   const appUser = toAppUser(user);
   const role = normalizeRole(appUser.role);

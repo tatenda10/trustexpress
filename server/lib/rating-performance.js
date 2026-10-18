@@ -1,5 +1,5 @@
 import { query } from '../db/connection.js';
-import { getClerkUserById, mergePrivateMetadata } from './clerk-user.js';
+import { getUserById, mergePrivateMetadata } from './users.js';
 import { getDriverVehicle } from './driver-verification-mysql.js';
 import { evaluateVehicleAgainstTiers, loadVehicleTierRules } from './vehicle-tier-matching.js';
 import { sendExpoPushNotifications } from './push.js';
@@ -202,7 +202,7 @@ export async function listRatingPerformanceEvents(subjectUserId, { limit = 20 } 
 
 async function notifyUser(userId, { title, body, data = {} }) {
   try {
-    const user = await getClerkUserById(userId, { skipCache: true });
+    const user = await getUserById(userId, { skipCache: true });
     const pushToken = user?.privateMetadata?.pushToken;
     if (!pushToken) return;
     await sendExpoPushNotifications({
@@ -357,7 +357,7 @@ async function applyDriverTierAutomation(driverUserId, { average, sampleSize }) 
 }
 
 async function applyAccountAutomation(userId, role, { average, sampleSize }) {
-  const user = await getClerkUserById(userId, { skipCache: true });
+  const user = await getUserById(userId, { skipCache: true });
   const account = getAccountStatusFromUser(user, role);
   if (account.isBlocked) {
     return null;

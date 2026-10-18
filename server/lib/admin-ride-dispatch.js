@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { query } from '../db/connection.js';
-import { getClerkClient } from './clerk-client.js';
-import { toAppUser } from './clerk-user.js';
+import { getUserStore } from './user-store.js';
+import { toAppUser } from './users.js';
 import { fetchCachedDirections } from './maps-directions.js';
 import { fetchCachedPlaceAutocomplete, fetchCachedPlaceDetails } from './maps-places.js';
 import { normalizePaymentMethod } from './payment-method.js';
@@ -110,7 +110,7 @@ export async function lookupDispatchPassenger(phoneValue) {
 
   let clerkUser = null;
   try {
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const list = await clerkClient.users.getUserList({ phoneNumber: [phone.e164Phone], limit: 5 });
     clerkUser = list?.data?.[0] || null;
   } catch {

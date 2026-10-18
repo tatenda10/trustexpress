@@ -15,7 +15,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { submitDriverDocuments, uploadFile, resolveUploadedMediaUrl } from '../../api';
 import { applyDriverKindToStatus, getDriverVehicleRoute, normalizeDriverKind, readPendingDriverKind } from '../../constants/driverKind';

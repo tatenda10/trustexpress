@@ -2,16 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView, KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -19,6 +17,19 @@ import { initiateDriverWalletTopup, verifyDriverWalletTopup } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 
 WebBrowser.maybeCompleteAuthSession();
+
+const QUICK_AMOUNTS = [5, 10, 20, 50];
+
+const SMILEPAY_METHODS = [
+  { key: 'ecocash', label: 'EcoCash', subtitle: 'Approve on your phone', icon: 'phone-portrait-outline' },
+  { key: 'card', label: 'Card', subtitle: 'Visa or Mastercard', icon: 'card-outline' },
+  { key: 'wallet', label: 'Smile&Pay Wallet', subtitle: 'Pay from your wallet', icon: 'wallet-outline' },
+];
+
+function formatCurrency(value, currency = 'USD') {
+  const amount = Number(value || 0);
+  return `${currency === 'USD' ? '$' : `${currency} `}${amount.toFixed(2)}`;
+}
 
 function formatCardNumber(value) {
   const digits = String(value || '').replace(/\D/g, '').slice(0, 19);
@@ -40,9 +51,9 @@ function parseExpiry(value) {
 
 function getCardBrand(cardNumber) {
   const digits = String(cardNumber || '').replace(/\D/g, '');
-  if (/^4/.test(digits)) return 'VISA';
-  if (/^(5[1-5]|2[2-7])/.test(digits)) return 'MC';
-  return 'CARD';
+  if (/^4/.test(digits)) return 'Visa';
+  if (/^(5[1-5]|2[2-7])/.test(digits)) return 'Mastercard';
+  return null;
 }
 
 function wait(ms) {
@@ -54,22 +65,32 @@ function isSuccessfulTopup(result) {
   return status === 'success' || status === 'successful' || status === 'paid' || status === 'completed';
 }
 
+function Field({ label, children }) {
+  return (
+    <View className="mt-3">
+      <Text className="mb-1.5 text-[12px] font-medium text-gray-500">{label}</Text>
+      {children}
+    </View>
+  );
+}
+
+const INPUT_CLASS = 'h-12 rounded-[10px] border border-gray-200 bg-[#f9fafb] px-3.5 text-[15px] text-gray-900';
+
 export default function DriverWalletTopupScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   const wallet = route?.params?.wallet || {};
-  const providerLabel = wallet.paymentProvider === 'smilepay' ? 'Smile&Pay' : 'Paystack';
+  const isSmilePay = wallet.paymentProvider === 'smilepay';
+  const providerLabel = isSmilePay ? 'Smile&Pay' : 'Paystack';
   const currency = wallet.currency || 'USD';
   const minAmount = Number(wallet.topupMinAmount || 1);
   const maxAmount = Number(wallet.topupMaxAmount || 500);
-  const [amount, setAmount] = useState(String(minAmount || 5));
-  const [method, setMethod] = useState(wallet.paymentProvider === 'smilepay' ? 'card' : 'ecocash');
-  const [cardName, setCardName] = useState('');
+  const [amount, setAmount] = useState(String(Math.max(minAmount, 5)));
+  const [method, setMethod] = useState('ecocash');
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvv, setCardCvv] = useState('');
-  const [postalCode, setPostalCode] = useState('');
   const [ecocashMobile, setEcocashMobile] = useState(
     String(wallet.smileCashMobile || wallet.phoneNumber || '').trim()
   );
@@ -79,9 +100,12 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  const normalizedAmount = Number(String(amount || '').replace(/[^0-9.]/g, ''));
+  const amountValid = normalizedAmount >= minAmount && normalizedAmount <= maxAmount;
+  const cardBrand = getCardBrand(cardNumber);
+
   const handleTopup = async () => {
     try {
-      const normalizedAmount = Number(String(amount || '').replace(/[^0-9.]/g, ''));
       if (!(normalizedAmount > 0)) {
         Alert.alert('Enter amount', 'Please enter a valid top-up amount.');
         return;
@@ -95,7 +119,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
         return;
       }
 
-      const isSmilePayCard = wallet.paymentProvider === 'smilepay' && method === 'card';
+      const isSmilePayCard = isSmilePay && method === 'card';
       const cleanCardNumber = String(cardNumber || '').replace(/\D/g, '');
       const { expMonth, expYear } = parseExpiry(cardExpiry);
       const cvv = String(cardCvv || '').replace(/\D/g, '');
@@ -105,12 +129,9 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
         return;
       }
       const cleanWalletMobile = String(ecocashMobile || '').replace(/[^\d+]/g, '');
-      const isWalletExpress = wallet.paymentProvider === 'smilepay' && (method === 'wallet' || method === 'ecocash');
+      const isWalletExpress = isSmilePay && (method === 'wallet' || method === 'ecocash');
       if (isWalletExpress && cleanWalletMobile.replace(/\D/g, '').length < 9) {
-        Alert.alert(
-          method === 'ecocash' ? 'EcoCash number required' : 'Smile&Pay Wallet number required',
-          `Enter the ${method === 'ecocash' ? 'EcoCash' : 'Smile&Pay Wallet'} mobile number that should approve this payment.`
-        );
+        Alert.alert('Mobile number required', 'Enter the mobile number that should approve this payment.');
         return;
       }
 
@@ -138,8 +159,8 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
           };
         }
         return {
-            checkoutMode: 'express_ecocash',
-            mobilePhoneNumber: cleanWalletMobile,
+          checkoutMode: 'express_ecocash',
+          mobilePhoneNumber: cleanWalletMobile,
         };
       })();
 
@@ -154,7 +175,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
       const topup = await initiateDriverWalletTopup(token, {
         amount: normalizedAmount,
         callbackUrl,
-        ...(wallet.paymentProvider === 'smilepay' ? smilePayPayload : {}),
+        ...(isSmilePay ? smilePayPayload : {}),
       });
       console.log('[driver.wallet.topup] client initiate result', {
         reference: topup?.reference || null,
@@ -171,25 +192,14 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
           if (topup?.reference) {
             for (let attempt = 0; attempt < 8; attempt += 1) {
               if (attempt > 0) await wait(5000);
-              console.log('[driver.wallet.topup] client verify attempt', {
-                reference: topup.reference,
-                attempt: attempt + 1,
-              });
               lastVerifyResult = await verifyDriverWalletTopup(token, topup.reference).catch((verifyError) => {
                 console.log('[driver.wallet.topup] client verify error', {
                   reference: topup.reference,
                   attempt: attempt + 1,
                   message: verifyError?.message || null,
                   status: verifyError?.status || null,
-                  code: verifyError?.code || null,
                 });
                 return null;
-              });
-              console.log('[driver.wallet.topup] client verify result', {
-                reference: topup.reference,
-                attempt: attempt + 1,
-                topupStatus: lastVerifyResult?.topup?.status || null,
-                walletBalance: lastVerifyResult?.wallet?.availableBalance ?? null,
               });
               if (isSuccessfulTopup(lastVerifyResult)) break;
             }
@@ -202,11 +212,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
           }
           Alert.alert(
             'Payment pending',
-            [
-              'Smile&Pay Express has started. Approve the request on your phone.',
-              topup?.externalTransactionId ? `ZB reference: ${topup.externalTransactionId}` : '',
-              'If no prompt arrives, check the mobile number and ask ZB to confirm EcoCash merchant push is enabled for this merchant.',
-            ].filter(Boolean).join('\n\n'),
+            'Approve the payment request on your phone. Your balance will update once it is confirmed.',
             [{ text: 'OK', onPress: () => navigation.goBack() }]
           );
           return;
@@ -230,7 +236,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
       for (const reference of references) {
         await verifyDriverWalletTopup(token, reference).catch(() => {});
       }
-      Alert.alert('Payment check complete', 'Your wallet has been refreshed. If payment succeeded, the balance will update shortly.', [
+      Alert.alert('Payment check complete', 'If the payment went through, your balance will update shortly.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (error) {
@@ -241,177 +247,231 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
   };
 
   return (
-    <View className="flex-1 bg-gray-50">
+    <View className="flex-1 bg-[#f6f7f3]">
       <View
-        className="flex-row items-center border-b border-gray-100 bg-white px-5 pb-3"
-        style={{ paddingTop: insets.top + 6 }}
+        className="flex-row items-center px-5 pb-4"
+        style={{ paddingTop: insets.top + 16 }}
       >
-        <TouchableOpacity onPress={() => navigation.goBack()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-gray-100">
-          <Ionicons name="arrow-back" size={22} color="#111827" />
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          className="h-11 w-11 items-center justify-center rounded-full bg-white"
+          style={{
+            shadowColor: '#0f172a',
+            shadowOpacity: 0.06,
+            shadowRadius: 6,
+            shadowOffset: { width: 0, height: 2 },
+            elevation: 1,
+          }}
+        >
+          <Ionicons name="chevron-back" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text className="text-lg font-bold text-gray-900">Top up wallet</Text>
+        <Text className="ml-3 text-[20px] font-bold text-gray-900">Top up wallet</Text>
       </View>
 
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
-      >
-        <ScrollView
-          className="flex-1"
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: Math.max(insets.bottom + 160, 190) }}
+      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={0} style={{ flex: 1 }}>
+        <KeyboardAwareScrollView
+          style={{ flex: 1 }}
+          bottomOffset={24}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
         >
-          <View className="rounded-[24px] bg-white px-5 py-5">
-            <Text className="text-xs font-semibold uppercase tracking-[2px] text-gray-500">Amount ({currency})</Text>
-            <TextInput
-              value={amount}
-              onChangeText={setAmount}
-              keyboardType="decimal-pad"
-              placeholder={String(minAmount || 5)}
-              className="mt-3 h-14 rounded-2xl border border-gray-200 bg-slate-50 px-4 text-center text-lg font-semibold text-gray-900"
-            />
+          <View className="rounded-[24px] bg-white px-5 pb-5 pt-4">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-[13px] font-medium text-gray-500">Amount</Text>
+              {Number.isFinite(Number(wallet.availableBalance)) ? (
+                <Text className="text-[12px] text-gray-400">
+                  Balance {formatCurrency(wallet.availableBalance, currency)}
+                </Text>
+              ) : null}
+            </View>
+            <View className="mt-2 flex-row items-center justify-center">
+              <Text className="text-[34px] font-bold text-gray-400">{currency === 'USD' ? '$' : currency}</Text>
+              <TextInput
+                value={amount}
+                onChangeText={(value) => setAmount(value.replace(/[^0-9.]/g, '').slice(0, 7))}
+                keyboardType="decimal-pad"
+                placeholder="0"
+                placeholderTextColor="#d1d5db"
+                className="ml-1 min-w-[60px] text-[40px] font-bold text-gray-900"
+                style={{ paddingVertical: 0 }}
+              />
+            </View>
+            <Text className={`text-center text-[12px] ${amount && !amountValid ? 'text-red-500' : 'text-gray-400'}`}>
+              {formatCurrency(minAmount, currency)} – {formatCurrency(maxAmount, currency)}
+            </Text>
+            <View className="mt-4 flex-row gap-2">
+              {QUICK_AMOUNTS.filter((value) => value >= minAmount && value <= maxAmount).map((value) => {
+                const selected = normalizedAmount === value;
+                return (
+                  <TouchableOpacity
+                    key={value}
+                    onPress={() => setAmount(String(value))}
+                    disabled={starting}
+                    className="h-10 flex-1 items-center justify-center rounded-[10px]"
+                    style={{ backgroundColor: selected ? PRIMARY_BLUE : '#f3f4f6' }}
+                  >
+                    <Text className={`text-[14px] font-semibold ${selected ? 'text-white' : 'text-gray-800'}`}>
+                      {currency === 'USD' ? '$' : ''}{value}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
-          {wallet.paymentProvider === 'smilepay' ? (
-            <View className="mt-4 rounded-[24px] bg-white px-5 py-5">
-              <View className="flex-row items-center justify-between">
-                <Text className="text-xs font-semibold uppercase tracking-[2px] text-gray-500">Select payment method</Text>
-                <Text className="text-xs font-semibold" style={{ color: PRIMARY_BLUE }}>Secure</Text>
-              </View>
-              <View className="mt-3 flex-row gap-3">
-                {[
-                  { key: 'card', label: 'Credit Card', icon: 'card-outline' },
-                  { key: 'wallet', label: 'Smile&Pay Wallet', icon: 'wallet-outline' },
-                  { key: 'ecocash', label: 'EcoCash', icon: 'phone-portrait-outline' },
-                ].map((option) => {
+          {isSmilePay ? (
+            <>
+              <Text className="mb-2 mt-5 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">
+                Pay with
+              </Text>
+              <View className="overflow-hidden rounded-[24px] bg-white">
+                {SMILEPAY_METHODS.map((option, index) => {
                   const selected = method === option.key;
                   return (
                     <TouchableOpacity
                       key={option.key}
                       onPress={() => setMethod(option.key)}
                       disabled={starting}
-                      className="min-h-[88px] flex-1 items-center justify-center rounded-xl border-2 px-1"
-                      style={{
-                        borderColor: selected ? PRIMARY_BLUE : '#e5e7eb',
-                        backgroundColor: selected ? '#ffffff' : '#f8fafc',
-                      }}
+                      activeOpacity={0.75}
+                      className="flex-row items-center px-4 py-3.5"
                     >
-                      <Ionicons name={option.icon} size={22} color={selected ? PRIMARY_BLUE : '#64748b'} />
-                      <Text className="mt-2 text-center text-sm font-semibold" style={{ color: selected ? PRIMARY_BLUE : '#475569' }}>
-                        {option.label}
-                      </Text>
+                      <View
+                        className="h-10 w-10 items-center justify-center rounded-2xl"
+                        style={{ backgroundColor: selected ? '#e8f1ff' : '#f3f4f6' }}
+                      >
+                        <Ionicons name={option.icon} size={20} color={selected ? PRIMARY_BLUE : '#1f2937'} />
+                      </View>
+                      <View className="ml-3 flex-1">
+                        <Text className="text-[15px] font-medium text-gray-900">{option.label}</Text>
+                        <Text className="mt-0.5 text-[12px] text-gray-500">{option.subtitle}</Text>
+                      </View>
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          borderWidth: 2,
+                          borderColor: selected ? PRIMARY_BLUE : '#d1d5db',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {selected ? (
+                          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: PRIMARY_BLUE }} />
+                        ) : null}
+                      </View>
+                      {index < SMILEPAY_METHODS.length - 1 ? (
+                        <View className="absolute bottom-0 left-[68px] right-4 bg-gray-100" style={{ height: 1 }} />
+                      ) : null}
                     </TouchableOpacity>
                   );
                 })}
               </View>
-            </View>
-          ) : null}
 
-          {wallet.paymentProvider === 'smilepay' && method === 'card' ? (
-              <View className="mt-4 rounded-[24px] bg-white px-5 py-5">
-                <Text className="text-xs font-semibold uppercase tracking-[2px] text-gray-500">Card details</Text>
-                <Text className="mt-4 text-xs font-semibold text-gray-700">Card Name</Text>
-                <TextInput
-                  value={cardName}
-                  onChangeText={setCardName}
-                  placeholder="Popoola Opeyemi"
-                  autoComplete="cc-name"
-                  className="mt-2 h-12 rounded bg-gray-100 px-4 text-base text-gray-900"
-                />
-                <Text className="mt-4 text-xs font-semibold text-gray-700">Card Number</Text>
-                <View className="mt-2 h-12 flex-row items-center rounded bg-gray-100 px-4">
-                  <TextInput
-                    value={cardNumber}
-                    onChangeText={(value) => setCardNumber(formatCardNumber(value))}
-                    keyboardType="number-pad"
-                    placeholder="2763 3482 3580 0394"
-                    autoComplete="cc-number"
-                    textContentType="creditCardNumber"
-                    className="h-12 flex-1 text-base text-gray-900"
-                  />
-                  <View className="ml-2 rounded-full bg-yellow-400 px-2 py-1">
-                    <Text className="text-[10px] font-black text-red-600">{getCardBrand(cardNumber)}</Text>
-                  </View>
-                </View>
-                <View className="mt-4 flex-row gap-4">
-                  <View className="flex-1">
-                    <Text className="text-xs font-semibold text-gray-700">Expiration</Text>
+              <View className="mt-4 rounded-[24px] bg-white px-5 pb-5 pt-2">
+                {method === 'card' ? (
+                  <>
+                    <Field label="Card number">
+                      <View className="h-12 flex-row items-center rounded-[10px] border border-gray-200 bg-[#f9fafb] px-3.5">
+                        <TextInput
+                          value={cardNumber}
+                          onChangeText={(value) => setCardNumber(formatCardNumber(value))}
+                          keyboardType="number-pad"
+                          placeholder="0000 0000 0000 0000"
+                          placeholderTextColor="#9ca3af"
+                          autoComplete="cc-number"
+                          textContentType="creditCardNumber"
+                          className="h-12 flex-1 text-[15px] text-gray-900"
+                        />
+                        {cardBrand ? (
+                          <Text className="ml-2 text-[12px] font-bold" style={{ color: PRIMARY_BLUE }}>{cardBrand}</Text>
+                        ) : null}
+                      </View>
+                    </Field>
+                    <View className="flex-row gap-3">
+                      <View className="flex-1">
+                        <Field label="Expiry">
+                          <TextInput
+                            value={cardExpiry}
+                            onChangeText={(value) => setCardExpiry(formatExpiry(value))}
+                            keyboardType="number-pad"
+                            placeholder="MM/YY"
+                            placeholderTextColor="#9ca3af"
+                            maxLength={5}
+                            autoComplete="cc-exp"
+                            className={INPUT_CLASS}
+                          />
+                        </Field>
+                      </View>
+                      <View className="flex-1">
+                        <Field label="CVV">
+                          <TextInput
+                            value={cardCvv}
+                            onChangeText={(value) => setCardCvv(value.replace(/\D/g, '').slice(0, 4))}
+                            keyboardType="number-pad"
+                            placeholder="123"
+                            placeholderTextColor="#9ca3af"
+                            maxLength={4}
+                            secureTextEntry
+                            autoComplete="cc-csc"
+                            className={INPUT_CLASS}
+                          />
+                        </Field>
+                      </View>
+                    </View>
+                  </>
+                ) : (
+                  <Field label={method === 'ecocash' ? 'EcoCash number' : 'Smile&Pay Wallet number'}>
                     <TextInput
-                      value={cardExpiry}
-                      onChangeText={(value) => setCardExpiry(formatExpiry(value))}
-                      keyboardType="number-pad"
-                      placeholder="09/26"
-                      maxLength={5}
-                      autoComplete="cc-exp"
-                      className="mt-2 h-12 rounded bg-gray-100 px-4 text-base text-gray-900"
+                      value={ecocashMobile}
+                      onChangeText={(value) => setEcocashMobile(value.replace(/[^\d+]/g, '').slice(0, 15))}
+                      keyboardType="phone-pad"
+                      placeholder="0771234567"
+                      placeholderTextColor="#9ca3af"
+                      autoComplete="tel"
+                      className={INPUT_CLASS}
                     />
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-xs font-semibold text-gray-700">CVV</Text>
-                    <TextInput
-                      value={cardCvv}
-                      onChangeText={(value) => setCardCvv(value.replace(/\D/g, '').slice(0, 4))}
-                      keyboardType="number-pad"
-                      placeholder="799"
-                      maxLength={4}
-                      secureTextEntry
-                      autoComplete="cc-csc"
-                      className="mt-2 h-12 rounded bg-gray-100 px-4 text-base text-gray-900"
-                    />
-                  </View>
-                </View>
-                <Text className="mt-4 text-xs font-semibold text-gray-700">Postal Code</Text>
-                <TextInput
-                  value={postalCode}
-                  onChangeText={(value) => setPostalCode(value.replace(/[^\d\s-]/g, '').slice(0, 12))}
-                  keyboardType="number-pad"
-                  placeholder="993483"
-                  autoComplete="postal-code"
-                  className="mt-2 h-12 rounded bg-gray-100 px-4 text-base tracking-[4px] text-gray-900"
-                />
+                  </Field>
+                )}
               </View>
+            </>
           ) : null}
 
-          {wallet.paymentProvider === 'smilepay' && (method === 'wallet' || method === 'ecocash') ? (
-            <View className="mt-4 rounded-[24px] bg-blue-50 px-5 py-5">
-              <Text className="text-base font-bold text-blue-900">
-                {method === 'ecocash' ? 'EcoCash Express' : 'Smile&Pay Wallet Express'}
-              </Text>
-              <Text className="mt-2 text-sm leading-6 text-blue-800">
-                {method === 'ecocash'
-                  ? 'Enter the EcoCash number. Smile&Pay will send an approval request to that phone.'
-                  : 'Enter your Smile&Pay Wallet number. We will open Smile&Pay hosted checkout to complete the wallet payment.'}
-              </Text>
-              <Text className="mt-4 text-xs font-semibold text-blue-900">
-                {method === 'ecocash' ? 'EcoCash mobile number' : 'Smile&Pay Wallet mobile number'}
-              </Text>
-              <TextInput
-                value={ecocashMobile}
-                onChangeText={(value) => setEcocashMobile(value.replace(/[^\d+]/g, '').slice(0, 15))}
-                keyboardType="phone-pad"
-                placeholder="0771234567"
-                autoComplete="tel"
-                className="mt-2 h-12 rounded bg-white px-4 text-base text-gray-900"
-              />
-            </View>
-          ) : null}
+          <View className="mt-4 flex-row items-center justify-center">
+            <Ionicons name="lock-closed" size={12} color="#9ca3af" />
+            <Text className="ml-1 text-[12px] text-gray-400">Secured by {providerLabel}</Text>
+          </View>
+        </KeyboardAwareScrollView>
 
+        <View
+          className="bg-[#f6f7f3]"
+          style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16) + 16 }}
+        >
           <TouchableOpacity
             onPress={handleTopup}
             disabled={starting}
-            className="mt-6 h-14 items-center justify-center rounded-2xl"
-            style={{ backgroundColor: PRIMARY_BLUE, opacity: starting ? 0.75 : 1 }}
+            activeOpacity={0.85}
+            style={{
+              height: 54,
+              borderRadius: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: PRIMARY_BLUE,
+              opacity: starting || !amountValid ? 0.6 : 1,
+            }}
           >
             {starting ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text className="text-base font-bold text-white">Continue</Text>
+              <Text className="text-[16px] font-bold text-white">
+                {amountValid ? `Top up ${formatCurrency(normalizedAmount, currency)}` : 'Top up'}
+              </Text>
             )}
           </TouchableOpacity>
-        </ScrollView>
+        </View>
       </KeyboardAvoidingView>
     </View>
   );

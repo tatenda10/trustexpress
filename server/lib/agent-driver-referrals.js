@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/connection.js';
-import { resolveClerkUserIdForMetadataSync } from './clerk-user.js';
+import { resolveUserIdForMetadataSync } from './users.js';
 
 export function normalizeVehicleNumber(value) {
   return String(value || '')
@@ -136,7 +136,7 @@ export async function resolveDriverByIdentifier(identifier) {
 }
 
 async function refreshDriverClerkUserId(driver) {
-  const identity = await resolveClerkUserIdForMetadataSync({
+  const identity = await resolveUserIdForMetadataSync({
     clerkUserId: driver.clerk_user_id,
     email: driver.email,
     role: driver.role,

@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { confirmPhoneVerification, getMe } from '../../api';
 import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -103,7 +103,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
     ? 'Your number is already saved on your account for ride updates and security.'
     : 'Add your Zimbabwe mobile number so we can save it on your account for ride updates.';
 
-  const scrollBottomPadding = Math.max(tabBarHeight + insets.bottom + 24, insets.bottom + 32);
+  const scrollBottomPadding = 24;
 
   return (
     <View className="flex-1 bg-[#f6f7f3]">

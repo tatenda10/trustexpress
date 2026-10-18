@@ -7,20 +7,89 @@ import {
   ActivityIndicator,
   Alert,
   Switch,
-  KeyboardAvoidingView,
-  Platform,
   Linking,
   Image,
   Modal,
 } from 'react-native';
-import { useUser, useClerk, useAuth } from '@clerk/clerk-expo';
+import { useUser, useClerk, useAuth } from '../../auth/AuthProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { deleteMe, getMe, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
+import Constants from 'expo-constants';
+import { deleteMe, getMe, getPassengerRideHistory, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import BiometricSignInSetting from '../../components/BiometricSignInSetting';
+
+const STATUS_TONES = {
+  done: { bg: '#dcfce7', text: '#166534', label: 'Verified' },
+  review: { bg: '#e0ecff', text: '#1d4ed8', label: 'Under review' },
+  action: { bg: '#fef3c7', text: '#92400e', label: 'Action needed' },
+  rejected: { bg: '#fee2e2', text: '#b91c1c', label: 'Resubmit' },
+};
+
+const EMERGENCY_CONTACTS = [
+  { key: 'police', label: 'Police', number: '995', icon: 'shield-checkmark-outline' },
+  { key: 'ambulance', label: 'Ambulance', number: '994', icon: 'medkit-outline' },
+  { key: 'fire', label: 'Fire brigade', number: '993', icon: 'flame-outline' },
+];
+
+function SectionTitle({ children }) {
+  return (
+    <Text className="mb-2 mt-1 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">{children}</Text>
+  );
+}
+
+function StatusPill({ tone }) {
+  const colors = STATUS_TONES[tone] || STATUS_TONES.action;
+  return (
+    <View className="rounded-full px-2.5 py-1" style={{ backgroundColor: colors.bg }}>
+      <Text className="text-[11px] font-semibold" style={{ color: colors.text }}>{colors.label}</Text>
+    </View>
+  );
+}
+
+function Row({ icon, title, subtitle, onPress, right, danger, disabled, last, iconColor }) {
+  return (
+    <TouchableOpacity
+      className="flex-row items-center px-4 py-3.5"
+      activeOpacity={onPress ? 0.7 : 1}
+      onPress={onPress}
+      disabled={disabled || !onPress}
+    >
+      <View className={`h-10 w-10 items-center justify-center rounded-2xl ${danger ? 'bg-red-50' : 'bg-[#f3f4f6]'}`}>
+        <Ionicons name={icon} size={20} color={danger ? '#dc2626' : iconColor || '#1f2937'} />
+      </View>
+      <View className="ml-3 flex-1 pr-2">
+        <Text className={`text-[15px] font-medium ${danger ? 'text-red-600' : 'text-gray-900'}`}>{title}</Text>
+        {subtitle ? <Text className="mt-0.5 text-[13px] text-gray-500" numberOfLines={1}>{subtitle}</Text> : null}
+      </View>
+      {right !== undefined ? right : <Ionicons name="chevron-forward" size={18} color="#c0c4cc" />}
+      {!last ? <View className="absolute bottom-0 left-[68px] right-4 bg-gray-100" style={{ height: 1 }} /> : null}
+    </TouchableOpacity>
+  );
+}
+
+function Card({ children, className = '' }) {
+  return <View className={`mb-5 overflow-hidden rounded-[24px] bg-white ${className}`}>{children}</View>;
+}
+
+function StatTile({ value, label, icon, iconColor, onPress }) {
+  return (
+    <TouchableOpacity
+      className="flex-1 items-center rounded-2xl bg-[#f6f7f3] px-2 py-3"
+      activeOpacity={onPress ? 0.7 : 1}
+      onPress={onPress}
+      disabled={!onPress}
+    >
+      <View className="flex-row items-center">
+        <Ionicons name={icon} size={14} color={iconColor} />
+        <Text className="ml-1 text-[16px] font-bold text-gray-900" numberOfLines={1}>{value}</Text>
+      </View>
+      <Text className="mt-0.5 text-[11px] font-medium text-gray-500" numberOfLines={1}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
 
 const PassengerAccountScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
@@ -29,6 +98,7 @@ const PassengerAccountScreen = ({ navigation }) => {
   const { signOut } = useClerk();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
 
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -38,9 +108,10 @@ const PassengerAccountScreen = ({ navigation }) => {
   const [phoneVisibleToDrivers, setPhoneVisibleToDrivers] = useState(false);
   const [updatingProfileImage, setUpdatingProfileImage] = useState(false);
   const [showProfileImagePreview, setShowProfileImagePreview] = useState(false);
-  useEffect(() => {
-    getTokenRef.current = getToken;
-  }, [getToken]);
+  const [showEmergencySheet, setShowEmergencySheet] = useState(false);
+  const [completedTrips, setCompletedTrips] = useState(null);
+  const [averageRating, setAverageRating] = useState(null);
+  const [ratingCount, setRatingCount] = useState(0);
 
   useEffect(() => {
     if (!isFocused) return undefined;
@@ -48,7 +119,6 @@ const PassengerAccountScreen = ({ navigation }) => {
 
     const loadProfile = async () => {
       try {
-        setLoading(true);
         setError('');
         const token = await getTokenRef.current();
         if (!token) throw new Error('Not signed in');
@@ -64,7 +134,26 @@ const PassengerAccountScreen = ({ navigation }) => {
       }
     };
 
+    const loadTripStats = async () => {
+      try {
+        const token = await getTokenRef.current();
+        if (!token) return;
+        const data = await getPassengerRideHistory(token, { page: 1, limit: 50, status: 'completed' });
+        if (!active) return;
+        const rides = Array.isArray(data?.rides) ? data.rides : [];
+        const ratings = rides
+          .map((ride) => Number(ride.driverPassengerRating))
+          .filter((value) => Number.isFinite(value) && value > 0);
+        setCompletedTrips(Number(data?.pagination?.total ?? rides.length));
+        setRatingCount(ratings.length);
+        setAverageRating(ratings.length ? ratings.reduce((sum, value) => sum + value, 0) / ratings.length : null);
+      } catch {
+        // Stats are optional; keep the tiles empty.
+      }
+    };
+
     loadProfile();
+    loadTripStats();
     return () => {
       active = false;
     };
@@ -122,7 +211,6 @@ const PassengerAccountScreen = ({ navigation }) => {
         Alert.alert('Call unavailable', `Calling ${label.toLowerCase()} is not available on this device right now.`);
         return;
       }
-
       Alert.alert(
         `Call ${label}`,
         `Do you want to call ${label} on ${phoneNumber}?`,
@@ -135,163 +223,6 @@ const PassengerAccountScreen = ({ navigation }) => {
       Alert.alert('Call unavailable', `Could not start a call to ${label.toLowerCase()} right now.`);
     }
   };
-
-  const passengerName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ') || user?.firstName || 'Passenger';
-  const passengerEmail = profile?.email || user?.primaryEmailAddress?.emailAddress || 'No email connected';
-  const appProfileImageUrl = resolveUploadedMediaUrl(profile?.privateMetadata?.profileImageUrl);
-  const clerkFallbackImageUrl = String(user?.imageUrl || '').trim() || null;
-  const displayProfileImageUrl =
-    appProfileImageUrl ||
-    resolveUploadedMediaUrl(profile?.image_url) ||
-    clerkFallbackImageUrl ||
-    null;
-  const hasAppProfilePicture = !!appProfileImageUrl;
-  const phoneVerified = profile?.phoneVerified === true;
-  const passengerIdentity = profile?.passengerIdentity || null;
-  const identityStatus = passengerIdentity?.status || 'not_submitted';
-  const identityDocsSubmitted = !!(
-    passengerIdentity?.nationalIdFrontUrl &&
-    passengerIdentity?.nationalIdBackUrl
-  );
-  const identityApproved = identityStatus === 'approved' || identityStatus === 'verified';
-  const identityPending = identityStatus === 'pending' && identityDocsSubmitted;
-  const identityRejected = identityStatus === 'rejected';
-  /** Full ID pack submitted and awaiting admin — same pattern as driver documentation row. */
-  const identityAwaitingReviewOnly = identityPending;
-  const verificationHeadline = phoneVerified ? 'Phone verified' : 'Verification in progress';
-  const verificationTone = phoneVerified
-    ? { bg: '#dcfce7', text: '#166534' }
-    : { bg: '#fef3c7', text: '#92400e' };
-
-  const verificationRows = [
-    {
-      key: 'phone',
-      title: 'Phone verification',
-      subtitle: phoneVerified ? 'Verified and ready for ride updates' : 'Add and verify your phone number',
-      icon: 'call-outline',
-      onPress: () => navigation.navigate('PassengerPhoneVerificationDetails'),
-    },
-    {
-      key: 'identity',
-      title: 'Identity documents',
-      subtitle: identityApproved
-        ? 'Approved'
-        : identityPending
-          ? 'Under review'
-        : identityRejected
-            ? 'Needs resubmission'
-            : 'Upload selfie and national ID',
-      icon: 'card-outline',
-      identityReviewOnly: identityAwaitingReviewOnly,
-      onPress: () => {
-        if (identityAwaitingReviewOnly) {
-          Alert.alert(
-            'Documents under review',
-            'We are reviewing your submission. You will be notified when there is an update. Status is also shown above on this screen.',
-          );
-          return;
-        }
-        navigation.navigate('PassengerIdentityVerification');
-      },
-    },
-  ];
-
-  const accountRows = [
-    {
-      key: 'profile',
-      title: 'Profile details',
-      subtitle: 'Update your first and last name',
-      icon: 'person-outline',
-      onPress: () => navigation.navigate('PassengerProfileDetails'),
-    },
-    {
-      key: 'smile-cash',
-      title: 'Online wallet',
-      subtitle: profile?.passengerIdentity?.smileCashStatus === 'active'
-        ? profile.passengerIdentity.smileCashMobile
-        : null,
-      icon: 'wallet-outline',
-      onPress: () => navigation.navigate('PassengerSmileCash'),
-    },
-    {
-      key: 'reviews',
-      title: 'Reviews',
-      subtitle: 'See what drivers said about you',
-      icon: 'star-outline',
-      onPress: () => navigation.navigate('PassengerReviews'),
-    },
-    {
-      key: 'referrals',
-      title: 'Invite friends',
-      subtitle: 'Share your email and invite passengers',
-      icon: 'gift-outline',
-      onPress: () => navigation.navigate('PassengerReferrals'),
-    },
-    {
-      key: 'support',
-      title: 'Support',
-      subtitle: 'Chat with the support team',
-      icon: 'headset-outline',
-      onPress: () => navigation.navigate('PassengerSupportChat'),
-    },
-    {
-      key: 'sharing',
-      title: 'Phone sharing',
-      subtitle: phoneVisibleToDrivers ? 'Drivers can see your phone number' : 'Drivers cannot see your phone number',
-      icon: 'shield-outline',
-    },
-  ];
-
-  const legalRows = [
-    {
-      key: 'privacy',
-      title: 'Privacy policy',
-      subtitle: 'See how TrustCars handles your data',
-      icon: 'document-text-outline',
-      onPress: () => navigation.navigate('PassengerLegalDocument', { document: 'privacy' }),
-      danger: false,
-    },
-    {
-      key: 'terms',
-      title: 'Terms of use',
-      subtitle: 'Review the rules for using the passenger app',
-      icon: 'reader-outline',
-      onPress: () => navigation.navigate('PassengerLegalDocument', { document: 'terms' }),
-      danger: false,
-    },
-    {
-      key: 'delete',
-      title: 'Delete account',
-      subtitle: 'Permanently remove your passenger account',
-      icon: 'trash-outline',
-      onPress: handleDeleteAccount,
-      danger: true,
-    },
-  ];
-
-  const safetyRows = [
-    {
-      key: 'police',
-      title: 'Police emergency',
-      subtitle: 'Call 995 for urgent police assistance',
-      icon: 'shield-checkmark-outline',
-      onPress: () => handleEmergencyCall('Police emergency', '995'),
-    },
-    {
-      key: 'ambulance',
-      title: 'Ambulance',
-      subtitle: 'Call 994 for medical emergency help',
-      icon: 'medkit-outline',
-      onPress: () => handleEmergencyCall('Ambulance', '994'),
-    },
-    {
-      key: 'fire',
-      title: 'Fire brigade',
-      subtitle: 'Call 993 for fire emergencies',
-      icon: 'flame-outline',
-      onPress: () => handleEmergencyCall('Fire brigade', '993'),
-    },
-  ];
 
   const handleChangeProfilePhoto = async () => {
     try {
@@ -332,14 +263,138 @@ const PassengerAccountScreen = ({ navigation }) => {
     }
   };
 
+  const passengerName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ') || user?.firstName || 'Passenger';
+  const passengerContact = profile?.email
+    || user?.primaryEmailAddress?.emailAddress
+    || user?.primaryPhoneNumber?.phoneNumber
+    || '';
+  const appProfileImageUrl = resolveUploadedMediaUrl(profile?.privateMetadata?.profileImageUrl);
+  const displayProfileImageUrl =
+    appProfileImageUrl
+    || resolveUploadedMediaUrl(profile?.image_url)
+    || String(user?.imageUrl || '').trim()
+    || null;
+
+  const phoneVerified = profile?.phoneVerified === true;
+  const passengerIdentity = profile?.passengerIdentity || null;
+  const identityStatus = String(passengerIdentity?.status || 'not_submitted').toLowerCase();
+  const identityDocsSubmitted = !!(passengerIdentity?.nationalIdFrontUrl && passengerIdentity?.nationalIdBackUrl);
+  const identityApproved = identityStatus === 'approved' || identityStatus === 'verified';
+  const identityPending = identityStatus === 'pending' && identityDocsSubmitted;
+  const identityRejected = identityStatus === 'rejected';
+  const allVerified = phoneVerified && identityApproved;
+  const verificationTone = allVerified || phoneVerified
+    ? { bg: '#dcfce7', text: '#166534' }
+    : { bg: '#fef3c7', text: '#92400e' };
+  const verificationHeadline = allVerified ? 'Fully verified' : phoneVerified ? 'Phone verified' : 'Verification needed';
+  const walletActive = passengerIdentity?.smileCashStatus === 'active';
+  const appVersion = Constants.expoConfig?.version || null;
+
+  const verificationRows = [
+    {
+      key: 'phone',
+      icon: 'phone-portrait-outline',
+      title: 'Phone number',
+      subtitle: phoneVerified ? (profile?.phone_number || 'Verified') : 'Add and verify your phone number',
+      tone: phoneVerified ? 'done' : 'action',
+      onPress: () => navigation.navigate('PassengerPhoneVerificationDetails'),
+    },
+    {
+      key: 'identity',
+      icon: 'card-outline',
+      title: 'Identity documents',
+      subtitle: identityApproved
+        ? 'Approved'
+        : identityPending
+          ? 'Under review'
+          : identityRejected
+            ? 'Needs resubmission'
+            : 'Upload selfie and national ID',
+      tone: identityApproved ? 'done' : identityPending ? 'review' : identityRejected ? 'rejected' : 'action',
+      onPress: () => {
+        if (identityPending) {
+          Alert.alert(
+            'Documents under review',
+            'We are reviewing your submission. You will be notified when there is an update.',
+          );
+          return;
+        }
+        navigation.navigate('PassengerIdentityVerification');
+      },
+    },
+  ];
+  const verifiedCount = verificationRows.filter((row) => row.tone === 'done').length;
+
+  const accountRows = [
+    {
+      key: 'profile',
+      title: 'Profile details',
+      subtitle: 'Name and personal info',
+      icon: 'person-outline',
+      onPress: () => navigation.navigate('PassengerProfileDetails'),
+    },
+    {
+      key: 'smile-cash',
+      title: 'Online wallet',
+      subtitle: walletActive ? passengerIdentity.smileCashMobile : 'Link your SmileCash wallet',
+      icon: 'wallet-outline',
+      onPress: () => navigation.navigate('PassengerSmileCash'),
+    },
+    {
+      key: 'reviews',
+      title: 'Reviews',
+      subtitle: ratingCount > 0 ? `${ratingCount} review${ratingCount === 1 ? '' : 's'} from drivers` : 'See what drivers said about you',
+      icon: 'star-outline',
+      onPress: () => navigation.navigate('PassengerReviews'),
+    },
+    {
+      key: 'referrals',
+      title: 'Invite friends',
+      subtitle: 'Share Trust Express and earn rewards',
+      icon: 'gift-outline',
+      iconColor: PRIMARY_BLUE,
+      onPress: () => navigation.navigate('PassengerReferrals'),
+    },
+  ];
+
+  const helpRows = [
+    {
+      key: 'support',
+      title: 'Support',
+      subtitle: 'Chat with the support team',
+      icon: 'headset-outline',
+      onPress: () => navigation.navigate('PassengerSupportChat'),
+    },
+    {
+      key: 'emergency',
+      title: 'Emergency numbers',
+      subtitle: 'Police, ambulance, fire brigade',
+      icon: 'alert-circle-outline',
+      iconColor: '#dc2626',
+      onPress: () => setShowEmergencySheet(true),
+    },
+  ];
+
+  const legalRows = [
+    {
+      key: 'privacy',
+      title: 'Privacy policy',
+      icon: 'shield-outline',
+      onPress: () => navigation.navigate('PassengerLegalDocument', { document: 'privacy' }),
+    },
+    {
+      key: 'terms',
+      title: 'Terms of use',
+      icon: 'document-text-outline',
+      onPress: () => navigation.navigate('PassengerLegalDocument', { document: 'terms' }),
+    },
+  ];
+
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-[#f6f7f3]"
-    >
+    <View className="flex-1 bg-[#f6f7f3]">
       <View
-        className="flex-row items-center justify-between bg-[#f6f7f3]"
-        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 14 }}
+        className="flex-row items-center bg-[#f6f7f3]"
+        style={{ paddingTop: insets.top + 6, paddingHorizontal: 20, paddingBottom: 10 }}
       >
         <TouchableOpacity
           activeOpacity={0.75}
@@ -348,248 +403,228 @@ const PassengerAccountScreen = ({ navigation }) => {
         >
           <Ionicons name="chevron-back" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text className="text-[18px] font-bold text-gray-900">Account info</Text>
-        <View className="h-10 w-10" />
+        <Text className="ml-3 text-[22px] font-bold text-gray-900">Account</Text>
       </View>
 
-      {loading ? (
-        <View className="flex-1 items-center justify-center px-5">
+      {loading && !profile ? (
+        <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color={PRIMARY_BLUE} />
-          <Text className="mt-4 text-base text-gray-500">Loading your account...</Text>
         </View>
       ) : (
         <ScrollView
           className="flex-1"
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 110 }}
-          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: insets.bottom + 40 }}
           showsVerticalScrollIndicator={false}
         >
           {error ? (
-            <View className="mb-4 rounded-[24px] bg-red-50 px-4 py-4">
-              <Text className="text-base font-medium text-red-600">{error}</Text>
+            <View className="mb-4 rounded-2xl bg-red-50 px-4 py-3">
+              <Text className="text-[13px] font-medium text-red-600">{error}</Text>
             </View>
           ) : null}
 
-          <View className="items-center px-4 pb-6 pt-4">
-            <View className="relative">
-              <View className="h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-white">
-                {displayProfileImageUrl ? (
-                  <Image
-                    source={{ uri: displayProfileImageUrl }}
-                    style={{ width: 96, height: 96 }}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Ionicons name="person" size={30} color="#374151" />
-                )}
-              </View>
+          <Card className="p-4">
+            <View className="flex-row items-center">
               <TouchableOpacity
-                className="absolute bottom-0 right-0 h-9 w-9 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
                 activeOpacity={0.8}
-                onPress={handleChangeProfilePhoto}
+                onPress={() => (appProfileImageUrl ? setShowProfileImagePreview(true) : handleChangeProfilePhoto())}
                 disabled={updatingProfileImage}
+                className="relative"
               >
-                {updatingProfileImage ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons name="camera" size={16} color="#fff" />
-                )}
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              activeOpacity={0.75}
-              onPress={() => {
-                if (hasAppProfilePicture) {
-                  setShowProfileImagePreview(true);
-                } else {
-                  handleChangeProfilePhoto();
-                }
-              }}
-              disabled={updatingProfileImage}
-            >
-              <Text className="mt-3 text-sm font-semibold text-[#2f73c9]">
-                {hasAppProfilePicture ? 'View profile picture' : 'Add profile picture'}
-              </Text>
-            </TouchableOpacity>
-            <Text className="mt-5 text-center text-[22px] font-bold text-gray-950">{passengerName}</Text>
-            <View className="mt-3 rounded-full bg-white px-4 py-2">
-              <Text className="text-sm font-medium text-gray-500">{passengerEmail}</Text>
-            </View>
-            <View className="mt-4 rounded-full px-4 py-2" style={{ backgroundColor: verificationTone.bg }}>
-              <Text className="text-xs font-semibold uppercase tracking-[1.2px]" style={{ color: verificationTone.text }}>
-                {verificationHeadline}
-              </Text>
-            </View>
-          </View>
-
-          <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Verification</Text>
-        <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-            {verificationRows.map((row, index) => (
-              <View key={row.key}>
-              <TouchableOpacity key={row.key} className="px-5 py-4" activeOpacity={0.75} onPress={row.onPress}>
-                <View className="flex-row items-center">
-                  <View className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]">
-                    <Ionicons name={row.icon} size={22} color="#374151" />
-                  </View>
-                  <View className="ml-3 flex-1">
-                    <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                    <Text
-                      className={`mt-0.5 text-sm ${
-                        row.key === 'identity'
-                          ? identityApproved
-                            ? 'text-green-600'
-                            : identityPending
-                              ? 'text-amber-600'
-                              : identityRejected
-                                ? 'text-red-600'
-                                : 'text-gray-500'
-                          : phoneVerified
-                            ? 'text-green-600'
-                            : 'text-gray-500'
-                      }`}
-                    >
-                      {row.subtitle}
-                    </Text>
-                  </View>
-                  {row.key === 'identity' ? (
-                    identityApproved ? (
-                      <View className="h-8 w-8 items-center justify-center rounded-full bg-green-100">
-                        <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
-                      </View>
-                    ) : row.identityReviewOnly ? (
-                      <Ionicons name="information-circle-outline" size={22} color="#9ca3af" />
-                    ) : (
-                      <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-                    )
-                  ) : phoneVerified ? (
-                    <View className="h-8 w-8 items-center justify-center rounded-full bg-green-100">
-                      <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
-                    </View>
+                <View className="h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-full bg-[#e8f1ff]">
+                  {displayProfileImageUrl ? (
+                    <Image source={{ uri: displayProfileImageUrl }} style={{ width: 72, height: 72 }} resizeMode="cover" />
                   ) : (
-                    <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+                    <Ionicons name="person" size={30} color="#1f2937" />
                   )}
                 </View>
-              </TouchableOpacity>
-              {index < verificationRows.length - 1 ? <View className="mx-5 bg-gray-100" style={{ height: 1 }} /> : null}
-              </View>
-            ))}
-          </View>
-
-          <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Account</Text>
-          <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-            {accountRows.map((row, index) => (
-              <View key={row.key}>
-                <TouchableOpacity className="flex-row items-center px-5 py-4" activeOpacity={row.onPress ? 0.75 : 1} onPress={row.onPress}>
-                  <View className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]">
-                    <Ionicons name={row.icon} size={22} color="#111827" />
-                  </View>
-                  <View className="ml-3 flex-1 pr-3">
-                    <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                    <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
-                  </View>
-                  {row.key === 'profile' || row.key === 'reviews' || row.key === 'referrals' || row.key === 'support' ? (
-                    <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-                  ) : null}
+                <TouchableOpacity
+                  className="absolute -bottom-1 -right-1 h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-[#1f2937]"
+                  activeOpacity={0.8}
+                  onPress={handleChangeProfilePhoto}
+                  disabled={updatingProfileImage}
+                >
+                  {updatingProfileImage ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="camera" size={14} color="#fff" />
+                  )}
                 </TouchableOpacity>
+              </TouchableOpacity>
 
-                {row.key === 'sharing' ? (
-                  <View className="px-5 pb-4">
-                    <View className="flex-row items-center justify-between rounded-[20px] bg-[#f8fafc] px-4 py-4">
-                      <View className="flex-1 pr-4">
-                        <Text className="text-sm font-medium text-gray-900">Make phone visible to drivers</Text>
-                        <Text className="mt-1 text-sm text-gray-500">
-                          When enabled, drivers can see your phone number on new ride requests.
-                        </Text>
-                      </View>
-                      {savingVisibility ? (
-                        <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-                      ) : (
-                        <Switch
-                          value={phoneVisibleToDrivers}
-                          onValueChange={handleTogglePhoneVisibility}
-                          trackColor={{ false: '#d1d5db', true: '#93c5fd' }}
-                          thumbColor={phoneVisibleToDrivers ? PRIMARY_BLUE : '#f9fafb'}
-                        />
-                      )}
-                    </View>
+              <View className="ml-4 flex-1">
+                <Text className="text-[19px] font-bold text-gray-950" numberOfLines={1}>{passengerName}</Text>
+                {passengerContact ? (
+                  <Text className="mt-0.5 text-[13px] text-gray-500" numberOfLines={1}>{passengerContact}</Text>
+                ) : null}
+                <View className="mt-2 flex-row">
+                  <View className="flex-row items-center rounded-full px-2.5 py-1" style={{ backgroundColor: verificationTone.bg }}>
+                    <Ionicons
+                      name={phoneVerified ? 'checkmark-circle' : 'time-outline'}
+                      size={13}
+                      color={verificationTone.text}
+                    />
+                    <Text className="ml-1 text-[11px] font-semibold" style={{ color: verificationTone.text }}>
+                      {verificationHeadline}
+                    </Text>
                   </View>
-                ) : null}
-
-                {index < accountRows.length - 1 ? (
-                  <View className="mx-5 bg-gray-100" style={{ height: 1 }} />
-                ) : null}
+                </View>
               </View>
-            ))}
-          </View>
+            </View>
 
-          <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Security</Text>
-          <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-            <BiometricSignInSetting role="passenger" />
-          </View>
+            <View className="mt-4 flex-row gap-2">
+              <StatTile
+                icon="star"
+                iconColor="#f59e0b"
+                value={averageRating !== null ? averageRating.toFixed(1) : '–'}
+                label={ratingCount > 0 ? `${ratingCount} rating${ratingCount === 1 ? '' : 's'}` : 'Rating'}
+                onPress={() => navigation.navigate('PassengerReviews')}
+              />
+              <StatTile
+                icon="car-sport"
+                iconColor={PRIMARY_BLUE}
+                value={completedTrips === null ? '–' : String(completedTrips)}
+                label="Trips"
+                onPress={() => navigation.getParent?.()?.navigate?.('PassengerActivity')}
+              />
+              <StatTile
+                icon="wallet"
+                iconColor="#16a34a"
+                value={walletActive ? 'Linked' : 'Off'}
+                label="Wallet"
+                onPress={() => navigation.navigate('PassengerSmileCash')}
+              />
+            </View>
+          </Card>
 
-          <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Safety</Text>
-          <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-            {safetyRows.map((row, index) => (
-              <TouchableOpacity
+          <View className="flex-row items-end justify-between">
+            <SectionTitle>Verification</SectionTitle>
+            <Text className="mb-2 px-1 text-xs font-medium text-gray-400">
+              {verifiedCount} of {verificationRows.length} done
+            </Text>
+          </View>
+          <Card>
+            {verificationRows.map((row, index) => (
+              <Row
                 key={row.key}
-                className="flex-row items-center px-5 py-4"
-                activeOpacity={0.75}
+                icon={row.icon}
+                title={row.title}
+                subtitle={row.subtitle}
+                last={index === verificationRows.length - 1}
                 onPress={row.onPress}
-              >
-                <View className="h-11 w-11 items-center justify-center rounded-full bg-[#f3f4f6]">
-                  <Ionicons name={row.icon} size={22} color="#111827" />
-                </View>
-                <View className="ml-3 flex-1 pr-3">
-                  <Text className="text-[15px] font-medium text-gray-900">{row.title}</Text>
-                  <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
-                </View>
-                <Ionicons name="call-outline" size={20} color="#9ca3af" />
-                {index < safetyRows.length - 1 ? (
-                  <View className="absolute bottom-0 left-20 right-5 bg-gray-100" style={{ height: 1 }} />
-                ) : null}
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text className="mb-3 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">Legal</Text>
-          <View className="mb-5 overflow-hidden rounded-[28px] bg-white">
-            {legalRows.map((row, index) => (
-              <TouchableOpacity
-                key={row.key}
-                className="flex-row items-center px-5 py-4"
-                activeOpacity={0.75}
-                onPress={row.onPress}
-                disabled={row.danger && deleting}
-              >
-                <View className={`h-11 w-11 items-center justify-center rounded-full ${row.danger ? 'bg-red-50' : 'bg-[#f3f4f6]'}`}>
-                  <Ionicons name={row.icon} size={22} color={row.danger ? '#dc2626' : '#111827'} />
-                </View>
-                <View className="ml-3 flex-1 pr-3">
-                  <Text className={`text-[15px] font-medium ${row.danger ? 'text-red-600' : 'text-gray-900'}`}>{row.title}</Text>
-                  <Text className="mt-0.5 text-sm text-gray-500">{row.subtitle}</Text>
-                </View>
-                {row.danger && deleting ? (
-                  <ActivityIndicator size="small" color="#dc2626" />
-                ) : (
-                  <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+                right={(
+                  <View className="flex-row items-center">
+                    <StatusPill tone={row.tone} />
+                    {row.tone !== 'done' ? (
+                      <Ionicons name="chevron-forward" size={18} color="#c0c4cc" style={{ marginLeft: 4 }} />
+                    ) : null}
+                  </View>
                 )}
-                {index < legalRows.length - 1 ? (
-                  <View className="absolute bottom-0 left-20 right-5 bg-gray-100" style={{ height: 1 }} />
-                ) : null}
-              </TouchableOpacity>
+              />
             ))}
-          </View>
+          </Card>
+
+          <SectionTitle>Account</SectionTitle>
+          <Card>
+            {accountRows.map((row, index) => (
+              <Row key={row.key} {...row} last={index === accountRows.length - 1} />
+            ))}
+          </Card>
+
+          <SectionTitle>Privacy & security</SectionTitle>
+          <Card>
+            <Row
+              icon="eye-outline"
+              title="Show my phone to drivers"
+              subtitle={phoneVisibleToDrivers ? 'Drivers can see your number' : 'Your number stays hidden'}
+              right={savingVisibility ? (
+                <ActivityIndicator size="small" color={PRIMARY_BLUE} />
+              ) : (
+                <Switch
+                  value={phoneVisibleToDrivers}
+                  onValueChange={handleTogglePhoneVisibility}
+                  trackColor={{ false: '#d1d5db', true: '#93c5fd' }}
+                  thumbColor={phoneVisibleToDrivers ? PRIMARY_BLUE : '#f9fafb'}
+                />
+              )}
+            />
+            <BiometricSignInSetting role="passenger" />
+          </Card>
+
+          <SectionTitle>Help & safety</SectionTitle>
+          <Card>
+            {helpRows.map((row, index) => (
+              <Row key={row.key} {...row} last={index === helpRows.length - 1} />
+            ))}
+          </Card>
+
+          <SectionTitle>Legal</SectionTitle>
+          <Card>
+            {legalRows.map((row, index) => (
+              <Row key={row.key} {...row} last={index === legalRows.length - 1} />
+            ))}
+          </Card>
 
           <TouchableOpacity
-            className="mb-4 flex-row items-center justify-center rounded-[24px] bg-white px-5 py-5"
+            className="mb-4 flex-row items-center justify-center rounded-[24px] bg-white px-5 py-4"
             onPress={() => signOut()}
             activeOpacity={0.8}
           >
-            <Ionicons name="log-out-outline" size={22} color="#dc2626" />
-            <Text className="ml-3 text-base font-semibold text-red-600">Sign out</Text>
+            <Ionicons name="log-out-outline" size={20} color="#dc2626" />
+            <Text className="ml-2 text-base font-semibold text-red-600">Sign out</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            className="items-center py-2"
+            onPress={handleDeleteAccount}
+            disabled={deleting}
+            activeOpacity={0.7}
+          >
+            {deleting ? (
+              <ActivityIndicator size="small" color="#dc2626" />
+            ) : (
+              <Text className="text-[13px] font-medium text-gray-400">Delete account</Text>
+            )}
+          </TouchableOpacity>
+          {appVersion ? (
+            <Text className="mt-1 text-center text-[12px] text-gray-300">Trust Express v{appVersion}</Text>
+          ) : null}
         </ScrollView>
       )}
+
+      <Modal
+        visible={showEmergencySheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowEmergencySheet(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/40"
+          activeOpacity={1}
+          onPress={() => setShowEmergencySheet(false)}
+        />
+        <View className="rounded-t-[28px] bg-white px-5 pt-3" style={{ paddingBottom: insets.bottom + 16 }}>
+          <View className="mb-4 h-1 w-10 self-center rounded-full bg-gray-200" />
+          <Text className="text-lg font-bold text-gray-900">Emergency numbers</Text>
+          <Text className="mb-4 mt-1 text-sm text-gray-500">Tap a service to call it.</Text>
+          {EMERGENCY_CONTACTS.map((contact) => (
+            <TouchableOpacity
+              key={contact.key}
+              className="mb-2 flex-row items-center rounded-2xl bg-[#fef2f2] px-4 py-3.5"
+              activeOpacity={0.75}
+              onPress={() => {
+                setShowEmergencySheet(false);
+                handleEmergencyCall(contact.label, contact.number);
+              }}
+            >
+              <Ionicons name={contact.icon} size={22} color="#dc2626" />
+              <Text className="ml-3 flex-1 text-[15px] font-semibold text-gray-900">{contact.label}</Text>
+              <Text className="mr-3 text-[15px] font-bold text-red-600">{contact.number}</Text>
+              <Ionicons name="call" size={18} color="#dc2626" />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Modal>
+
       <Modal
         visible={showProfileImagePreview}
         transparent
@@ -610,9 +645,20 @@ const PassengerAccountScreen = ({ navigation }) => {
               resizeMode="cover"
             />
           ) : null}
+          <TouchableOpacity
+            className="mt-8 flex-row items-center rounded-full bg-white px-5 py-3"
+            activeOpacity={0.8}
+            onPress={() => {
+              setShowProfileImagePreview(false);
+              handleChangeProfilePhoto();
+            }}
+          >
+            <Ionicons name="camera-outline" size={18} color="#111827" />
+            <Text className="ml-2 text-sm font-semibold text-gray-900">Change photo</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 };
 

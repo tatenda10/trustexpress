@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { Router } from 'express';
 import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import { normalizePaymentMethod, receiptPaymentMethodLabel } from '../lib/payment-method.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { getServiceAreaLabel, isCoordinateInServiceAreaFromDb } from '../lib/service-area.js';
@@ -23,6 +23,7 @@ import {
   emitRideStatusToDriver,
   emitRideStatusToPassenger,
   emitTripRatingToDriver,
+  emitToUser,
 } from '../lib/realtime.js';
 import { loadDriversViewingSnapshot } from '../lib/ride-driver-responses.js';
 import {
@@ -82,7 +83,6 @@ const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
 const DRIVER_REQUEST_RADIUS_KM = 12;
 const MAX_DRIVER_OFFERS = 500;
-const DRIVER_ONLINE_STALE_DAYS = 1;
 /** Drivers whose app polled or sent location within this window count as "app open". */
 const DRIVER_ACTIVE_SEEN_SECONDS = 180;
 /** While nobody has accepted, offer the ride to drivers who come online or move into range later. */
@@ -138,7 +138,7 @@ function createCaseReference(prefix, rideRequestId) {
 }
 
 async function requirePassenger(req, res) {
-  const user = await getClerkUserById(req.userId);
+  const user = await getUserById(req.userId);
   const appUser = toAppUser(user);
   const role = normalizeRole(appUser.role);
   // Allow both passengers and drivers to create and manage ride requests
@@ -224,6 +224,7 @@ function mapDriverAvailability(row, pickupCoordinate) {
     },
     carImage,
     lastSeenAt: row.last_seen_at || null,
+    locationUpdatedAt: row.location_updated_at || null,
   };
 }
 
@@ -268,6 +269,7 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     phoneNumber: row.phone_number || null,
     coordinate,
     lastSeenAt: row.last_seen_at || null,
+    locationUpdatedAt: row.location_updated_at || null,
     tier: {
       tierKey: row.vehicle_tier_key || null,
       tierName: row.vehicle_tier_name || 'Ride',
@@ -417,7 +419,7 @@ function buildRideDiscountPayload(ride) {
 export async function getUserProfileImageUrl(userId) {
   if (!userId || String(userId).startsWith('dispatch:')) return null;
   try {
-    const user = await getClerkUserById(userId);
+    const user = await getUserById(userId);
     return toAppUser(user)?.image_url || null;
   } catch {
     return null;
@@ -492,7 +494,6 @@ export async function loadEligibleDriversForRide({
      WHERE da.is_online = 1
        AND da.current_lat IS NOT NULL
        AND da.current_lng IS NOT NULL
-       AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
        AND active_ride.id IS NULL
        AND active_hire.id IS NULL
        AND COALESCE(di.driver_kind, 'standard') <> 'truck'
@@ -609,7 +610,7 @@ export async function notifyDriversAboutRideRequest({ drivers, passengerName, pi
 
         if (!expoToken && !fcmToken) {
           try {
-            const driverUser = await getClerkUserById(driver.id);
+            const driverUser = await getUserById(driver.id);
             expoToken = String(driverUser?.privateMetadata?.pushToken || '').trim() || null;
             fcmToken = String(driverUser?.privateMetadata?.fcmToken || '').trim() || null;
             if (expoToken || fcmToken) {
@@ -774,11 +775,17 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
       ? Math.min(requestedLimit, 50)
       : 10;
     const offset = (page - 1) * limit;
+    const statusFilter = String(req.query?.status || '').toLowerCase();
+    const statusClause = {
+      completed: `AND status = 'completed'`,
+      cancelled: `AND status IN ('cancelled', 'expired')`,
+      ongoing: `AND status NOT IN ('completed', 'cancelled', 'expired')`,
+    }[statusFilter] || '';
 
     const [countRow] = await query(
       `SELECT COUNT(*) AS total
        FROM ride_requests
-       WHERE passenger_user_id = ?`,
+       WHERE passenger_user_id = ? ${statusClause}`,
       [req.userId]
     );
     const total = Number(countRow?.total || 0);
@@ -823,9 +830,11 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
          driver_passenger_rated_at,
          requested_at,
         completed_at,
-        cancelled_at
+        cancelled_at,
+        estimated_minutes,
+        estimated_distance_km
        FROM ride_requests
-       WHERE passenger_user_id = ?
+       WHERE passenger_user_id = ? ${statusClause}
        ORDER BY requested_at DESC, id DESC
        LIMIT ${limit} OFFSET ${offset}`,
       [req.userId]
@@ -868,6 +877,8 @@ router.get('/passenger/history', requireAuth, async (req, res) => {
         requestedAt: row.requested_at,
         completedAt: row.completed_at,
         cancelledAt: row.cancelled_at,
+        estimatedMinutes: Number(row.estimated_minutes || 0),
+        estimatedDistanceKm: Number(row.estimated_distance_km || 0),
       })),
       pagination: {
         page,
@@ -1402,7 +1413,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         );
     if (ride.driver_user_id && !assignedDriver?.coordinate) {
       const [liveLocation] = await query(
-        `SELECT current_lat, current_lng, last_seen_at, driver_name, phone_number
+        `SELECT current_lat, current_lng, last_seen_at, location_updated_at, driver_name, phone_number
          FROM driver_availability
          WHERE driver_user_id = ?
          LIMIT 1`,
@@ -1417,6 +1428,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
           }),
           coordinate: liveCoordinate,
           lastSeenAt: liveLocation.last_seen_at || assignedDriver?.lastSeenAt || null,
+          locationUpdatedAt: liveLocation.location_updated_at || assignedDriver?.locationUpdatedAt || null,
           phoneNumber: assignedDriver?.phoneNumber || liveLocation.phone_number || null,
         };
       }
@@ -1447,6 +1459,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
         estimatedAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
+        minimumFareAmount: getRideFareFloor(ride),
         tipAmount: Number(ride.tip_amount || 0),
         totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
@@ -1539,6 +1552,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
            da.current_lat,
            da.current_lng,
            da.last_seen_at,
+           da.location_updated_at,
            da.is_online,
            rr.driver_user_id AS profile_image_user_id
          FROM ride_request_driver_responses rr
@@ -1575,6 +1589,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
            da.current_lat,
            da.current_lng,
            da.last_seen_at,
+           da.location_updated_at,
            da.driver_name,
            da.phone_number,
            da.vehicle_tier_key,
@@ -1618,6 +1633,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
           || null,
         coordinate: liveCoordinate || assignedDriver?.coordinate || mappedAssigned?.coordinate || null,
         lastSeenAt: liveLocation?.last_seen_at || assignedDriver?.lastSeenAt || null,
+        locationUpdatedAt: liveLocation?.location_updated_at || assignedDriver?.locationUpdatedAt || null,
         rating: assignedDriver?.rating
           ?? mappedAssigned?.rating
           ?? null,
@@ -1630,8 +1646,9 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     }
 
     const driverCoordinate = assignedDriver?.coordinate || null;
-    const driverLocationAgeSeconds = getLocationAgeSeconds(assignedDriver?.lastSeenAt);
-    const driverLocationFresh = isFreshDriverLocation(assignedDriver?.lastSeenAt);
+    const driverLocationUpdatedAt = assignedDriver?.locationUpdatedAt || null;
+    const driverLocationAgeSeconds = getLocationAgeSeconds(driverLocationUpdatedAt);
+    const driverLocationFresh = isFreshDriverLocation(driverLocationUpdatedAt);
     const liveDriverDistanceKm = driverCoordinate ? calculateDistanceKm(driverCoordinate, pickupCoordinate) : null;
     const liveDriverEtaMinutes = driverLocationFresh && liveDriverDistanceKm !== null
       ? Math.max(1, Math.round(liveDriverDistanceKm * 4))
@@ -1669,7 +1686,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         status: 'driver_arrived',
         stage: 'waiting_at_pickup',
         driverCoordinate,
-        driverLocationUpdatedAt: assignedDriver?.lastSeenAt || null,
+        driverLocationUpdatedAt,
         arrivedAt: toIsoOrNull(ride.arrived_at),
         reason: 'auto_arrived_by_live_location',
       });
@@ -1703,6 +1720,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         estimatedMinutes: Number(ride.estimated_minutes || 0),
         estimatedAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0),
+        minimumFareAmount: getRideFareFloor(ride),
         tipAmount: Number(ride.tip_amount || 0),
         totalAmount: Number(ride.final_estimated_amount || ride.estimated_amount || 0) + Number(ride.tip_amount || 0),
         requestedTierKey: ride.requested_tier_key,
@@ -1722,7 +1740,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         driverCoordinate,
         driverLocationFresh,
         driverLocationAgeSeconds,
-        driverLocationUpdatedAt: assignedDriver?.lastSeenAt || null,
+        driverLocationUpdatedAt,
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
@@ -1780,6 +1798,8 @@ router.get('/passenger/:rideRequestId/details', requireAuth, async (req, res) =>
         requestedAt: ride.requested_at,
         completedAt: ride.completed_at,
         cancelledAt: ride.cancelled_at,
+        estimatedMinutes: Number(ride.estimated_minutes || 0),
+        estimatedDistanceKm: Number(ride.estimated_distance_km || 0),
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
@@ -2125,7 +2145,7 @@ router.post('/passenger/:rideRequestId/rate-driver', requireAuth, async (req, re
     );
 
     try {
-      const driverUser = await getClerkUserById(ride.driver_user_id);
+      const driverUser = await getUserById(ride.driver_user_id);
       const pushToken = driverUser?.privateMetadata?.pushToken;
       if (pushToken) {
         await sendExpoPushNotifications({
@@ -2218,7 +2238,7 @@ router.post('/passenger/:rideRequestId/tip-driver', requireAuth, async (req, res
     );
 
     try {
-      const driverUser = await getClerkUserById(ride.driver_user_id);
+      const driverUser = await getUserById(ride.driver_user_id);
       const pushToken = String(driverUser?.privateMetadata?.pushToken || '').trim();
       if (pushToken) {
         await sendExpoPushNotifications({
@@ -2289,7 +2309,6 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
        FROM driver_availability
        WHERE driver_user_id = ?
          AND is_online = 1
-         AND last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
        LIMIT 1`,
       [driverUserId]
     );
@@ -2584,6 +2603,70 @@ router.patch('/passenger/:rideRequestId/cancel', requireAuth, async (req, res) =
   }
 });
 
+function getRideFareFloor(ride) {
+  const original = Number(ride?.original_estimated_amount || ride?.estimated_amount || 0);
+  const discount = Number(ride?.discount_amount || 0);
+  return Math.max(0, Number((original - discount).toFixed(2)));
+}
+
+router.patch('/passenger/:rideRequestId/fare', requireAuth, async (req, res) => {
+  try {
+    const user = await requirePassenger(req, res);
+    if (!user) return;
+
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId)) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const [ride] = await query(
+      `SELECT id, status, driver_user_id, estimated_amount, original_estimated_amount, discount_amount, final_estimated_amount
+       FROM ride_requests
+       WHERE id = ? AND passenger_user_id = ?
+       LIMIT 1`,
+      [rideRequestId, req.userId]
+    );
+    if (!ride) return res.status(404).json({ error: 'Ride request not found' });
+    if (!['requested', 'driver_found'].includes(String(ride.status)) || ride.driver_user_id) {
+      return res.status(409).json({ error: 'The fare can only be changed while you are still looking for a driver.' });
+    }
+
+    const floor = getRideFareFloor(ride);
+    const ceiling = Math.ceil(Math.max(floor * 2, floor + 5));
+    const amount = Number(Number(req.body?.amount).toFixed(2));
+    if (!Number.isFinite(amount) || amount < floor || amount > ceiling) {
+      return res.status(400).json({
+        error: `Choose a fare between $${floor.toFixed(2)} and $${ceiling.toFixed(2)}.`,
+        minimumFareAmount: floor,
+        maximumFareAmount: ceiling,
+      });
+    }
+
+    await query(
+      `UPDATE ride_requests
+       SET estimated_amount = ?, final_estimated_amount = ?
+       WHERE id = ? AND passenger_user_id = ? AND status IN ('requested', 'driver_found') AND driver_user_id IS NULL`,
+      [amount, amount, rideRequestId, req.userId]
+    );
+
+    const offeredDrivers = await query(
+      `SELECT driver_user_id
+       FROM ride_request_driver_responses
+       WHERE ride_request_id = ? AND status IN ('pending', 'accepted')`,
+      [rideRequestId]
+    );
+    offeredDrivers.forEach((row) => {
+      emitToUser(row.driver_user_id, 'ride_request:fare_updated', { rideRequestId, amount });
+    });
+    emitRideStatusToPassenger(req.userId, { rideRequestId, status: ride.status, fareAmount: amount });
+
+    return res.json({ ok: true, fareAmount: amount, minimumFareAmount: floor, maximumFareAmount: ceiling });
+  } catch (err) {
+    console.error('PATCH /api/rides/passenger/:rideRequestId/fare', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.patch('/passenger/:rideRequestId/arrived', requireAuth, async (req, res) => {
   try {
     const user = await requirePassenger(req, res);
@@ -2681,7 +2764,7 @@ router.patch('/passenger/:rideRequestId/confirm-pickup', requireAuth, async (req
       });
 
       Promise.resolve().then(async () => {
-        const driverUser = await getClerkUserById(ride.driver_user_id);
+        const driverUser = await getUserById(ride.driver_user_id);
         const pushToken = String(driverUser?.privateMetadata?.pushToken || '').trim();
         const fcmToken = String(driverUser?.privateMetadata?.fcmToken || '').trim();
         const pushPayload = {
@@ -2875,9 +2958,9 @@ router.post('/:rideRequestId/messages', requireAuth, async (req, res) => {
     );
 
     const messageRecord = row ? mapRideMessage(row) : null;
-    const senderUser = await getClerkUserById(req.userId).catch(() => null);
+    const senderUser = await getUserById(req.userId).catch(() => null);
     const senderName = [senderUser?.firstName, senderUser?.lastName].filter(Boolean).join(' ').trim() || (chat.senderRole === 'driver' ? 'Driver' : 'Passenger');
-    const recipientUser = await getClerkUserById(chat.recipientUserId).catch(() => null);
+    const recipientUser = await getUserById(chat.recipientUserId).catch(() => null);
     const recipientPushToken = String(recipientUser?.privateMetadata?.pushToken || '').trim();
 
     emitRideChatMessageToUser(chat.recipientUserId, {

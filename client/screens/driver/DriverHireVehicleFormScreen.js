@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createHireVehicle, getHireVehicleTypes, resolveUploadedMediaUrl, updateHireVehicle, uploadFile } from '../../api';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';

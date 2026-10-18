@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useUser, useAuth } from '@clerk/clerk-expo';
+import { useUser, useAuth } from '../../auth/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { linkDriverSmileCash, openDriverSmileCash, unlinkDriverSmileCash } from '../../api';
 import SmileCashIdentityFields from '../../components/smile/SmileCashIdentityFields';

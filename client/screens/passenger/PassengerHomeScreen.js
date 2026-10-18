@@ -10,13 +10,17 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  Image,
+  BackHandler,
+  AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useIsFocused } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth, useUser } from '../../auth/AuthProvider';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
+import { LetterMarker, PIN_COLORS, stopLetter } from '../../components/maps/LetterPin';
 import * as Location from 'expo-location';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -77,6 +81,8 @@ const PLACE_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const PLACE_DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PLACE_CACHE_ENTRIES = 80;
 const MAX_INTERMEDIATE_STOPS = 2;
+const LOCATION_REFRESH_MIN_INTERVAL_MS = 20 * 1000;
+const LOCATION_REFRESH_MIN_MOVE_METERS = 40;
 
 function normalizeSearchText(value) {
   return String(value || '')
@@ -267,6 +273,16 @@ async function searchZimbabweFirst(token, query, originCoordinate, sessionToken)
   }
 }
 
+const HOME_CARD_BORDER = {
+  borderWidth: 1,
+  borderColor: '#e5e7eb',
+};
+
+const HOME_SHEET_BORDER = {
+  borderTopWidth: 1,
+  borderColor: '#e5e7eb',
+};
+
 export default function PassengerHomeScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
@@ -304,6 +320,21 @@ export default function PassengerHomeScreen({ navigation, route }) {
   const [nearbyDrivers, setNearbyDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
   const [tripMode, setTripMode] = useState('ride'); // 'ride' | 'hire'
+  const [homeView, setHomeView] = useState('landing'); // 'landing' | 'map'
+  const { user } = useUser();
+
+  useEffect(() => {
+    navigation.setParams({ bookingMap: homeView === 'map' });
+  }, [homeView, navigation]);
+
+  useEffect(() => {
+    if (homeView !== 'map' || !isFocused) return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setHomeView('landing');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [homeView, isFocused]);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -481,6 +512,57 @@ export default function PassengerHomeScreen({ navigation, route }) {
     };
   }, [isFocused, navigation]);
 
+  const pickupIsAutoRef = useRef(true);
+  const lastLocationRefreshAtRef = useRef(0);
+  const locationRefreshInFlightRef = useRef(false);
+  const currentLocationCoordinateRef = useRef(null);
+  const homeViewRef = useRef('landing');
+  currentLocationCoordinateRef.current = currentLocationCoordinate;
+  homeViewRef.current = homeView;
+
+  // Re-read GPS when the passenger comes back to the app, so pickup follows them after they move.
+  const refreshCurrentLocation = useCallback(async ({ force = false } = {}) => {
+    if (locationRefreshInFlightRef.current) return;
+    if (!force && Date.now() - lastLocationRefreshAtRef.current < LOCATION_REFRESH_MIN_INTERVAL_MS) return;
+    locationRefreshInFlightRef.current = true;
+    lastLocationRefreshAtRef.current = Date.now();
+    try {
+      const permission = await Location.getForegroundPermissionsAsync();
+      if (!permission.granted) return;
+      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const coordinate = { latitude: current.coords.latitude, longitude: current.coords.longitude };
+      if (!isCoordinateInBulawayoServiceArea(coordinate)) return;
+
+      const previous = currentLocationCoordinateRef.current;
+      const movedMeters = previous ? calculateDistanceKm(previous, coordinate) * 1000 : Infinity;
+      const moved = movedMeters >= LOCATION_REFRESH_MIN_MOVE_METERS;
+      if (moved) setCurrentLocationCoordinate(coordinate);
+
+      if (!(moved || force) || !pickupIsAutoRef.current || homeViewRef.current !== 'landing') return;
+      const label = await getReadableLocationLabel('Pickup', coordinate);
+      if (!pickupIsAutoRef.current) return;
+      setPickupCoordinate(coordinate);
+      setPickupLabel(label);
+      setPickupQuery(label.replace('Pickup: ', ''));
+      setLocationError('');
+    } catch {
+      // Keep the last known location.
+    } finally {
+      locationRefreshInFlightRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isFocused) refreshCurrentLocation();
+  }, [isFocused, refreshCurrentLocation]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') refreshCurrentLocation();
+    });
+    return () => subscription.remove();
+  }, [refreshCurrentLocation]);
+
   useEffect(() => {
     let active = true;
 
@@ -488,8 +570,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
       try {
         const permission = await Location.requestForegroundPermissionsAsync();
         if (permission.status !== 'granted') throw new Error('Location permission denied');
-        const current = await Location.getCurrentPositionAsync({});
+        const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
         if (!active) return;
+        lastLocationRefreshAtRef.current = Date.now();
 
         const coordinate = {
           latitude: current.coords.latitude,
@@ -540,6 +623,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
   useEffect(() => {
     if (!route?.params?.resetRideDraftAt) return;
     clearDestination();
+    setHomeView('landing');
+    pickupIsAutoRef.current = true;
+    refreshCurrentLocation({ force: true });
   }, [route?.params?.resetRideDraftAt]);
 
   useEffect(() => {
@@ -754,6 +840,9 @@ export default function PassengerHomeScreen({ navigation, route }) {
       Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports pickup points within ${SERVICE_AREA_LABEL}.`);
       return;
     }
+    pickupIsAutoRef.current = currentLocationCoordinate
+      ? calculateDistanceKm(currentLocationCoordinate, coordinate) * 1000 < LOCATION_REFRESH_MIN_MOVE_METERS
+      : false;
     setPickupCoordinate(coordinate);
     setPickupLabel(label);
     if (!pickupQuery.trim()) setPickupQuery(label.replace('Pickup: ', ''));
@@ -972,6 +1061,41 @@ export default function PassengerHomeScreen({ navigation, route }) {
     });
   };
 
+  useEffect(() => {
+    if (homeView !== 'map' || !pickupCoordinate || !dropoffCoordinate) return undefined;
+    const fitCoordinates = [
+      pickupCoordinate,
+      dropoffCoordinate,
+      ...intermediateStops.map((stop) => stop?.coordinate),
+      ...routeCoordinates.filter((_, index) => index % 10 === 0),
+    ].filter(Boolean);
+    const timeout = setTimeout(() => {
+      try {
+        mapRef.current?.fitToCoordinates?.(fitCoordinates, {
+          edgePadding: { top: 170, right: 50, bottom: 300, left: 50 },
+          animated: true,
+        });
+      } catch {
+        // Region-based centering from applyDestination remains as fallback.
+      }
+    }, 250);
+    return () => clearTimeout(timeout);
+  }, [homeView, pickupCoordinate, dropoffCoordinate, intermediateStops, routeCoordinates]);
+
+  const openBookingMap = (mode = 'ride', { search = false } = {}) => {
+    setTripMode(mode);
+    setHomeView('map');
+    if (search) openRouteModal();
+  };
+
+  const openRecentTrip = (trip) => {
+    setTripMode('ride');
+    setHomeView('map');
+    applyDestination(trip.coordinate, `Drop-off: ${trip.title}`);
+  };
+
+  const userInitial = (user?.firstName || user?.fullName || 'T').trim().charAt(0).toUpperCase();
+
   return (
     <SafeAreaView className="flex-1 bg-white" edges={['top', 'left', 'right']}>
       <View className="flex-1 bg-[#eef4ff]">
@@ -990,11 +1114,14 @@ export default function PassengerHomeScreen({ navigation, route }) {
           showsUserLocation={false}
         >
           {currentLocationCoordinate ? (
-            <Marker coordinate={currentLocationCoordinate} title="Your location" tracksViewChanges={false}>
-              <View className="items-center">
-                <View className="h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#2563eb]">
-                  <Ionicons name="locate" size={18} color="#fff" />
-                </View>
+            <Marker
+              coordinate={currentLocationCoordinate}
+              title="Your location"
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+            >
+              <View className="h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: 'rgba(37,99,235,0.18)' }}>
+                <View className="h-5 w-5 rounded-full border-[3px] border-white bg-[#2563eb]" />
               </View>
             </Marker>
           ) : null}
@@ -1013,20 +1140,23 @@ export default function PassengerHomeScreen({ navigation, route }) {
               </View>
             </Marker>
           ))}
-          {pickupCoordinate && !areCoordinatesClose(pickupCoordinate, currentLocationCoordinate) ? (
-            <Marker coordinate={pickupCoordinate} title="Pickup" pinColor={PRIMARY_BLUE} />
+          {pickupCoordinate && (dropoffCoordinate || !areCoordinatesClose(pickupCoordinate, currentLocationCoordinate)) ? (
+            <LetterMarker coordinate={pickupCoordinate} title="Pickup" letter="A" color={PIN_COLORS.start} />
           ) : null}
           {intermediateStops.map((stop, index) => (
             stop?.coordinate ? (
-              <Marker
+              <LetterMarker
                 key={`stop-${index}`}
                 coordinate={stop.coordinate}
                 title={stop.label || `Stop ${index + 1}`}
-                pinColor="#f59e0b"
+                letter={stopLetter(index)}
+                color={PIN_COLORS.stop}
               />
             ) : null
           ))}
-          {dropoffCoordinate ? <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#111827" /> : null}
+          {dropoffCoordinate ? (
+            <LetterMarker coordinate={dropoffCoordinate} title="Drop-off" letter="B" color={PIN_COLORS.finish} />
+          ) : null}
           {pickupCoordinate && dropoffCoordinate ? (
             routeCoordinates.length > 1 ? (
               <>
@@ -1045,143 +1175,80 @@ export default function PassengerHomeScreen({ navigation, route }) {
           ) : null}
         </MapView>
 
-        <View pointerEvents="none" className="absolute inset-0 bg-black/25" />
-
-        <View style={{ paddingTop: insets.top + 10 }} className="px-5">
-          {dropoffCoordinate ? (
-            <View className="rounded-[28px] bg-white/95 px-4 py-4">
-              <View className="flex-row items-start">
-                <View className="mr-3 items-center pt-1">
-                  <View className="h-4 w-4 rounded-full border-[4px] border-green-600" />
-                  <View className="my-1 h-10 w-0.5 bg-gray-300" />
-                  <View className="h-4 w-4 rounded-full border-[4px]" style={{ borderColor: PRIMARY_BLUE }} />
-                </View>
-                <View className="flex-1">
-                  <Text className="text-lg font-bold text-gray-900">{pickupLabel.replace('Pickup: ', '')}</Text>
-                  <Text className="mt-1 text-base text-gray-700">{dropoffLabel.replace('Drop-off: ', '')}</Text>
-                  {intermediateStops.length ? (
-                    <Text className="mt-1 text-sm text-amber-700">
-                      {intermediateStops.filter((stop) => stop?.label).length} stop{intermediateStops.filter((stop) => stop?.label).length === 1 ? '' : 's'} added
-                    </Text>
-                  ) : null}
-                  <Text className="mt-1 text-sm text-gray-500">{estimatedMinutes} min</Text>
-                </View>
+        <View style={{ paddingTop: 10 }} className="px-4">
+          <View className="rounded-2xl bg-white" style={HOME_CARD_BORDER}>
+            <TouchableOpacity
+              onPress={openRouteModal}
+              activeOpacity={0.8}
+              className="flex-row items-center px-4 py-3.5"
+            >
+              <TouchableOpacity onPress={() => setHomeView('landing')} hitSlop={10} className="mr-3">
+                <Ionicons name="arrow-back" size={21} color="#111827" />
+              </TouchableOpacity>
+              <Text className="flex-1 text-[15px] font-semibold text-gray-900" numberOfLines={1}>
+                {loadingLocation ? 'Finding your location...' : (pickupLabel.replace('Pickup: ', '') || 'Your location')}
+              </Text>
+            </TouchableOpacity>
+            {dropoffCoordinate ? (
+              <>
+                <View className="ml-12 h-px bg-gray-100" />
                 <TouchableOpacity
                   onPress={openRouteModal}
-                  className="ml-3 h-12 w-12 items-center justify-center rounded-full bg-[#f3f6fb]"
+                  activeOpacity={0.8}
+                  className="flex-row items-center px-4 py-3.5"
                 >
-                  <Ionicons name="pencil" size={20} color="#111827" />
+                  <View className="mr-3 h-[21px] w-[21px] items-center justify-center rounded-full" style={{ backgroundColor: PIN_COLORS.finish }}>
+                    <Text className="text-[11px] font-extrabold text-white">B</Text>
+                  </View>
+                  <Text className="flex-1 text-[15px] font-semibold text-gray-900" numberOfLines={1}>
+                    {dropoffLabel.replace('Drop-off: ', '')}
+                  </Text>
+                  <Ionicons name="add" size={22} color="#6b7280" />
                 </TouchableOpacity>
-              </View>
-              <TouchableOpacity
-                onPress={openRouteModal}
-                className="mt-3 self-start flex-row items-center rounded-full bg-[#eff6ff] px-3 py-2"
-              >
-                <Ionicons name="add" size={16} color={PRIMARY_BLUE} />
-                <Text className="ml-1.5 text-sm font-semibold" style={{ color: PRIMARY_BLUE }}>
-                  Add stop
-                </Text>
-              </TouchableOpacity>
+              </>
+            ) : null}
+          </View>
+          {intermediateStops.some((stop) => stop?.label) ? (
+            <View className="mt-2 self-start rounded-full bg-white px-3 py-1" style={HOME_CARD_BORDER}>
+              <Text className="text-[12px] font-semibold text-amber-700">
+                {intermediateStops.filter((stop) => stop?.label).length} stop{intermediateStops.filter((stop) => stop?.label).length === 1 ? '' : 's'} added
+              </Text>
             </View>
-          ) : (
-            <View className="self-end rounded-2xl bg-white/95 px-4 py-3">
-              <Text className="text-sm font-medium text-gray-500">Pickup point</Text>
-              <Text className="text-lg font-bold text-gray-900">{pickupLabel.replace('Pickup: ', '')}</Text>
-            </View>
-          )}
+          ) : null}
         </View>
 
         <View
-          className="mt-auto rounded-t-[32px] bg-[#f8f8f6] px-5 pt-4"
-          style={{ marginBottom: tabBarHeight + 40, minHeight: dropoffCoordinate ? 320 : 380 }}
+          className="mt-auto rounded-t-[28px] bg-white px-5 pt-3"
+          style={[HOME_SHEET_BORDER, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}
         >
-          <View className="items-center">
-            <View className="h-2 w-16 rounded-full bg-gray-300" />
-          </View>
+          <View className="mb-3 h-1 w-10 self-center rounded-full bg-gray-200" />
 
-          <TouchableOpacity
-            onPress={openRouteModal}
-            activeOpacity={0.9}
-            className="mt-4 rounded-[24px] bg-white px-4 py-4"
-          >
-            <View className="mt-2 flex-row items-center">
-              <Ionicons name="search" size={20} color="#111827" />
-              <Text
-                numberOfLines={1}
-                className={`ml-3 flex-1 text-[18px] font-semibold ${dropoffCoordinate ? 'text-gray-950' : 'text-gray-400'}`}
-              >
-                {dropoffCoordinate ? dropoffLabel.replace('Drop-off: ', '') : 'Where to?'}
-              </Text>
-              {dropoffCoordinate ? (
+          {dropoffCoordinate ? (
+            <View>
+              <View className="flex-row items-center">
+                <View className="h-10 w-10 items-center justify-center rounded-full bg-[#eef4ff]">
+                  <Ionicons name="location" size={20} color={PRIMARY_BLUE} />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className="text-[16px] font-bold text-gray-900" numberOfLines={1}>
+                    {dropoffLabel.replace('Drop-off: ', '')}
+                  </Text>
+                  <Text className="mt-0.5 text-[13px] text-gray-500">
+                    {routeDistanceKm > 0 ? `${distanceKm.toFixed(1)} km · ${estimatedMinutes} min` : 'Calculating road distance...'}
+                  </Text>
+                </View>
                 <TouchableOpacity
                   onPress={clearDestination}
-                  className="h-8 w-8 items-center justify-center rounded-full bg-[#f3f4f6]"
+                  className="h-9 w-9 items-center justify-center rounded-full bg-[#f3f4f6]"
                 >
                   <Ionicons name="close" size={18} color="#111827" />
                 </TouchableOpacity>
-              ) : null}
-            </View>
-          </TouchableOpacity>
-
-          <View className="mt-3 flex-row gap-2">
-            <TouchableOpacity
-              onPress={() => setTripMode('ride')}
-              activeOpacity={0.85}
-              className="flex-1 flex-row items-center justify-center rounded-[18px] px-3 py-3"
-              style={{
-                backgroundColor: tripMode === 'ride' ? PRIMARY_BLUE : '#ffffff',
-                borderWidth: 1,
-                borderColor: tripMode === 'ride' ? PRIMARY_BLUE : '#e5e7eb',
-              }}
-            >
-              <Ionicons name="car-outline" size={18} color={tripMode === 'ride' ? '#fff' : '#111827'} />
-              <Text
-                className="ml-2 text-sm font-bold"
-                style={{ color: tripMode === 'ride' ? '#fff' : '#111827' }}
-              >
-                Normal ride
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                setTripMode('hire');
-                if (!dropoffCoordinate) {
-                  openRouteModal();
-                }
-              }}
-              activeOpacity={0.85}
-              className="flex-1 flex-row items-center justify-center rounded-[18px] px-3 py-3"
-              style={{
-                backgroundColor: tripMode === 'hire' ? PRIMARY_BLUE : '#ffffff',
-                borderWidth: 1,
-                borderColor: tripMode === 'hire' ? PRIMARY_BLUE : '#e5e7eb',
-              }}
-            >
-              <Ionicons name="bus-outline" size={18} color={tripMode === 'hire' ? '#fff' : '#111827'} />
-              <Text
-                className="ml-2 text-sm font-bold"
-                style={{ color: tripMode === 'hire' ? '#fff' : '#111827' }}
-              >
-                Vehicle hire
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {dropoffCoordinate ? (
-            <View className="mt-4 pb-5">
-              <View className="rounded-[22px] bg-white px-4 py-4">
-                <Text className="text-sm font-medium text-gray-400">
-                  {tripMode === 'hire' ? 'Hire trip preview' : 'Trip preview'}
-                </Text>
-                <Text className="mt-1 text-base font-semibold text-gray-900">
-                  {routeDistanceKm > 0 ? `${distanceKm.toFixed(1)} km • ${estimatedMinutes} min away` : 'Calculating road distance...'}
-                </Text>
-                {tripMode === 'hire' ? (
-                  <Text className="mt-1 text-sm text-gray-500">
-                    Next: add vehicle specs, notes and your offer fee.
-                  </Text>
-                ) : null}
               </View>
+              {tripMode === 'hire' ? (
+                <Text className="mt-3 text-[12px] text-gray-500">
+                  Next: add vehicle specs, notes and your offer fee.
+                </Text>
+              ) : null}
               <TouchableOpacity
                 onPress={tripMode === 'hire' ? openHireRequestScreen : openChooseRideScreen}
                 disabled={
@@ -1189,7 +1256,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                     ? (loadingLocation || isCalculating || !routeReady)
                     : (loadingLocation || !pickupCoordinate || !dropoffCoordinate)
                 }
-                className="mt-4 h-16 items-center justify-center rounded-[22px]"
+                className="mt-4 h-14 items-center justify-center rounded-2xl"
                 style={{
                   backgroundColor: (
                     tripMode === 'ride'
@@ -1201,42 +1268,62 @@ export default function PassengerHomeScreen({ navigation, route }) {
                 {tripMode === 'ride' && (isCalculating || !routeReady) ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text className="text-lg font-bold text-white">
+                  <Text className="text-[17px] font-bold text-white">
                     {tripMode === 'hire' ? 'Continue hire request' : 'Choose ride'}
                   </Text>
                 )}
               </TouchableOpacity>
             </View>
           ) : (
-            <View className="pb-5">
-              {tripMode === 'hire' ? (
-                <Text className="mt-3 text-sm text-gray-500">
-                  Choose pickup and drop-off on the map, then continue your vehicle hire request.
-                </Text>
-              ) : null}
-              {recentTrips.length ? (
-                <View className="mt-4 rounded-[20px] bg-white px-4 py-4">
-                  <Text className="text-sm font-semibold text-gray-700">Recent trips</Text>
-                  <View className="mt-3 flex-row flex-wrap gap-2">
-                    {recentTrips.map((trip) => (
-                      <TouchableOpacity
-                        key={trip.id}
-                        onPress={() => applyDestination(trip.coordinate, `Drop-off: ${trip.title}`)}
-                        className="rounded-full bg-[#eef5ff] px-3 py-2"
-                      >
-                        <Text className="text-xs font-semibold" style={{ color: PRIMARY_BLUE }}>
-                          {trip.title}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+            <View>
+              <TouchableOpacity
+                onPress={openRouteModal}
+                activeOpacity={0.8}
+                className="flex-row items-center justify-between"
+              >
+                <Text className="text-[24px] font-extrabold text-gray-950">Where to?</Text>
+                <View className="h-10 w-10 items-center justify-center rounded-full bg-[#f3f4f6]">
+                  <Ionicons name="search" size={19} color="#111827" />
                 </View>
-              ) : null}
+              </TouchableOpacity>
+
+              <View className="mt-2">
+                {recentTrips.length ? (
+                  recentTrips.slice(0, 4).map((trip, index, list) => (
+                    <TouchableOpacity
+                      key={trip.id}
+                      onPress={() => applyDestination(trip.coordinate, `Drop-off: ${trip.title}`)}
+                      activeOpacity={0.7}
+                      className="flex-row items-center py-3"
+                      style={index < list.length - 1 ? { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' } : undefined}
+                    >
+                      <View className="h-9 w-9 items-center justify-center rounded-full bg-[#f3f4f6]">
+                        <Ionicons name="time-outline" size={18} color="#374151" />
+                      </View>
+                      <View className="ml-3 flex-1">
+                        <Text className="text-[15px] font-semibold text-gray-900" numberOfLines={1}>{trip.title}</Text>
+                        <Text className="text-[12px] text-gray-400">Previous ride</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                ) : (
+                  <TouchableOpacity onPress={openRouteModal} activeOpacity={0.7} className="flex-row items-center py-3">
+                    <View className="h-9 w-9 items-center justify-center rounded-full bg-[#f3f4f6]">
+                      <Ionicons name="search" size={18} color="#374151" />
+                    </View>
+                    <View className="ml-3 flex-1">
+                      <Text className="text-[15px] font-semibold text-gray-900">Search for a destination</Text>
+                      <Text className="text-[12px] text-gray-400">Your previous rides will show here</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              </View>
+
               {locationError ? (
-                <View className="mt-4 rounded-[20px] border border-amber-200 bg-amber-50 px-4 py-3">
-                  <Text className="text-sm font-semibold text-amber-900">Location unavailable</Text>
-                  <Text className="mt-1 text-sm text-amber-800">
-                    Enable location and retry, or set your pickup manually from the route sheet.
+                <View className="mt-2 flex-row rounded-2xl bg-amber-50 px-4 py-3">
+                  <Ionicons name="location-outline" size={18} color="#b45309" />
+                  <Text className="ml-2.5 flex-1 text-[13px] text-amber-800">
+                    Location unavailable. Turn it on, or tap the bar above to set your pickup.
                   </Text>
                 </View>
               ) : null}
@@ -1395,6 +1482,163 @@ export default function PassengerHomeScreen({ navigation, route }) {
             </>
           ) : null}
         </View>
+        ) : null}
+
+        {homeView === 'landing' ? (
+          <View className="absolute inset-0 bg-white">
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 24 }}
+            >
+              <View className="flex-row items-center justify-between">
+                <View style={{ width: 120, height: 42, overflow: 'hidden' }}>
+                  <Image
+                    source={require('../../assets/logo.png')}
+                    style={{ width: 120, height: 42 }}
+                    resizeMode="cover"
+                  />
+                </View>
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('PassengerAccount', { screen: 'PassengerAccountMain' })}
+                  className="h-10 w-10 items-center justify-center rounded-full"
+                  style={{ backgroundColor: '#eef4ff' }}
+                >
+                  <Text className="text-[16px] font-bold" style={{ color: PRIMARY_BLUE }}>{userInitial}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View className="mt-4 rounded-2xl border border-gray-200 bg-white" style={HOME_CARD_BORDER}>
+                <TouchableOpacity
+                  onPress={() => openBookingMap('ride', { search: true })}
+                  activeOpacity={0.8}
+                  className="flex-row items-center px-4 py-4"
+                >
+                  <Ionicons name="search" size={20} color="#111827" />
+                  <Text className="ml-3 flex-1 text-[17px] font-semibold text-gray-500">Where to?</Text>
+                </TouchableOpacity>
+                <View className="h-px bg-gray-100" />
+                {recentTrips.length ? (
+                  <View className="flex-row">
+                    {recentTrips.slice(0, 2).map((trip, index) => (
+                      <TouchableOpacity
+                        key={trip.id}
+                        onPress={() => openRecentTrip(trip)}
+                        activeOpacity={0.7}
+                        className="flex-1 flex-row items-center px-4 py-3"
+                        style={index === 0 && recentTrips.length > 1 ? { borderRightWidth: 1, borderRightColor: '#f3f4f6' } : undefined}
+                      >
+                        <Ionicons name="time-outline" size={17} color="#374151" />
+                        <Text className="ml-2 flex-1 text-[14px] font-medium text-gray-800" numberOfLines={1}>
+                          {trip.title}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => openBookingMap('ride')}
+                    activeOpacity={0.7}
+                    className="flex-row items-center px-4 py-3"
+                  >
+                    <Ionicons name="navigate-outline" size={17} color="#374151" />
+                    <Text className="ml-2 flex-1 text-[14px] font-medium text-gray-800" numberOfLines={1}>
+                      {pickupLabel.replace('Pickup: ', '')}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <View className="mt-4 flex-row gap-3">
+                <TouchableOpacity
+                  onPress={() => openBookingMap('ride')}
+                  activeOpacity={0.85}
+                  className="flex-1 rounded-2xl px-4 pb-4 pt-3"
+                  style={{ backgroundColor: '#eef4ff' }}
+                >
+                  <Image
+                    source={require('../../assets/car white.png')}
+                    style={{ width: 72, height: 46 }}
+                    resizeMode="contain"
+                  />
+                  <Text className="mt-2 text-[17px] font-bold text-gray-900">Normal ride</Text>
+                  <Text className="mt-0.5 text-[12px] text-gray-600">Get around town at a fair price</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => openBookingMap('hire', { search: true })}
+                  activeOpacity={0.85}
+                  className="flex-1 rounded-2xl px-4 pb-4 pt-3"
+                  style={{ backgroundColor: '#fff7ed' }}
+                >
+                  <Image
+                    source={require('../../assets/truck.png')}
+                    style={{ width: 72, height: 46 }}
+                    resizeMode="contain"
+                  />
+                  <Text className="mt-2 text-[17px] font-bold text-gray-900">Truck hire</Text>
+                  <Text className="mt-0.5 text-[12px] text-gray-600">Moving, deliveries and loads</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View className="mt-4 flex-row gap-3">
+                {[
+                  { key: 'trips', icon: 'receipt', label: 'My trips', onPress: () => navigation.navigate('PassengerActivity') },
+                  {
+                    key: 'smile',
+                    icon: 'wallet',
+                    label: 'Smile Cash',
+                    onPress: () => navigation.navigate('PassengerAccount', { screen: 'PassengerSmileCash', initial: false }),
+                  },
+                  {
+                    key: 'help',
+                    icon: 'chatbubble-ellipses',
+                    label: 'Help',
+                    onPress: () => navigation.navigate('PassengerAccount', { screen: 'PassengerSupportChat', initial: false }),
+                  },
+                ].map((service) => (
+                  <TouchableOpacity
+                    key={service.key}
+                    onPress={service.onPress}
+                    activeOpacity={0.8}
+                    className="flex-1 items-center rounded-2xl bg-[#f3f4f6] py-4"
+                  >
+                    <View className="h-11 w-11 items-center justify-center rounded-full bg-white">
+                      <Ionicons name={service.icon} size={21} color={PRIMARY_BLUE} />
+                    </View>
+                    <Text className="mt-2 text-[13px] font-semibold text-gray-900">{service.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                onPress={() => navigation.navigate('PassengerAccount', { screen: 'PassengerReferrals', initial: false })}
+                activeOpacity={0.9}
+                className="mt-4 flex-row items-center overflow-hidden rounded-2xl px-4 py-5"
+                style={{ backgroundColor: PRIMARY_BLUE }}
+              >
+                <View className="flex-1 pr-2">
+                  <Text className="text-[19px] font-extrabold leading-6 text-white">Invite friends to{'\n'}Trust Express</Text>
+                  <Text className="mt-1 text-[13px] text-blue-100">Share your code and earn rewards</Text>
+                  <View className="mt-3 self-start rounded-full bg-white px-4 py-1.5">
+                    <Text className="text-[13px] font-bold" style={{ color: PRIMARY_BLUE }}>Invite</Text>
+                  </View>
+                </View>
+                <Image
+                  source={require('../../assets/car white.png')}
+                  style={{ width: 110, height: 70 }}
+                  resizeMode="contain"
+                />
+              </TouchableOpacity>
+
+              {locationError ? (
+                <View className="mt-4 flex-row rounded-2xl bg-amber-50 px-4 py-3">
+                  <Ionicons name="location-outline" size={18} color="#b45309" />
+                  <Text className="ml-2.5 flex-1 text-[13px] text-amber-800">
+                    Location is off. Turn it on so drivers can find your pickup.
+                  </Text>
+                </View>
+              ) : null}
+            </ScrollView>
+          </View>
         ) : null}
 
         <Modal visible={showRouteModal} animationType="slide" transparent onRequestClose={() => setShowRouteModal(false)}>

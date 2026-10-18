@@ -5,7 +5,7 @@
  */
 import 'dotenv/config';
 import mysql from 'mysql2/promise';
-import { getClerkClient } from '../lib/clerk-client.js';
+import { getUserStore } from '../lib/user-store.js';
 
 const DRIVER_USER_ID_MAX_LEN = 255;
 
@@ -75,7 +75,7 @@ async function run() {
       )
     `);
 
-    const clerk = getClerkClient();
+    const clerk = getUserStore();
     let total = 0;
     let backfilled = 0;
     let offset = 0;

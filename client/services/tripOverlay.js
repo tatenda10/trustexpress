@@ -34,6 +34,24 @@ function logUnsupported(source) {
   return undefined;
 }
 
+const DEFAULT_ALERT_TIMEOUT_SECONDS = 30;
+const MAX_ALERT_TIMEOUT_SECONDS = 45;
+
+function resolveAlertTimeoutSeconds(payload = {}) {
+  const candidates = [];
+  const explicit = Number(payload?.alertTimeoutSeconds);
+  if (Number.isFinite(explicit) && explicit > 0) candidates.push(explicit);
+  const remaining = Number(payload?.remainingSeconds);
+  if (Number.isFinite(remaining) && remaining > 0) candidates.push(remaining);
+  const expiresAtMs = payload?.expiresAt ? new Date(payload.expiresAt).getTime() : NaN;
+  if (Number.isFinite(expiresAtMs)) {
+    const secondsLeft = (expiresAtMs - Date.now()) / 1000;
+    if (secondsLeft > 0) candidates.push(secondsLeft);
+  }
+  const seconds = candidates.length ? Math.min(...candidates) : DEFAULT_ALERT_TIMEOUT_SECONDS;
+  return Math.max(5, Math.min(MAX_ALERT_TIMEOUT_SECONDS, Math.round(seconds)));
+}
+
 function normalizePayload(payload = {}) {
   const variant = String(payload.variant || 'online').trim().toLowerCase();
   const normalizedVariant = ['request', 'trip'].includes(variant) ? variant : 'online';
@@ -52,6 +70,7 @@ function normalizePayload(payload = {}) {
     dropoffLabel: String(payload.dropoffLabel || payload.dropoff || ''),
     fareLabel: String(fareLabel || ''),
     rideRequestId,
+    alertTimeoutSeconds: resolveAlertTimeoutSeconds(payload),
   };
 }
 
@@ -196,6 +215,7 @@ export async function showFullScreenRideRequest(payload = {}) {
       dropoffLabel: normalized.dropoffLabel,
       fareLabel: normalized.fareLabel,
       rideRequestId: normalized.rideRequestId,
+      alertTimeoutSeconds: normalized.alertTimeoutSeconds,
     });
     logOverlay('showFullScreenRideRequest:done', { rideRequestId: normalized.rideRequestId || null });
     return true;

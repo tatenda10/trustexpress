@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/connection.js';
-import { toAppUser } from './clerk-user.js';
+import { toAppUser } from './users.js';
 import { getPaymentProvider } from './payment-providers/index.js';
 import { normalizeSmilePayCheckoutMode } from './payment-providers/smilepay.js';
 import { getDriverWalletSettings } from './driver-wallet-settings.js';
@@ -269,7 +269,7 @@ export async function initializePassengerRidePayment({
   passenger,
   rideRequestId,
   callbackUrl = null,
-  checkoutMode = 'express_mpgs',
+  checkoutMode = 'hosted',
 }) {
   const [ride] = await query(
     `SELECT rr.*,
@@ -288,7 +288,10 @@ export async function initializePassengerRidePayment({
   if (!(amount > 0)) throw buildPaymentError('Ride amount must be greater than zero');
 
   const receiverMobile = normalizeZimMobile(ride.driver_smile_cash_mobile || '') || null;
-  const requestedCheckoutMode = normalizeSmilePayCheckoutMode(checkoutMode, 'express_mpgs');
+  // The passenger app never collects card details, so express card checkout always fails;
+  // installed apps still request it, so card goes through Smile&Pay's hosted page instead.
+  const normalizedCheckoutMode = normalizeSmilePayCheckoutMode(checkoutMode, 'hosted');
+  const requestedCheckoutMode = normalizedCheckoutMode === 'express_mpgs' ? 'hosted' : normalizedCheckoutMode;
 
   const [existingPending] = await query(
     `SELECT *
@@ -359,6 +362,7 @@ export async function initializePassengerRidePayment({
     itemName: `Trust Express Ride ${ride.public_id || ride.id}`,
     itemDescription: `Passenger ride payment held by Trust Express for ${ride.driver_name || 'driver'}`,
     checkoutMode: requestedCheckoutMode,
+    hostedPaymentMethod: null,
   });
 
   console.log('[smilepay] initialize.created', {

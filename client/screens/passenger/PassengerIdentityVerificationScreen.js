@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { getMe, submitPassengerIdentity, uploadFile } from '../../api';
 import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
@@ -327,7 +327,7 @@ export default function PassengerIdentityVerificationScreen({ navigation, route 
   const canSkip = !mustCompleteIdentity;
   const scrollBottomPadding = requiredInOnboarding
     ? Math.max(insets.bottom + 32, 32)
-    : Math.max(tabBarHeight + insets.bottom + 24, insets.bottom + 32);
+    : 24;
 
   return (
     <View className="flex-1 bg-[#f6f7f3]">

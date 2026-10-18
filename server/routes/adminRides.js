@@ -5,7 +5,7 @@ import { requirePermission } from '../middleware/requirePermission.js';
 import { buildRideStopsPayload } from '../lib/ride-stops.js';
 import { formatCancelledByLabel, inferCancelledBy } from '../lib/ride-cancellation.js';
 import { buildAdminSafetyPinPayload } from '../lib/ride-safety-pin.js';
-import { getClerkUserById } from '../lib/clerk-user.js';
+import { getUserById } from '../lib/users.js';
 import { sendExpoPushNotifications } from '../lib/push.js';
 import {
   emitRideRequestRemovedFromDriver,
@@ -41,7 +41,7 @@ async function notifyUserPush(userId, { title, body, data = {} }) {
   // Admin book-for-passenger rides use synthetic dispatch:* passenger IDs — not Clerk users.
   if (!userId || String(userId).startsWith('dispatch:')) return;
   try {
-    const user = await getClerkUserById(userId);
+    const user = await getUserById(userId);
     const pushToken = user?.privateMetadata?.pushToken;
     if (!pushToken) return;
     await sendExpoPushNotifications({

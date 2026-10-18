@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { requirePermission } from '../middleware/requirePermission.js';
-import { getClerkClient } from '../lib/clerk-client.js';
+import { getUserStore } from '../lib/user-store.js';
 import { deleteEndUserAccount } from '../lib/account-deletion.js';
-import { getPrimaryEmail, getPrimaryPhone, normalizeRole } from '../lib/clerk-user.js';
+import { getPrimaryEmail, getPrimaryPhone, normalizeRole } from '../lib/users.js';
 import { listPassengerIdentities, shapePassengerIdentityFromRow } from '../lib/passenger-verification-mysql.js';
 import { query } from '../db/connection.js';
 import {
@@ -16,7 +16,7 @@ import {
 const router = Router();
 
 async function loadAllClerkUsers(orderBy = '-created_at') {
-  const clerkClient = getClerkClient();
+  const clerkClient = getUserStore();
   const limit = 100;
   let offset = 0;
   const users = [];
@@ -369,7 +369,7 @@ router.get('/export.csv', requireAdminAuth, requirePermission('passengers.read')
 
 router.get('/:passengerId', requireAdminAuth, requirePermission('passengers.read'), async (req, res) => {
   try {
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const user = await clerkClient.users.getUser(req.params.passengerId);
     const identities = await listPassengerIdentities([req.params.passengerId]);
     const passengerRideStats = await loadPassengerRideStats([req.params.passengerId]);
@@ -452,7 +452,7 @@ router.patch('/:passengerId/review', requireAdminAuth, requirePermission('verifi
       );
     }
 
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const user = await clerkClient.users.getUser(passengerId);
     const identities = await listPassengerIdentities([passengerId]);
     const mapped = mapPassenger(user, shapePassengerIdentityFromRow(identities[0] || null));
@@ -487,7 +487,7 @@ router.delete('/:passengerId', requireAdminAuth, requirePermission('passengers.d
       return res.json({ ok: true });
     }
 
-    const clerkClient = getClerkClient();
+    const clerkClient = getUserStore();
     const user = await clerkClient.users.getUser(passengerId);
     const mapped = mapPassenger(user);
     if (mapped._role !== 'passenger') {

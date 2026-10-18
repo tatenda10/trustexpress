@@ -1,6 +1,6 @@
 import { query } from '../db/connection.js';
-import { getClerkClient } from './clerk-client.js';
-import { toAppUser } from './clerk-user.js';
+import { getUserStore } from './user-store.js';
+import { toAppUser } from './users.js';
 import { getDriverWalletSettings } from './driver-wallet-settings.js';
 import { creditDriverWalletManual } from './driver-wallet.js';
 
@@ -14,7 +14,7 @@ function buildWalletError(message, status = 400) {
 }
 
 export async function loadAllClerkDrivers() {
-  const clerk = getClerkClient();
+  const clerk = getUserStore();
   const limit = 100;
   let offset = 0;
   const drivers = [];
@@ -159,7 +159,7 @@ export async function resolveDriverUserIdByEmail(email) {
     throw buildWalletError('Valid driver email is required');
   }
 
-  const clerk = getClerkClient();
+  const clerk = getUserStore();
   const list = await clerk.users.getUserList({ emailAddress: [normalizedEmail], limit: 10 });
   const users = Array.isArray(list?.data) ? list.data : [];
 

@@ -16,7 +16,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../../auth/AuthProvider';
 import * as ImagePicker from 'expo-image-picker';
 import { getDriverVehicleOptions, submitVehicle, uploadFile } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';

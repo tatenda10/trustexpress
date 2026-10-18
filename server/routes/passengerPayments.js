@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { getClerkUserById, normalizeRole, toAppUser } from '../lib/clerk-user.js';
+import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import {
   choosePassengerRideCashPayment,
   handlePassengerSmilePayWebhook,
@@ -13,7 +13,7 @@ import {
 const router = Router();
 
 async function requirePassenger(req, res) {
-  const clerkUser = await getClerkUserById(req.userId);
+  const clerkUser = await getUserById(req.userId);
   const user = toAppUser(clerkUser);
   const role = normalizeRole(user.role);
   if (role !== 'passenger' && role !== 'driver') {
@@ -99,7 +99,7 @@ router.post('/rides/:rideRequestId/smilepay/initiate', requireAuth, async (req, 
       passenger: passenger.user,
       rideRequestId,
       callbackUrl: req.body?.callbackUrl,
-      checkoutMode: req.body?.checkoutMode || req.body?.paymentMethod || 'express_mpgs',
+      checkoutMode: req.body?.checkoutMode || req.body?.paymentMethod || 'hosted',
     });
     return res.json({ ok: true, payment });
   } catch (err) {
