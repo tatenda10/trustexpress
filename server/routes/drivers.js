@@ -1302,7 +1302,7 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
         .filter((id) => !requests.some((request) => Number(request.id) === Number(id))),
       markedViewedCount,
     });
-    console.log('[drivers.ride-requests] response timing', {
+    debugDriverRequests('response timing', {
       driverUserId: req.userId,
       serverTime: new Date().toISOString(),
       offeredCount: rows.length,

@@ -1454,7 +1454,13 @@ export default function PassengerHomeScreen({ navigation, route }) {
                                 {estimatedMinutes} min away • {tier.regionName || 'Available now'}
                               </Text>
                             </View>
-                            <Text className="text-[22px] font-bold text-gray-950">${tierAmount.toFixed(2)}</Text>
+                            {routeDistanceKm > 0 ? (
+                              <Text className="text-[22px] font-bold text-gray-950">${tierAmount.toFixed(2)}</Text>
+                            ) : isCalculating ? (
+                              <ActivityIndicator size="small" color="#9ca3af" />
+                            ) : (
+                              <Text className="text-[15px] font-semibold text-gray-400">—</Text>
+                            )}
                           </View>
                         </TouchableOpacity>
                       );

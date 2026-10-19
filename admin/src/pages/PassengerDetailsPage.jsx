@@ -4,6 +4,7 @@ import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 import { resolveMediaUrl } from '../utils/media'
+import UserAccountCard from '../components/UserAccountCard'
 
 const tabs = [
   { key: 'profile', label: 'Profile' },
@@ -181,12 +182,30 @@ export default function PassengerDetailsPage() {
         <section className="space-y-3">
           <div className="grid gap-3 rounded-sm border border-slate-300 bg-white p-4 md:grid-cols-2">
           <Field label="Passenger ID" value={passenger.id} />
+          <Field label="Name" value={[passenger.firstName, passenger.lastName].filter(Boolean).join(' ')} />
           <Field label="Email" value={passenger.email} />
           <Field label="Phone" value={passenger.phoneNumber} />
           <Field label="Phone Verified" value={passenger.phoneVerified ? 'Yes' : 'No'} />
           <Field label="Status" value={passenger.status} />
           <Field label="Joined" value={String(passenger.createdAt || '').slice(0, 19).replace('T', ' ')} />
           </div>
+
+          <UserAccountCard
+            userId={passenger.id}
+            token={token}
+            canManage={can('passengers.manage')}
+            onUpdated={(account) =>
+              account &&
+              setPassenger((current) => ({
+                ...current,
+                firstName: account.firstName,
+                lastName: account.lastName,
+                email: account.email,
+                phoneNumber: account.phoneNumber,
+                phoneVerified: account.phoneVerified,
+              }))
+            }
+          />
 
           <div className="rounded-sm border border-slate-300 bg-white p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">

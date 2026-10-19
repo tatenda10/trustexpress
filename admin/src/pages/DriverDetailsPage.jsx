@@ -4,6 +4,7 @@ import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
 import BASE_URL from '../context/Api'
 import { resolveMediaUrl } from '../utils/media'
+import UserAccountCard from '../components/UserAccountCard'
 
 const ADMIN_DOCUMENT_FILE_FIELDS = ['nationalIdFront', 'nationalIdBack', 'driverLicence', 'selfie', 'selfieWithIdCard']
 const ADMIN_DOCUMENT_TEXT_FIELDS = ['nationalIdNumber', 'driverLicenceNumber', 'dateOfBirth', 'driverLicenceExpiresAt']
@@ -620,6 +621,24 @@ export default function DriverDetailsPage() {
               </div>
             </div>
           ) : null}
+          <div className="md:col-span-2">
+            <UserAccountCard
+              userId={driver.id}
+              token={token}
+              canManage={can('drivers.manage')}
+              onUpdated={(account) =>
+                account &&
+                setDriver((current) => ({
+                  ...current,
+                  firstName: account.firstName,
+                  lastName: account.lastName,
+                  email: account.email,
+                  phoneNumber: account.phoneNumber,
+                  phoneVerified: account.phoneVerified,
+                }))
+              }
+            />
+          </div>
         </section>
       ) : null}
 
