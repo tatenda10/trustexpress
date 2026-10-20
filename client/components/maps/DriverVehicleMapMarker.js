@@ -10,6 +10,7 @@ import {
 } from '../../lib/mapVehicleHeading';
 
 const CAR_ICON_NATIVE_HEADING = 0;
+const CAR_WHITE_MARKER_XSMALL = require('../../assets/car-white-marker-xsmall.png');
 const CAR_WHITE_MARKER_SMALL = require('../../assets/car-white-marker-small.png');
 const CAR_WHITE_MARKER_MEDIUM = require('../../assets/car-white-marker-medium.png');
 const CAR_WHITE_MARKER_LARGE = require('../../assets/car-white-marker-large.png');
@@ -21,6 +22,7 @@ const TELEPORT_DISTANCE_METERS = 800;
 
 function getCarMarkerAsset(size) {
   const numericSize = Number(size || 0);
+  if (numericSize <= 18) return CAR_WHITE_MARKER_XSMALL;
   if (numericSize <= 24) return CAR_WHITE_MARKER_SMALL;
   if (numericSize <= 32) return CAR_WHITE_MARKER_MEDIUM;
   return CAR_WHITE_MARKER_LARGE;

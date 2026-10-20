@@ -210,7 +210,15 @@ async function cleanupDriverData(connection, userId) {
   );
 }
 
-export async function deleteEndUserAccount(userId, role, { email = null, fullName = null } = {}) {
+/**
+ * `allowWalletBalance` is for admin deletes only: the wallet row and its balance are kept
+ * (marked closed) so the funds stay on record for settlement.
+ */
+export async function deleteEndUserAccount(
+  userId,
+  role,
+  { email = null, fullName = null, allowWalletBalance = false } = {}
+) {
   const normalizedRole = role === 'driver' ? 'driver' : 'passenger';
   const normalizedUserId = String(userId || '').trim();
   const isSyntheticUser = normalizedUserId.startsWith('dispatch:') || normalizedUserId.startsWith('whatsapp:');
@@ -218,7 +226,7 @@ export async function deleteEndUserAccount(userId, role, { email = null, fullNam
   const snapshotEmail = email ? String(email).trim().toLowerCase() : null;
   const snapshotName = fullName ? String(fullName).trim() : null;
 
-  if (normalizedRole === 'driver') {
+  if (normalizedRole === 'driver' && !allowWalletBalance) {
     await assertDriverHasNoWalletFunds(userId);
   }
 
@@ -234,7 +242,7 @@ export async function deleteEndUserAccount(userId, role, { email = null, fullNam
         [userId]
       );
       const balance = normalizeMoney(walletRows?.[0]?.available_balance || 0);
-      if (balance > 0) {
+      if (balance > 0 && !allowWalletBalance) {
         throw buildDeletionError(
           `This driver still has a wallet balance of ${balance.toFixed(2)}. Clear or withdraw the funds before deleting the account.`,
           409,

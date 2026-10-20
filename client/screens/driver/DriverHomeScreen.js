@@ -404,6 +404,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const LABEL_UPDATE_MIN_DISTANCE_KM = 0.3; // or every ~300m
   const placeLabelCacheRef = useRef(new Map());
   const hiddenRequestUntilRef = useRef(new Map());
+  const simulatedRequestsRef = useRef([]);
   const suppressTripAutoOpenUntilRef = useRef(0);
 
   useEffect(() => {
@@ -855,7 +856,19 @@ const DriverHomeScreen = ({ navigation, route }) => {
         if (!active) return;
 
         const serverCapturedAt = Date.now();
-        const serverRequests = Array.isArray(data?.requests) ? data.requests : [];
+        const simulatedRequests = __DEV__
+          ? simulatedRequestsRef.current
+            .map((request) => ({
+              ...request,
+              remainingSeconds: Math.max(0, Math.ceil((new Date(request.expiresAt).getTime() - serverCapturedAt) / 1000)),
+            }))
+            .filter((request) => request.remainingSeconds > 0)
+          : [];
+        if (__DEV__) simulatedRequestsRef.current = simulatedRequests;
+        const serverRequests = [
+          ...(Array.isArray(data?.requests) ? data.requests : []),
+          ...simulatedRequests,
+        ];
         if (__DEV__) {
           console.log('[driver.requests] api result', {
             source,
@@ -1896,8 +1909,70 @@ const DriverHomeScreen = ({ navigation, route }) => {
     };
   }, [isFocused, isOnline]);
 
+  const handleSimulateIncomingRides = (count = 4) => {
+    if (!isOnline) {
+      Alert.alert('Go online first', 'Simulated requests only show while you are online.');
+      return;
+    }
+    const base = driverCoordinate || FALLBACK_DRIVER_COORDINATE;
+    const now = Date.now();
+    const samples = [
+      { name: 'Tendai M.', pickup: 'Avondale Shopping Centre', dropoff: 'Sam Levy\'s Village, Borrowdale', km: 0.8, trip: 7.4, mins: 16, amount: 6.5, rating: 4.9, tier: 'Standard', seconds: 55 },
+      { name: 'Rudo C.', pickup: 'Eastgate Mall, Harare CBD', dropoff: 'Robert Gabriel Mugabe Airport', km: 1.6, trip: 14.2, mins: 24, amount: 14, rating: 4.7, tier: 'Comfort', seconds: 48 },
+      { name: 'Farai N.', pickup: 'Westgate Shopping Centre', dropoff: 'Belgravia Sports Club', km: 2.3, trip: 9.1, mins: 19, amount: 8, rating: null, tier: 'Standard', seconds: 40 },
+      { name: 'Chipo K.', pickup: 'Newlands Shopping Centre', dropoff: 'Chitungwiza Town Centre', km: 3.1, trip: 26.5, mins: 38, amount: 22, rating: 5, tier: 'XL', seconds: 33 },
+    ];
+    simulatedRequestsRef.current = samples.slice(0, count).map((sample, index) => {
+      const id = 900000000 + Math.floor(now / 1000) % 100000 * 10 + index;
+      const offset = 0.004 * (index + 1);
+      const expiresAt = new Date(now + sample.seconds * 1000).toISOString();
+      return {
+        id,
+        publicId: `SIM-${index + 1}`,
+        isSimulated: true,
+        passengerName: sample.name,
+        passengerPhone: null,
+        passengerCount: 1,
+        passengerRating: sample.rating,
+        passengerRatingCount: sample.rating ? 12 + index * 7 : 0,
+        passengerProfile: { fullName: sample.name, imageUrl: null, phoneNumber: null, phoneVisibleToDrivers: false },
+        tierKey: sample.tier.toLowerCase(),
+        tierName: sample.tier,
+        pickup: sample.pickup,
+        dropoff: sample.dropoff,
+        pickupCoordinate: { latitude: base.latitude + offset, longitude: base.longitude - offset },
+        dropoffCoordinate: { latitude: base.latitude + offset * 6, longitude: base.longitude + offset * 4 },
+        stops: [],
+        tripDistanceKm: sample.trip,
+        tripDurationMinutes: sample.mins,
+        estimatedDistanceKm: sample.trip,
+        estimatedMinutes: sample.mins,
+        estimatedAmount: sample.amount,
+        finalEstimatedAmount: sample.amount,
+        discountAmount: 0,
+        driverReimbursementAmount: 0,
+        paymentMethod: index % 2 === 0 ? 'cash' : 'smilecash',
+        status: 'pending',
+        requestedAt: new Date(now).toISOString(),
+        offerPresentedAt: new Date(now).toISOString(),
+        expiresAt,
+        remainingSeconds: sample.seconds,
+        driverDistanceKm: sample.km,
+        etaMinutes: Math.max(1, Math.round(sample.km * 4)),
+        pickupRouteDistanceKm: sample.km,
+        pickupRouteMinutes: Math.max(1, Math.round(sample.km * 4)),
+      };
+    });
+    requestRefreshNowRef.current?.('simulate');
+  };
+
   const handleAcceptRequest = async (request) => {
     const req = request || activeRequest;
+    if (req?.isSimulated) {
+      Alert.alert('Simulated ride', 'This is a test request, so it cannot be accepted. It has been removed.');
+      handleDeclineRequest(req);
+      return;
+    }
     try {
       if (!req) return;
       if (req?.expiresAt && getRemainingSeconds(req.expiresAt, req?.remainingSeconds, req?.remainingSecondsCapturedAt) < 1) {
@@ -1986,6 +2061,9 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const handleDeclineRequest = (request) => {
     const req = request || activeRequest;
     if (!req) return;
+    if (req.isSimulated) {
+      simulatedRequestsRef.current = simulatedRequestsRef.current.filter((item) => item.id !== req.id);
+    }
     markRideRequestDismissed(req.id);
     setDismissedRequestIds((current) => [...new Set([...current, req.id])]);
     hiddenRequestUntilRef.current.set(req.id, Number.MAX_SAFE_INTEGER);
@@ -2227,6 +2305,16 @@ const DriverHomeScreen = ({ navigation, route }) => {
                     <Text className="text-sm font-bold uppercase text-[#5d6470]">Go Offline</Text>
                   )}
                 </TouchableOpacity>
+
+                {__DEV__ ? (
+                  <TouchableOpacity
+                    onPress={() => handleSimulateIncomingRides(4)}
+                    className="mt-4 flex-row items-center rounded-full bg-amber-100 px-4 py-2"
+                  >
+                    <Ionicons name="flask-outline" size={14} color="#92400e" />
+                    <Text className="ml-1.5 text-xs font-semibold text-amber-800">Simulate 4 rides (dev)</Text>
+                  </TouchableOpacity>
+                ) : null}
               </>
             )}
           </View>

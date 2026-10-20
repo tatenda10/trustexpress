@@ -242,9 +242,12 @@ export default function DriversPage() {
   const verifiedPhoneCount = useMemo(() => rows.filter((driver) => driver.phoneVerified).length, [rows])
 
   const handleDelete = async (driverId) => {
-    const confirmed = window.confirm(
-      'Delete this driver account permanently?\n\nDrivers with a wallet balance cannot be deleted.'
-    )
+    const driver = rows.find((item) => item.id === driverId)
+    const balance = Number(driver?.wallet?.availableBalance || 0)
+    const balanceNote = balance > 0
+      ? `\n\nThis driver still has a wallet balance of ${String(driver.wallet.currency || 'USD').toUpperCase()} ${balance.toFixed(2)}. The balance stays on record in the wallet history after deletion.`
+      : ''
+    const confirmed = window.confirm(`Delete this driver account permanently?${balanceNote}`)
     if (!confirmed) return
 
     try {

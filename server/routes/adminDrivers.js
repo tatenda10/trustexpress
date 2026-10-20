@@ -1282,7 +1282,9 @@ router.delete('/:driverId', requireAdminAuth, requirePermission('drivers.delete'
     await deleteEndUserAccount(driverId, 'driver', {
       email: getPrimaryEmail(user),
       fullName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null,
+      allowWalletBalance: true,
     });
+    console.info('[admin.drivers] deleted', { driverId, adminId: req.admin?.id || null });
     return res.json({ ok: true });
   } catch (err) {
     const status = Number(err?.status) || 500;

@@ -841,7 +841,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
               key={`live-driver-${driver.id}`}
               coordinate={driver.coordinate}
               headingDegrees={driver.headingDegrees || driver.heading || 0}
-              size={26}
+              size={18}
             />
           ))}
           {acceptedDriverMarkers.map((driver) => (
@@ -850,7 +850,7 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
               coordinate={driver.coordinate}
               headingDegrees={driver.headingDegrees || driver.heading || 0}
               etaLabel={driver.etaMinutes ? `${driver.etaMinutes} min` : null}
-              size={26}
+              size={18}
             />
           ))}
         </MapView>

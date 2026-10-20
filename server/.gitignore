@@ -26,3 +26,5 @@ trust-vehicles-app-firebase-adminsdk-fbsvc-dfdb05a758.json
 *.njsproj
 *.sln
 *.sw?
+
+exports/
