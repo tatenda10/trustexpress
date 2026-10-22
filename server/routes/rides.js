@@ -46,6 +46,7 @@ import {
 import { getDriverWalletSummariesByUserIds } from '../lib/driver-wallet.js';
 
 const router = Router();
+const PASSENGER_FARE_EDITING_ENABLED = false;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -2613,6 +2614,9 @@ router.patch('/passenger/:rideRequestId/fare', requireAuth, async (req, res) => 
   try {
     const user = await requirePassenger(req, res);
     if (!user) return;
+    if (!PASSENGER_FARE_EDITING_ENABLED) {
+      return res.status(409).json({ error: 'The fare is fixed for the ride and tier you chose.' });
+    }
 
     const rideRequestId = Number(req.params.rideRequestId);
     if (!Number.isInteger(rideRequestId)) {

@@ -98,6 +98,10 @@ Notifications.setNotificationHandler({
     const data = notification?.request?.content?.data || {};
     const isDriverArrivedAlert = String(data?.type || '') === 'ride_status'
       && String(data?.status || '') === 'driver_arrived';
+    // The in-app call screen already rings while the app is open.
+    if (String(data?.type || '') === 'ride_call') {
+      return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
+    }
     return {
       shouldShowBanner: true,
       shouldShowList: true,

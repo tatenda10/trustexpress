@@ -26,6 +26,8 @@ import { BULAWAYO_GEO_LOCK_ENABLED, BULAWAYO_SERVICE_BOUNDS_ARRAY } from '../../
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { PASSENGER_ARRIVAL_VIBRATION_PATTERN, showLocalRideNotification } from '../../notifications';
 import { connectRealtime } from '../../realtime';
+import { useRideCalls } from '../../calls/CallProvider';
+import CallOptionsSheet from '../../calls/CallOptionsSheet';
 import {
   PASSENGER_RIDE_MAP_MAX_DELTA,
   PASSENGER_RIDE_MAP_MIN_DELTA,
@@ -354,6 +356,8 @@ async function fetchTrackingDirections(token, origin, destination, waypoints = [
 }
 
 export default function PassengerRideTrackingScreen({ navigation, route }) {
+  const { startFreeCall, freeCallSupported } = useRideCalls();
+  const [showCallOptions, setShowCallOptions] = useState(false);
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -1315,6 +1319,18 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
   };
 
   const handleCallDriver = () => {
+    setShowCallOptions(true);
+  };
+
+  const handleFreeCallDriver = () => {
+    startFreeCall({
+      rideRequestId,
+      peerName: driver?.driverName || 'Your driver',
+      peerImageUrl: driverProfileImageUrl || null,
+    });
+  };
+
+  const handleRegularCallDriver = () => {
     const phone = String(driver?.phoneNumber || '').trim();
     if (!phone) {
       Alert.alert('Call driver', 'No driver phone number is available for this ride.');
@@ -2860,6 +2876,16 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
           </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
+
+      <CallOptionsSheet
+        visible={showCallOptions}
+        onClose={() => setShowCallOptions(false)}
+        peerLabel="driver"
+        freeCallSupported={freeCallSupported}
+        regularCallAvailable={Boolean(String(driver?.phoneNumber || '').trim())}
+        onFreeCall={handleFreeCallDriver}
+        onRegularCall={handleRegularCallDriver}
+      />
     </SafeAreaView>
   );
 }

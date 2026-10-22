@@ -11,6 +11,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import "./global.css"
 
 import { AuthProvider, useAuth, useUser } from './auth/AuthProvider';
+import { CallProvider } from './calls/CallProvider';
 import { getDriverCurrentRide, getDriverRideRequests, setApiAuthErrorHandler } from './api';
 
 // Screens - Shared
@@ -1835,6 +1836,7 @@ function AppContent() {
     >
       <SafeAreaProvider>
         <KeyboardProvider>
+          <CallProvider enabled={Boolean(isLoaded && isSignedIn && !blockedAccountParams)}>
           {!isLoaded ? (
             <SplashScreen />
           ) : isSignedIn && blockedAccountParams ? (
@@ -1850,6 +1852,7 @@ function AppContent() {
           ) : (
             <AuthStack />
           )}
+          </CallProvider>
           <StatusBar style="auto" />
         </KeyboardProvider>
       </SafeAreaProvider>

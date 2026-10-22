@@ -13,6 +13,7 @@ import { startDriverWalletTopupReconciler } from './lib/wallet-topup-reconciler.
 import { startRideOfferExpansionLoop } from './routes/rides.js';
 import { startRideCommissionReconciler } from './lib/ride-commission-reconciler.js';
 import { ensureDriverLocationUpdatedAtColumn } from './lib/driver-location-schema.js';
+import { ensureRideCallsTable, registerRideCallHandlers } from './lib/ride-calls.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT);
@@ -246,11 +247,13 @@ io.on('connection', (socket) => {
   }
 
   socket.join(getRealtimeUserRoom(userId));
+  registerRideCallHandlers(io, socket);
 });
 
 setRealtimeServer(io);
 
 await ensureDriverLocationUpdatedAtColumn();
+await ensureRideCallsTable();
 
 httpServer.listen(PORT, () => {
   console.log(`Trust Express API at http://localhost:${PORT}`);

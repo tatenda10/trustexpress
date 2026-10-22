@@ -31,6 +31,13 @@
         }
       ],
       [
+        "@config-plugins/react-native-webrtc",
+        {
+          "microphonePermission": "Trust Express uses your microphone for free in-app calls between you and your driver or passenger during a ride.",
+          "cameraPermission": "Trust Express uses the camera so passengers and drivers can take verification and vehicle photos."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {

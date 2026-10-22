@@ -28,6 +28,8 @@ import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons
 import { buildRatingReviewText, toggleRatingTag } from '../../constants/rideRatingTags';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
 import { connectRealtime } from '../../realtime';
+import { useRideCalls } from '../../calls/CallProvider';
+import CallOptionsSheet from '../../calls/CallOptionsSheet';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import {
   DriverTripEmptyState,
@@ -347,6 +349,8 @@ export default function DriverTripScreen({ navigation, route }) {
   const lastLocalLocationAtRef = useRef(0);
   const initialRide = route?.params?.initialRide || null;
   const [ride, setRide] = useState(() => initialRide);
+  const { startFreeCall, freeCallSupported } = useRideCalls();
+  const [showCallOptions, setShowCallOptions] = useState(false);
   const [loading, setLoading] = useState(() => !initialRide);
   const [submitting, setSubmitting] = useState(false);
   const [cancellingRide, setCancellingRide] = useState(false);
@@ -1430,7 +1434,22 @@ export default function DriverTripScreen({ navigation, route }) {
     }
   };
 
-  const handleCallPassenger = async () => {
+  const hasPassengerPhone = Boolean(String(ride?.passengerPhone || '').trim());
+  const canCallPassenger = freeCallSupported || hasPassengerPhone;
+
+  const handleCallPassenger = () => {
+    setShowCallOptions(true);
+  };
+
+  const handleFreeCallPassenger = () => {
+    startFreeCall({
+      rideRequestId: ride?.id,
+      peerName: ride?.passengerName || 'Your passenger',
+      peerImageUrl: passengerProfileImageUrl || null,
+    });
+  };
+
+  const handleRegularCallPassenger = async () => {
     const phone = String(ride?.passengerPhone || '').trim();
     if (!phone) {
       Alert.alert('Call unavailable', 'No passenger phone number is available for this ride.');
@@ -1471,7 +1490,7 @@ export default function DriverTripScreen({ navigation, route }) {
       targetLabel={targetLabel}
       voiceGuidanceEnabled={voiceGuidanceEnabled}
       onToggleVoiceGuidance={handleToggleVoiceGuidance}
-      showCallPassenger={Boolean(String(ride?.passengerPhone || '').trim()) && ride.stage !== 'on_trip'}
+      showCallPassenger={canCallPassenger}
       onCallPassenger={handleCallPassenger}
       onSendPanicAlert={handleSendPanicAlert}
       onOpenChat={() => navigation.navigate('RideChat', {
@@ -1527,7 +1546,7 @@ export default function DriverTripScreen({ navigation, route }) {
           targetLabel={targetLabel}
           voiceGuidanceEnabled={voiceGuidanceEnabled}
           onToggleVoiceGuidance={handleToggleVoiceGuidance}
-          showCallPassenger={Boolean(String(ride?.passengerPhone || '').trim())}
+          showCallPassenger={canCallPassenger}
           onCallPassenger={handleCallPassenger}
           onSendPanicAlert={handleSendPanicAlert}
           submittingPanicAlert={submittingPanicAlert}
@@ -1798,7 +1817,7 @@ export default function DriverTripScreen({ navigation, route }) {
               >
                 <Ionicons name="chatbubble-ellipses" size={20} color="#111827" />
               </TouchableOpacity>
-              {String(ride?.passengerPhone || '').trim() ? (
+              {canCallPassenger ? (
                 <TouchableOpacity
                   onPress={handleCallPassenger}
                   className="ml-2 h-11 w-11 items-center justify-center rounded-full bg-[#fee2e2]"
@@ -1819,6 +1838,15 @@ export default function DriverTripScreen({ navigation, route }) {
         </View>
       </KeyboardAvoidingView>
     </Modal>
+    <CallOptionsSheet
+      visible={showCallOptions}
+      onClose={() => setShowCallOptions(false)}
+      peerLabel="passenger"
+      freeCallSupported={freeCallSupported}
+      regularCallAvailable={hasPassengerPhone}
+      onFreeCall={handleFreeCallPassenger}
+      onRegularCall={handleRegularCallPassenger}
+    />
     </>
   );
 }

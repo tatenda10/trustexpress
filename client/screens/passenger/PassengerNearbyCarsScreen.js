@@ -24,7 +24,6 @@ import {
   getNearbyPassengerDrivers,
   getPassengerRideRequestStatus,
   selectRideDriver,
-  updateRideFare,
 } from '../../api';
 import { PASSENGER_CANCELLATION_REASONS } from '../../constants/cancellationReasons';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -740,36 +739,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const hasDrivers = acceptedDrivers.length > 0 && !assignedDriver;
   const paymentLabel = paymentMethodLabel(rideStatus?.paymentMethod || rideRequest?.paymentMethod) || 'Cash';
   const bottomSafeInset = Math.max(insets.bottom, 12);
-  const minimumFare = Number(rideStatus?.minimumFareAmount ?? rideRequest?.minimumFareAmount ?? finalEstimatedAmount ?? 0);
-  const maximumFare = Math.ceil(Math.max(minimumFare * 2, minimumFare + 5));
-  const [fareDraft, setFareDraft] = useState(null);
-  const [savingFare, setSavingFare] = useState(false);
-  const shownFare = fareDraft ?? finalEstimatedAmount;
-  const fareChanged = fareDraft !== null && Math.abs(fareDraft - finalEstimatedAmount) >= 0.01;
-
-  const changeFareDraft = (delta) => {
-    const next = Math.round((shownFare + delta) * 100) / 100;
-    setFareDraft(Math.min(maximumFare, Math.max(minimumFare, next)));
-  };
-
-  const handleSaveFare = async () => {
-    if (!fareChanged || savingFare || !rideRequest?.id) return;
-    try {
-      setSavingFare(true);
-      const token = await getAuthToken();
-      if (!token) throw new Error('Not signed in');
-      const data = await updateRideFare(token, rideRequest.id, fareDraft);
-      const nextFare = Number(data?.fareAmount ?? fareDraft);
-      setRideStatus((current) => ({ ...(current || {}), estimatedAmount: nextFare, finalEstimatedAmount: nextFare }));
-      setFareDraft(null);
-      refreshRideStatus({ silent: true });
-    } catch (error) {
-      Alert.alert('Could not update fare', error?.message || 'Please try again.');
-    } finally {
-      setSavingFare(false);
-    }
-  };
-
   const mapPickupCoordinate = normalizeRouteCoordinate(pickupCoordinate);
   const mapDropoffCoordinate = normalizeRouteCoordinate(dropoffCoordinate);
 
@@ -905,46 +874,16 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
             {hasDrivers ? 'Choose your driver' : 'Locating driver nearby'}
           </Text>
 
-          <View className="mt-3 flex-row items-center rounded-2xl border border-gray-200 px-3 py-3">
-            <TouchableOpacity
-              onPress={() => changeFareDraft(-1)}
-              disabled={savingFare || shownFare <= minimumFare}
-              className="h-11 w-12 items-center justify-center rounded-xl border border-gray-200"
-              style={{ opacity: shownFare <= minimumFare ? 0.4 : 1 }}
-            >
-              <Text className="text-[16px] font-bold text-gray-800">-1</Text>
-            </TouchableOpacity>
-            <View className="flex-1 items-center">
-              <Text className="text-[22px] font-extrabold text-gray-900">{formatOfferPrice(shownFare)}</Text>
-              <Text className="mt-0.5 text-[11px] text-gray-500">
-                Recommended fare: {formatOfferPrice(minimumFare)} · {paymentLabel}
-              </Text>
+          <View className="mt-3 flex-row items-center rounded-2xl border border-gray-200 px-4 py-3">
+            <View className="flex-1">
+              <Text className="text-[12px] text-gray-500">Trip fare · {paymentLabel}</Text>
+              <Text className="mt-0.5 text-[22px] font-extrabold text-gray-900">{formatOfferPrice(finalEstimatedAmount)}</Text>
             </View>
-            <TouchableOpacity
-              onPress={() => changeFareDraft(1)}
-              disabled={savingFare || shownFare >= maximumFare}
-              className="h-11 w-12 items-center justify-center rounded-xl border border-gray-200"
-              style={{ opacity: shownFare >= maximumFare ? 0.4 : 1 }}
-            >
-              <Text className="text-[16px] font-bold text-gray-800">+1</Text>
-            </TouchableOpacity>
+            <View className="flex-row items-center rounded-full bg-gray-100 px-2.5 py-1">
+              <Ionicons name="lock-closed" size={12} color="#6b7280" />
+              <Text className="ml-1 text-[11px] font-semibold text-gray-600">Fixed price</Text>
+            </View>
           </View>
-
-          <TouchableOpacity
-            onPress={handleSaveFare}
-            disabled={!fareChanged || savingFare}
-            className="mt-3 h-12 items-center justify-center rounded-full"
-            style={{ backgroundColor: fareChanged ? PRIMARY_BLUE : '#e5e7eb' }}
-            activeOpacity={0.85}
-          >
-            {savingFare ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text className="text-[15px] font-bold" style={{ color: fareChanged ? '#fff' : '#9ca3af' }}>
-                {fareChanged && fareDraft < finalEstimatedAmount ? 'Lower fare' : 'Raise fare'}
-              </Text>
-            )}
-          </TouchableOpacity>
 
           <View className="mt-3 flex-row items-center">
             <View className="h-5 w-5 items-center justify-center rounded-full" style={{ backgroundColor: PIN_COLORS.start }}>
