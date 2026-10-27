@@ -1,3 +1,5 @@
+import { createThreeDsChallenge } from '../payment-3ds-challenges.js';
+
 const SANDBOX_BASE_URL = 'https://zbnet.zb.co.zw/wallet_sandbox_api/payments-gateway';
 const LIVE_BASE_URL = 'https://zbnet.zb.co.zw/wallet_gateway/payments-gateway';
 
@@ -418,12 +420,28 @@ export const smilePayProvider = {
       body: requestBody,
     });
 
+    let authorizationUrl = pickSmilePayAuthorizationUrl(payload);
+    let nextAction = pickSmilePayNextAction(payload, checkoutMode);
+    const threeDsHtml = String(payload?.redirectHtml || payload?.data?.redirectHtml || '').trim();
+    if (!authorizationUrl && threeDsHtml) {
+      authorizationUrl = createThreeDsChallenge(threeDsHtml, {
+        baseUrl: getPublicApiBaseUrl(),
+        reference,
+      });
+      if (authorizationUrl) nextAction = 'redirect';
+      logSmilePay('initialize.3ds_challenge', {
+        reference,
+        hosted: Boolean(authorizationUrl),
+        authenticationStatus: payload?.authenticationStatus || null,
+      });
+    }
+
     const initiated = {
       provider: 'smilepay',
       reference,
       checkoutMode,
-      nextAction: pickSmilePayNextAction(payload, checkoutMode),
-      authorizationUrl: pickSmilePayAuthorizationUrl(payload),
+      nextAction,
+      authorizationUrl,
       accessCode: null,
       externalTransactionId: payload?.transactionReference
         ? String(payload.transactionReference)

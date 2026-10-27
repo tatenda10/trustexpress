@@ -212,7 +212,9 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
           }
           Alert.alert(
             'Payment pending',
-            'Approve the payment request on your phone. Your balance will update once it is confirmed.',
+            method === 'card'
+              ? 'Your bank is still confirming this card payment. Your balance will update once it is confirmed.'
+              : 'Approve the payment request on your phone. Your balance will update once it is confirmed.',
             [{ text: 'OK', onPress: () => navigation.goBack() }]
           );
           return;
@@ -233,12 +235,31 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
         }
       }
 
-      for (const reference of references) {
-        await verifyDriverWalletTopup(token, reference).catch(() => {});
+      const verifyAttempts = authResult?.type === 'success' ? 4 : 2;
+      let verified = false;
+      for (let attempt = 0; attempt < verifyAttempts && !verified; attempt += 1) {
+        if (attempt > 0) await wait(3000);
+        for (const reference of references) {
+          const result = await verifyDriverWalletTopup(token, reference).catch(() => null);
+          if (isSuccessfulTopup(result)) {
+            verified = true;
+            break;
+          }
+        }
       }
-      Alert.alert('Payment check complete', 'If the payment went through, your balance will update shortly.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      if (verified) {
+        Alert.alert('Top-up successful', 'Your wallet has been credited.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+        return;
+      }
+      Alert.alert(
+        'Payment not confirmed yet',
+        method === 'card'
+          ? 'If you confirmed the payment with your bank, your balance will update shortly. If you closed the bank page before confirming, the payment will not go through and you can try again.'
+          : 'If the payment went through, your balance will update shortly.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
     } catch (error) {
       Alert.alert('Top-up failed', error?.message || 'Could not start wallet top-up.');
     } finally {

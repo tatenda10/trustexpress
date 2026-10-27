@@ -313,7 +313,8 @@ export async function initializePassengerRidePayment({
       raw = {};
     }
     const existingCheckoutMode = normalizeSmilePayCheckoutMode(raw.checkoutMode || raw.checkout_mode, 'hosted');
-    if (existingCheckoutMode === requestedCheckoutMode) {
+    // Card attempts carry fresh card details and a short-lived bank challenge, so never reuse them.
+    if (existingCheckoutMode === requestedCheckoutMode && requestedCheckoutMode !== 'express_mpgs') {
       console.log('[smilepay] initialize.reuse_pending', {
         rideRequestId,
         reference: existingPending.reference,

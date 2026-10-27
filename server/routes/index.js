@@ -44,6 +44,7 @@ import publicShareRouter from './publicShare.js';
 import hireRouter from './hire.js';
 import whatsappRouter from './whatsapp.js';
 import authRouter from './auth.js';
+import payment3dsRouter from './payment3ds.js';
 
 const router = Router();
 
@@ -56,6 +57,7 @@ router.use('/public', publicShareRouter);
 router.use('/users', usersRouter);
 router.use('/passengers', passengersRouter);
 router.use('/passengers/payments', passengerPaymentsRouter);
+router.use('/payments/3ds', payment3dsRouter);
 router.use('/drivers/wallet', driverWalletRouter);
 router.use('/drivers', driversRouter);
 router.use('/hire', hireRouter);
