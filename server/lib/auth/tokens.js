@@ -4,9 +4,6 @@ import { query } from '../../db/connection.js';
 export const AUTH_TOKEN_ISSUER = 'trust-express';
 const ACCESS_TOKEN_TTL_SECONDS = Number(process.env.AUTH_ACCESS_TOKEN_TTL_SECONDS) || 60 * 60;
 const REFRESH_TOKEN_TTL_DAYS = Number(process.env.AUTH_REFRESH_TOKEN_TTL_DAYS) || 90;
-// A refresh reply lost on a weak network leaves the app holding the previous token;
-// accept it briefly instead of treating it as theft and logging the driver out.
-const REFRESH_REUSE_GRACE_SECONDS = 120;
 
 function getSecret() {
   const secret = String(process.env.AUTH_JWT_SECRET || '').trim();
@@ -107,7 +104,6 @@ export async function refreshSession(refreshToken, { loadRole }) {
 
   const [session] = await query(
     `SELECT id, user_id, refresh_token_hash, previous_token_hash,
-            TIMESTAMPDIFF(SECOND, rotated_at, CURRENT_TIMESTAMP) AS seconds_since_rotation,
             expires_at < CURRENT_TIMESTAMP AS expired,
             revoked_at
      FROM auth_sessions
@@ -121,29 +117,29 @@ export async function refreshSession(refreshToken, { loadRole }) {
 
   const presentedHash = sha256Hex(token);
   const isCurrent = presentedHash === session.refresh_token_hash;
-  const isRecentPrevious = presentedHash === session.previous_token_hash
-    && Number(session.seconds_since_rotation) <= REFRESH_REUSE_GRACE_SECONDS;
+  const isPrevious = presentedHash === session.previous_token_hash;
 
-  if (!isCurrent && !isRecentPrevious) {
-    // An old refresh token came back after the grace window: someone else has a copy.
-    await revokeSession(sessionId, 'refresh_reuse');
+  if (!isCurrent && !isPrevious) {
     throw Object.assign(new Error('Session has ended. Please sign in again.'), { status: 401, code: 'SESSION_INVALID' });
   }
 
-  const nextRefreshToken = makeRefreshToken(sessionId);
+  // Refresh tokens remain stable for the life of the session. Rotating them made a lost
+  // response or failed device-storage write look like token theft and revoked valid users.
+  // Accept and promote the previous hash once so sessions created by the old rotation logic
+  // can recover without asking the user to sign in again.
   await query(
     `UPDATE auth_sessions
-     SET previous_token_hash = ?,
-         refresh_token_hash = ?,
-         rotated_at = CURRENT_TIMESTAMP,
+     SET refresh_token_hash = ?,
+         previous_token_hash = NULL,
+         rotated_at = NULL,
          last_used_at = CURRENT_TIMESTAMP,
          expires_at = CURRENT_TIMESTAMP + INTERVAL ${REFRESH_TOKEN_TTL_DAYS} DAY
      WHERE id = ?`,
-    [session.refresh_token_hash, sha256Hex(nextRefreshToken), sessionId]
+    [presentedHash, sessionId]
   );
 
   const role = await loadRole(session.user_id);
-  return buildTokenResponse({ userId: session.user_id, sessionId, role, refreshToken: nextRefreshToken });
+  return buildTokenResponse({ userId: session.user_id, sessionId, role, refreshToken: token });
 }
 
 export async function revokeSession(sessionId, reason = 'sign_out') {

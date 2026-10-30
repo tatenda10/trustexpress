@@ -6,6 +6,7 @@ import { query } from '../db/connection.js';
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
 import { normalizeZimbabwePhoneNumber } from '../lib/phone-number.js';
 import { sendCode, verifyCode } from '../lib/auth/codes.js';
+import { createRestriction, listUserRestrictions } from '../lib/account-restrictions.js';
 
 const router = Router();
 
@@ -18,14 +19,24 @@ async function blockDuplicateAccountsForPhone(phoneNumber, role) {
   }
 
   const affectedUserIds = sameRoleUsers.map((item) => item.id);
-  await Promise.all(affectedUserIds.map((userId) => (
-    mergePrivateMetadata(userId, {
-      ...(role === 'driver' ? { driverStatus: 'blocked' } : { passengerStatus: 'blocked' }),
+  const reasonPrefix = `Duplicate ${role} account`;
+  for (const userId of affectedUserIds) {
+    const otherUserIds = affectedUserIds.filter((id) => id !== userId);
+    const reason = `${reasonPrefix}: phone ${phoneNumber} is also used by ${otherUserIds.join(', ')}`;
+    await mergePrivateMetadata(userId, {
       duplicateAccountDetectedAt: new Date().toISOString(),
-      duplicateAccountReason: `Duplicate ${role} accounts detected for verified phone number ${phoneNumber}.`,
+      duplicateAccountReason: reason,
       duplicateAccountMatchedUserIds: affectedUserIds,
-    })
-  )));
+    });
+    const existing = await listUserRestrictions(userId);
+    if (existing.some((restriction) => restriction.status === 'active' && restriction.reason.startsWith(reasonPrefix))) continue;
+    await createRestriction({
+      userId,
+      userRole: role,
+      scope: role === 'driver' ? 'go_online' : 'request_rides',
+      reason,
+    });
+  }
 
   return { duplicate: true, affectedUserIds };
 }

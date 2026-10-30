@@ -461,6 +461,16 @@ export default function DriverDetailsPage() {
     ? `${String(lastAutomation.action || '').replace(/_/g, ' ')}${lastAutomation.avgRating != null ? ` · avg ${Number(lastAutomation.avgRating).toFixed(2)}` : ''}`
     : 'None yet'
 
+  const activeRestrictions = Array.isArray(driver.activeRestrictions) ? driver.activeRestrictions : []
+  const baseAccountStatus = driver.accountStatus || 'active'
+  const accountStatusLabel = baseAccountStatus === 'active' && activeRestrictions.length
+    ? `restricted (${activeRestrictions.map((restriction) => restriction.scopeLabel || restriction.scope).join(', ')})`
+    : baseAccountStatus
+  const accountStatusReasons = [
+    driver.accountStatusReason,
+    ...activeRestrictions.map((restriction) => restriction.reason),
+  ].filter(Boolean)
+
   return (
     <section className="space-y-4">
       <header className="border border-slate-300 bg-white">
@@ -482,7 +492,7 @@ export default function DriverDetailsPage() {
             <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
               <HeaderField label="Phone" value={driver.phoneNumber || '-'} />
               <HeaderField label="Joined" value={formatDateTime(driver.createdAt)} />
-              <HeaderField label="Account status" value={driver.accountStatus || 'active'} />
+              <HeaderField label="Account status" value={accountStatusLabel} />
               <HeaderField label="Approved tier" value={driver.vehicle?.vehicleTierName || '-'} />
               <HeaderField label="Available balance" value={formatWalletMoney(driver.wallet)} />
               <HeaderField label="Completed Trips" value={trips.filter((trip) => trip.status === 'completed').length} />
@@ -547,7 +557,8 @@ export default function DriverDetailsPage() {
           <Field label="Email" value={driver.email} />
           <Field label="Phone" value={driver.phoneNumber} />
           <Field label="Phone Verified" value={driver.phoneVerified ? 'Yes' : 'No'} />
-          <Field label="Account status" value={driver.accountStatus || 'active'} />
+          <Field label="Account status" value={accountStatusLabel} />
+          <Field label="Block / restriction reason" value={accountStatusReasons.join(' · ') || '-'} />
           <Field label="Approved tier" value={driver.vehicle?.vehicleTierName || '-'} />
           <Field
             label="Rolling rating avg"

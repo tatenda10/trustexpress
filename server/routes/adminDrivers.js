@@ -11,6 +11,7 @@ import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib
 import { toIsoDateOnly } from '../lib/smile-cash.js';
 import { getDriverWalletStatus, getDriverWalletSummariesByUserIds, getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
 import { getAccountStatusFromUser, getDriverRatingPerformanceSummary } from '../lib/rating-performance.js';
+import { listUserRestrictions } from '../lib/account-restrictions.js';
 import {
   describeDriverVerification,
   formatExportName,
@@ -235,6 +236,9 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
     phoneVerified: !!identityRow?.phone_verified_at,
     phoneVerifiedAt: identityRow?.phone_verified_at || null,
     accountStatus: getAccountStatusFromUser(user, 'driver').status,
+    accountStatusReason: getAccountStatusFromUser(user, 'driver').isRestricted
+      ? privateMeta.ratingRestrictionReason || privateMeta.duplicateAccountReason || null
+      : null,
     ratingRestrictionReason: privateMeta.ratingRestrictionReason || null,
     profile,
     profileImageReview: getDriverProfileImageReview(privateMeta, 'driver'),
@@ -696,6 +700,8 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
     ]);
 
     const mapped = mapDriverFromClerkAndMysql(user, identityRow, vehicleRow);
+    mapped.activeRestrictions = (await listUserRestrictions(user.id).catch(() => []))
+      .filter((restriction) => restriction.status === 'active');
 
     const profileDocs = mapIdentityProfileDocs(identityRow);
 
