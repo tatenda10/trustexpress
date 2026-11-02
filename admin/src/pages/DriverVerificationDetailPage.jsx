@@ -495,6 +495,35 @@ export default function DriverVerificationDetailPage() {
     }
   }
 
+  const revokeVehicleApproval = async () => {
+    if (!driver || !canReview || driver?.vehicle?.status !== 'approved' || reviewing) return
+    const rejectionReason = window.prompt(
+      'Why are you revoking this vehicle approval? This reason will be shown to the driver.',
+      'Vehicle was approved by mistake',
+    )
+    if (rejectionReason === null) return
+    if (!rejectionReason.trim()) {
+      setError('A reason is required to revoke vehicle approval.')
+      return
+    }
+    if (!window.confirm('Revoke this vehicle approval and take the driver offline?')) return
+
+    setReviewing(true)
+    setError('')
+    try {
+      await axios.patch(
+        `${BASE_URL}/api/admin/drivers/${driverId}/review`,
+        { target: 'vehicle', action: 'reject', rejectionReason: rejectionReason.trim(), allowResubmit: true },
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      await loadDriver()
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to revoke vehicle approval')
+    } finally {
+      setReviewing(false)
+    }
+  }
+
   const handleApprove = () => approveFor(reviewTarget)
   const handleReject = () => rejectFor(reviewTarget)
   const handleApproveProfileImage = () => approveFor('profile_image')
@@ -783,8 +812,21 @@ export default function DriverVerificationDetailPage() {
       {activeSection === 'car' ? (
       <div className="space-y-4">
         <section className="border border-slate-300 bg-white">
-          <div className="border-b border-slate-300 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-800">Vehicle Details</h2>
+          <div className="flex items-center justify-between gap-3 border-b border-slate-300 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800">Vehicle Details</h2>
+              <p className="mt-1 text-xs text-slate-500">Status: {driver.vehicle?.status || 'Not submitted'}</p>
+            </div>
+            {canReview && driver.vehicle?.status === 'approved' ? (
+              <button
+                type="button"
+                onClick={revokeVehicleApproval}
+                disabled={reviewing}
+                className="bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-500 disabled:bg-rose-300"
+              >
+                {reviewing ? 'Working...' : 'Revoke approval'}
+              </button>
+            ) : null}
           </div>
           <div className="grid gap-2 p-4 md:grid-cols-2">
             <Field label="Plate Number" value={driver.vehicle?.numberPlate} />
