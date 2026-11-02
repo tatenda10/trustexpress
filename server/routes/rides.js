@@ -44,6 +44,7 @@ import {
   upsertDriverPushTokens,
 } from '../lib/driver-push-tokens.js';
 import { getDriverWalletSummariesByUserIds } from '../lib/driver-wallet.js';
+import { attachActiveSurgeToTier } from '../lib/surge-pricing.js';
 
 const router = Router();
 const PASSENGER_FARE_EDITING_ENABLED = false;
@@ -174,21 +175,23 @@ export async function loadPassengerTier(selectedTierKey) {
   const row = rows[0];
   if (!row) return null;
 
-  return {
+  return attachActiveSurgeToTier({
     tier_key: row.tier_key,
     tier_name: row.tier_name,
     price_per_km: Number(row.price_per_km || 0),
     base_fare: Number(row.base_fare || 0),
     per_minute_rate: Number(row.per_minute_rate || 0),
     minimum_fare: Number(row.minimum_fare || 0),
-  };
+  });
 }
 
 export function calculateTierFare(tier, distanceKm) {
   const baseFare = Number(tier?.base_fare || 0);
   const pricePerKm = Number(tier?.price_per_km || 0);
   const minimumFare = Number(tier?.minimum_fare || 0);
-  return Math.ceil(Math.max(baseFare + (Number(distanceKm || 0) * pricePerKm), minimumFare));
+  const surgeMultiplier = Math.max(Number(tier?.surge_multiplier || tier?.surgeMultiplier || 1), 1);
+  const standardFare = Math.max(baseFare + (Number(distanceKm || 0) * pricePerKm), minimumFare);
+  return Math.ceil(standardFare * surgeMultiplier);
 }
 
 function toDriverAverageRating(row) {

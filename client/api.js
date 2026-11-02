@@ -391,6 +391,20 @@ export async function getDriverRideRequests(token) {
   return apiFetch('/api/drivers/ride-requests', {}, token);
 }
 
+export async function markDriverRideRequestOpened(token, rideRequestId) {
+  return apiFetch(`/api/drivers/ride-requests/${rideRequestId}/opened`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  }, token);
+}
+
+export async function declineDriverRideRequest(token, rideRequestId) {
+  return apiFetch(`/api/drivers/ride-requests/${rideRequestId}/decline`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  }, token);
+}
+
 export async function getDriverRideHistory(token, options = {}) {
   const params = new URLSearchParams();
   if (options.page) params.set('page', String(options.page));

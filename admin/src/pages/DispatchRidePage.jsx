@@ -487,6 +487,11 @@ export default function DispatchRidePage() {
               <p className="text-sm text-slate-600">
                 {Number(quote.distanceKm || 0).toFixed(1)} km · {Math.max(1, Math.round(quote.durationMinutes || 1))} min · {quote.tierName}
               </p>
+              {Number(quote.surgeMultiplier || 1) > 1 ? (
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                  {quote.surgeMultiplier}× {quote.surgeName || 'busy-time pricing'}
+                </span>
+              ) : null}
             </div>
           ) : (
             <p className="mt-2 text-sm text-slate-500">Choose pickup and drop-off to see the fare.</p>

@@ -52,6 +52,22 @@ export async function markRideRequestsViewedByDriver(rideRequestIds, driverUserI
   return Number(result?.affectedRows || 0);
 }
 
+export async function markRideRequestOpenedByDriver(rideRequestId, driverUserId) {
+  const safeRideRequestId = Number(rideRequestId);
+  if (!driverUserId || !Number.isInteger(safeRideRequestId) || safeRideRequestId <= 0) return false;
+
+  const result = await query(
+    `UPDATE ride_request_driver_responses
+     SET opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP),
+         viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP)
+     WHERE driver_user_id = ?
+       AND ride_request_id = ?
+       AND status IN ('pending', 'accepted')`,
+    [driverUserId, safeRideRequestId]
+  );
+  return Number(result?.affectedRows || 0) > 0;
+}
+
 export async function loadDriversViewingSnapshot(rideRequestId) {
   if (!Number.isInteger(Number(rideRequestId)) || Number(rideRequestId) <= 0) {
     return { driversViewingCount: 0, visibleDriversPreview: [] };

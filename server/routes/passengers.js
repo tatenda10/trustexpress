@@ -5,6 +5,7 @@ import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import { getPassengerVerificationFromMysql } from '../lib/passenger-verification-mysql.js';
 import { syncClerkUserForRequest } from '../lib/user-sync.js';
 import passengerReferralsRouter from './passengerReferrals.js';
+import { getActiveSurgeMap } from '../lib/surge-pricing.js';
 
 const router = Router();
 const DRIVER_ONLINE_STALE_DAYS = 1;
@@ -48,8 +49,12 @@ router.get('/ride-options', requireAuth, async (req, res) => {
       return res.json({ tiers: [] });
     }
 
+    const surgeMap = await getActiveSurgeMap(rows.map((row) => row.tier_key));
+
     return res.json({
-      tiers: rows.map((row) => ({
+      tiers: rows.map((row) => {
+        const surge = surgeMap.get(String(row.tier_key || '').trim().toLowerCase()) || { multiplier: 1, name: null };
+        return {
         id: row.id,
         tierKey: row.tier_key,
         tierName: row.tier_name,
@@ -61,7 +66,10 @@ router.get('/ride-options', requireAuth, async (req, res) => {
         regionName: null,
         city: null,
         countryCode: null,
-      })),
+        surgeMultiplier: surge.multiplier,
+        surgeName: surge.name,
+      };
+      }),
     });
   } catch (err) {
     console.error('GET /api/passengers/ride-options', err);

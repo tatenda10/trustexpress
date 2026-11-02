@@ -62,12 +62,12 @@ function encodePolyline(coordinates) {
 }
 
 function getTierAmount(tier, distanceKm) {
-  return Math.ceil(
-    Math.max(
-      Number(tier?.baseFare || 0) + Number(distanceKm || 0) * Number(tier?.pricePerKm || 0),
-      Number(tier?.minimumFare || 0),
-    ),
+  const standardFare = Math.max(
+    Number(tier?.baseFare || 0) + Number(distanceKm || 0) * Number(tier?.pricePerKm || 0),
+    Number(tier?.minimumFare || 0),
   );
+  const surgeMultiplier = Math.max(Number(tier?.surgeMultiplier || 1), 1);
+  return Math.ceil(standardFare * surgeMultiplier);
 }
 
 function getDiscountedAmount(amount, discount) {
@@ -115,7 +115,9 @@ function TierRow({ tier, selected, onPress, distanceKm, appliedDiscount }) {
       <View style={styles.tierPriceWrap}>
         <Text style={styles.tierPrice}>${visibleTierAmount.toFixed(2)}</Text>
         {tier.surgeMultiplier && Number(tier.surgeMultiplier) > 1 ? (
-          <Text style={styles.surgeText}>{tier.surgeMultiplier}× busy</Text>
+          <Text style={styles.surgeText}>
+            {tier.surgeMultiplier}× {tier.surgeName || 'busy pricing'}
+          </Text>
         ) : null}
       </View>
     </TouchableOpacity>

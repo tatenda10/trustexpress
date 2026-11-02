@@ -18,7 +18,7 @@ import {
   emitRideStatusToPassenger,
   emitTripRatingToPassenger,
 } from '../lib/realtime.js';
-import { markRideRequestsViewedByDriver } from '../lib/ride-driver-responses.js';
+import { markRideRequestOpenedByDriver } from '../lib/ride-driver-responses.js';
 import {
   DRIVER_ACCEPT_OFFER_TTL_SECONDS,
   DRIVER_PENDING_OFFER_TTL_SECONDS,
@@ -66,6 +66,7 @@ import {
   notifyWhatsAppRideCompleted,
 } from '../lib/whatsapp/ride-notifications.js';
 import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
+import { evaluateDriverResponsePolicy } from '../lib/driver-response-policy.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -242,6 +243,17 @@ router.get('/me', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
     if (!user) return;
+
+    try {
+      await assertUserCanPerform({
+        userId: req.userId,
+        user,
+        role: 'driver',
+        scope: 'accept_rides',
+      });
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
+    }
 
     const [verification, availability, walletStatus] = await Promise.all([
       getDriverVerificationFromMysql(req.userId, user),
@@ -1010,6 +1022,17 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     const user = await requireDriver(req, res);
     if (!user) return;
 
+    try {
+      await assertUserCanPerform({
+        userId: req.userId,
+        user,
+        role: 'driver',
+        scope: 'accept_rides',
+      });
+    } catch (restrictionError) {
+      return res.status(restrictionError?.status || 403).json(restrictionErrorResponse(restrictionError));
+    }
+
     const walletStatus = await getDriverWalletStatus(req.userId);
     if (!walletStatus.sufficientBalance) {
       debugDriverRequests('empty:wallet', {
@@ -1288,11 +1311,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       }
     }));
 
-    const markedViewedCount = await markRideRequestsViewedByDriver(
-      requests.map((request) => request.id),
-      req.userId
-    );
-
     debugDriverRequests('result', {
       driverUserId: req.userId,
       offeredRideRequestIds: rows.map((row) => row.id),
@@ -1300,7 +1318,6 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
       hiddenRideRequestIds: rows
         .map((row) => row.id)
         .filter((id) => !requests.some((request) => Number(request.id) === Number(id))),
-      markedViewedCount,
     });
     debugDriverRequests('response timing', {
       driverUserId: req.userId,
@@ -1329,6 +1346,64 @@ router.get('/ride-requests', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/drivers/ride-requests', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/ride-requests/:rideRequestId/opened', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId) || rideRequestId <= 0) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const opened = await markRideRequestOpenedByDriver(rideRequestId, req.userId);
+    if (!opened) return res.status(404).json({ error: 'Ride request is no longer available' });
+    return res.json({ ok: true, rideRequestId, openedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('PATCH /api/drivers/ride-requests/:rideRequestId/opened', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/ride-requests/:rideRequestId/decline', requireAuth, async (req, res) => {
+  try {
+    const user = await requireDriver(req, res);
+    if (!user) return;
+    const rideRequestId = Number(req.params.rideRequestId);
+    if (!Number.isInteger(rideRequestId) || rideRequestId <= 0) {
+      return res.status(400).json({ error: 'Invalid rideRequestId' });
+    }
+
+    const result = await query(
+      `UPDATE ride_request_driver_responses
+       SET status = 'declined',
+           opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP),
+           viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP),
+           responded_at = CURRENT_TIMESTAMP
+       WHERE ride_request_id = ?
+         AND driver_user_id = ?
+         AND status = 'pending'`,
+      [rideRequestId, req.userId]
+    );
+    if (!Number(result?.affectedRows || 0)) {
+      return res.status(409).json({ error: 'Ride request is no longer available' });
+    }
+
+    const policyResult = await evaluateDriverResponsePolicy(req.userId).catch((error) => {
+      console.error('[driver-response-policy] decline evaluation failed', {
+        driverUserId: req.userId,
+        rideRequestId,
+        message: error?.message || error,
+      });
+      return null;
+    });
+    emitRideRequestRemovedFromDriver(req.userId, { rideRequestId, reason: 'driver_declined' });
+    return res.json({ ok: true, rideRequestId, policy: policyResult });
+  } catch (err) {
+    console.error('PATCH /api/drivers/ride-requests/:rideRequestId/decline', err);
     return res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1508,12 +1583,16 @@ router.patch('/ride-requests/:rideRequestId/accept', requireAuth, async (req, re
          driver_user_id,
          status,
          responded_at,
-         viewed_at
-       ) VALUES (?, ?, 'accepted', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         viewed_at,
+         opened_at,
+         accepted_at
+       ) VALUES (?, ?, 'accepted', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON DUPLICATE KEY UPDATE
          status = 'accepted',
          responded_at = CURRENT_TIMESTAMP,
-         viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP)`,
+         viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP),
+         opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP),
+         accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP)`,
       [rideRequestId, req.userId]
     );
     const [acceptedSnapshot] = await query(

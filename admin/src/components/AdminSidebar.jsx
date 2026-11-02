@@ -53,6 +53,7 @@ const navSections = [
       { id: 'panic-alerts', label: 'Panic Alerts', icon: LockIcon, to: '/dashboard/panic-alerts', permission: 'ride_ops.read' },
       { id: 'lost-items', label: 'Lost Items', icon: LockIcon, to: '/dashboard/lost-items', permission: 'ride_ops.read' },
       { id: 'account-restrictions', label: 'Account Restrictions', icon: LockIcon, to: '/dashboard/account-restrictions', permission: 'account_restrictions.read' },
+      { id: 'driver-response-performance', label: 'Driver Responses', icon: BriefcaseIcon, to: '/dashboard/driver-response-performance', permission: 'account_restrictions.read' },
       { id: 'ride-safety-pin', label: 'Night Safety PIN', icon: LockIcon, to: '/dashboard/ride-safety-pin', permission: 'ride_ops.manage' },
       { id: 'admin-users', label: 'Admin Users', icon: UsersIcon, to: '/dashboard/admin-users', permission: 'admin.users.read' },
     ],

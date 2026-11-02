@@ -1249,6 +1249,14 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
          WHERE driver_user_id = ?`,
         [status, action === 'reject' ? rejectionReason : null, canResubmit, tierKey || null, tierName || null, driverId]
       );
+      if (action === 'reject') {
+        await query(
+          `UPDATE driver_availability
+           SET is_online = 0, updated_at = CURRENT_TIMESTAMP
+           WHERE driver_user_id = ?`,
+          [driverId]
+        );
+      }
       const [updated] = await query('SELECT * FROM driver_vehicle WHERE driver_user_id = ? LIMIT 1', [driverId]);
       const vehicle = updated
         ? {

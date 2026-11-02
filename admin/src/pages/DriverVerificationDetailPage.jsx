@@ -328,7 +328,7 @@ export default function DriverVerificationDetailPage() {
       : canApproveProfile
   const canRejectCurrent = canReview && (
     reviewTarget === 'vehicle'
-      ? driver?.vehicle?.status === 'pending' && hasVehicleDocuments
+      ? ['pending', 'approved'].includes(driver?.vehicle?.status) && hasVehicleDocuments
       : reviewTarget === 'profile_image'
         ? profileImageReview?.status === 'pending' && !!pendingProfilePhotoUrl
       : driver?.profile?.status === 'pending' && hasProfileDocuments
@@ -471,7 +471,7 @@ export default function DriverVerificationDetailPage() {
     }
     const allowResubmit = true
     const canReject = target === 'vehicle'
-      ? driver?.vehicle?.status === 'pending'
+      ? ['pending', 'approved'].includes(driver?.vehicle?.status)
       : target === 'profile_image'
         ? profileImageReview?.status === 'pending' && !!pendingProfilePhotoUrl
         : driver?.profile?.status === 'pending'
@@ -1071,11 +1071,11 @@ export default function DriverVerificationDetailPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={driver?.vehicle?.status !== 'pending' || !hasVehicleDocuments || reviewing}
+                    disabled={!['pending', 'approved'].includes(driver?.vehicle?.status) || !hasVehicleDocuments || reviewing}
                     onClick={() => rejectFor('vehicle')}
                     className="bg-rose-600 px-2 py-1 text-[11px] font-semibold text-white disabled:bg-rose-300"
                   >
-                    Reject
+                    {driver?.vehicle?.status === 'approved' ? 'Revoke approval' : 'Reject'}
                   </button>
                 </div>
               </div>

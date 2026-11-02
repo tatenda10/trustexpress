@@ -697,6 +697,9 @@ async function quoteAndAskConfirmation(phone, session) {
       `From: ${quote.pickupLabel}`,
       `To: ${quote.dropoffLabel}`,
       `Distance: ${Number(quote.distanceKm || 0).toFixed(1)} km`,
+      ...(Number(quote.surgeMultiplier || 1) > 1
+        ? [`Busy-time pricing: ${Number(quote.surgeMultiplier).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}x${quote.surgeName ? ` (${quote.surgeName})` : ''}`]
+        : []),
       `Payment: ${quote.paymentMethod}`,
       '',
       'Confirm this ride?',

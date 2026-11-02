@@ -247,6 +247,8 @@ export async function quoteDispatchRide(payload) {
     estimatedAmount: quote.estimatedAmount,
     tierKey: quote.tier.tier_key,
     tierName: quote.tier.tier_name,
+    surgeMultiplier: Number(quote.tier.surge_multiplier || 1),
+    surgeName: quote.tier.surge_name || null,
     passengerCount: quote.partySize,
     paymentMethod: quote.paymentMethod,
   };

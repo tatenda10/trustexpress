@@ -16,10 +16,12 @@ import { showLocalRideNotification, clearRideRequestNotifications } from '../../
 import {
   acceptDriverRideRequest,
   cancelDriverCurrentRide,
+  declineDriverRideRequest,
   getDirectionsRoute,
   getDriverCurrentRide,
   getDriverMe,
   getDriverRideRequests,
+  markDriverRideRequestOpened,
   resolveUploadedMediaUrl,
   updateDriverAvailability,
 } from '../../api';
@@ -381,6 +383,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const incomingRideSoundRef = useRef(null);
   const incomingAlertGenerationRef = useRef(0);
   const alertedIncomingRequestIdsRef = useRef(new Set());
+  const openedIncomingRequestIdsRef = useRef(new Set());
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === 'active');
   const locationWatcherRef = useRef(null);
   const locationSyncInFlightRef = useRef(false);
@@ -394,6 +397,35 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const forceOpenIncomingOverlayRef = useRef(false);
   const pendingNotificationRideRequestIdRef = useRef(null);
   const pendingNotificationActionRef = useRef(null);
+
+  useEffect(() => {
+    const rideRequestId = Number(activeRequest?.id);
+    if (
+      !isAppActive
+      || !showIncomingRideOverlay
+      || activeRequest?.isSimulated
+      || !Number.isInteger(rideRequestId)
+      || rideRequestId <= 0
+      || openedIncomingRequestIdsRef.current.has(rideRequestId)
+    ) return;
+
+    openedIncomingRequestIdsRef.current.add(rideRequestId);
+    getTokenRef.current()
+      .then((token) => {
+        if (!token) throw new Error('Not signed in');
+        return markDriverRideRequestOpened(token, rideRequestId);
+      })
+      .catch((error) => {
+        openedIncomingRequestIdsRef.current.delete(rideRequestId);
+        if (__DEV__) {
+          console.warn('[driver.requests] mark opened failed', {
+            rideRequestId,
+            message: error?.message || null,
+            status: error?.status ?? null,
+          });
+        }
+      });
+  }, [activeRequest?.id, activeRequest?.isSimulated, isAppActive, showIncomingRideOverlay]);
   const acceptRequestHandlerRef = useRef(null);
   const lastAvailabilityAttemptRef = useRef({ target: null, at: 0 });
   const forwardedRideIdRef = useRef(null);
@@ -2088,6 +2120,31 @@ const DriverHomeScreen = ({ navigation, route }) => {
         title: 'Trust Express',
         subtitle: 'Online - Ready for rides',
       }).catch(() => {});
+    }
+
+    if (!req.isSimulated) {
+      getTokenRef.current()
+        .then((token) => {
+          if (!token) throw new Error('Not signed in');
+          return declineDriverRideRequest(token, req.id);
+        })
+        .then((result) => {
+          if (result?.policy?.restricted) {
+            Alert.alert(
+              'Ride requests paused',
+              result?.policy?.restriction?.reason || 'You have temporarily been restricted from accepting rides.',
+            );
+          }
+        })
+        .catch((error) => {
+          if (__DEV__) {
+            console.warn('[driver.requests] decline sync failed', {
+              rideRequestId: req.id,
+              message: error?.message || null,
+              status: error?.status ?? null,
+            });
+          }
+        });
     }
   };
 

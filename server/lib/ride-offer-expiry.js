@@ -4,6 +4,7 @@ import {
   emitRideStatusToDriver,
   emitRideStatusToPassenger,
 } from './realtime.js';
+import { evaluateDriverResponsePolicy } from './driver-response-policy.js';
 
 /** How long a captain's accepted offer stays selectable before it is removed. */
 export const DRIVER_ACCEPT_OFFER_TTL_SECONDS = 30;
@@ -74,7 +75,7 @@ export async function expireStaleAcceptedDriverOffers(rideRequestId = null) {
   }
 
   const staleRows = await query(
-    `SELECT rr.ride_request_id, rr.driver_user_id
+    `SELECT rr.ride_request_id, rr.driver_user_id, rr.opened_at
      FROM ride_request_driver_responses rr
      INNER JOIN ride_requests r ON r.id = rr.ride_request_id
      WHERE rr.status = 'accepted'
@@ -135,7 +136,7 @@ export async function expireStalePendingDriverOffers(rideRequestId = null) {
   }
 
   const staleRows = await query(
-    `SELECT rr.ride_request_id, rr.driver_user_id
+    `SELECT rr.ride_request_id, rr.driver_user_id, rr.opened_at
      FROM ride_request_driver_responses rr
      INNER JOIN ride_requests r ON r.id = rr.ride_request_id
      WHERE rr.status = 'pending'
@@ -173,6 +174,22 @@ export async function expireStalePendingDriverOffers(rideRequestId = null) {
       reason: 'driver_response_timeout',
     });
   });
+
+  const openedDriverIds = [...new Set(
+    staleRows
+      .filter((row) => row.opened_at)
+      .map((row) => String(row.driver_user_id || '').trim())
+      .filter(Boolean)
+  )];
+  await Promise.all(openedDriverIds.map((driverUserId) =>
+    evaluateDriverResponsePolicy(driverUserId).catch((error) => {
+      console.error('[driver-response-policy] expiry evaluation failed', {
+        driverUserId,
+        message: error?.message || error,
+      });
+      return null;
+    })
+  ));
 
   return { expiredPendingOffers: staleRows };
 }
