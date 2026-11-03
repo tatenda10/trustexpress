@@ -814,6 +814,20 @@ export default function RideOperationDetailPage() {
                 <p className="text-[11px] uppercase tracking-wide text-slate-500">Driver Request Timeline</p>
                 <span className="text-xs font-semibold text-slate-600">{Array.isArray(ride.driverResponses) ? ride.driverResponses.length : 0}</span>
               </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+                {[
+                  ['Offered', ride.driverRequestStats?.offeredCount || 0],
+                  ['Online', ride.driverRequestStats?.onlineAtOfferCount || 0],
+                  ['App active', ride.driverRequestStats?.presenceSnapshotAvailable ? (ride.driverRequestStats?.recentlyActiveAtOfferCount || 0) : '—'],
+                  ['Opened', ride.driverRequestStats?.openedCount || 0],
+                  ['Accepted', ride.driverRequestStats?.acceptedCount || 0],
+                ].map(([label, value]) => (
+                  <div key={label} className="border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{value}</p>
+                  </div>
+                ))}
+              </div>
               {Array.isArray(ride.driverResponses) && ride.driverResponses.length ? (
                 <div className="mt-3 space-y-3">
                   {ride.driverResponses.map((item) => (
@@ -829,7 +843,9 @@ export default function RideOperationDetailPage() {
                         {[item.tierName, item.vehicleLabel].filter(Boolean).join(' · ') || 'Vehicle details pending'}
                       </p>
                       <div className="mt-2 grid gap-2 md:grid-cols-2">
-                        <p className="text-xs text-slate-500">Viewed: {formatDateTime(item.viewedAt)}</p>
+                        <p className="text-xs text-slate-500">Opened: {formatDateTime(item.openedAt || item.viewedAt)}</p>
+                        <p className="text-xs text-slate-500">App active at offer: {item.recentlyActiveAtOffer === null ? 'Not recorded' : item.recentlyActiveAtOffer ? 'Yes' : 'No'}</p>
+                        <p className="text-xs text-slate-500">Last seen at offer: {formatDateTime(item.lastSeenAtOffer)}</p>
                         <p className="text-xs text-slate-500">Responded: {formatDateTime(item.respondedAt)}</p>
                         <p className="text-xs text-slate-500">Selected: {formatDateTime(item.selectedAt)}</p>
                         <p className="text-xs text-slate-500">Last change: {formatDateTime(item.updatedAt || item.createdAt)}</p>

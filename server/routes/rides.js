@@ -555,18 +555,29 @@ export async function loadEligibleDriversForRide({
 export async function createPendingDriverOffers(rideRequestId, drivers) {
   if (!rideRequestId || !Array.isArray(drivers) || !drivers.length) return;
 
-  const placeholders = drivers.map(() => '(?, ?, \'pending\', CURRENT_TIMESTAMP)').join(', ');
-  const params = drivers.flatMap((driver) => [rideRequestId, driver.id]);
+  const placeholders = drivers.map(() => '(?, ?, \'pending\', CURRENT_TIMESTAMP, 1, ?, ?)').join(', ');
+  const params = drivers.flatMap((driver) => [
+    rideRequestId,
+    driver.id,
+    driver.recentlyActive ? 1 : 0,
+    driver.lastSeenAt || null,
+  ]);
   await query(
     `INSERT INTO ride_request_driver_responses (
        ride_request_id,
        driver_user_id,
        status,
-       responded_at
+       responded_at,
+       online_at_offer,
+       recently_active_at_offer,
+       last_seen_at_offer
      ) VALUES ${placeholders}
      ON DUPLICATE KEY UPDATE
        status = VALUES(status),
-       responded_at = VALUES(responded_at)`,
+       responded_at = VALUES(responded_at),
+       online_at_offer = VALUES(online_at_offer),
+       recently_active_at_offer = VALUES(recently_active_at_offer),
+       last_seen_at_offer = VALUES(last_seen_at_offer)`,
     params
   );
 }

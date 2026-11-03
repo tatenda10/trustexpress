@@ -1163,6 +1163,11 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
          rr.responded_at,
          rr.selected_at,
          rr.viewed_at,
+         rr.opened_at,
+         rr.accepted_at,
+         rr.online_at_offer,
+         rr.recently_active_at_offer,
+         rr.last_seen_at_offer,
          rr.created_at,
          rr.updated_at,
          da.driver_name,
@@ -1173,7 +1178,7 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
          da.number_plate
        FROM ride_request_driver_responses rr
        LEFT JOIN driver_availability da
-         ON da.driver_user_id = rr.driver_user_id
+         ON BINARY da.driver_user_id = BINARY rr.driver_user_id
        WHERE rr.ride_request_id = ?
        ORDER BY
          CASE rr.status
@@ -1264,6 +1269,14 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         canAssignAcceptedDriver: isAdminDispatchedRide(row)
           && ['requested', 'driver_found'].includes(String(row.status || '').trim().toLowerCase())
           && !row.driver_user_id,
+        driverRequestStats: {
+          presenceSnapshotAvailable: driverResponses.some((responseRow) => responseRow.recently_active_at_offer !== null),
+          offeredCount: driverResponses.length,
+          onlineAtOfferCount: driverResponses.filter((responseRow) => responseRow.online_at_offer === null || Boolean(responseRow.online_at_offer)).length,
+          recentlyActiveAtOfferCount: driverResponses.filter((responseRow) => Boolean(responseRow.recently_active_at_offer)).length,
+          openedCount: driverResponses.filter((responseRow) => Boolean(responseRow.opened_at)).length,
+          acceptedCount: driverResponses.filter((responseRow) => Boolean(responseRow.accepted_at)).length,
+        },
         acceptedDrivers: (driverResponses || [])
           .map((responseRow) => ({
             id: responseRow.id,
@@ -1277,6 +1290,11 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
             tierName: responseRow.vehicle_tier_name || null,
             status: String(responseRow.status || '').trim().toLowerCase() || 'pending',
             viewedAt: responseRow.viewed_at || null,
+            openedAt: responseRow.opened_at || null,
+            acceptedAt: responseRow.accepted_at || null,
+            onlineAtOffer: responseRow.online_at_offer === null ? null : Boolean(responseRow.online_at_offer),
+            recentlyActiveAtOffer: responseRow.recently_active_at_offer === null ? null : Boolean(responseRow.recently_active_at_offer),
+            lastSeenAtOffer: responseRow.last_seen_at_offer || null,
             respondedAt: responseRow.responded_at || null,
             selectedAt: responseRow.selected_at || null,
             createdAt: responseRow.created_at || null,
@@ -1295,6 +1313,11 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
           tierName: responseRow.vehicle_tier_name || null,
           status: String(responseRow.status || '').trim().toLowerCase() || 'pending',
           viewedAt: responseRow.viewed_at || null,
+          openedAt: responseRow.opened_at || null,
+          acceptedAt: responseRow.accepted_at || null,
+          onlineAtOffer: responseRow.online_at_offer === null ? null : Boolean(responseRow.online_at_offer),
+          recentlyActiveAtOffer: responseRow.recently_active_at_offer === null ? null : Boolean(responseRow.recently_active_at_offer),
+          lastSeenAtOffer: responseRow.last_seen_at_offer || null,
           respondedAt: responseRow.responded_at || null,
           selectedAt: responseRow.selected_at || null,
           createdAt: responseRow.created_at || null,

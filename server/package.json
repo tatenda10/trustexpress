@@ -69,6 +69,7 @@
     "db:migrate:surge-pricing": "node scripts/run-migration.js sql/migrations/090_add_scheduled_surge_pricing.sql",
     "db:migrate:dynamic-pricing-controls": "node scripts/run-migration.js sql/migrations/091_add_dynamic_pricing_controls.sql",
     "db:migrate:driver-response-policy": "node scripts/run-migration.js sql/migrations/092_add_driver_response_policy.sql",
+    "db:migrate:driver-offer-presence": "node scripts/run-migration.js sql/migrations/093_add_driver_offer_presence_snapshot.sql",
     "users:import-clerk": "node scripts/import-clerk-users.js",
     "db:verify:captain-rewards": "node scripts/verify-captain-rewards-db.js",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
