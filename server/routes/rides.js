@@ -7,7 +7,7 @@ import { normalizePaymentMethod, receiptPaymentMethodLabel } from '../lib/paymen
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import { getServiceAreaLabel, isCoordinateInServiceAreaFromDb } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
-import { sendExpoPushNotifications, sendFcmNotifications } from '../lib/push.js';
+import { sendExpoPushNotifications, sendFcmNotifications, sendFcmNotificationsDetailed } from '../lib/push.js';
 import { findBestAutoDiscountForRide, syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
 import { normalizeRatingTags } from '../lib/ride-rating-tags.js';
 import { buildRideStopsPayload, sanitizeIntermediateStops, stringifyIntermediateStops } from '../lib/ride-stops.js';
@@ -649,6 +649,78 @@ export async function notifyDriversAboutRideRequest({ drivers, passengerName, pi
   const priorityFcmTokens = destinations.filter((item) => item.isPriority).map((item) => item.fcmToken).filter(Boolean);
   const standardFcmTokens = destinations.filter((item) => !item.isPriority).map((item) => item.fcmToken).filter(Boolean);
 
+  const sendFcmBatchWithExpoFallback = async (fcmTokens, priorityType) => {
+    if (!fcmTokens.length) return;
+    const isPriority = priorityType === 'priority';
+    const results = await sendFcmNotificationsDetailed(
+      fcmTokens.map((token) => ({
+        to: token,
+        title: 'New ride request',
+        body: notificationBody,
+        android: {
+          channelId: isPriority ? 'ride-requests-nearby-v4' : 'ride-requests-distant-v4',
+          collapseKey: 'driver-ride-request',
+          notification: {
+            sound: isPriority ? 'near_rides' : 'sound2',
+            tag: 'driver-ride-request',
+            clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
+          },
+        },
+        data: {
+          type: 'driver_new_ride_request',
+          rideRequestId: String(rideRequestId),
+          publicId: String(publicId || ''),
+          passengerName: String(passengerName || ''),
+          pickupLabel: String(pickupLabel || ''),
+          dropoffLabel: String(dropoffLabel || ''),
+          intermediateStopCount: String(stopCount || 0),
+          tierName: String(tierName || ''),
+          passengerCount: String(passengerCount || ''),
+          priorityType,
+        },
+      }))
+    );
+    const failedTokens = new Set(
+      (Array.isArray(results) ? results : [])
+        .filter((result) => !result.success)
+        .map((result) => result.token)
+    );
+    if (!failedTokens.size) return;
+
+    const fallbackExpoTokens = destinations
+      .filter((item) => failedTokens.has(item.fcmToken) && item.expoToken)
+      .map((item) => item.expoToken);
+    if (!fallbackExpoTokens.length) return;
+
+    console.warn('[rides.findDriver] FCM failed; using Expo fallback', {
+      rideRequestId,
+      priorityType,
+      failedFcmCount: failedTokens.size,
+      expoFallbackCount: fallbackExpoTokens.length,
+    });
+    for (let index = 0; index < fallbackExpoTokens.length; index += 90) {
+      const batch = fallbackExpoTokens.slice(index, index + 90);
+      await sendExpoPushNotifications(batch.map((token) => ({
+        to: token,
+        title: 'New ride request',
+        body: notificationBody,
+        sound: isPriority ? 'near_rides.mpeg' : 'sound2.mpeg',
+        channelId: isPriority ? 'ride-requests-nearby-v4' : 'ride-requests-distant-v4',
+        data: {
+          type: 'driver_new_ride_request',
+          rideRequestId,
+          publicId,
+          passengerName,
+          pickupLabel,
+          dropoffLabel,
+          tierName,
+          passengerCount: passengerCount ? String(passengerCount) : '',
+          priorityType,
+        },
+      })));
+    }
+  };
+
   console.log('[rides.findDriver] push notification targets', {
     rideRequestId,
     driverCount: drivers.length,
@@ -705,65 +777,11 @@ export async function notifyDriversAboutRideRequest({ drivers, passengerName, pi
   }
 
   if (priorityFcmTokens.length) {
-    await sendFcmNotifications(
-      priorityFcmTokens.map((token) => ({
-        to: token,
-        title: 'New ride request',
-        body: notificationBody,
-        android: {
-          channelId: 'ride-requests-nearby-v4',
-          collapseKey: 'driver-ride-request',
-          notification: {
-            sound: 'near_rides',
-            tag: 'driver-ride-request',
-            clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
-          },
-        },
-        data: {
-          type: 'driver_new_ride_request',
-          rideRequestId: String(rideRequestId),
-          publicId: String(publicId || ''),
-          passengerName: String(passengerName || ''),
-          pickupLabel: String(pickupLabel || ''),
-          dropoffLabel: String(dropoffLabel || ''),
-          intermediateStopCount: String(stopCount || 0),
-          tierName: String(tierName || ''),
-          passengerCount: String(passengerCount || ''),
-          priorityType: 'priority',
-        },
-      }))
-    );
+    await sendFcmBatchWithExpoFallback(priorityFcmTokens, 'priority');
   }
 
   if (standardFcmTokens.length) {
-    await sendFcmNotifications(
-      standardFcmTokens.map((token) => ({
-        to: token,
-        title: 'New ride request',
-        body: notificationBody,
-        android: {
-          channelId: 'ride-requests-distant-v4',
-          collapseKey: 'driver-ride-request',
-          notification: {
-            sound: 'sound2',
-            tag: 'driver-ride-request',
-            clickAction: 'com.tatenda10.trustexpress.FULL_SCREEN_RIDE_REQUEST',
-          },
-        },
-        data: {
-          type: 'driver_new_ride_request',
-          rideRequestId: String(rideRequestId),
-          publicId: String(publicId || ''),
-          passengerName: String(passengerName || ''),
-          pickupLabel: String(pickupLabel || ''),
-          dropoffLabel: String(dropoffLabel || ''),
-          intermediateStopCount: String(stopCount || 0),
-          tierName: String(tierName || ''),
-          passengerCount: String(passengerCount || ''),
-          priorityType: 'standard',
-        },
-      }))
-    );
+    await sendFcmBatchWithExpoFallback(standardFcmTokens, 'standard');
   }
 }
 

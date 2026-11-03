@@ -58,7 +58,7 @@ export async function sendExpoPushNotifications(messages) {
   return data;
 }
 
-export async function sendFcmNotifications(messages) {
+export async function sendFcmNotificationsDetailed(messages) {
   const payload = Array.isArray(messages) ? messages : [messages];
   if (!payload.length) return;
 
@@ -101,13 +101,26 @@ export async function sendFcmNotifications(messages) {
       };
 
       try {
-        return await admin.messaging().send(fcmMessage);
+        const messageId = await admin.messaging().send(fcmMessage);
+        return { token: message.to, success: true, messageId, errorCode: null };
       } catch (error) {
         console.error('FCM send error', error);
-        return null;
+        return {
+          token: message.to,
+          success: false,
+          messageId: null,
+          errorCode: error?.code || error?.errorInfo?.code || 'unknown',
+        };
       }
     }),
   );
 
   return results.filter(Boolean);
+}
+
+export async function sendFcmNotifications(messages) {
+  const results = await sendFcmNotificationsDetailed(messages);
+  return (Array.isArray(results) ? results : [])
+    .filter((result) => result.success && result.messageId)
+    .map((result) => result.messageId);
 }
