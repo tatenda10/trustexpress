@@ -88,9 +88,6 @@ function drawRoutePoint(doc, y, label, value, isLast = false) {
 }
 
 export function writeRideReceiptPdf(res, ride, options = {}) {
-  const doc = new PDFDocument({ size: [320, 740], margin: 0 });
-  doc.pipe(res);
-
   const fareAmount = Number(ride.final_estimated_amount || ride.estimated_amount || 0);
   const originalFareAmount = Number(ride.original_estimated_amount || fareAmount);
   const discountAmount = Number(ride.discount_amount || 0);
@@ -113,9 +110,13 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
     })),
     { label: 'DROP-OFF', value: ride.dropoff_label, color: BLUE },
   ];
+  const extraRouteRows = Math.max(0, routeRows.length - 2);
+  const pageHeight = 780 + extraRouteRows * 44;
+  const doc = new PDFDocument({ size: [320, pageHeight], margin: 0 });
+  doc.pipe(res);
 
-  doc.rect(0, 0, 320, 740).fill('#FFFFFF');
-  doc.roundedRect(8, 8, 304, 724, 3).strokeColor('#CFCFCF').lineWidth(0.7).stroke();
+  doc.rect(0, 0, 320, pageHeight).fill('#FFFFFF');
+  doc.roundedRect(8, 8, 304, pageHeight - 16, 3).strokeColor('#CFCFCF').lineWidth(0.7).stroke();
 
   doc.rect(8, 8, 304, 90).fill(BLUE);
   doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(7).text('TRUST EXPRESS', 0, 28, {
@@ -211,10 +212,10 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   doc.fillColor(MUTED).font('Helvetica').fontSize(6).text(
     options.footerText || 'Thank you for driving with Trust Express!',
     0,
-    720,
+    pageHeight - 28,
     { width: 320, align: 'center' },
   );
-  doc.fontSize(5).text('Safe rides. Trusted drivers. Always.', 0, 730, {
+  doc.fontSize(5).text('Safe rides. Trusted drivers. Always.', 0, pageHeight - 17, {
     width: 320,
     align: 'center',
   });
