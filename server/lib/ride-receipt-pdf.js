@@ -9,6 +9,7 @@ const TEXT = '#111827';
 const MUTED = '#6B7280';
 const LINE = '#D6D6D6';
 const CARD = '#F7F5F2';
+const RECEIPT_TIME_ZONE = process.env.RECEIPT_TIME_ZONE || 'Africa/Harare';
 
 function currency(value) {
   return `$${Number(value || 0).toFixed(2)}`;
@@ -18,6 +19,7 @@ function shortDate(value) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString('en-ZW', {
+    timeZone: RECEIPT_TIME_ZONE,
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -28,6 +30,7 @@ function shortDateTime(value) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString('en-ZW', {
+    timeZone: RECEIPT_TIME_ZONE,
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
@@ -210,7 +213,7 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   });
 
   doc.fillColor(MUTED).font('Helvetica').fontSize(6).text(
-    options.footerText || 'Thank you for driving with Trust Express!',
+    options.footerText || 'Thank you for riding with Trust Express — Your Trusted Ride Partner.',
     0,
     pageHeight - 28,
     { width: 320, align: 'center' },

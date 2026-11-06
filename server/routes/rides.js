@@ -1943,7 +1943,7 @@ router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res
 
     writeRideReceiptPdf(res, ride, {
       statusLabel: mapPassengerRideStatus(ride.status),
-      footerText: 'Thank you for riding with Trust Express!',
+      footerText: 'Thank you for riding with Trust Express — Your Trusted Ride Partner.',
     });
   } catch (err) {
     console.error('GET /api/rides/passenger/:rideRequestId/receipt-pdf', err);
