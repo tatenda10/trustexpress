@@ -259,7 +259,7 @@ export default function AgentDetailPage() {
         <div className="flex flex-col gap-2 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Referred Users</h2>
-            <p className="text-xs text-slate-500">Drivers and passengers linked to this agent, with ride counts for drivers.</p>
+            <p className="text-xs text-slate-500">Driver reward links expire automatically 40 days after registration. Historical referrals remain visible.</p>
           </div>
           <select
             value={typeFilter}
@@ -335,7 +335,14 @@ export default function AgentDetailPage() {
                         {item.type === 'driver' ? (item.completedRides ?? 0) : '-'}
                       </td>
                       <td className="px-4 py-3 text-slate-700">{item.source || '-'}</td>
-                      <td className="px-4 py-3 text-slate-700">{formatDateTime(item.referredAt)}</td>
+                      <td className="px-4 py-3 text-slate-700">
+                        <div>{formatDateTime(item.referredAt)}</div>
+                        {item.type === 'driver' ? (
+                          <div className={`mt-1 text-[11px] font-semibold ${item.linkActive ? 'text-emerald-700' : 'text-amber-700'}`}>
+                            {item.linkActive ? `Active until ${formatDateTime(item.expiresAt)}` : `Ended ${formatDateTime(item.expiresAt)}`}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <Link

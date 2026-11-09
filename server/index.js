@@ -12,6 +12,7 @@ import { buildAuthorityShareTrackingHtml } from './lib/admin-share-page.js';
 import { startDriverWalletTopupReconciler } from './lib/wallet-topup-reconciler.js';
 import { startRideOfferExpansionLoop } from './routes/rides.js';
 import { startRideCommissionReconciler } from './lib/ride-commission-reconciler.js';
+import { startAgentReferralExpiryReconciler } from './lib/agent-referral-expiry.js';
 import { ensureDriverLocationUpdatedAtColumn } from './lib/driver-location-schema.js';
 import { ensureRideCallsTable, registerRideCallHandlers } from './lib/ride-calls.js';
 
@@ -260,4 +261,5 @@ httpServer.listen(PORT, () => {
   startDriverWalletTopupReconciler();
   startRideOfferExpansionLoop();
   startRideCommissionReconciler();
+  startAgentReferralExpiryReconciler();
 });

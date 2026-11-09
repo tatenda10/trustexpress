@@ -230,6 +230,12 @@ router.post('/register', requireAuth, async (req, res) => {
     if (err.status === 400) {
       return res.status(400).json({ error: err.message || 'Invalid invite link' });
     }
+    if (err.status === 409) {
+      return res.status(409).json({
+        error: err.message || 'Agent link period expired',
+        code: err.code || 'AGENT_LINK_CONFLICT',
+      });
+    }
     console.error('POST /api/users/register', err);
     return res.status(500).json({ error: 'Server error' });
   }
@@ -283,6 +289,12 @@ router.post('/agent-referral/attach', requireAuth, async (req, res) => {
   } catch (err) {
     if (err.status === 400) {
       return res.status(400).json({ error: err.message || 'Invalid invite link' });
+    }
+    if (err.status === 409) {
+      return res.status(409).json({
+        error: err.message || 'Agent link period expired',
+        code: err.code || 'AGENT_LINK_CONFLICT',
+      });
     }
     console.error('POST /api/users/agent-referral/attach', err);
     return res.status(500).json({ error: 'Server error' });

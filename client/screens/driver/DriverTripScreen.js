@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Image, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Dimensions, Image, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../auth/AuthProvider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -19,7 +19,7 @@ import {
   startDriverCurrentRide,
   verifyDriverRidePin,
   submitDriverPassengerRating,
-  updateDriverAvailability,
+  updateDriverLiveLocation,
 } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { paymentMethodLabel } from '../../constants/payment';
@@ -28,6 +28,10 @@ import { DRIVER_CANCELLATION_REASONS } from '../../constants/cancellationReasons
 import { buildRatingReviewText, toggleRatingTag } from '../../constants/rideRatingTags';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
 import { connectRealtime } from '../../realtime';
+import {
+  setDriverBackgroundLocationMode,
+  startDriverBackgroundLocation,
+} from '../../services/driverBackgroundLocation';
 import { useRideCalls } from '../../calls/CallProvider';
 import CallOptionsSheet from '../../calls/CallOptionsSheet';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -42,8 +46,11 @@ import {
 
 const ROUTE_REFRESH_DISTANCE_METERS = 10;
 const ROUTE_REFRESH_MIN_INTERVAL_MS = 1500;
-const LOCATION_UPDATE_DISTANCE_METERS = 1;
-const LOCATION_UPDATE_INTERVAL_MS = 1000;
+const LOCATION_UPDATE_DISTANCE_METERS = 5;
+const LOCATION_UPDATE_INTERVAL_MS = 3000;
+const LOCATION_PUBLISH_TIMEOUT_MS = 8000;
+const LOCATION_WATCHDOG_INTERVAL_MS = 10000;
+const LOCATION_WATCHDOG_STALE_MS = 20000;
 const LIVE_DIRECTIONS_CACHE_TTL_SECONDS = 0;
 const AUTO_ARRIVAL_DISTANCE_METERS = 90;
 const AUTO_ARRIVAL_STABLE_MS = 3500;
@@ -72,6 +79,22 @@ function normalizeCoordinate(value) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
   return { latitude, longitude };
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function normalizeCoordinates(values) {
@@ -407,6 +430,37 @@ export default function DriverTripScreen({ navigation, route }) {
   }, [getToken]);
 
   useEffect(() => {
+    const rideStatus = String(ride?.status || '').toLowerCase();
+    const hasLiveTrip = Boolean(ride?.id)
+      && !['completed', 'cancelled', 'canceled'].includes(rideStatus);
+    if (!hasLiveTrip) return undefined;
+
+    let active = true;
+    const getCurrentToken = () => getTokenRef.current();
+
+    const ensureFastBackgroundTracking = async () => {
+      const switched = await setDriverBackgroundLocationMode('trip', getCurrentToken);
+      if (!active || switched) return;
+
+      const started = await startDriverBackgroundLocation(getCurrentToken, { prompt: false });
+      if (!active || !started) return;
+      await setDriverBackgroundLocationMode('trip', getCurrentToken);
+    };
+
+    ensureFastBackgroundTracking().catch((error) => {
+      console.log(TRIP_DEBUG_PREFIX, 'fast background location unavailable', {
+        rideId: ride?.id || null,
+        message: error?.message || 'unknown error',
+      });
+    });
+
+    return () => {
+      active = false;
+      setDriverBackgroundLocationMode('idle', getCurrentToken).catch(() => {});
+    };
+  }, [ride?.id, ride?.status]);
+
+  useEffect(() => {
     const nextRide = route?.params?.initialRide || null;
     if (!nextRide?.id) return;
     setRide((current) => (Number(current?.id || 0) === Number(nextRide.id || 0) ? current : nextRide));
@@ -642,6 +696,8 @@ export default function DriverTripScreen({ navigation, route }) {
   useEffect(() => {
     if (!ride) return undefined;
     let active = true;
+    let locationStartInFlight = false;
+    let watchdogInFlight = false;
 
     const flushAvailabilityCoordinate = async () => {
       if (!active || availabilitySyncInFlightRef.current) return;
@@ -651,14 +707,19 @@ export default function DriverTripScreen({ navigation, route }) {
       availabilitySyncInFlightRef.current = true;
       pendingAvailabilityCoordinateRef.current = null;
       try {
-        const token = await getTokenRef.current();
+        const token = await withTimeout(
+          getTokenRef.current(),
+          LOCATION_PUBLISH_TIMEOUT_MS,
+          'Location authentication timed out'
+        );
         if (!token || !active) return;
-        await updateDriverAvailability(token, {
-          isOnline: true,
+        const result = await updateDriverLiveLocation(token, {
           latitude: coordinate.latitude,
           longitude: coordinate.longitude,
-        });
-        console.log(TRIP_DEBUG_PREFIX, 'availability sync success', coordinate);
+        }, LOCATION_PUBLISH_TIMEOUT_MS);
+        if (result?.isOnline === false) {
+          throw new Error('Driver is no longer online');
+        }
       } catch (error) {
         console.log(TRIP_DEBUG_PREFIX, 'availability sync failed', {
           message: error?.message || 'unknown error',
@@ -670,84 +731,118 @@ export default function DriverTripScreen({ navigation, route }) {
       } finally {
         availabilitySyncInFlightRef.current = false;
         if (active && pendingAvailabilityCoordinateRef.current) {
-          flushAvailabilityCoordinate();
+          void flushAvailabilityCoordinate();
         }
       }
     };
 
-    const startLocationTracking = async () => {
+    const publishPosition = (position) => {
+      if (!active || !position?.coords) return;
+      const nextCoordinate = normalizeCoordinate({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
+      if (!nextCoordinate) return;
+      lastLocalLocationAtRef.current = Date.now();
+      setLiveDriverCoordinate(nextCoordinate);
+      pendingAvailabilityCoordinateRef.current = nextCoordinate;
+      void flushAvailabilityCoordinate();
+    };
+
+    const requestFreshPosition = async () => {
+      const position = await withTimeout(
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation }),
+        LOCATION_PUBLISH_TIMEOUT_MS,
+        'Fresh GPS position timed out'
+      );
+      publishPosition(position);
+    };
+
+    const startLocationTracking = async ({ force = false } = {}) => {
+      if (locationStartInFlight || !active) return;
+      locationStartInFlight = true;
       try {
-        if (locationSubscriptionRef.current && activeLocationRideIdRef.current === ride?.id) {
-          console.log(TRIP_DEBUG_PREFIX, 'location tracking skipped: already subscribed for ride', {
-            rideId: ride?.id || null,
-          });
+        if (!force && locationSubscriptionRef.current && activeLocationRideIdRef.current === ride?.id) {
           return;
         }
-        console.log(TRIP_DEBUG_PREFIX, 'location tracking start', {
-          rideId: ride?.id || null,
-          stage: ride?.stage || null,
-        });
-        const permission = await Location.requestForegroundPermissionsAsync();
-        console.log(TRIP_DEBUG_PREFIX, 'location permission result', {
-          status: permission?.status || 'unknown',
-        });
+        const existing = locationSubscriptionRef.current;
+        if (existing && typeof existing.remove === 'function') existing.remove();
+        locationSubscriptionRef.current = null;
+        activeLocationRideIdRef.current = null;
+
+        const permission = await Location.getForegroundPermissionsAsync();
         if (permission.status !== 'granted') return;
 
-        const currentPosition = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.BestForNavigation,
-        });
-        console.log(TRIP_DEBUG_PREFIX, 'location current position success', {
-          latitude: currentPosition?.coords?.latitude,
-          longitude: currentPosition?.coords?.longitude,
-        });
-        if (active) {
-          const currentCoordinate = normalizeCoordinate({
-            latitude: currentPosition.coords.latitude,
-            longitude: currentPosition.coords.longitude,
-          });
-          if (!currentCoordinate) return;
-          lastLocalLocationAtRef.current = Date.now();
-          setLiveDriverCoordinate(currentCoordinate);
-          pendingAvailabilityCoordinateRef.current = currentCoordinate;
-          await flushAvailabilityCoordinate();
-        }
-
-        locationSubscriptionRef.current = await Location.watchPositionAsync(
+        const subscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.BestForNavigation,
             timeInterval: LOCATION_UPDATE_INTERVAL_MS,
             distanceInterval: LOCATION_UPDATE_DISTANCE_METERS,
           },
-          async (position) => {
-            if (!active) return;
-
-            const nextCoordinate = normalizeCoordinate({
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-            });
-            if (!nextCoordinate) return;
-
-            console.log(TRIP_DEBUG_PREFIX, 'location watcher update', nextCoordinate);
-            lastLocalLocationAtRef.current = Date.now();
-            setLiveDriverCoordinate(nextCoordinate);
-            pendingAvailabilityCoordinateRef.current = nextCoordinate;
-            await flushAvailabilityCoordinate();
-          }
+          publishPosition
         );
+        if (!active) {
+          subscription?.remove?.();
+          return;
+        }
+        locationSubscriptionRef.current = subscription;
         activeLocationRideIdRef.current = ride?.id || null;
-        console.log(TRIP_DEBUG_PREFIX, 'location watcher subscribed');
+
+        const lastKnown = await Location.getLastKnownPositionAsync({
+          maxAge: 15000,
+          requiredAccuracy: 200,
+        }).catch(() => null);
+        if (lastKnown) publishPosition(lastKnown);
+        void requestFreshPosition().catch((error) => {
+          console.log(TRIP_DEBUG_PREFIX, 'initial fresh location failed', {
+            message: error?.message || 'unknown error',
+          });
+        });
       } catch (error) {
         console.log(TRIP_DEBUG_PREFIX, 'location tracking failed', {
           message: error?.message || 'unknown error',
         });
-        // Ignore location tracking startup failures and keep server-fed coordinates.
+      } finally {
+        locationStartInFlight = false;
       }
     };
 
-    startLocationTracking();
+    void startLocationTracking();
+
+    const restartStaleTracking = async (reason) => {
+      if (!active || watchdogInFlight) return;
+      watchdogInFlight = true;
+      try {
+        console.warn(TRIP_DEBUG_PREFIX, 'location watchdog restarting', {
+          rideId: ride?.id || null,
+          reason,
+          staleForMs: lastLocalLocationAtRef.current
+            ? Date.now() - lastLocalLocationAtRef.current
+            : null,
+        });
+        await requestFreshPosition().catch(() => {});
+        await startLocationTracking({ force: true });
+      } finally {
+        watchdogInFlight = false;
+      }
+    };
+
+    const watchdogInterval = setInterval(() => {
+      const lastUpdateAt = Number(lastLocalLocationAtRef.current || 0);
+      if (lastUpdateAt > 0 && Date.now() - lastUpdateAt <= LOCATION_WATCHDOG_STALE_MS) return;
+      void restartStaleTracking('gps_updates_stale');
+    }, LOCATION_WATCHDOG_INTERVAL_MS);
+
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void restartStaleTracking('app_resumed');
+      }
+    });
 
     return () => {
       active = false;
+      clearInterval(watchdogInterval);
+      appStateSubscription?.remove?.();
       if (locationSubscriptionRef.current) {
         locationSubscriptionRef.current.remove();
         locationSubscriptionRef.current = null;

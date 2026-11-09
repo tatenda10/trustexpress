@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { query, withTransaction } from '../db/connection.js';
+import { AGENT_DRIVER_LINK_DAYS } from './agent-referral-expiry.js';
 
 function generateInviteToken() {
   return crypto.randomBytes(24).toString('hex');
@@ -15,6 +16,35 @@ function mapInviteRow(row) {
     fullName: row.full_name || '',
     employeeCode: row.employee_code || '',
   };
+}
+
+async function getDriverReferralWindow(connection, driverUserId) {
+  const [rows] = await connection.execute(
+    `SELECT created_at
+     FROM users
+     WHERE clerk_user_id = ?
+     LIMIT 1`,
+    [driverUserId]
+  );
+  const linkedAt = rows[0]?.created_at ? new Date(rows[0].created_at) : new Date();
+  const expiresAt = new Date(linkedAt.getTime() + AGENT_DRIVER_LINK_DAYS * 24 * 60 * 60 * 1000);
+  if (expiresAt.getTime() <= Date.now()) {
+    const error = new Error(`The ${AGENT_DRIVER_LINK_DAYS}-day agent link period for this driver has already expired`);
+    error.status = 409;
+    error.code = 'AGENT_LINK_WINDOW_EXPIRED';
+    throw error;
+  }
+  return { linkedAt, expiresAt };
+}
+
+function assertExistingReferralIsActive(row) {
+  const expiresAt = row?.expires_at ? new Date(row.expires_at) : null;
+  if (!row?.is_active || !expiresAt || expiresAt.getTime() <= Date.now()) {
+    const error = new Error(`The ${AGENT_DRIVER_LINK_DAYS}-day agent link period for this driver has expired`);
+    error.status = 409;
+    error.code = 'AGENT_LINK_WINDOW_EXPIRED';
+    throw error;
+  }
 }
 
 export async function getOrCreateInviteForAgent(agentUserId) {
@@ -76,7 +106,7 @@ export async function attachDriverToAgentManual({ driverUserId, agentUserId, sou
 
   return withTransaction(async (connection) => {
     const [existingRows] = await connection.execute(
-      `SELECT id, driver_user_id, agent_user_id, invite_id, source
+      `SELECT id, driver_user_id, agent_user_id, invite_id, source, linked_at, expires_at, is_active
        FROM agent_driver_referrals
        WHERE driver_user_id = ?
        LIMIT 1`,
@@ -84,6 +114,7 @@ export async function attachDriverToAgentManual({ driverUserId, agentUserId, sou
     );
 
     if (existingRows[0]) {
+      assertExistingReferralIsActive(existingRows[0]);
       if (Number(existingRows[0].agent_user_id) !== Number(agentUserId)) {
         const error = new Error('Driver is already assigned to another agent');
         error.status = 409;
@@ -95,15 +126,19 @@ export async function attachDriverToAgentManual({ driverUserId, agentUserId, sou
         agentUserId: existingRows[0].agent_user_id,
         inviteId: existingRows[0].invite_id,
         source: existingRows[0].source,
+        linkedAt: existingRows[0].linked_at,
+        expiresAt: existingRows[0].expires_at,
         alreadyExists: true,
       };
     }
 
+    const { linkedAt, expiresAt } = await getDriverReferralWindow(connection, driverUserId);
     const referralSource = String(source || 'admin_manual').trim() || 'admin_manual';
     await connection.execute(
-      `INSERT INTO agent_driver_referrals (driver_user_id, agent_user_id, invite_id, source)
-       VALUES (?, ?, ?, ?)`,
-      [driverUserId, invite.agentUserId, invite.id, referralSource]
+      `INSERT INTO agent_driver_referrals
+        (driver_user_id, agent_user_id, invite_id, source, linked_at, expires_at, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      [driverUserId, invite.agentUserId, invite.id, referralSource, linkedAt, expiresAt]
     );
 
     return {
@@ -111,6 +146,8 @@ export async function attachDriverToAgentManual({ driverUserId, agentUserId, sou
       agentUserId: invite.agentUserId,
       inviteId: invite.id,
       source: referralSource,
+      linkedAt,
+      expiresAt,
       alreadyExists: false,
     };
   });
@@ -129,7 +166,7 @@ export async function attachDriverToAgentInvite({ driverUserId, inviteToken }) {
 
   return withTransaction(async (connection) => {
     const [existingRows] = await connection.execute(
-      `SELECT id, driver_user_id, agent_user_id, invite_id, source
+      `SELECT id, driver_user_id, agent_user_id, invite_id, source, linked_at, expires_at, is_active
        FROM agent_driver_referrals
        WHERE driver_user_id = ?
        LIMIT 1`,
@@ -137,18 +174,23 @@ export async function attachDriverToAgentInvite({ driverUserId, inviteToken }) {
     );
 
     if (existingRows[0]) {
+      assertExistingReferralIsActive(existingRows[0]);
       return {
         driverUserId: existingRows[0].driver_user_id,
         agentUserId: existingRows[0].agent_user_id,
         inviteId: existingRows[0].invite_id,
         source: existingRows[0].source,
+        linkedAt: existingRows[0].linked_at,
+        expiresAt: existingRows[0].expires_at,
       };
     }
 
+    const { linkedAt, expiresAt } = await getDriverReferralWindow(connection, driverUserId);
     await connection.execute(
-      `INSERT INTO agent_driver_referrals (driver_user_id, agent_user_id, invite_id, source)
-       VALUES (?, ?, ?, 'agent_deep_link')`,
-      [driverUserId, invite.agentUserId, invite.id]
+      `INSERT INTO agent_driver_referrals
+        (driver_user_id, agent_user_id, invite_id, source, linked_at, expires_at, is_active)
+       VALUES (?, ?, ?, 'agent_deep_link', ?, ?, 1)`,
+      [driverUserId, invite.agentUserId, invite.id, linkedAt, expiresAt]
     );
 
     return {
@@ -156,6 +198,8 @@ export async function attachDriverToAgentInvite({ driverUserId, inviteToken }) {
       agentUserId: invite.agentUserId,
       inviteId: invite.id,
       source: 'agent_deep_link',
+      linkedAt,
+      expiresAt,
     };
   });
 }

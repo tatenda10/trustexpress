@@ -51,6 +51,8 @@ router.get('/', requireAdminAuth, requirePermission('agents.read'), async (req, 
           SELECT COUNT(*)
           FROM agent_driver_referrals r
           WHERE r.agent_user_id = a.id
+            AND r.is_active = 1
+            AND r.expires_at > CURRENT_TIMESTAMP
         ) AS driver_referral_count,
         (
           SELECT COUNT(*)
@@ -60,7 +62,10 @@ router.get('/', requireAdminAuth, requirePermission('agents.read'), async (req, 
         (
           SELECT COUNT(CASE WHEN rr.status = 'completed' THEN 1 END)
           FROM agent_driver_referrals r
-          LEFT JOIN ride_requests rr ON rr.driver_user_id = r.driver_user_id
+          LEFT JOIN ride_requests rr
+            ON rr.driver_user_id = r.driver_user_id
+           AND rr.completed_at >= r.linked_at
+           AND rr.completed_at < r.expires_at
           WHERE r.agent_user_id = a.id
         ) AS total_completed_rides
       FROM agent_users a
@@ -233,6 +238,14 @@ router.post('/:agentId/referrals/drivers', requireAdminAuth, requirePermission('
     }
 
     const existingReferral = await getExistingDriverReferral(driver.clerk_user_id);
+    const existingReferralActive = !!existingReferral?.is_active
+      && new Date(existingReferral.expires_at).getTime() > Date.now();
+    if (existingReferral && !existingReferralActive) {
+      return res.status(409).json({
+        error: 'This driver’s 40-day agent commission period has expired and cannot be restarted.',
+        expiredAt: existingReferral.expires_at || existingReferral.unlinked_at || null,
+      });
+    }
     if (existingReferral && Number(existingReferral.agent_user_id) !== agentId) {
       return res.status(409).json({
         error: 'Driver is already assigned to another agent',
@@ -390,6 +403,8 @@ router.get('/:agentId', requireAdminAuth, requirePermission('agents.read'), asyn
           SELECT COUNT(*)
           FROM agent_driver_referrals r
           WHERE r.agent_user_id = a.id
+            AND r.is_active = 1
+            AND r.expires_at > CURRENT_TIMESTAMP
         ) AS driver_referral_count,
         (
           SELECT COUNT(*)
@@ -399,7 +414,10 @@ router.get('/:agentId', requireAdminAuth, requirePermission('agents.read'), asyn
         (
           SELECT COUNT(CASE WHEN rr.status = 'completed' THEN 1 END)
           FROM agent_driver_referrals r
-          LEFT JOIN ride_requests rr ON rr.driver_user_id = r.driver_user_id
+          LEFT JOIN ride_requests rr
+            ON rr.driver_user_id = r.driver_user_id
+           AND rr.completed_at >= r.linked_at
+           AND rr.completed_at < r.expires_at
           WHERE r.agent_user_id = a.id
         ) AS total_completed_rides
        FROM agent_users a

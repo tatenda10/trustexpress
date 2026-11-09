@@ -951,6 +951,44 @@ router.post('/location-key', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/live-location', requireAuth, async (req, res) => {
+  try {
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+    if (
+      !Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || Math.abs(latitude) > 90 || Math.abs(longitude) > 180
+    ) {
+      return res.status(400).json({ error: 'A valid location is required' });
+    }
+
+    const result = await query(
+      `UPDATE driver_availability
+       SET current_lat = ?,
+           current_lng = ?,
+           location_updated_at = CURRENT_TIMESTAMP,
+           last_seen_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?
+         AND is_online = 1`,
+      [latitude, longitude, req.userId]
+    );
+    const isOnline = Number(result?.affectedRows || 0) > 0;
+    if (isOnline) {
+      await emitDriverLiveLocation(req.userId, latitude, longitude).catch((error) => {
+        console.error('[drivers.live-location] live emit failed', error?.message || error);
+      });
+    }
+
+    return res.json({
+      isOnline,
+      locationUpdatedAt: isOnline ? new Date().toISOString() : null,
+    });
+  } catch (err) {
+    console.error('POST /api/drivers/live-location', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 /**
  * Location from the driver app's background task. It runs without a Clerk session, so it
  * authenticates with the per-device key from POST /location-key instead.

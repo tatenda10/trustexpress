@@ -43,6 +43,14 @@ module.exports = ({ config } = {}) => {
     },
     android: {
       ...(expo.android || {}),
+      intentFilters: [
+        ...(expo.android?.intentFilters || []),
+        {
+          action: 'VIEW',
+          category: ['BROWSABLE', 'DEFAULT'],
+          data: [{ scheme: 'geo' }],
+        },
+      ],
       permissions: [
         ...(expo.android?.permissions || []),
         'android.permission.SYSTEM_ALERT_WINDOW',

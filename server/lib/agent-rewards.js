@@ -41,7 +41,10 @@ async function getTotalCompletedRidesForAgent(agentUserId) {
   const rows = await query(
     `SELECT COUNT(CASE WHEN rr.status = 'completed' THEN 1 END) AS total_completed_rides
      FROM agent_driver_referrals r
-     LEFT JOIN ride_requests rr ON rr.driver_user_id = r.driver_user_id
+     LEFT JOIN ride_requests rr
+       ON rr.driver_user_id = r.driver_user_id
+      AND rr.completed_at >= r.linked_at
+      AND rr.completed_at < r.expires_at
      WHERE r.agent_user_id = ?`,
     [agentUserId]
   );
@@ -123,11 +126,20 @@ export async function getAgentRewardProgress(agentUserId, providedTiers = null) 
         r.id AS referral_id,
         r.driver_user_id,
         r.created_at AS referred_at,
+        r.linked_at,
+        r.expires_at,
+        r.is_active,
+        r.unlinked_at,
+        r.unlink_reason,
         COUNT(CASE WHEN rr.status = 'completed' THEN 1 END) AS completed_rides
       FROM agent_driver_referrals r
-      LEFT JOIN ride_requests rr ON rr.driver_user_id = r.driver_user_id
+      LEFT JOIN ride_requests rr
+        ON rr.driver_user_id = r.driver_user_id
+       AND rr.completed_at >= r.linked_at
+       AND rr.completed_at < r.expires_at
       WHERE r.agent_user_id = ?
-      GROUP BY r.id, r.driver_user_id, r.created_at
+      GROUP BY r.id, r.driver_user_id, r.created_at, r.linked_at, r.expires_at,
+               r.is_active, r.unlinked_at, r.unlink_reason
       ORDER BY r.created_at DESC, r.id DESC`,
       [agentUserId]
     ),
@@ -162,6 +174,11 @@ export async function getAgentRewardProgress(agentUserId, providedTiers = null) 
     referralId: Number(row.referral_id),
     driverUserId: row.driver_user_id,
     referredAt: row.referred_at,
+    linkedAt: row.linked_at,
+    expiresAt: row.expires_at,
+    isActive: !!row.is_active && new Date(row.expires_at).getTime() > Date.now(),
+    unlinkedAt: row.unlinked_at || null,
+    unlinkReason: row.unlink_reason || null,
     completedRides: Number(row.completed_rides || 0),
   }));
 
@@ -236,7 +253,10 @@ export async function redeemAgentRewards(agentUserId) {
       const [agg] = await connection.execute(
         `SELECT COUNT(CASE WHEN rr.status = 'completed' THEN 1 END) AS total_completed_rides
          FROM agent_driver_referrals r
-         LEFT JOIN ride_requests rr ON rr.driver_user_id = r.driver_user_id
+         LEFT JOIN ride_requests rr
+           ON rr.driver_user_id = r.driver_user_id
+          AND rr.completed_at >= r.linked_at
+          AND rr.completed_at < r.expires_at
          WHERE r.agent_user_id = ?`,
         [agentUserId]
       );

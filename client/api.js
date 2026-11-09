@@ -782,22 +782,44 @@ export async function updateDriverAvailability(token, payload) {
   return apiFetch('/api/drivers/availability', { method: 'POST', body: JSON.stringify(payload) }, token);
 }
 
+export async function updateDriverLiveLocation(token, payload, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await apiFetch('/api/drivers/live-location', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+      suppressAuthErrorHandler: true,
+    }, token);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function issueDriverLocationKey(token) {
   return apiFetch('/api/drivers/location-key', { method: 'POST', body: JSON.stringify({}) }, token);
 }
 
 /** Called from the background location task, which has no signed-in session; authenticates with the device key. */
 export async function postDriverBackgroundLocation(locationKey, payload) {
-  const res = await fetch(getApiUrl('/api/drivers/background-location'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Driver-Location-Key': locationKey,
-    },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { status: res.status, data };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(getApiUrl('/api/drivers/background-location'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Driver-Location-Key': locationKey,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function submitDriverDocuments(token, payload, options = {}) {

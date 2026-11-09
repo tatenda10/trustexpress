@@ -83,7 +83,10 @@ export function createPublicRideId() {
 
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
-const DRIVER_REQUEST_RADIUS_KM = 12;
+const DRIVER_REQUEST_RADIUS_KM = Math.max(
+  1,
+  Number(process.env.DRIVER_REQUEST_RADIUS_KM || 20) || 20
+);
 const MAX_DRIVER_OFFERS = 500;
 /** Drivers whose app polled or sent location within this window count as "app open". */
 const DRIVER_ACTIVE_SEEN_SECONDS = 180;
@@ -1422,7 +1425,9 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
          da.car_photo_url,
          NULLIF(TRIM(dv.car_photo_front_url), '') AS car_photo_front_url,
          da.current_lat,
-         da.current_lng
+         da.current_lng,
+         da.last_seen_at,
+         da.location_updated_at
        FROM driver_availability da
        LEFT JOIN driver_vehicle dv ON dv.driver_user_id = da.driver_user_id
        WHERE da.driver_user_id = ?
@@ -1468,6 +1473,9 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
     }
 
     const driverCoordinate = assignedDriver?.coordinate || null;
+    const driverLocationUpdatedAt = assignedDriver?.locationUpdatedAt || null;
+    const driverLocationAgeSeconds = getLocationAgeSeconds(driverLocationUpdatedAt);
+    const driverLocationFresh = isFreshDriverLocation(driverLocationUpdatedAt);
 
     const viewingSnapshot = (ride.status === 'requested' || ride.status === 'driver_found')
       ? await loadDriversViewingSnapshot(ride.id)
@@ -1508,6 +1516,9 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
         driverDistanceKm: ride.driver_distance_km === null ? null : Number(ride.driver_distance_km),
         driverEtaMinutes: ride.driver_eta_minutes === null ? null : Number(ride.driver_eta_minutes),
         driverCoordinate,
+        driverLocationFresh,
+        driverLocationAgeSeconds,
+        driverLocationUpdatedAt,
         passengerDriverRating: ride.passenger_driver_rating === null ? null : Number(ride.passenger_driver_rating),
         passengerDriverReview: ride.passenger_driver_review || '',
         passengerDriverFeedbackTags: parseJsonArray(ride.passenger_driver_feedback_tags),
@@ -1739,8 +1750,11 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
       rideRequest: {
         ...buildRideStopsPayload(ride),
         ...buildRidePaymentPayload(ride),
+        ...buildRideDiscountPayload(ride),
         id: ride.id,
         publicId: ride.public_id,
+        passengerName: ride.passenger_name || 'Passenger',
+        driverName: ride.driver_name || assignedDriver?.driverName || 'Driver',
         status: ride.status,
         stage: mapPassengerTripStage(ride.status),
         pickupLabel: ride.pickup_label,
@@ -1760,6 +1774,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
         requestedTierName: ride.requested_tier_name,
         passengerCount: Number(ride.passenger_count || 1),
         requestedAt: toIsoOrNull(ride.requested_at),
+        startedAt: toIsoOrNull(ride.started_at),
         arrivedAt: toIsoOrNull(ride.arrived_at),
         completedAt: toIsoOrNull(ride.completed_at),
         passengerConfirmedAt: toIsoOrNull(ride.passenger_confirmed_at),

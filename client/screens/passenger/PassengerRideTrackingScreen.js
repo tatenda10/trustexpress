@@ -13,6 +13,7 @@ import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, choosePassengerRideCashPayment, initiatePassengerRideSmilePay, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup, verifyPassengerRideSmilePay } from '../../api';
 import RideRatingTagPicker from '../../components/ride/RideRatingTagPicker';
+import PassengerReceiptCard from '../../components/ride/PassengerReceiptCard';
 import { downloadReceiptPdf } from '../../services/receiptPrint';
 import { receiptPaymentMethodLabel } from '../../constants/payment';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -2798,58 +2799,19 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
                   </View>
                 ) : null}
 
-                <View className="mt-6 rounded-[10px] bg-[#f8fafc] px-4 py-4">
-                  <View className="flex-row items-center justify-between">
-                    <Text className="text-sm font-bold text-gray-900">Trip receipt</Text>
-                    <TouchableOpacity onPress={handleDownloadTripReceipt} disabled={downloadingTripReceipt} hitSlop={8} className="flex-row items-center">
-                      {downloadingTripReceipt ? (
-                        <ActivityIndicator size="small" color={PRIMARY_BLUE} />
-                      ) : (
-                        <>
-                          <Ionicons name="download-outline" size={16} color={PRIMARY_BLUE} />
-                          <Text className="ml-1 text-xs font-bold" style={{ color: PRIMARY_BLUE }}>PDF</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                  <View className="mt-3">
-                    {tripTimelineLabels.map((label, index) => {
-                      const isLast = index === tripTimelineLabels.length - 1;
-                      return (
-                        <View key={`receipt-stop-${index}`} className="flex-row">
-                          <View className="mr-3 items-center" style={{ width: 10 }}>
-                            <View
-                              className="mt-1.5 h-2.5 w-2.5 rounded-full"
-                              style={{ backgroundColor: index === 0 ? PIN_COLORS.start : isLast ? PIN_COLORS.finish : PIN_COLORS.stop }}
-                            />
-                            {!isLast ? <View className="w-px flex-1 bg-gray-300" style={{ minHeight: 14 }} /> : null}
-                          </View>
-                          <Text className={`flex-1 text-sm text-gray-800 ${isLast ? '' : 'pb-3'}`} numberOfLines={2}>{label}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                  <View className="mt-3 border-t border-gray-200 pt-3">
-                    <View className="flex-row items-center justify-between">
-                      <Text className="text-sm text-gray-500">Trip fare</Text>
-                      <Text className="text-sm font-semibold text-gray-900">${estimatedAmount.toFixed(2)}</Text>
-                    </View>
-                    {tipAmount > 0 ? (
-                      <View className="mt-2 flex-row items-center justify-between">
-                        <Text className="text-sm text-gray-500">Tip</Text>
-                        <Text className="text-sm font-semibold text-green-600">${tipAmount.toFixed(2)}</Text>
-                      </View>
-                    ) : null}
-                    <View className="mt-2 flex-row items-center justify-between">
-                      <Text className="text-sm text-gray-500">Payment</Text>
-                      <Text className="text-sm font-semibold text-gray-900">{receiptPaymentMethodLabel(rideStatus?.paymentMethod) || '-'}</Text>
-                    </View>
-                    <View className="mt-3 flex-row items-center justify-between">
-                      <Text className="text-base font-bold text-gray-900">Total</Text>
-                      <Text className="text-lg font-bold text-gray-900">${totalAmount.toFixed(2)}</Text>
-                    </View>
-                  </View>
-                </View>
+                <PassengerReceiptCard
+                  ride={rideStatus}
+                  driver={driver}
+                  pickupLabel={pickupLabel}
+                  dropoffLabel={dropoffLabel}
+                  intermediateStops={intermediateStops}
+                  paymentLabel={receiptPaymentMethodLabel(rideStatus?.paymentMethod)}
+                  fareAmount={estimatedAmount}
+                  tipAmount={tipAmount}
+                  totalAmount={totalAmount}
+                  downloading={downloadingTripReceipt}
+                  onDownload={handleDownloadTripReceipt}
+                />
               </ScrollView>
 
               <View className="border-t border-gray-100 bg-white px-4 pb-2 pt-3">

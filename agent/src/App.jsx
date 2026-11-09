@@ -927,7 +927,7 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
         <h2 className="mt-2 text-[28px] font-semibold text-slate-950">Track accounts linked to your invite</h2>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
           This list shows drivers and passengers who created their account through your invite and how far they have moved through signup,
-          documentation, and admin approval.
+          documentation, and admin approval. Driver reward eligibility lasts 40 days from registration.
         </p>
       </section>
 
@@ -1006,6 +1006,13 @@ function ApplicationsSection({ applications, loading, error, filters, onFilterCh
                     <td className="border-b border-slate-200 px-4 py-3 text-sm text-slate-800">
                       <p className="font-semibold text-slate-900">{item.driver.fullName || `${item.type === 'passenger' ? 'Passenger' : 'Driver'} account created`}</p>
                       <p className="mt-1 text-xs text-slate-500">{item.driver.email || item.driver.phoneNumber || item.driverUserId || item.passengerUserId}</p>
+                      {item.type === 'driver' ? (
+                        <p className={`mt-1 text-xs font-semibold ${item.linkActive ? 'text-emerald-700' : 'text-amber-700'}`}>
+                          {item.linkActive
+                            ? `Reward link active until ${new Date(item.expiresAt).toLocaleDateString()}`
+                            : `Reward link ended ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : ''}`}
+                        </p>
+                      ) : null}
                       {item.vehicle.make || item.vehicle.model || item.vehicle.numberPlate ? (
                         <p className="mt-1 text-xs text-slate-500">
                           {[item.vehicle.make, item.vehicle.model, item.vehicle.numberPlate].filter(Boolean).join(' • ')}

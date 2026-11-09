@@ -865,6 +865,32 @@ export default function PassengerHomeScreen({ navigation, route }) {
     if (closeModal) setShowRouteModal(false);
   };
 
+  useEffect(() => {
+    const latitude = Number(route?.params?.sharedLocationCoordinate?.latitude);
+    const longitude = Number(route?.params?.sharedLocationCoordinate?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return undefined;
+
+    let active = true;
+    const coordinate = { latitude, longitude };
+    setHomeView('map');
+    setActiveField('destination');
+
+    getReadableLocationLabel('Drop-off', coordinate)
+      .catch(() => 'Drop-off: Shared WhatsApp location')
+      .then((label) => {
+        if (!active) return;
+        applyDestination(coordinate, label || 'Drop-off: Shared WhatsApp location');
+        navigation.setParams({
+          sharedLocationCoordinate: undefined,
+          sharedLocationAt: undefined,
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [route?.params?.sharedLocationAt]);
+
   const applyIntermediateStop = async (index, coordinate, label, closeModal = false) => {
     if (!isCoordinateInBulawayoServiceArea(coordinate)) {
       Alert.alert(SERVICE_AREA_TITLE, `Trust Express currently supports stop points within ${SERVICE_AREA_LABEL}.`);

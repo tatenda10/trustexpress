@@ -1617,6 +1617,27 @@ function AppContent() {
   const [currentRouteName, setCurrentRouteName] = useState(null);
   const [blockedAccountParams, setBlockedAccountParams] = useState(null);
 
+  const parseSharedGeoCoordinate = useCallback((url) => {
+    let decodedUrl = String(url || '').trim();
+    try {
+      decodedUrl = decodeURIComponent(decodedUrl);
+    } catch {
+      // Keep the original URL when Android supplies an incomplete escape sequence.
+    }
+    if (!/^geo:/i.test(decodedUrl)) return null;
+
+    const queryMatch = decodedUrl.match(/[?&]q=(?:loc:)?(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/i);
+    const pathMatch = decodedUrl.match(/^geo:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/i);
+    const match = queryMatch || pathMatch;
+    if (!match) return null;
+
+    const latitude = Number(match[1]);
+    const longitude = Number(match[2]);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+    if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+    return { latitude, longitude };
+  }, []);
+
   const syncCurrentRouteName = useCallback(() => {
     try {
       setCurrentRouteName(navigationRef.getCurrentRoute?.()?.name || null);
@@ -1637,6 +1658,24 @@ function AppContent() {
 
   const handleInviteUrl = useCallback(async (url) => {
     if (!url) return false;
+    const sharedGeoCoordinate = parseSharedGeoCoordinate(url);
+    if (sharedGeoCoordinate && navigationRef.isReady()) {
+      const rootState = navigationRef.getRootState?.();
+      const routeNames = Array.isArray(rootState?.routeNames) ? rootState.routeNames : [];
+      if (routeNames.includes('PassengerTabs')) {
+        navigationRef.navigate('PassengerTabs', {
+          screen: 'PassengerHome',
+          params: {
+            screen: 'PassengerBookingHome',
+            params: {
+              sharedLocationCoordinate: sharedGeoCoordinate,
+              sharedLocationAt: Date.now(),
+            },
+          },
+        });
+        return true;
+      }
+    }
     const parsed = Linking.parse(url);
     const path = String(parsed?.path || parsed?.hostname || '').toLowerCase();
     const queryInvite = parsed?.queryParams?.invite;
@@ -1710,7 +1749,7 @@ function AppContent() {
     } catch {
       return false;
     }
-  }, [isSignedIn, navigateToOnboardingIfAvailable, setInviteFromToken, setReferrerEmailFromDeepLink]);
+  }, [isSignedIn, navigateToOnboardingIfAvailable, parseSharedGeoCoordinate, setInviteFromToken, setReferrerEmailFromDeepLink]);
 
   useEffect(() => {
     console.log('[AppContent] auth state:', {
