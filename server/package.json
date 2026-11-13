@@ -71,6 +71,7 @@
     "db:migrate:driver-response-policy": "node scripts/run-migration.js sql/migrations/092_add_driver_response_policy.sql",
     "db:migrate:driver-offer-presence": "node scripts/run-migration.js sql/migrations/093_add_driver_offer_presence_snapshot.sql",
     "db:migrate:agent-driver-expiry": "node scripts/run-migration.js sql/migrations/094_add_agent_driver_link_expiry.sql",
+    "db:migrate:driver-engagement-reminders": "node scripts/run-migration.js sql/migrations/095_add_driver_engagement_reminder_runs.sql",
     "users:import-clerk": "node scripts/import-clerk-users.js",
     "db:verify:captain-rewards": "node scripts/verify-captain-rewards-db.js",
     "db:migrate:vehicle-catalog": "node scripts/run-migration.js sql/migrations/041_add_vehicle_make_model_catalog.sql",
