@@ -15,11 +15,12 @@ import {
   toggleRatingTag,
 } from '../../constants/rideRatingTags';
 import { isTransientNetworkError, withNetworkRetry } from '../../lib/networkRetry';
+import { formatMarketCurrency } from '../../constants/market';
 
 WebBrowser.maybeCompleteAuthSession();
 
-function formatCurrency(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+function formatCurrency(value, currencyCode = null) {
+  return formatMarketCurrency(value, currencyCode);
 }
 
 function formatDate(value) {

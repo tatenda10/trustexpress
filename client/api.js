@@ -137,7 +137,7 @@ export async function registerUser(token, payload) {
   const registrationCityPayload = await getRegistrationCityPayload().catch(() => ({}));
   return apiFetch(
     '/api/users/register',
-    { method: 'POST', body: JSON.stringify({ ...(payload || {}), ...registrationCityPayload }) },
+    { method: 'POST', body: JSON.stringify({ ...registrationCityPayload, ...(payload || {}) }) },
     token,
   );
 }
@@ -838,10 +838,10 @@ export async function submitVehicle(token, payload) {
   return apiFetch('/api/drivers/vehicle', { method: 'POST', body: JSON.stringify(payload) }, token);
 }
 
-export async function confirmPhoneVerification(token, phoneNumber) {
+export async function confirmPhoneVerification(token, phoneNumber, countryCode) {
   return apiFetch('/api/verify-phone/confirm', {
     method: 'POST',
-    body: JSON.stringify({ phoneNumber }),
+    body: JSON.stringify({ phoneNumber, countryCode }),
   }, token);
 }
 

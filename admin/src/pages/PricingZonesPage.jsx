@@ -101,16 +101,23 @@ export default function PricingZonesPage() {
   const [saving, setSaving] = useState(false)
   const [savingSurge, setSavingSurge] = useState(false)
   const [savingControls, setSavingControls] = useState(false)
+  const [markets, setMarkets] = useState([])
+  const [selectedCountryCode, setSelectedCountryCode] = useState('ZW')
   const [currencyCode, setCurrencyCode] = useState('USD')
   const [tierRows, setTierRows] = useState(defaultTierRows())
   const [surgeRules, setSurgeRules] = useState([])
   const [dynamicPricing, setDynamicPricing] = useState(DEFAULT_DYNAMIC_PRICING)
   const [pricingTimeZone, setPricingTimeZone] = useState('Africa/Harare')
 
-  const loadPricing = async () => {
+  const loadPricing = async (countryCode = selectedCountryCode) => {
     setLoading(true)
     try {
-      const { data } = await axios.get(`${BASE_URL}/api/admin/pricing`, { headers })
+      const { data } = await axios.get(`${BASE_URL}/api/admin/pricing`, {
+        headers,
+        params: { countryCode },
+      })
+      setMarkets(Array.isArray(data?.markets) ? data.markets : [])
+      setSelectedCountryCode(data?.market?.countryCode || countryCode)
       setCurrencyCode(data?.currencyCode || 'USD')
       setTierRows(rowsFromApi(data?.tiers || []))
       setSurgeRules((data?.surgeRules || []).map(makeSurgeRule))
@@ -195,6 +202,7 @@ export default function PricingZonesPage() {
       const { data } = await axios.put(
         `${BASE_URL}/api/admin/pricing`,
         {
+          countryCode: selectedCountryCode,
           currencyCode,
           tiers: normalizeRows(tierRows),
         },
@@ -202,7 +210,7 @@ export default function PricingZonesPage() {
       )
       setCurrencyCode(data?.currencyCode || currencyCode)
       setTierRows(rowsFromApi(data?.tiers || []))
-      toast.success('Universal pricing saved')
+      toast.success(`${selectedCountryCode} pricing saved`)
     } catch (err) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to save pricing')
     } finally {
@@ -213,14 +221,36 @@ export default function PricingZonesPage() {
   return (
     <section className="space-y-4">
       <div className="rounded-sm border border-slate-300 bg-white p-4 shadow-sm">
-        <h1 className="text-sm font-semibold text-slate-800">Universal Pricing</h1>
+        <h1 className="text-sm font-semibold text-slate-800">Market Pricing</h1>
         <p className="mt-1 text-xs text-slate-500">
-          Manage the passenger ride pricing for all locations from one place. Regions are disabled for now.
+          Manage fares separately for Zimbabwe and South Africa. Each market keeps its own currency and fare tiers.
         </p>
       </div>
 
       <div className="rounded-sm border border-slate-300 bg-white p-4 shadow-sm">
-        <div className="grid gap-4 lg:grid-cols-[160px_1fr]">
+        <div className="grid gap-4 lg:grid-cols-[220px_160px_1fr]">
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+              Market
+            </label>
+            <select
+              value={selectedCountryCode}
+              onChange={(event) => loadPricing(event.target.value)}
+              disabled={loading}
+              className="h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm"
+            >
+              {markets.length ? markets.map((market) => (
+                <option key={market.id} value={market.countryCode}>
+                  {market.name} ({market.currencyCode})
+                </option>
+              )) : (
+                <>
+                  <option value="ZW">Zimbabwe (USD)</option>
+                  <option value="ZA">South Africa (ZAR)</option>
+                </>
+              )}
+            </select>
+          </div>
           <div>
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-600">
               Currency
@@ -234,7 +264,7 @@ export default function PricingZonesPage() {
             />
           </div>
           <div className="rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-            Passenger pricing is now universal. The admin no longer needs to create or manage regions here.
+            You are editing {selectedCountryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'} fares only. Service areas determine where these fares are offered.
           </div>
         </div>
 
@@ -343,7 +373,7 @@ export default function PricingZonesPage() {
               </span>
             </div>
             <p className="mt-1 max-w-2xl text-xs text-slate-500">
-              The normal fare remains the minimum. Turning this off immediately disables every schedule and manual multiplier.
+              These controls currently apply across all markets. The normal market fare remains the minimum; dynamic pricing never reduces it.
             </p>
           </div>
           <button

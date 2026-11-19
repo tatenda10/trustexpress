@@ -6,6 +6,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getPassengerRideHistory } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { formatMarketCurrency } from '../../constants/market';
 
 const PAGE_SIZE = 15;
 
@@ -29,8 +30,8 @@ const ONGOING_LABELS = {
   in_progress: 'On trip',
 };
 
-function formatCurrency(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+function formatCurrency(value, currencyCode) {
+  return formatMarketCurrency(value, currencyCode);
 }
 
 function formatDate(value) {
@@ -58,7 +59,7 @@ function RideRow({ ride, filter, onPress }) {
   const minutes = Number(ride?.estimatedMinutes || 0);
   const isCancelled = filter === 'cancelled';
   const isOngoing = filter === 'ongoing';
-  const meta = [formatCurrency(fare), minutes > 0 ? `${minutes} min` : null].filter(Boolean).join(' · ');
+  const meta = [formatCurrency(fare, ride?.currencyCode), minutes > 0 ? `${minutes} min` : null].filter(Boolean).join(' · ');
 
   return (
     <TouchableOpacity

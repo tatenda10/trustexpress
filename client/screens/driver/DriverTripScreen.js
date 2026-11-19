@@ -299,15 +299,17 @@ function toExternalNavigationUrls(label, coordinate) {
 
   if (Platform.OS === 'android') {
     return [
+      `google.navigation:q=${latLng}&mode=d`,
+      `https://www.google.com/maps/dir/?api=1&destination=${latLng}&travelmode=driving`,
       `geo:${latLng}?q=${latLng}(${encodedLabel})`,
-      `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`,
     ];
   }
 
   return [
+    `comgooglemaps://?daddr=${latLng}&directionsmode=driving`,
     `maps://?daddr=${lat},${lng}&dirflg=d`,
+    `https://www.google.com/maps/dir/?api=1&destination=${latLng}&travelmode=driving`,
     `https://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`,
-    `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`,
   ];
 }
 
@@ -366,6 +368,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const lastSpokenAtRef = useRef(0);
   const lastArrivalAnnouncementStageRef = useRef('');
   const lastPassengerConfirmedAtRef = useRef('');
+  const lastPublishedCoordinateRef = useRef(null);
   const speechDebounceTimeoutRef = useRef(null);
   const autoArrivalTimerRef = useRef(null);
   const autoArrivalRideIdRef = useRef(null);
@@ -442,8 +445,13 @@ export default function DriverTripScreen({ navigation, route }) {
       const switched = await setDriverBackgroundLocationMode('trip', getCurrentToken);
       if (!active || switched) return;
 
-      const started = await startDriverBackgroundLocation(getCurrentToken, { prompt: false });
-      if (!active || !started) return;
+      const started = await startDriverBackgroundLocation(getCurrentToken, { prompt: true });
+      if (!active || !started) {
+        console.warn(TRIP_DEBUG_PREFIX, 'active trip background location unavailable', {
+          rideId: ride?.id || null,
+        });
+        return;
+      }
       await setDriverBackgroundLocationMode('trip', getCurrentToken);
     };
 
@@ -744,6 +752,7 @@ export default function DriverTripScreen({ navigation, route }) {
       });
       if (!nextCoordinate) return;
       lastLocalLocationAtRef.current = Date.now();
+      lastPublishedCoordinateRef.current = nextCoordinate;
       setLiveDriverCoordinate(nextCoordinate);
       pendingAvailabilityCoordinateRef.current = nextCoordinate;
       void flushAvailabilityCoordinate();
@@ -809,6 +818,21 @@ export default function DriverTripScreen({ navigation, route }) {
 
     void startLocationTracking();
 
+    const keepaliveInterval = setInterval(() => {
+      if (!active) return;
+      const coordinate = lastPublishedCoordinateRef.current;
+      if (coordinate) {
+        pendingAvailabilityCoordinateRef.current = coordinate;
+        void flushAvailabilityCoordinate();
+        return;
+      }
+      void requestFreshPosition().catch((error) => {
+        console.log(TRIP_DEBUG_PREFIX, 'location keepalive failed', {
+          message: error?.message || 'unknown error',
+        });
+      });
+    }, LOCATION_WATCHDOG_INTERVAL_MS);
+
     const restartStaleTracking = async (reason) => {
       if (!active || watchdogInFlight) return;
       watchdogInFlight = true;
@@ -842,6 +866,7 @@ export default function DriverTripScreen({ navigation, route }) {
     return () => {
       active = false;
       clearInterval(watchdogInterval);
+      clearInterval(keepaliveInterval);
       appStateSubscription?.remove?.();
       if (locationSubscriptionRef.current) {
         locationSubscriptionRef.current.remove();

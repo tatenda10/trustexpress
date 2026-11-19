@@ -19,9 +19,8 @@ import { confirmPhoneVerification, getMe } from '../../api';
 import { navigateToPassengerAccountMain } from '../../navigation/passengerNavigation';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import {
-  INVALID_LOCAL_PHONE_MESSAGE,
   e164ToLocalPhone,
-  normalizeZimbabwePhoneNumber,
+  normalizePhoneNumber,
   sanitizeLocalPhoneInput,
 } from '../../utils/phoneNumber';
 
@@ -37,6 +36,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
   const [currentPhone, setCurrentPhone] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [countryCode, setCountryCode] = useState('ZW');
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -55,6 +55,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
         if (!active) return;
         setPhoneVerified(data?.phoneVerified === true);
         setCurrentPhone(data?.phone_number || '');
+        setCountryCode(data?.registrationCountryCode === 'ZA' ? 'ZA' : 'ZW');
       } catch (error) {
         if (!active) return;
         Alert.alert('Verification unavailable', error?.message || 'Could not load your phone verification status.');
@@ -70,9 +71,9 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
   }, [isFocused]);
 
   const handleVerifyPhone = async () => {
-    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    const phoneResult = normalizePhoneNumber(phone, countryCode);
     if (!phoneResult.ok) {
-      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
+      Alert.alert('Invalid number', phoneResult.error || 'Enter a valid mobile number.');
       return;
     }
 
@@ -80,7 +81,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
       setSubmitting(true);
       const token = await getTokenRef.current();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, phoneResult.e164Phone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone, countryCode);
       const data = await getMe(token);
       setPhoneVerified(data?.phoneVerified === true);
       setCurrentPhone(data?.phone_number || phoneResult.e164Phone);
@@ -101,7 +102,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
   const headline = phoneVerified ? 'Your phone is verified' : 'Confirm your information';
   const subtitle = phoneVerified
     ? 'Your number is already saved on your account for ride updates and security.'
-    : 'Add your Zimbabwe mobile number so we can save it on your account for ride updates.';
+    : `Add your ${countryCode === 'ZA' ? 'South African' : 'Zimbabwean'} mobile number so we can save it on your account for ride updates.`;
 
   const scrollBottomPadding = 24;
 
@@ -166,7 +167,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
                   <TextInput
                     value={phone}
                     onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
-                    placeholder="0771234567"
+                    placeholder={countryCode === 'ZA' ? '0712345678' : '0771234567'}
                     placeholderTextColor="#9ca3af"
                     keyboardType="phone-pad"
                     maxLength={10}
@@ -174,7 +175,7 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
                     className="rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-lg font-medium text-gray-900"
                   />
                   <Text className="mt-2 text-xs text-gray-500">
-                    10 digits starting with 07 (e.g. 0771234567).
+                    {countryCode === 'ZA' ? 'Enter a South African mobile number, for example 0712345678.' : '10 digits starting with 07 (e.g. 0771234567).'}
                   </Text>
                 </View>
               ) : null}

@@ -13,6 +13,8 @@ import "./global.css"
 import { AuthProvider, useAuth, useUser } from './auth/AuthProvider';
 import { CallProvider } from './calls/CallProvider';
 import { getDriverCurrentRide, getDriverRideRequests, setApiAuthErrorHandler } from './api';
+import { configureMarket } from './constants/market';
+import { configureServiceAreaCountry } from './constants/serviceArea';
 
 // Screens - Shared
 import SplashScreen from './screens/shared/SplashScreen';
@@ -114,7 +116,7 @@ function AuthStack() {
   );
 }
 
-import { attachAgentReferral, getMe, getDriverMe, registerUser, saveDriverPushToken, saveDriverFcmToken, saveUserPushToken } from './api';
+import { attachAgentReferral, getMe, getDriverMe, loadServiceAreas, registerUser, saveDriverPushToken, saveDriverFcmToken, saveUserPushToken } from './api';
 import {
   DRIVER_SKIP_ENHANCED_SELFIE_KEY,
   DRIVER_SKIP_ONBOARDING_KEY,
@@ -375,6 +377,10 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    loadServiceAreas().catch(() => {});
+  }, []);
 
   useEffect(() => {
     referralAttachKeyRef.current = '';
@@ -1041,6 +1047,8 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
       })
       .then((profile) => {
         if (cancelled) return;
+        configureMarket(profile?.registrationCountryCode);
+        configureServiceAreaCountry(profile?.registrationCountryCode);
         const explicitRole = resolveExplicitRole(profile);
         if (explicitRole) {
           const nextProfile = {
@@ -1277,6 +1285,8 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         return fallbackProfile;
       }
       const profile = await getMe(token);
+      configureMarket(profile?.registrationCountryCode);
+      configureServiceAreaCountry(profile?.registrationCountryCode);
       setUserProfile(profile);
       return profile;
     } catch (error) {

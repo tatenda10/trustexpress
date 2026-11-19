@@ -4,6 +4,7 @@
  */
 import { query } from '../db/connection.js';
 import { toIsoDateOnly } from './smile-cash.js';
+import { getSaDriverCompliance } from './sa-driver-compliance.js';
 
 export function normalizeUploadPath(value) {
   const raw = String(value || '').trim();
@@ -67,6 +68,8 @@ function shapeProfileFromRow(row) {
   return {
     id: `profile_${row.driver_user_id}`,
     driverKind: row.driver_kind || null,
+    registrationCountryCode: row.registration_country_code || null,
+    identityDocumentType: row.identity_document_type || null,
     status: effectiveStatus,
     submittedAt: row.profile_submitted_at ? new Date(row.profile_submitted_at).toISOString() : null,
     rejectionReason: row.profile_rejection_reason || null,
@@ -79,6 +82,18 @@ function shapeProfileFromRow(row) {
     nationalIdNumber: row.national_id_number || null,
     driverLicenceNumber: row.driver_licence_number || null,
     driverLicenceExpiresAt: toIsoDateOnly(row.driver_licence_expires_at),
+    residentialAddress: row.residential_address || null,
+    proofOfAddressUrl: normalizeUploadPath(row.proof_of_address_url),
+    prdpNumber: row.prdp_number || null,
+    prdpUrl: normalizeUploadPath(row.prdp_url),
+    prdpExpiresAt: toIsoDateOnly(row.prdp_expires_at),
+    criminalRecordReportUrl: normalizeUploadPath(row.criminal_record_report_url),
+    criminalDeclarationAcceptedAt: toIsoOrNull(row.criminal_declaration_accepted_at),
+    ricaEcaDeclarationAcceptedAt: toIsoOrNull(row.rica_eca_declaration_accepted_at),
+    operatorAgreementVersion: row.operator_agreement_version || null,
+    operatorAgreementAcceptedAt: toIsoOrNull(row.operator_agreement_accepted_at),
+    operatorAgreementSignature: row.operator_agreement_signature || null,
+    operatingLicenceConditionAcceptedAt: toIsoOrNull(row.operating_licence_condition_accepted_at),
     ecocashNumber: row.ecocash_number || null,
     ecocashRegisteredName: row.ecocash_registered_name || null,
     dateOfBirth: toIsoDateOnly(row.date_of_birth),
@@ -114,10 +129,19 @@ function shapeVehicleFromRow(row) {
     vehicleRegistrationBookUrl: normalizeUploadPath(row.vehicle_registration_book_url),
     insuranceUrl: normalizeUploadPath(row.insurance_url),
     zinaraUrl: normalizeUploadPath(row.zinara_url),
+    operatingLicenceNumber: row.operating_licence_number || null,
+    operatingLicenceUrl: normalizeUploadPath(row.operating_licence_url),
+    operatingLicenceExpiresAt: toIsoDateOnly(row.operating_licence_expires_at),
+    operatorLegalName: row.operator_legal_name || null,
+    operatorBusinessAddress: row.operator_business_address || null,
+    panicDeviceProofUrl: normalizeUploadPath(row.panic_device_proof_url),
+    vehicleMarkingLeftUrl: normalizeUploadPath(row.vehicle_marking_left_url),
+    vehicleMarkingRightUrl: normalizeUploadPath(row.vehicle_marking_right_url),
     numberPlate: row.number_plate ? String(row.number_plate).trim().toUpperCase() : null,
     make: row.make || null,
     model: row.model || null,
     year: row.year ?? null,
+    firstRegisteredAt: toIsoDateOnly(row.first_registered_at),
     color: row.color || null,
     vehicleTierKey: row.vehicle_tier_key || null,
     vehicleTierName: row.vehicle_tier_name || null,
@@ -225,20 +249,28 @@ function shapeVehicleFromLegacyMetadata(vehicleMeta = {}) {
  * Uses MySQL as source of truth; pass clerkUser only for pushToken (and optional fallback).
  */
 export async function getDriverVerificationFromMysql(driverUserId, clerkUser = null) {
-  const [identity, vehicle] = await Promise.all([
+  const [identity, vehicle, userRow] = await Promise.all([
     getDriverIdentity(driverUserId),
     getDriverVehicle(driverUserId),
+    query('SELECT registration_country_code FROM users WHERE clerk_user_id = ? LIMIT 1', [driverUserId]).then((rows) => rows[0] || null),
   ]);
+
+  if (identity && !identity.registration_country_code && userRow?.registration_country_code) {
+    identity.registration_country_code = userRow.registration_country_code;
+  }
 
   const legacyMeta = clerkUser?.privateMetadata || {};
   const phoneVerified = !!identity?.phone_verified_at || !!legacyMeta?.phoneVerifiedAt;
   const driverProfile = shapeProfileFromRow(identity) || shapeProfileFromLegacyMetadata(legacyMeta.driverProfile);
   const vehicleShaped = shapeVehicleFromRow(vehicle) || shapeVehicleFromLegacyMetadata(legacyMeta.vehicle);
+  const saCompliance = getSaDriverCompliance(identity, vehicle);
 
   return {
     phoneVerified,
+    registrationCountryCode: identity?.registration_country_code || userRow?.registration_country_code || null,
     driverProfile,
     vehicle: vehicleShaped,
+    saCompliance,
     pushToken: clerkUser?.privateMetadata?.pushToken || null,
   };
 }

@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Linking } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth, useUser } from '../../auth/AuthProvider';
 import { getMe, updateMe } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { configureMarket } from '../../constants/market';
+import { configureServiceAreaCountry } from '../../constants/serviceArea';
 
 export default function CompleteProfileScreen({ route, role: roleProp, onCompleted: onCompletedProp }) {
   const insets = useSafeAreaInsets();
@@ -14,6 +17,8 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
   const [saving, setSaving] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [registrationCountryCode, setRegistrationCountryCode] = useState('ZW');
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [loadWarning, setLoadWarning] = useState('');
 
   const role = roleProp || (route?.params?.role === 'driver' ? 'driver' : 'passenger');
@@ -37,6 +42,7 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
         if (!active) return;
         setFirstName(profile?.first_name || '');
         setLastName(profile?.last_name || '');
+        setRegistrationCountryCode(profile?.registrationCountryCode === 'ZA' ? 'ZA' : 'ZW');
       } catch (error) {
         if (!active) return;
         console.warn('[CompleteProfileScreen] profile bootstrap failed', error);
@@ -60,11 +66,22 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
       Alert.alert('Missing details', 'Enter both your first name and last name before continuing.');
       return;
     }
+    if (registrationCountryCode === 'ZA' && !termsAccepted) {
+      Alert.alert('Consent required', 'Accept the Trust Express terms and privacy policy to create your South African account.');
+      return;
+    }
 
     try {
       setSaving(true);
       const token = await getTokenRef.current();
-      await updateMe(token, { firstName: trimmedFirstName, lastName: trimmedLastName });
+      await updateMe(token, {
+        firstName: trimmedFirstName,
+        lastName: trimmedLastName,
+        registrationCountryCode,
+        acceptTermsAndPrivacy: registrationCountryCode === 'ZA' ? true : undefined,
+      });
+      configureMarket(registrationCountryCode);
+      configureServiceAreaCountry(registrationCountryCode);
       await user?.reload?.().catch(() => {});
 
       if (typeof onCompleted === 'function') {
@@ -113,6 +130,47 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
                 onChangeText={setFirstName}
                 autoCapitalize="words"
               />
+
+              <Text className="mb-2 mt-5 text-sm font-medium text-gray-700">Registration country</Text>
+              <View className="flex-row gap-3">
+                {[
+                  { code: 'ZW', label: 'Zimbabwe' },
+                  { code: 'ZA', label: 'South Africa' },
+                ].map((country) => {
+                  const selected = registrationCountryCode === country.code;
+                  return (
+                    <TouchableOpacity
+                      key={country.code}
+                      onPress={() => setRegistrationCountryCode(country.code)}
+                      className={`flex-1 rounded-xl border px-4 py-4 ${selected ? 'border-blue-600 bg-blue-50' : 'border-gray-200 bg-white'}`}
+                    >
+                      <Text className={`text-center text-base font-semibold ${selected ? 'text-blue-700' : 'text-gray-700'}`}>{country.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text className="mt-2 text-xs leading-5 text-gray-500">
+                This controls phone formats, service areas, currency, payments and emergency information in the app.
+              </Text>
+
+              {registrationCountryCode === 'ZA' ? (
+                <View className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                  <TouchableOpacity className="flex-row items-start" onPress={() => setTermsAccepted((value) => !value)}>
+                    <Ionicons name={termsAccepted ? 'checkbox' : 'square-outline'} size={23} color={termsAccepted ? PRIMARY_BLUE : '#64748b'} />
+                    <Text className="ml-3 flex-1 text-sm leading-5 text-gray-700">
+                      I accept the Trust Express terms of use and consent to the processing of my personal information as described in the privacy policy.
+                    </Text>
+                  </TouchableOpacity>
+                  <View className="ml-9 mt-3 flex-row gap-5">
+                    <TouchableOpacity onPress={() => Linking.openURL('https://trustexpress.co.za/privacy')}>
+                      <Text className="text-sm font-semibold text-blue-700">Privacy policy</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => Linking.openURL('https://trustexpress.co.za/terms')}>
+                      <Text className="text-sm font-semibold text-blue-700">Terms of use</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
 
               <Text className="mb-2 text-sm font-medium text-gray-700">Last name</Text>
               <TextInput

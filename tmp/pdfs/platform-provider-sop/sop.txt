@@ -1,0 +1,417 @@
+
+===== PAGE 1 =====
+ 
+ 
+  
+ 
+STANDARD 
+OPERATING 
+PROCEDURE AND 
+PROCESS FLOW FOR 
+THE REGISTRATION 
+OF E-HAILING 
+PLATFORM 
+PROVIDERS 
+ 
+NATIONAL PUBLIC TRANSPORT REGULATOR 
+ANNEXURE E 
+
+
+===== PAGE 2 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 1 
+Table of Contents 
+ 
+Purpose of the Standard Operating Procedure ......................................................................... 2 
+Legislation Framework ..................................................................................................................... 2 
+Definition .............................................................................................................................................. 2 
+Process flow for the registration of e-hailing platform providers ......................................... 3 
+Step 1: Receiving the application .............................................................................................. 4 
+Documents to be included ....................................................................................................... 4 
+Check application ...................................................................................................................... 5 
+Return application if incomplete or defective .................................................................... 5 
+Method of payment .................................................................................................................... 5 
+Check proof of payment ........................................................................................................... 6 
+Issue a receipt ............................................................................................................................. 6 
+Step 2: Verification ........................................................................................................................ 6 
+Verify submitted certificates from ICASA ............................................................................ 6 
+Check tax compliance status pin ........................................................................................... 6 
+Step 3: Notify the public ............................................................................................................... 6 
+Step 4: Preparation of the application for adjudication ....................................................... 6 
+Step 5: Adjudication ...................................................................................................................... 7 
+Applicant Demonstrate the app .............................................................................................. 7 
+NPTR takes a decision .............................................................................................................. 7 
+Step 6: Register the platform provider and issue certificate ............................................. 8 
+Step 7: Inform Provincial Regulatory Entities (PREs) .......................................................... 8 
+NPTR Committee Sittings ............................................................................................................ 8 
+Approval of the Standard Operating Procedure (SOP) ........................................................ 8 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+
+===== PAGE 3 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 2 
+ 
+Purpose of the Standard Operating Procedure  
+ 
+The purpose of this Standard Operating Procedure (SOP) is to provide a structured 
+and a clear process for the registration of e -hailing platform providers  or platform 
+providers by the National Public Transport Regulator (NPTR).  
+ 
+Its aim is to provide a guidance to the NPTR support staff (officials) and applicants on 
+submission, evaluation, approval, renewal of registration of e-hailing application (App) 
+or software providers. 
+ 
+Legislation Framework 
+This annexure is informed by, but not limited to the following legislative instruments: 
+1. National Land Transport Amendment Act, 2023 (Act No. 23 of 2023) 
+2. Second National Land Transport Regulations, 2025 
+3. Type Approval Regulations, 2013 developed in terms of section 4(1) and 35 of 
+the Electronic Communications Act, 2005 (Act No. 36 of 2005). 
+Definition 
+E-Hailing Platform Provider or platform provider means a person who provides the 
+application or technology that is designed or used in enabling the e-hailing public 
+transport service to be provided, including any or all of the value chain elements 
+listed in regulation 15. 
+ 
+ 
+ 
+ 
+
+
+===== PAGE 4 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 3 
+ 
+Process flow for the registration of e-hailing platform providers  
+ 
+The following diagram depicts the seven (7) steps to be followed when registering 
+platform providers.  
+ 
+ 
+ 
+    
+  
+ 
+ 
+ 
+ 
+  
+ 
+ 
+ 
+ 
+                                                                      
+ 
+  
+ 
+ 
+ 
+ 
+ 
+                               
+ 
+STEP 1 
+APPLICATION SUBMITTED PERSONALLY 
+AT NPTR OFFICE, RECEIVED BY POST OR 
+EMAIL 
+-Check for completeness while at 
+helpdesk  
+-Request original documents where 
+necessary  
+-Application fees paid and/or verified if 
+paid electronically 
+- Issue receipt  
+ 
+Return to 
+applicant 
+Complete 
+ 
+STEP 3 
+PUBLISH NOTICE OF APPLICATION 
+FOR REGISTRATION AS E-HAILING 
+PLATFORM PROVIDER (14 days) 
+-Government Gazette 
+-NPTR notice board 
+-Website 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+STEP 4 
+ 
+ 
+ 
+ 
+Incomplete 
+STEP 6 
+meeting 
+preparations 
+ Notice 
+ Approved 
+DEMONSTRATION  
+-Invite the applicant to appear before the 
+Committee 
+-Demonstration of app functionality by 
+applicant 
+DECISION 
+- NPTR Committee considers whether the 
+application is compliant and the platform 
+provider complies with the regulations to 
+make a decision 
+-Committee may dispatch NPTR Inspectors for 
+additional information and/or verification 
+ 
+ 
+ 
+       STEP 5 
+-Print applications summary  
+-circulate meeting packs to 
+the committee 
+ -Arrange adjudication 
+meeting 
+ 
+ 
+ 
+ 
+REGISTER PLATFORM 
+PROVIDER AND ISSUE 
+CERTIFICATE 
+-Issue certificate to applicant 
+or authorised representative 
+-Keep duplicate copy of the 
+certificate 
+ 
+VERIFICATION  
+-Check correctness of application  
+-Verify ICASA certificates 
+-Check Tax Compliance Status 
+STEP 2 
+INFORM PROVINCIAL 
+REGULATORY ENTITIES 
+Send notification of 
+registration Platform 
+Provider to all PREs 
+ 
+STEP 7 
+INFORM ALL PREs 
+-Send notification of 
+registration to all PREs 
+ 
+ 
+     Complete 
+Refused 
+Provide reasons and 
+remedial action to the 
+applicant 
+
+
+===== PAGE 5 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 4 
+  
+Step 1: Receiving the application 
+ 
+The applicant must complete all of the fields on the application form (Form 9A in the 
+Second National Land Transport Regulations, 2025) and submit it to the NPTR as 
+follows: 
+• By hand to the NPTR office  
+• By fax to the NPTR office 
+• By e-mail to the NPTR (documents can be scanned) 
+• By post to the NPTR office 
+Documents to be included 
+ 
+The following documents must accompany the application: 
+a) A certified copy of the following in case of an individual: 
+i. RSA identity document; or 
+ii. Passport; or 
+iii. Temporary RSA identity certificate; or 
+iv. Foreign identity document; 
+v. Valid work visa 
+b) A certified copy of the following in case of a company: 
+ i.       Certificate of incorporation; or  
+ii. Founding statement; or 
+iii. Partnership agreement  
+iv. Letter of Authority (trust)  
+c) Certified proof of Type Approval from ICASA (Certificates for all equipment) 
+d) A valid Tax Compliance Status Pin from SARS in the names of the applicant. 
+e) Certified proof of physical address (Lease agreement/Title deed/Municipal 
+account) 
+f) Proof of payment 
+g) Other proof or documents required by the NPTR, if any. 
+ 
+
+
+===== PAGE 6 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 5 
+Check application 
+ 
+The official receiving the application must check it to see that all fields have been 
+completed and that all required documents have been attached.  
+Where applicable the official must help the applicant to complete the form and give 
+advice on what documents must or should be attached. 
+If the official suspects that any d ocument attached is not valid or authentic, he/she 
+may ask the applicant to submit the original. 
+The help desk should also do the following: 
+• Provide the application form to the applicant 
+• Check whether the applicant ha s all of the documents needed for th e type of 
+application 
+• Request originals if needed 
+• Check proof of payment if it is done by electronic funds transfer (EFT), and 
+• Refer the applicant to the payment method used (EFT or Cash Deposits) 
+Return application if incomplete or defective 
+ 
+If there are problems with the application that cannot be resolved by assisting the 
+applicant, the official must reject the application and advise the applicant on what is 
+missing or wrong. See regulation 2 (4) 
+Method of payment 
+ 
+The application fee may be paid by Cash Deposit or by electronic funds transfer (EFT) 
+after officials are satisfied that all documents are in order and the application form is 
+completed properly and signed.  
+Banking Details: ABSA  
+     Account Number: 405 362 0095  
+     Branch code: 632 005  
+    Reference number: “NPTR” ID Number or Company registration 
+
+
+===== PAGE 7 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 6 
+Check proof of payment 
+ 
+Check that the application fee specified in  the Regulations has been paid and that a 
+reference number has been allocated. 
+Issue a receipt 
+Issue a receipt to the person lodging the application where it is submitted by hand or 
+acknowledge receipt by fax or email if the application was submitted by fax, e -mail or 
+post. This must be done on the day of receipt, or on the next working day if recei ved 
+over a weekend or on a public holiday. 
+Step 2: Verification  
+Double checks the information on the application form to ensure correctness. 
+Verify submitted certificates from ICASA 
+Verify authenticity of certificates from ICASA. (Telephonically or via email to ICASA 
+Check tax compliance status pin  
+Make sure that the name and details on the tax compliance status pin are the same 
+as those on the application form and check compliance status on e-filing.  
+Step 3: Notify the public 
+Publish notice of the application  for registration of e -hailing platform provider in the 
+government gazette, NPTR office and website  for public comments . Interested 
+persons may supply comments or representations within 14 days.  
+Step 4: Preparation of the application for adjudication 
+The Secretariat official compiles a manual board summary of applications received, 
+for adjudication. 
+Applications are to be prepared on a First In, First Out (FIFO) basis to ensure fairness. 
+Board meeting agenda prepared and printed (manually). 
+Hard copies of meeting/document packs are distributed to members at least three (3) 
+days before the meeting. 
+ 
+
+
+===== PAGE 8 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 7 
+Step 5: Adjudication 
+The applicant should be informed that they are required to appear before the 
+Committee to demonstrate the app, and the hearing date should be scheduled in 
+advance (at least seven (7) days before the demonstration day). 
+The NPTR has the power to subpoena witnesses by using Form 3D in National Land 
+Transport Regulations, 2 009. Witnesses can be required to bring specified books, 
+plans, documents or records with them to the hearing.  
+Persons may be represented by a representative at the hearing, i.e. an attorney, 
+advocate or any other person, who, on request of the NPTR, must  provide written 
+proof that he/she has been authorised to appear (regulation 19(3)  of the NLTA 
+regulations, 2009). 
+A person may require a translator to be present to translate the proceedings at the 
+hearing into an official language other than English. If so he/she must notify the NPTR 
+accordingly not less than 7 days before the hearing (regulation 19(5)). The NPTR must 
+be satisfied that all persons present at the hearing are able to understand the 
+proceedings (regulation 19(6)).  
+ 
+Applicant Demonstrate the app 
+The applicant must demonstrate the functionality of the app to meet the minimum 
+requirements in regulation s 16 & 17 of the Second National Land Transport 
+Regulations 2025.  
+ 
+NPTR takes a decision 
+The NPTR Committee assesses the application's compliance and determines whether 
+the platform provider meets the requirements of Regulations 15, 16, and 17 of the 
+Second National Land Transport Regulations, 2025. 
+The Regulator may direct the NPTR Inspectors to conduct physical inspections of the 
+applicant’s premises before taking a decision.  
+ 
+
+
+===== PAGE 9 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 8 
+Step 6: Register the platform provider and issue certificate 
+Notify the applicant that the application was approved. 
+Register the platform provider, print the certificate and inform the applicant that the 
+certificate is ready for collection.  
+Issue (hand) the certificate to the applicant or authorised representative.  If the latter, 
+he/she must hand in written authorisation from the applicant (Keep a duplicate copy).  
+Step 7: Inform Provincial Regulatory Entities (PREs) 
+Send notification of registration to all PREs for information and their records. 
+NPTR Committee Sittings 
+The NPTR Committee should convene as frequently as possible, preferably on a 
+weekly basis, to consider applications for e -hailing platform registration and other 
+related matters. 
+Members must be notified timeously of the sittings. A meeting will be deemed valid 
+when a majority of members are in attendance, and no decisions may be made 
+without a quorum. Each sitting must provide members with the agenda, minutes, and 
+records of decisions. 
+Approval of the Standard Operating Procedure (SOP) 
+ 
+On the 5th of November 2025 the NPTR deliberated on the draft SOP and agreed 
+that this version should be approved as version one (1) SOP for the registration of e-
+hailing platform providers. Here below is the control sheet confirming such approval. 
+ANNEXURE TO NPTR STANDARD OPERATING PROCEDURE (SOP) 
+SOP Group e-hailing platform provider registration  
+Type Regulation    Policy  
+Guideline   Procedure x 
+SOP reference and 
+Version No: 
+202511 
+One (01) 
+Certification of due 
+process 
+ 
+ 
+ 
+
+
+===== PAGE 10 =====
+                      PROCESS FLOW FOR THE REGISTRATION OF E-HAILING PLATFORM PROVIDERS 
+ pg. 9 
+Delegated Authority       Date 
+Approval Date 05 November 2025 Commencement Date Immediate  
+ 
+ 
+ 
+SOP MANUAL IS APPROVED/ NOT APPROVED/ COMMENTS  
+_____________________________________________________ 
+________________________________________________________________ 
+________________________________________________________________ 
+ 
+_______________________ 
+MR. BONILE MALILA 
+CHAIRPERSON: NPTR  
+DATE: 05/11/2025 
+   

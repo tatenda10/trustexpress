@@ -9,20 +9,20 @@ function post(path, body) {
   });
 }
 
-export const sendPhoneCode = ({ phone, role, channel }) => post('/api/auth/phone/send-code', { phone, role, channel });
-export const verifyPhoneCode = ({ phone, role, code }) => post('/api/auth/phone/verify', { phone, role, code });
+export const sendPhoneCode = ({ phone, role, channel, countryCode }) => post('/api/auth/phone/send-code', { phone, role, channel, countryCode });
+export const verifyPhoneCode = ({ phone, role, code, countryCode }) => post('/api/auth/phone/verify', { phone, role, code, countryCode });
 export const completePhoneSignUp = ({ signupToken, firstName, lastName, email }) =>
   post('/api/auth/phone/complete-sign-up', { signupToken, firstName, lastName, email });
 
-export const emailSignUp = ({ email, password, firstName, lastName, role }) =>
-  post('/api/auth/email/sign-up', { email, password, firstName, lastName, role });
+export const emailSignUp = ({ email, password, firstName, lastName, role, countryCode }) =>
+  post('/api/auth/email/sign-up', { email, password, firstName, lastName, role, countryCode });
 export const verifyEmailCode = ({ email, role, code }) => post('/api/auth/email/verify', { email, role, code });
 export const resendEmailCode = ({ email, role }) => post('/api/auth/email/resend-code', { email, role });
 export const emailSignIn = ({ email, password, role }) => post('/api/auth/email/sign-in', { email, password, role });
 
-export const forgotPassword = ({ identifier, role, channel }) => post('/api/auth/password/forgot', { identifier, role, channel });
-export const resetPassword = ({ identifier, role, channel, code, newPassword }) =>
-  post('/api/auth/password/reset', { identifier, role, channel, code, newPassword });
+export const forgotPassword = ({ identifier, role, channel, countryCode }) => post('/api/auth/password/forgot', { identifier, role, channel, countryCode });
+export const resetPassword = ({ identifier, role, channel, code, newPassword, countryCode }) =>
+  post('/api/auth/password/reset', { identifier, role, channel, code, newPassword, countryCode });
 
 export const changePassword = (token, { currentPassword, newPassword }) =>
   apiFetch('/api/auth/password/change', {

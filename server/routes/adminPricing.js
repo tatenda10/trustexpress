@@ -70,12 +70,53 @@ function mapTier(row) {
   };
 }
 
-async function resolveUniversalRegion() {
-  const regionRows = await query(
-    `SELECT id, currency_code
+function normalizeCountryCode(value) {
+  const countryCode = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(countryCode) ? countryCode : null;
+}
+
+function mapMarket(row) {
+  return {
+    id: row.id,
+    name: row.region_name,
+    countryCode: row.country_code,
+    currencyCode: row.currency_code || 'USD',
+    timezone: row.timezone || PRICING_TIME_ZONE,
+    isActive: !!row.is_active,
+  };
+}
+
+async function listPricingMarkets() {
+  return query(
+    `SELECT id, region_name, country_code, currency_code, timezone, is_active
      FROM operating_regions
+     ORDER BY is_active DESC, country_code ASC, id ASC`
+  );
+}
+
+async function resolvePricingRegion(countryCode = null, regionId = null) {
+  const normalizedCountryCode = normalizeCountryCode(countryCode);
+  const normalizedRegionId = Number(regionId);
+  const conditions = [];
+  const params = [];
+
+  if (Number.isInteger(normalizedRegionId) && normalizedRegionId > 0) {
+    conditions.push('id = ?');
+    params.push(normalizedRegionId);
+  } else if (normalizedCountryCode) {
+    conditions.push('country_code = ?');
+    params.push(normalizedCountryCode);
+  } else {
+    conditions.push("country_code = 'ZW'");
+  }
+
+  const regionRows = await query(
+    `SELECT id, region_name, country_code, currency_code, timezone, is_active
+     FROM operating_regions
+     WHERE ${conditions.join(' AND ')}
      ORDER BY is_active DESC, id ASC
-     LIMIT 1`
+     LIMIT 1`,
+    params
   );
 
   const region = regionRows[0];
@@ -88,7 +129,8 @@ async function resolveUniversalRegion() {
 
 router.get('/', requireAdminAuth, requirePermission('pricing.read'), async (req, res) => {
   try {
-    const region = await resolveUniversalRegion();
+    const region = await resolvePricingRegion(req.query.countryCode, req.query.regionId);
+    const markets = await listPricingMarkets();
     const rows = await query(
       `SELECT id, tier_key, tier_name, price_per_km, base_fare, per_minute_rate, minimum_fare, is_active, sort_order
        FROM operating_region_pricing_tiers
@@ -104,6 +146,8 @@ router.get('/', requireAdminAuth, requirePermission('pricing.read'), async (req,
     }));
 
     return res.json({
+      market: mapMarket(region),
+      markets: markets.map(mapMarket),
       currencyCode: region.currency_code || 'USD',
       tiers: rows.map(mapTier),
       surgeRules,
@@ -210,7 +254,7 @@ router.put('/surge-rules', requireAdminAuth, requirePermission('pricing.manage')
 
 router.put('/', requireAdminAuth, requirePermission('pricing.manage'), async (req, res) => {
   try {
-    const region = await resolveUniversalRegion();
+    const region = await resolvePricingRegion(req.body?.countryCode, req.body?.regionId);
     const rawTiers = Array.isArray(req.body?.tiers) ? req.body.tiers : [];
     const tiers = rawTiers
       .map((tier, index) => ({
@@ -272,6 +316,10 @@ router.put('/', requireAdminAuth, requirePermission('pricing.manage'), async (re
     );
 
     return res.json({
+      market: mapMarket({
+        ...region,
+        currency_code: String(req.body?.currencyCode || region.currency_code || 'USD').trim().toUpperCase() || 'USD',
+      }),
       currencyCode: String(req.body?.currencyCode || region.currency_code || 'USD').trim().toUpperCase() || 'USD',
       tiers: rows.map(mapTier),
     });
@@ -283,7 +331,10 @@ router.put('/', requireAdminAuth, requirePermission('pricing.manage'), async (re
 
 router.post('/reset-defaults', requireAdminAuth, requirePermission('pricing.manage'), async (req, res) => {
   try {
-    const region = await resolveUniversalRegion();
+    const region = await resolvePricingRegion(
+      req.body?.countryCode || req.query.countryCode,
+      req.body?.regionId || req.query.regionId
+    );
     const existingRows = await query(
       `SELECT price_per_km, base_fare, per_minute_rate, minimum_fare
        FROM operating_region_pricing_tiers
@@ -336,7 +387,7 @@ router.post('/reset-defaults', requireAdminAuth, requirePermission('pricing.mana
       [region.id]
     );
 
-    return res.json({ currencyCode: region.currency_code || 'USD', tiers: rows.map(mapTier) });
+    return res.json({ market: mapMarket(region), currencyCode: region.currency_code || 'USD', tiers: rows.map(mapTier) });
   } catch (err) {
     console.error('POST /api/admin/pricing/reset-defaults', err);
     return res.status(500).json({ error: 'Server error' });

@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { query } from '../../db/connection.js';
-import { normalizeZimbabwePhoneNumber } from '../phone-number.js';
+import { normalizePhoneNumber } from '../phone-number.js';
 
 const BCRYPT_ROUNDS = 10;
 const MAX_FAILED_LOGINS_15_MIN = 5;
@@ -16,15 +16,16 @@ export function normalizeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
 }
 
-export function normalizePhone(value) {
-  const result = normalizeZimbabwePhoneNumber(value);
+export function normalizePhone(value, countryCode = null) {
+  const result = normalizePhoneNumber(value, countryCode);
   return result.ok ? result.e164Phone : null;
 }
 
-/** Older rows may hold 07…, 2637… or +2637…; match all of them. */
 function phoneVariants(e164Phone) {
-  const national = e164Phone.slice(4);
-  return [e164Phone, `263${national}`, `0${national}`];
+  const raw = String(e164Phone || '');
+  const countryDigits = raw.startsWith('+263') ? '263' : raw.startsWith('+27') ? '27' : '';
+  const national = countryDigits ? raw.slice(countryDigits.length + 1) : raw.replace(/^\+/, '');
+  return [raw, `${countryDigits}${national}`, `0${national}`];
 }
 
 export function assertPasswordStrength(password) {
@@ -58,7 +59,7 @@ export function generateUserId() {
   return `user_${id}`;
 }
 
-const USER_COLUMNS = `clerk_user_id AS id, email, first_name, last_name, image_url, role,
+const USER_COLUMNS = `clerk_user_id AS id, email, first_name, last_name, image_url, role, registration_country_code,
   phone_number, phone_verified_at, email_verified_at, password_hash, created_at`;
 
 export async function findUserById(userId) {
@@ -102,14 +103,15 @@ export async function createUser({
   firstName = null,
   lastName = null,
   passwordHash = null,
+  registrationCountryCode = null,
 }) {
   const userId = generateUserId();
   await query(
     `INSERT INTO users (
        clerk_user_id, email, first_name, last_name, role,
        phone_number, phone_verified_at, email_verified_at, password_hash, password_updated_at,
-       clerk_imported_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+       registration_country_code, clerk_imported_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       userId,
       email,
@@ -121,6 +123,9 @@ export async function createUser({
       emailVerified ? new Date() : null,
       passwordHash,
       passwordHash ? new Date() : null,
+      ['ZA', 'ZW'].includes(String(registrationCountryCode || '').toUpperCase())
+        ? String(registrationCountryCode).toUpperCase()
+        : null,
     ]
   );
   return findUserById(userId);
@@ -203,5 +208,6 @@ export function toPublicUser(row) {
     lastName: row.last_name || null,
     imageUrl: row.image_url || null,
     hasPassword: Boolean(row.password_hash),
+    registrationCountryCode: row.registration_country_code || null,
   };
 }

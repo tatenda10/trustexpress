@@ -1692,11 +1692,20 @@ const DriverHomeScreen = ({ navigation, route }) => {
       setIsOnline(true);
       // Sequential so the background-location and overlay permission prompts don't stack.
       backgroundLocationPromptedRef.current = true;
-      startDriverBackgroundLocation(() => getTokenRef.current(), { prompt: true })
-        .catch(() => {})
-        .finally(() => {
-          ensureDisplayOverlayReady().catch(() => {});
-        });
+      const backgroundLocationStarted = await startDriverBackgroundLocation(
+        () => getTokenRef.current(),
+        { prompt: true }
+      ).catch(() => false);
+      if (!backgroundLocationStarted) {
+        await syncAvailability(false).catch(() => {});
+        setIsOnline(false);
+        Alert.alert(
+          'Background location required',
+          'To keep passenger tracking accurate, allow Trust Express to use your location all the time before going online.'
+        );
+        return;
+      }
+      ensureDisplayOverlayReady().catch(() => {});
     } catch (error) {
       Alert.alert('Could not go online', getAvailabilityErrorMessage(true, error));
     } finally {

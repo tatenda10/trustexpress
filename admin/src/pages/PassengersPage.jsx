@@ -43,6 +43,13 @@ function sourceClass(source) {
   return 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
 }
 
+function formatSpend(passenger) {
+  const entries = Object.entries(passenger?.totalSpendByCurrency || {}).filter(([, amount]) => Number(amount) !== 0)
+  if (entries.length) return entries.map(([currency, amount]) => `${currency} ${Number(amount).toFixed(2)}`).join(' / ')
+  const currency = passenger?.registrationCountryCode === 'ZA' ? 'ZAR' : 'USD'
+  return `${currency} ${Number(passenger?.totalSpend || 0).toFixed(2)}`
+}
+
 export default function PassengersPage() {
   const { token } = useAuth()
   const navigate = useNavigate()
@@ -52,6 +59,7 @@ export default function PassengersPage() {
   const [sortBy, setSortBy] = useState('createdAt')
   const [sortOrder, setSortOrder] = useState('desc')
   const [identityFilter, setIdentityFilter] = useState('all')
+  const [countryFilter, setCountryFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
@@ -72,6 +80,7 @@ export default function PassengersPage() {
         params: {
           status: activeTab,
           identityStatus: identityFilter,
+          countryCode: countryFilter,
           search: search || undefined,
           sortBy,
           sortOrder,
@@ -93,7 +102,7 @@ export default function PassengersPage() {
   useEffect(() => {
     loadPassengers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeTab, identityFilter, search, sortBy, sortOrder, page, pageSize])
+  }, [token, activeTab, identityFilter, countryFilter, search, sortBy, sortOrder, page, pageSize])
 
   const rows = useMemo(() => passengers, [passengers])
   const activeCount = useMemo(() => rows.filter((passenger) => passenger.status === 'active').length, [rows])
@@ -133,6 +142,7 @@ export default function PassengersPage() {
         params: {
           status: activeTab,
           identityStatus: identityFilter,
+          countryCode: countryFilter,
           search: search || undefined,
         },
         responseType: 'blob',
@@ -202,7 +212,7 @@ export default function PassengersPage() {
 
       <div className="border border-slate-300 bg-white px-4 py-3">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_140px_116px_88px_110px]">
+          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_140px_140px_116px_88px_110px]">
             <div className="relative">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
@@ -231,6 +241,18 @@ export default function PassengersPage() {
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
               <option value="not_submitted">Not submitted</option>
+            </select>
+            <select
+              value={countryFilter}
+              onChange={(event) => {
+                setCountryFilter(event.target.value)
+                setPage(1)
+              }}
+              className="h-10 border border-slate-300 bg-white px-2 text-xs"
+            >
+              <option value="all">All countries</option>
+              <option value="ZW">Zimbabwe</option>
+              <option value="ZA">South Africa</option>
             </select>
             <select
               value={sortBy}
@@ -291,6 +313,7 @@ export default function PassengersPage() {
                 <th className="rounded-tl-sm px-4 py-3 font-semibold">Name</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Identity</th>
+                <th className="px-4 py-3 font-semibold">Market</th>
                 <th className="px-4 py-3 font-semibold">Completed Rides</th>
                 <th className="px-4 py-3 font-semibold">Total Spend</th>
                 <th className="px-4 py-3 font-semibold">Last Completed</th>
@@ -301,11 +324,11 @@ export default function PassengersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-xs text-slate-500">Loading passengers...</td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-xs text-slate-500">Loading passengers...</td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-xs text-slate-500">No passengers found.</td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-xs text-slate-500">No passengers found.</td>
                 </tr>
               ) : (
                 rows.map((passenger) => (
@@ -341,8 +364,13 @@ export default function PassengersPage() {
                         ) : null}
                       </div>
                     </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${passenger.registrationCountryCode === 'ZA' ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' : 'bg-blue-50 text-blue-700 ring-1 ring-blue-200'}`}>
+                        {passenger.registrationCountryCode === 'ZA' ? 'South Africa' : passenger.registrationCountryCode === 'ZW' ? 'Zimbabwe' : 'Not set'}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-slate-700">{passenger.totalRides}</td>
-                    <td className="px-4 py-3 text-slate-700">${Number(passenger.totalSpend || 0).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-slate-700">{formatSpend(passenger)}</td>
                     <td className="px-4 py-3 text-slate-700">{passenger.lastRideAt ? formatJoined(passenger.lastRideAt) : '-'}</td>
                     <td className="px-4 py-3 text-slate-700">{formatJoined(passenger.createdAt)}</td>
                     <td className="px-4 py-3 text-right">

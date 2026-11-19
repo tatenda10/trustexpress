@@ -27,6 +27,7 @@ import {
 import { lookupAccountRole, registerUser } from '../../../api';
 import { useAgentInvite } from '../../../context/AgentInviteContext';
 import { usePassengerReferral } from '../../../context/PassengerReferralContext';
+import { PRIMARY_BLUE } from '../../../constants/colors';
 import {
   BIOMETRIC_LABEL,
   clearBiometricCredentials,
@@ -160,6 +161,8 @@ export default function AuthScreen({ navigation, role, mode }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [phone, setPhone] = useState('');
+  const [phoneCountryCode, setPhoneCountryCode] = useState('ZW');
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [channel, setChannel] = useState(DEFAULT_PHONE_CHANNEL);
   const [code, setCode] = useState('');
   const [signupToken, setSignupToken] = useState('');
@@ -199,6 +202,8 @@ export default function AuthScreen({ navigation, role, mode }) {
       await registerUser(result.accessToken, {
         role,
         email: result.user?.email || undefined,
+        registrationCountryCode: result.user?.registrationCountryCode || phoneCountryCode,
+        acceptTermsAndPrivacy: (result.user?.registrationCountryCode || phoneCountryCode) === 'ZA' && termsAccepted,
         inviteToken: inviteToken || undefined,
         ...(role === 'passenger' && referrerEmail ? { referrerEmail } : {}),
       })
@@ -307,9 +312,13 @@ export default function AuthScreen({ navigation, role, mode }) {
       showError('Passwords do not match', 'Your password and confirm password need to match.');
       return;
     }
+    if (phoneCountryCode === 'ZA' && !termsAccepted) {
+      showInfo('Consent required', 'Accept the terms of use and privacy policy to create your South African account.');
+      return;
+    }
     setLoading(true);
     try {
-      const result = await emailSignUp({ email: email.trim(), password, firstName: firstName.trim(), lastName: lastName.trim(), role });
+      const result = await emailSignUp({ email: email.trim(), password, firstName: firstName.trim(), lastName: lastName.trim(), role, countryCode: phoneCountryCode });
       createdAccountRef.current = true;
       setResendIn(result.resendAfterSeconds || 30);
       goToStep('email_code');
@@ -358,12 +367,14 @@ export default function AuthScreen({ navigation, role, mode }) {
 
   const requestPhoneCode = async (nextChannel = channel) => {
     if (!phone.trim()) {
-      showInfo('Phone number needed', 'Enter your phone number, e.g. 0771234567.');
+      showInfo('Phone number needed', phoneCountryCode === 'ZA'
+        ? 'Enter your South African mobile number, e.g. 0712345678.'
+        : 'Enter your phone number, e.g. 0771234567.');
       return false;
     }
     setLoading(true);
     try {
-      const result = await sendPhoneCode({ phone: phone.trim(), role, channel: nextChannel });
+      const result = await sendPhoneCode({ phone: phone.trim(), role, channel: nextChannel, countryCode: phoneCountryCode });
       setChannel(nextChannel);
       setResendIn(result.resendAfterSeconds || 30);
       return true;
@@ -387,7 +398,7 @@ export default function AuthScreen({ navigation, role, mode }) {
     }
     setLoading(true);
     try {
-      const result = await verifyPhoneCode({ phone: phone.trim(), role, code: code.trim() });
+      const result = await verifyPhoneCode({ phone: phone.trim(), role, code: code.trim(), countryCode: phoneCountryCode });
       if (result.status === 'needs_profile') {
         setSignupToken(result.signupToken);
         goToStep('phone_profile');
@@ -404,6 +415,10 @@ export default function AuthScreen({ navigation, role, mode }) {
   const handleCompletePhoneProfile = async () => {
     if (!firstName.trim() || !lastName.trim()) {
       showInfo('Name needed', 'Enter your first and last name.');
+      return;
+    }
+    if (phoneCountryCode === 'ZA' && !termsAccepted) {
+      showInfo('Consent required', 'Accept the terms of use and privacy policy to create your South African account.');
       return;
     }
     setLoading(true);
@@ -447,7 +462,7 @@ export default function AuthScreen({ navigation, role, mode }) {
     const sendChannel = resetUsesPhone ? (resetChannel === 'email' ? DEFAULT_PHONE_CHANNEL : resetChannel) : 'email';
     setLoading(true);
     try {
-      const result = await forgotPassword({ identifier, role, channel: sendChannel });
+      const result = await forgotPassword({ identifier, role, channel: sendChannel, countryCode: phoneCountryCode });
       setResetChannel(sendChannel);
       setResendIn(result.resendAfterSeconds || 30);
       setPassword('');
@@ -481,6 +496,7 @@ export default function AuthScreen({ navigation, role, mode }) {
         channel: resetChannel,
         code: code.trim(),
         newPassword: password,
+        countryCode: phoneCountryCode,
       });
       await clearBiometricCredentials(role);
       await finishSignIn(result, { biometricPassword: password });
@@ -507,13 +523,40 @@ export default function AuthScreen({ navigation, role, mode }) {
       <SegmentedControl
         value={value}
         onChange={onChange}
-        options={[
-          { value: 'whatsapp', label: 'WhatsApp', icon: 'logo-whatsapp' },
-          { value: 'sms', label: 'SMS', icon: 'chatbubble-outline' },
-        ]}
+        options={phoneCountryCode === 'ZA'
+          ? [{ value: 'whatsapp', label: 'WhatsApp', icon: 'logo-whatsapp' }]
+          : [
+            { value: 'whatsapp', label: 'WhatsApp', icon: 'logo-whatsapp' },
+            { value: 'sms', label: 'SMS', icon: 'chatbubble-outline' },
+          ]}
       />
     </View>
   );
+
+  const countryPicker = () => (
+    <Field label="Country">
+      <SegmentedControl
+        value={phoneCountryCode}
+        onChange={(value) => {
+          setPhoneCountryCode(value);
+          if (value === 'ZA') setChannel('whatsapp');
+        }}
+        options={[
+          { value: 'ZW', label: 'Zimbabwe' },
+          { value: 'ZA', label: 'South Africa' },
+        ]}
+      />
+    </Field>
+  );
+
+  const saConsent = () => phoneCountryCode === 'ZA' ? (
+    <TouchableOpacity onPress={() => setTermsAccepted((value) => !value)} className="mb-5 flex-row items-start rounded-2xl bg-blue-50 p-4">
+      <Ionicons name={termsAccepted ? 'checkbox' : 'square-outline'} size={23} color={termsAccepted ? PRIMARY_BLUE : '#64748b'} />
+      <Text className="ml-3 flex-1 text-sm leading-5 text-gray-700">
+        I accept the Trust Express terms of use and privacy policy for my South African account.
+      </Text>
+    </TouchableOpacity>
+  ) : null;
 
   let title;
   let subtitle;
@@ -543,7 +586,7 @@ export default function AuthScreen({ navigation, role, mode }) {
         </Field>
         <PrimaryButton label="Continue" onPress={handleVerifyPhone} loading={loading} />
         {resendLink(() => requestPhoneCode(channel))}
-        {WHATSAPP_OTP_ENABLED ? (
+        {WHATSAPP_OTP_ENABLED && phoneCountryCode !== 'ZA' ? (
           <TouchableOpacity onPress={() => requestPhoneCode(otherChannel)} disabled={resendIn > 0 || loading} className="mt-3 items-center">
             <Text className={`text-sm font-medium ${resendIn > 0 ? 'text-gray-400' : 'text-primary'}`}>
               Send by {CHANNEL_LABELS[otherChannel]} instead
@@ -566,6 +609,7 @@ export default function AuthScreen({ navigation, role, mode }) {
         <Field label="Email (optional)">
           <Input placeholder="you@example.com" value={email} onChangeText={setEmail} keyboardType="email-address" />
         </Field>
+        {saConsent()}
         <PrimaryButton label="Create account" onPress={handleCompletePhoneProfile} loading={loading} />
       </>
     );
@@ -620,14 +664,16 @@ export default function AuthScreen({ navigation, role, mode }) {
         />
         {method === 'phone' ? (
           <>
+            {countryPicker()}
             <Field label="Phone number">
-              <Input placeholder="0771234567" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+              <Input placeholder={phoneCountryCode === 'ZA' ? '0712345678' : '0771234567'} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
             </Field>
             {WHATSAPP_OTP_ENABLED ? channelPicker(channel, setChannel) : null}
             <PrimaryButton label="Send code" onPress={handleSendPhoneCode} loading={loading} />
           </>
         ) : isSignUp ? (
           <>
+            {countryPicker()}
             <View className="flex-row gap-3">
               <View className="flex-1">
                 <Field label="First name">
@@ -649,6 +695,7 @@ export default function AuthScreen({ navigation, role, mode }) {
             <Field label="Confirm password">
               <PasswordInput placeholder="Repeat password" value={confirmPassword} onChangeText={setConfirmPassword} />
             </Field>
+            {saConsent()}
             <PrimaryButton label="Create account" onPress={handleEmailSignUp} loading={loading} />
           </>
         ) : (

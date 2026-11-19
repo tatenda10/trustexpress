@@ -11,26 +11,27 @@ const LINE = '#D6D6D6';
 const CARD = '#F7F5F2';
 const RECEIPT_TIME_ZONE = process.env.RECEIPT_TIME_ZONE || 'Africa/Harare';
 
-function currency(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+function currency(value, currencyCode = 'USD') {
+  const code = String(currencyCode || 'USD').toUpperCase();
+  return `${code === 'USD' ? '$' : `${code} `}${Number(value || 0).toFixed(2)}`;
 }
 
-function shortDate(value) {
+function shortDate(value, timeZone = RECEIPT_TIME_ZONE) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString('en-ZW', {
-    timeZone: RECEIPT_TIME_ZONE,
+    timeZone,
     day: '2-digit',
     month: 'short',
     year: 'numeric',
   });
 }
 
-function shortDateTime(value) {
+function shortDateTime(value, timeZone = RECEIPT_TIME_ZONE) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString('en-ZW', {
-    timeZone: RECEIPT_TIME_ZONE,
+    timeZone,
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
@@ -96,6 +97,8 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   const discountAmount = Number(ride.discount_amount || 0);
   const tipAmount = Number(ride.tip_amount || 0);
   const totalAmount = fareAmount + tipAmount;
+  const currencyCode = ride.currency_code || (ride.country_code === 'ZA' ? 'ZAR' : 'USD');
+  const receiptTimeZone = ride.country_code === 'ZA' ? 'Africa/Johannesburg' : RECEIPT_TIME_ZONE;
   const completedAt = ride.completed_at || new Date();
   const statusLabel = options.statusLabel || 'Completed';
   const passengerName = shortName(ride.passenger_name, 'Passenger');
@@ -114,7 +117,9 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
     { label: 'DROP-OFF', value: ride.dropoff_label, color: BLUE },
   ];
   const extraRouteRows = Math.max(0, routeRows.length - 2);
-  const pageHeight = 780 + extraRouteRows * 44;
+  const hasOperatorDetails = !!(ride.operator_business_address || ride.operating_licence_number || ride.vehicle_make || ride.number_plate);
+  const complianceHeight = hasOperatorDetails ? 70 : 0;
+  const pageHeight = 780 + extraRouteRows * 44 + complianceHeight;
   const doc = new PDFDocument({ size: [320, pageHeight], margin: 0 });
   doc.pipe(res);
 
@@ -128,7 +133,7 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
     characterSpacing: 0.6,
   });
   doc.fontSize(16).text('Trip receipt', 0, 42, { width: 320, align: 'center' });
-  doc.font('Helvetica').fontSize(8).text(shortDate(completedAt), 0, 62, { width: 320, align: 'center' });
+  doc.font('Helvetica').fontSize(8).text(shortDate(completedAt, receiptTimeZone), 0, 62, { width: 320, align: 'center' });
 
   doc.rect(8, 98, 304, 38).fill(LIGHT_GREEN);
   doc.circle(28, 117, 3).fill(GREEN);
@@ -155,18 +160,18 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   const tripDetailsY = peopleSectionY + 118;
   sectionTitle(doc, 'TRIP DETAILS', tripDetailsY);
   labelValue(doc, 'Trip ID', ride.public_id || ride.id, 24, tripDetailsY + 16, { width: 106 });
-  labelValue(doc, 'Requested', shortDateTime(ride.requested_at), 24, tripDetailsY + 46, { width: 106 });
-  labelValue(doc, 'Completed', shortDateTime(ride.completed_at), 24, tripDetailsY + 76, { width: 106 });
+  labelValue(doc, 'Requested', shortDateTime(ride.requested_at, receiptTimeZone), 24, tripDetailsY + 46, { width: 106 });
+  labelValue(doc, 'Completed', shortDateTime(ride.completed_at, receiptTimeZone), 24, tripDetailsY + 76, { width: 106 });
   labelValue(doc, 'Service tier', ride.requested_tier_name || 'Trust Express', 24, tripDetailsY + 106, { width: 106 });
   doc.fillColor(TEXT).font('Helvetica').fontSize(8).text(`TR-${String(ride.id).padStart(5, '0')}`, 190, tripDetailsY + 26, {
     width: 86,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.requested_at), 170, tripDetailsY + 56, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.requested_at, receiptTimeZone), 170, tripDetailsY + 56, {
     width: 106,
     align: 'right',
   });
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.completed_at), 170, tripDetailsY + 86, {
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(shortDateTime(ride.completed_at, receiptTimeZone), 170, tripDetailsY + 86, {
     width: 106,
     align: 'right',
   });
@@ -175,28 +180,33 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   doc.fillColor(BLUE).font('Helvetica-Bold').fontSize(7).text(ride.requested_tier_name || 'Trust Express', 198, tripDetailsY + 120, {
     width: 70,
   });
-  divider(doc, tripDetailsY + 152);
+  if (hasOperatorDetails) {
+    labelValue(doc, 'Vehicle', [ride.vehicle_make, ride.vehicle_model, ride.vehicle_color, ride.number_plate].filter(Boolean).join(' · '), 24, tripDetailsY + 142, { width: 126, labelWidth: 126, size: 7 });
+    labelValue(doc, 'Operating licence', ride.operating_licence_number || '-', 164, tripDetailsY + 142, { width: 112, labelWidth: 112, size: 7 });
+    labelValue(doc, 'Operator business address', ride.operator_business_address || '-', 24, tripDetailsY + 176, { width: 252, labelWidth: 252, size: 7 });
+  }
+  divider(doc, tripDetailsY + 152 + complianceHeight);
 
-  const fareY = tripDetailsY + 170;
+  const fareY = tripDetailsY + 170 + complianceHeight;
   sectionTitle(doc, 'FARE BREAKDOWN', fareY);
   doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Original fare', 24, fareY + 24);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(originalFareAmount), 230, fareY + 24, {
-    width: 46,
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(originalFareAmount, currencyCode), 215, fareY + 24, {
+    width: 61,
     align: 'right',
   });
   doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Discount', 24, fareY + 48);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(`-${currency(discountAmount)}`, 230, fareY + 48, {
-    width: 46,
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(`-${currency(discountAmount, currencyCode)}`, 215, fareY + 48, {
+    width: 61,
     align: 'right',
   });
   doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Fare', 24, fareY + 72);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(fareAmount), 230, fareY + 72, {
-    width: 46,
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(fareAmount, currencyCode), 215, fareY + 72, {
+    width: 61,
     align: 'right',
   });
   doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Tip', 24, fareY + 96);
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(tipAmount), 230, fareY + 96, {
-    width: 46,
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(8).text(currency(tipAmount, currencyCode), 215, fareY + 96, {
+    width: 61,
     align: 'right',
   });
   doc.fillColor(TEXT).font('Helvetica').fontSize(8).text('Payment', 24, fareY + 120);
@@ -207,8 +217,8 @@ export function writeRideReceiptPdf(res, ride, options = {}) {
   divider(doc, fareY + 144);
 
   doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(9).text('Total charged', 24, fareY + 160);
-  doc.fillColor(BLUE).font('Courier').fontSize(15).text(currency(totalAmount), 210, fareY + 155, {
-    width: 66,
+  doc.fillColor(BLUE).font('Courier').fontSize(13).text(currency(totalAmount, currencyCode), 190, fareY + 155, {
+    width: 86,
     align: 'right',
   });
 

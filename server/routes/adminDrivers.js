@@ -9,6 +9,7 @@ import { evaluateVehicleAgainstTiers, loadVehicleTierRules } from '../lib/vehicl
 import { query } from '../db/connection.js';
 import { getDriverIdentity, getDriverVehicle, normalizeUploadPath } from '../lib/driver-verification-mysql.js';
 import { toIsoDateOnly } from '../lib/smile-cash.js';
+import { getSaProfileCompliance, getSaVehicleCompliance, isSouthAfricanDriver } from '../lib/sa-driver-compliance.js';
 import { getDriverWalletStatus, getDriverWalletSummariesByUserIds, getAdminDriverWalletLedger } from '../lib/driver-wallet.js';
 import { getAccountStatusFromUser, getDriverRatingPerformanceSummary } from '../lib/rating-performance.js';
 import { listUserRestrictions } from '../lib/account-restrictions.js';
@@ -90,6 +91,20 @@ function mapIdentityProfileDocs(row) {
     driverLicenceNumber: row.driver_licence_number || null,
     dateOfBirth: toIsoDateOnly(row.date_of_birth),
     driverLicenceExpiresAt: toIsoDateOnly(row.driver_licence_expires_at),
+    registrationCountryCode: row.registration_country_code || null,
+    identityDocumentType: row.identity_document_type || null,
+    residentialAddress: row.residential_address || null,
+    proofOfAddressUrl: normalizeUploadPath(row.proof_of_address_url),
+    prdpNumber: row.prdp_number || null,
+    prdpUrl: normalizeUploadPath(row.prdp_url),
+    prdpExpiresAt: toIsoDateOnly(row.prdp_expires_at),
+    criminalRecordReportUrl: normalizeUploadPath(row.criminal_record_report_url),
+    criminalDeclarationAcceptedAt: row.criminal_declaration_accepted_at || null,
+    ricaEcaDeclarationAcceptedAt: row.rica_eca_declaration_accepted_at || null,
+    operatorAgreementVersion: row.operator_agreement_version || null,
+    operatorAgreementAcceptedAt: row.operator_agreement_accepted_at || null,
+    operatorAgreementSignature: row.operator_agreement_signature || null,
+    operatingLicenceConditionAcceptedAt: row.operating_licence_condition_accepted_at || null,
   };
 }
 
@@ -734,6 +749,15 @@ router.get('/:driverId', requireAdminAuth, requirePermission('drivers.read'), as
           vehicleRegistrationBookUrl: normalizeUploadPath(vehicleRow.vehicle_registration_book_url),
           insuranceUrl: normalizeUploadPath(vehicleRow.insurance_url),
           zinaraUrl: normalizeUploadPath(vehicleRow.zinara_url),
+          firstRegisteredAt: toIsoDateOnly(vehicleRow.first_registered_at),
+          operatingLicenceNumber: vehicleRow.operating_licence_number || null,
+          operatingLicenceUrl: normalizeUploadPath(vehicleRow.operating_licence_url),
+          operatingLicenceExpiresAt: toIsoDateOnly(vehicleRow.operating_licence_expires_at),
+          operatorLegalName: vehicleRow.operator_legal_name || null,
+          operatorBusinessAddress: vehicleRow.operator_business_address || null,
+          panicDeviceProofUrl: normalizeUploadPath(vehicleRow.panic_device_proof_url),
+          vehicleMarkingLeftUrl: normalizeUploadPath(vehicleRow.vehicle_marking_left_url),
+          vehicleMarkingRightUrl: normalizeUploadPath(vehicleRow.vehicle_marking_right_url),
           year: vehicleRow.year || null,
           color: vehicleRow.color || null,
           vehicleTierKey: vehicleRow.vehicle_tier_key || null,
@@ -1206,6 +1230,15 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
       ) {
         return res.status(400).json({ error: 'Driver has not submitted profile documents' });
       }
+      if (action === 'approve' && isSouthAfricanDriver(identityRow)) {
+        const compliance = getSaProfileCompliance(identityRow);
+        if (!compliance.complete || compliance.expired.length > 0) {
+          return res.status(400).json({
+            error: `SA profile compliance cannot be approved: ${[...compliance.missing, ...compliance.expired.map((item) => `${item} expired`)].join(', ')}`,
+            saCompliance: compliance,
+          });
+        }
+      }
       const status = action === 'approve' ? 'approved' : 'rejected';
       const canResubmit = action === 'approve' ? 1 : (allowResubmit ? 1 : 0);
       await query(
@@ -1248,6 +1281,15 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
         !hasEnoughVehiclePhotos
       ) {
         return res.status(400).json({ error: 'Driver has not submitted vehicle documents' });
+      }
+      if (action === 'approve' && isSouthAfricanDriver(identityRow)) {
+        const compliance = getSaVehicleCompliance(vehicleRow);
+        if (!compliance.complete || compliance.expired.length > 0) {
+          return res.status(400).json({
+            error: `SA vehicle compliance cannot be approved: ${[...compliance.missing, ...compliance.expired.map((item) => `${item} expired`)].join(', ')}`,
+            saCompliance: compliance,
+          });
+        }
       }
       const status = action === 'approve' ? 'approved' : 'rejected';
       const canResubmit = action === 'approve' ? 1 : (allowResubmit ? 1 : 0);

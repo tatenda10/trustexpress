@@ -5,7 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import { normalizePaymentMethod, receiptPaymentMethodLabel } from '../lib/payment-method.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
-import { getServiceAreaLabel, isCoordinateInServiceAreaFromDb } from '../lib/service-area.js';
+import { getServiceAreaForCoordinateFromDb, getServiceAreaLabel } from '../lib/service-area.js';
 import { writeRideReceiptPdf } from '../lib/ride-receipt-pdf.js';
 import { sendExpoPushNotifications, sendFcmNotifications, sendFcmNotificationsDetailed } from '../lib/push.js';
 import { findBestAutoDiscountForRide, syncDiscountRedemptionForRide, validateDiscountForRide } from '../lib/ride-discounts.js';
@@ -134,7 +134,10 @@ function buildRidePaymentPayload(ride) {
     paidAt: toIsoOrNull(ride?.paid_at),
     canChoosePaymentMethod: isPayable && !isPaid && !isRefunded && !choseCash && !choseOnline,
     canPayCash: isPayable && !isPaid && !isRefunded && !choseCash && !choseOnline,
-    canPayWithSmilePay: isPayable && !isPaid && !isRefunded && !choseCash,
+    canPayWithSmilePay: String(ride?.country_code || 'ZW').toUpperCase() !== 'ZA'
+      && isPayable && !isPaid && !isRefunded && !choseCash,
+    countryCode: ride?.country_code || 'ZW',
+    currencyCode: ride?.currency_code || (ride?.country_code === 'ZA' ? 'ZAR' : 'USD'),
   };
 }
 
@@ -155,7 +158,7 @@ async function requirePassenger(req, res) {
   return user;
 }
 
-export async function loadPassengerTier(selectedTierKey) {
+export async function loadPassengerTier(selectedTierKey, countryCode = null) {
   const normalizedTierKey = String(selectedTierKey || '').trim().toLowerCase();
   const rows = await query(
     `SELECT
@@ -165,14 +168,17 @@ export async function loadPassengerTier(selectedTierKey) {
        t.base_fare,
        t.per_minute_rate,
        t.minimum_fare
+       ,r.country_code
+       ,r.currency_code
      FROM operating_region_pricing_tiers t
      INNER JOIN operating_regions r ON r.id = t.region_id
      WHERE t.is_active = 1 AND r.is_active = 1
+       AND (? IS NULL OR r.country_code = ?)
      ORDER BY
        CASE WHEN LOWER(t.tier_key) = ? THEN 0 ELSE 1 END,
        t.sort_order ASC,
        t.id ASC`,
-    [normalizedTierKey]
+    [countryCode, countryCode, normalizedTierKey]
   );
 
   const row = rows[0];
@@ -185,6 +191,8 @@ export async function loadPassengerTier(selectedTierKey) {
     base_fare: Number(row.base_fare || 0),
     per_minute_rate: Number(row.per_minute_rate || 0),
     minimum_fare: Number(row.minimum_fare || 0),
+    country_code: row.country_code || 'ZW',
+    currency_code: row.currency_code || (row.country_code === 'ZA' ? 'ZAR' : 'USD'),
   });
 }
 
@@ -1027,7 +1035,12 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
     const dropoffLat = Number(dropoffCoordinate?.latitude);
     const dropoffLng = Number(dropoffCoordinate?.longitude);
     const normalizedIntermediateStops = sanitizeIntermediateStops(intermediateStops);
-    const tier = await loadPassengerTier(selectedTier?.tierKey);
+    const [passengerMarket] = await query(
+      'SELECT registration_country_code FROM users WHERE clerk_user_id = ? LIMIT 1',
+      [req.userId]
+    );
+    const passengerCountryCode = passengerMarket?.registration_country_code === 'ZA' ? 'ZA' : 'ZW';
+    const tier = await loadPassengerTier(selectedTier?.tierKey, passengerCountryCode);
 
     if (!pickupLabel || !dropoffLabel || !tier) {
       return res.status(400).json({ error: 'pickup, drop-off, and pricing configuration are required' });
@@ -1048,14 +1061,21 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
 
     const pickupPoint = { latitude: pickupLat, longitude: pickupLng };
     const dropoffPoint = { latitude: dropoffLat, longitude: dropoffLng };
+    const pickupServiceArea = await getServiceAreaForCoordinateFromDb(pickupPoint);
+    const dropoffServiceArea = await getServiceAreaForCoordinateFromDb(dropoffPoint);
     const serviceAreaLabel = await getServiceAreaLabel();
-    if (!await isCoordinateInServiceAreaFromDb(pickupPoint) || !await isCoordinateInServiceAreaFromDb(dropoffPoint)) {
+    if (!pickupServiceArea || !dropoffServiceArea
+      || pickupServiceArea.countryCode !== passengerCountryCode
+      || dropoffServiceArea.countryCode !== passengerCountryCode) {
       return res.status(422).json({
         error: `Trust Express currently supports rides within ${serviceAreaLabel}. Please choose pickup and drop-off points in a supported city.`,
       });
     }
     const stopsInServiceArea = await Promise.all(
-      normalizedIntermediateStops.map((stop) => isCoordinateInServiceAreaFromDb(stop.coordinate))
+      normalizedIntermediateStops.map(async (stop) => {
+        const area = await getServiceAreaForCoordinateFromDb(stop.coordinate);
+        return area?.countryCode === passengerCountryCode;
+      })
     );
     if (stopsInServiceArea.some((ok) => !ok)) {
       return res.status(422).json({
@@ -1120,6 +1140,8 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         passenger_name,
         passenger_phone,
         passenger_count,
+        country_code,
+        currency_code,
         requested_tier_key,
         requested_tier_name,
         pickup_label,
@@ -1147,13 +1169,15 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         discount_applied_at,
         payment_method,
         status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested')`,
       [
         publicId,
         req.userId,
         passengerName,
         passengerPhoneForDrivers,
         partySize,
+        passengerCountryCode,
+        tier.currency_code,
         tier.tier_key,
         tier.tier_name,
         String(pickupLabel).trim(),
@@ -1299,6 +1323,8 @@ router.post('/passenger/find-driver', requireAuth, async (req, res) => {
         estimatedDistanceKm: authoritativeDistanceKm,
         estimatedMinutes: authoritativeMinutes,
         estimatedAmount: finalEstimatedAmount,
+        countryCode: passengerCountryCode,
+        currencyCode: tier.currency_code,
         ...buildRideDiscountPayload({
           original_estimated_amount: authoritativeAmount,
           discount_amount: discountAmount,
@@ -1878,7 +1904,7 @@ router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) =>
 
     const [ride] = await query(
       `SELECT
-         id,
+         rr.id,
          public_id,
          passenger_name,
          driver_name,
@@ -1892,11 +1918,18 @@ router.get('/passenger/:rideRequestId/receipt', requireAuth, async (req, res) =>
          final_estimated_amount,
          tip_amount,
          payment_method,
-         status,
+         rr.status,
          requested_at,
-         completed_at
-       FROM ride_requests
-       WHERE id = ? AND passenger_user_id = ?
+         completed_at,
+         dv.make AS vehicle_make,
+         dv.model AS vehicle_model,
+         dv.color AS vehicle_color,
+         dv.number_plate,
+         dv.operator_business_address,
+         dv.operating_licence_number
+       FROM ride_requests rr
+       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
+       WHERE rr.id = ? AND rr.passenger_user_id = ?
        LIMIT 1`,
       [rideRequestId, req.userId]
     );
@@ -1926,7 +1959,7 @@ router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res
 
     const [ride] = await query(
       `SELECT
-         id,
+         rr.id,
          public_id,
          passenger_name,
          driver_name,
@@ -1940,11 +1973,18 @@ router.get('/passenger/:rideRequestId/receipt-pdf', requireAuth, async (req, res
          final_estimated_amount,
          tip_amount,
          payment_method,
-         status,
+         rr.status,
          requested_at,
-         completed_at
-       FROM ride_requests
-       WHERE id = ? AND passenger_user_id = ?
+         completed_at,
+         dv.make AS vehicle_make,
+         dv.model AS vehicle_model,
+         dv.color AS vehicle_color,
+         dv.number_plate,
+         dv.operator_business_address,
+         dv.operating_licence_number
+       FROM ride_requests rr
+       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
+       WHERE rr.id = ? AND rr.passenger_user_id = ?
        LIMIT 1`,
       [rideRequestId, req.userId]
     );

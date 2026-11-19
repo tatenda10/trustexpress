@@ -34,6 +34,8 @@ export default function RideOperationsPage() {
   const [appliedSearch, setAppliedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [appliedStatusFilter, setAppliedStatusFilter] = useState('all')
+  const [countryFilter, setCountryFilter] = useState('all')
+  const [appliedCountryFilter, setAppliedCountryFilter] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [appliedDateFrom, setAppliedDateFrom] = useState('')
@@ -54,6 +56,7 @@ export default function RideOperationsPage() {
             pageSize,
             search: appliedSearch,
             status: appliedStatusFilter,
+            countryCode: appliedCountryFilter,
             dateFrom: appliedDateFrom,
             dateTo: appliedDateTo,
           },
@@ -75,13 +78,14 @@ export default function RideOperationsPage() {
     return () => {
       active = false
     }
-  }, [appliedDateFrom, appliedDateTo, appliedSearch, appliedStatusFilter, page, pageSize, token])
+  }, [appliedCountryFilter, appliedDateFrom, appliedDateTo, appliedSearch, appliedStatusFilter, page, pageSize, token])
 
   const safePage = Math.min(page, totalPages)
 
   const handleSearch = () => {
     setAppliedSearch(searchInput.trim())
     setAppliedStatusFilter(statusFilter)
+    setAppliedCountryFilter(countryFilter)
     setAppliedDateFrom(dateFrom)
     setAppliedDateTo(dateTo)
     setPage(1)
@@ -163,6 +167,15 @@ export default function RideOperationsPage() {
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
             </select>
+            <select
+              value={countryFilter}
+              onChange={(event) => setCountryFilter(event.target.value)}
+              className="h-9 border border-slate-300 bg-white px-3 text-xs text-slate-800 outline-none transition focus:border-indigo-500"
+            >
+              <option value="all">All countries</option>
+              <option value="ZW">Zimbabwe</option>
+              <option value="ZA">South Africa</option>
+            </select>
             <input
               type="date"
               value={dateFrom}
@@ -197,6 +210,7 @@ export default function RideOperationsPage() {
               <th className="px-4 py-2 font-semibold">Driver</th>
               <th className="px-4 py-2 font-semibold">Route</th>
               <th className="px-4 py-2 font-semibold">Tier</th>
+              <th className="px-4 py-2 font-semibold">Market</th>
               <th className="px-4 py-2 font-semibold">Fare</th>
               <th className="px-4 py-2 font-semibold">Safety</th>
               <th className="px-4 py-2 font-semibold">Status</th>
@@ -207,11 +221,11 @@ export default function RideOperationsPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-slate-500">Loading rides...</td>
+                <td colSpan={11} className="px-4 py-6 text-center text-slate-500">Loading rides...</td>
               </tr>
             ) : rides.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-slate-500">No ride activity yet.</td>
+                <td colSpan={11} className="px-4 py-6 text-center text-slate-500">No ride activity yet.</td>
               </tr>
             ) : (
               rides.map((row) => (
@@ -222,29 +236,32 @@ export default function RideOperationsPage() {
                   <td className="px-4 py-3 text-slate-700">{row.route}</td>
                   <td className="px-4 py-3 text-slate-700">{row.tierName}</td>
                   <td className="px-4 py-3 text-slate-700">
+                    {row.countryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'} · {row.currencyCode}
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
                     <div className="space-y-1">
                       <div>{row.fare}</div>
                       {Number(row.discountAmount || 0) > 0 ? (
                         <>
                           <div className="text-[11px] font-medium text-emerald-700">
-                            Promo{row.discountCode ? ` ${row.discountCode}` : ''}: -${Number(row.discountAmount || 0).toFixed(2)}
+                            Promo{row.discountCode ? ` ${row.discountCode}` : ''}: -{row.currencyCode} {Number(row.discountAmount || 0).toFixed(2)}
                           </div>
                           <div className="text-[11px] text-slate-500">
-                            Original: ${Number(row.originalEstimatedAmount || 0).toFixed(2)}
+                            Original: {row.currencyCode} {Number(row.originalEstimatedAmount || 0).toFixed(2)}
                           </div>
                           <div className="text-[11px] text-slate-500">
-                            Driver reimbursement: ${Number(row.driverReimbursementAmount || 0).toFixed(2)}
+                            Driver reimbursement: {row.currencyCode} {Number(row.driverReimbursementAmount || 0).toFixed(2)}
                           </div>
                         </>
                       ) : null}
                       {Number(row.tipAmount || 0) > 0 ? (
                         <div className="text-[11px] font-medium text-emerald-700">
-                          Tip: ${Number(row.tipAmount || 0).toFixed(2)}
+                          Tip: {row.currencyCode} {Number(row.tipAmount || 0).toFixed(2)}
                         </div>
                       ) : null}
                       {Number(row.tipAmount || 0) > 0 || Number(row.discountAmount || 0) > 0 ? (
                         <div className="text-[11px] text-slate-500">
-                          Total: ${Number(row.totalAmount || 0).toFixed(2)}
+                          Total: {row.currencyCode} {Number(row.totalAmount || 0).toFixed(2)}
                         </div>
                       ) : null}
                     </div>

@@ -58,6 +58,7 @@ import {
 } from '../lib/smile-cash.js';
 import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger-payments.js';
 import { upsertDriverPushTokens } from '../lib/driver-push-tokens.js';
+import { getSaDriverCompliance, getSaProfileCompliance, SA_OPERATOR_AGREEMENT_VERSION } from '../lib/sa-driver-compliance.js';
 import { findDriverByLocationKey, issueDriverLocationKey } from '../lib/driver-location-keys.js';
 import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
 import {
@@ -716,6 +717,24 @@ router.post('/availability', requireAuth, async (req, res) => {
 
     const isLocationHeartbeat = isOnline && (wasOnline || hasActiveTrip);
 
+    if (isOnline && !hasActiveTrip && verification.saCompliance?.applies && !verification.saCompliance.active) {
+      await query(
+        `UPDATE driver_availability
+         SET is_online = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE driver_user_id = ?`,
+        [req.userId]
+      );
+      const reasons = [
+        ...(verification.saCompliance.missing || []).map((item) => `missing ${item}`),
+        ...(verification.saCompliance.expired || []).map((item) => `${item} expired`),
+      ];
+      return res.status(403).json({
+        error: `South Africa compliance is not active: ${reasons.join(', ')}`,
+        code: 'SA_COMPLIANCE_REQUIRED',
+        saCompliance: verification.saCompliance,
+      });
+    }
+
     // Mid-ride / heartbeat location updates should not re-run go-online gates.
     // Wallet/verification checks only apply when transitioning offline -> online.
     if (isOnline && !isLocationHeartbeat && !forHire) {
@@ -963,25 +982,47 @@ router.post('/live-location', requireAuth, async (req, res) => {
     }
 
     const result = await query(
-      `UPDATE driver_availability
+      `UPDATE driver_availability da
        SET current_lat = ?,
            current_lng = ?,
            location_updated_at = CURRENT_TIMESTAMP,
            last_seen_at = CURRENT_TIMESTAMP
-       WHERE driver_user_id = ?
-         AND is_online = 1`,
+       WHERE da.driver_user_id = ?
+         AND (
+           da.is_online = 1
+           OR EXISTS (
+             SELECT 1
+             FROM ride_requests rr
+             WHERE BINARY rr.driver_user_id = BINARY da.driver_user_id
+               AND rr.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM hire_bookings hb
+             WHERE BINARY hb.driver_user_id = BINARY da.driver_user_id
+               AND hb.status IN ('confirmed', 'driver_arrived', 'in_progress')
+           )
+         )`,
       [latitude, longitude, req.userId]
     );
-    const isOnline = Number(result?.affectedRows || 0) > 0;
-    if (isOnline) {
+    const trackingActive = Number(result?.affectedRows || 0) > 0;
+    if (trackingActive) {
       await emitDriverLiveLocation(req.userId, latitude, longitude).catch((error) => {
         console.error('[drivers.live-location] live emit failed', error?.message || error);
       });
     }
 
+    console.log('[drivers.live-location] update', {
+      driverUserId: req.userId,
+      trackingActive,
+      latitude,
+      longitude,
+    });
+
     return res.json({
-      isOnline,
-      locationUpdatedAt: isOnline ? new Date().toISOString() : null,
+      isOnline: trackingActive,
+      trackingActive,
+      locationUpdatedAt: trackingActive ? new Date().toISOString() : null,
     });
   } catch (err) {
     console.error('POST /api/drivers/live-location', err);
@@ -1010,23 +1051,44 @@ router.post('/background-location', async (req, res) => {
     }
 
     const result = await query(
-      `UPDATE driver_availability
+      `UPDATE driver_availability da
        SET current_lat = ?,
            current_lng = ?,
            location_updated_at = CURRENT_TIMESTAMP,
            last_seen_at = CURRENT_TIMESTAMP
-       WHERE driver_user_id = ?
-         AND is_online = 1`,
+       WHERE da.driver_user_id = ?
+         AND (
+           da.is_online = 1
+           OR EXISTS (
+             SELECT 1
+             FROM ride_requests rr
+             WHERE BINARY rr.driver_user_id = BINARY da.driver_user_id
+               AND rr.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM hire_bookings hb
+             WHERE BINARY hb.driver_user_id = BINARY da.driver_user_id
+               AND hb.status IN ('confirmed', 'driver_arrived', 'in_progress')
+           )
+         )`,
       [latitude, longitude, driverUserId]
     );
-    const isOnline = Number(result?.affectedRows || 0) > 0;
-    if (isOnline) {
+    const trackingActive = Number(result?.affectedRows || 0) > 0;
+    if (trackingActive) {
       await emitDriverLiveLocation(driverUserId, latitude, longitude).catch((error) => {
         console.error('[drivers.background-location] live emit failed', error?.message || error);
       });
     }
 
-    return res.json({ isOnline });
+    console.log('[drivers.background-location] update', {
+      driverUserId,
+      trackingActive,
+      latitude,
+      longitude,
+    });
+
+    return res.json({ isOnline: trackingActive, trackingActive });
   } catch (err) {
     console.error('POST /api/drivers/background-location', err);
     return res.status(500).json({ error: 'Server error' });
@@ -2794,7 +2856,7 @@ router.get('/ride-requests/:rideRequestId/receipt-pdf', requireAuth, async (req,
 
     const [ride] = await query(
       `SELECT
-         id,
+         rr.id,
          public_id,
          passenger_name,
          driver_name,
@@ -2810,11 +2872,18 @@ router.get('/ride-requests/:rideRequestId/receipt-pdf', requireAuth, async (req,
          discount_code,
          tip_amount,
          payment_method,
-         status,
+         rr.status,
          requested_at,
-         completed_at
-       FROM ride_requests
-       WHERE id = ? AND driver_user_id = ?
+         completed_at,
+         dv.make AS vehicle_make,
+         dv.model AS vehicle_model,
+         dv.color AS vehicle_color,
+         dv.number_plate,
+         dv.operator_business_address,
+         dv.operating_licence_number
+       FROM ride_requests rr
+       LEFT JOIN driver_vehicle dv ON dv.driver_user_id = rr.driver_user_id
+       WHERE rr.id = ? AND rr.driver_user_id = ?
        LIMIT 1`,
       [rideRequestId, req.userId]
     );
@@ -2865,6 +2934,18 @@ router.post('/documents', requireAuth, async (req, res) => {
       dateOfBirth,
       driverLicenceExpiresAt,
       driverKind: rawDriverKind,
+      identityDocumentType,
+      residentialAddress,
+      proofOfAddressUrl,
+      prdpNumber,
+      prdpUrl,
+      prdpExpiresAt,
+      criminalRecordReportUrl,
+      criminalDeclarationAccepted,
+      ricaEcaDeclarationAccepted,
+      operatorAgreementAccepted,
+      operatorAgreementSignature,
+      operatingLicenceConditionAccepted,
     } = req.body || {};
     console.log('[POST /api/drivers/documents] received payload', {
       userId: req.userId,
@@ -2892,6 +2973,14 @@ router.post('/documents', requireAuth, async (req, res) => {
       driverLicenceNumber: currentProfile?.driverLicenceNumber || null,
       dateOfBirth: currentProfile?.dateOfBirth || null,
       driverLicenceExpiresAt: currentProfile?.driverLicenceExpiresAt || null,
+      identityDocumentType: currentProfile?.identityDocumentType || null,
+      residentialAddress: currentProfile?.residentialAddress || null,
+      proofOfAddressUrl: currentProfile?.proofOfAddressUrl || null,
+      prdpNumber: currentProfile?.prdpNumber || null,
+      prdpUrl: currentProfile?.prdpUrl || null,
+      prdpExpiresAt: currentProfile?.prdpExpiresAt || null,
+      criminalRecordReportUrl: currentProfile?.criminalRecordReportUrl || null,
+      operatorAgreementSignature: currentProfile?.operatorAgreementSignature || null,
     };
     const nextValues = {
       nationalIdFrontUrl: nationalIdFrontUrl || currentValues.nationalIdFrontUrl,
@@ -2903,6 +2992,14 @@ router.post('/documents', requireAuth, async (req, res) => {
       driverLicenceNumber: normalizeIdentityValue(driverLicenceNumber || currentValues.driverLicenceNumber),
       dateOfBirth: normalizeDateOfBirth(dateOfBirth || currentValues.dateOfBirth),
       driverLicenceExpiresAt: normalizeDateOfBirth(driverLicenceExpiresAt || currentValues.driverLicenceExpiresAt),
+      identityDocumentType: String(identityDocumentType || currentValues.identityDocumentType || '').trim().toLowerCase() || null,
+      residentialAddress: String(residentialAddress || currentValues.residentialAddress || '').trim() || null,
+      proofOfAddressUrl: proofOfAddressUrl || currentValues.proofOfAddressUrl,
+      prdpNumber: String(prdpNumber || currentValues.prdpNumber || '').trim().toUpperCase() || null,
+      prdpUrl: prdpUrl || currentValues.prdpUrl,
+      prdpExpiresAt: normalizeDateOfBirth(prdpExpiresAt || currentValues.prdpExpiresAt),
+      criminalRecordReportUrl: criminalRecordReportUrl || currentValues.criminalRecordReportUrl,
+      operatorAgreementSignature: String(operatorAgreementSignature || currentValues.operatorAgreementSignature || '').trim() || null,
     };
     console.log('[POST /api/drivers/documents] resolved next values', {
       userId: req.userId,
@@ -2930,6 +3027,7 @@ router.post('/documents', requireAuth, async (req, res) => {
     }
 
     const isFullIdentitySubmit = providedCount >= 5;
+    const isSouthAfrican = existing.registrationCountryCode === 'ZA';
     if (isFullIdentitySubmit && !nextValues.nationalIdNumber) {
       return res.status(400).json({ error: 'National ID number is required' });
     }
@@ -2954,6 +3052,29 @@ router.post('/documents', requireAuth, async (req, res) => {
       const expiry = new Date(`${nextValues.driverLicenceExpiresAt}T00:00:00Z`);
       if (Number.isNaN(expiry.getTime())) {
         return res.status(400).json({ error: 'Enter a valid licence expiration date' });
+      }
+    }
+    if (isSouthAfrican && isFullIdentitySubmit) {
+      const prospectiveIdentity = {
+        registration_country_code: 'ZA',
+        identity_document_type: nextValues.identityDocumentType,
+        residential_address: nextValues.residentialAddress,
+        proof_of_address_url: nextValues.proofOfAddressUrl,
+        prdp_number: nextValues.prdpNumber,
+        prdp_url: nextValues.prdpUrl,
+        prdp_expires_at: nextValues.prdpExpiresAt,
+        criminal_record_report_url: nextValues.criminalRecordReportUrl,
+        criminal_declaration_accepted_at: criminalDeclarationAccepted ? new Date() : currentProfile?.criminalDeclarationAcceptedAt,
+        rica_eca_declaration_accepted_at: ricaEcaDeclarationAccepted ? new Date() : currentProfile?.ricaEcaDeclarationAcceptedAt,
+        operator_agreement_version: operatorAgreementAccepted ? SA_OPERATOR_AGREEMENT_VERSION : currentProfile?.operatorAgreementVersion,
+        operator_agreement_accepted_at: operatorAgreementAccepted ? new Date() : currentProfile?.operatorAgreementAcceptedAt,
+        operator_agreement_signature: nextValues.operatorAgreementSignature,
+        operating_licence_condition_accepted_at: operatingLicenceConditionAccepted ? new Date() : currentProfile?.operatingLicenceConditionAcceptedAt,
+        driver_licence_expires_at: nextValues.driverLicenceExpiresAt,
+      };
+      const compliance = getSaProfileCompliance(prospectiveIdentity);
+      if (!compliance.complete) {
+        return res.status(400).json({ error: `Complete the SA compliance requirements: ${compliance.missing.join(', ')}` });
       }
     }
 
@@ -2993,12 +3114,19 @@ router.post('/documents', requireAuth, async (req, res) => {
     try {
       await query(
         `INSERT INTO driver_identity (
-          driver_user_id, driver_kind, national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
+          driver_user_id, driver_kind, registration_country_code, identity_document_type,
+          national_id_front_url, national_id_back_url, driver_licence_url, selfie_url, selfie_with_id_card_url,
           national_id_number, driver_licence_number, date_of_birth, driver_licence_expires_at,
+          residential_address, proof_of_address_url, prdp_number, prdp_url, prdp_expires_at,
+          criminal_record_report_url, criminal_declaration_accepted_at, rica_eca_declaration_accepted_at,
+          operator_agreement_version, operator_agreement_accepted_at, operator_agreement_signature,
+          operating_licence_condition_accepted_at,
           profile_status, profile_submitted_at, profile_rejection_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
         ON DUPLICATE KEY UPDATE
           driver_kind = COALESCE(VALUES(driver_kind), driver_identity.driver_kind),
+          registration_country_code = COALESCE(VALUES(registration_country_code), driver_identity.registration_country_code),
+          identity_document_type = COALESCE(VALUES(identity_document_type), driver_identity.identity_document_type),
           national_id_front_url = VALUES(national_id_front_url),
           national_id_back_url = VALUES(national_id_back_url),
           driver_licence_url = VALUES(driver_licence_url),
@@ -3008,6 +3136,18 @@ router.post('/documents', requireAuth, async (req, res) => {
           driver_licence_number = COALESCE(VALUES(driver_licence_number), driver_identity.driver_licence_number),
           date_of_birth = COALESCE(VALUES(date_of_birth), driver_identity.date_of_birth),
           driver_licence_expires_at = COALESCE(VALUES(driver_licence_expires_at), driver_identity.driver_licence_expires_at),
+          residential_address = COALESCE(VALUES(residential_address), driver_identity.residential_address),
+          proof_of_address_url = COALESCE(VALUES(proof_of_address_url), driver_identity.proof_of_address_url),
+          prdp_number = COALESCE(VALUES(prdp_number), driver_identity.prdp_number),
+          prdp_url = COALESCE(VALUES(prdp_url), driver_identity.prdp_url),
+          prdp_expires_at = COALESCE(VALUES(prdp_expires_at), driver_identity.prdp_expires_at),
+          criminal_record_report_url = COALESCE(VALUES(criminal_record_report_url), driver_identity.criminal_record_report_url),
+          criminal_declaration_accepted_at = COALESCE(VALUES(criminal_declaration_accepted_at), driver_identity.criminal_declaration_accepted_at),
+          rica_eca_declaration_accepted_at = COALESCE(VALUES(rica_eca_declaration_accepted_at), driver_identity.rica_eca_declaration_accepted_at),
+          operator_agreement_version = COALESCE(VALUES(operator_agreement_version), driver_identity.operator_agreement_version),
+          operator_agreement_accepted_at = COALESCE(VALUES(operator_agreement_accepted_at), driver_identity.operator_agreement_accepted_at),
+          operator_agreement_signature = COALESCE(VALUES(operator_agreement_signature), driver_identity.operator_agreement_signature),
+          operating_licence_condition_accepted_at = COALESCE(VALUES(operating_licence_condition_accepted_at), driver_identity.operating_licence_condition_accepted_at),
           profile_status = 'pending',
           profile_submitted_at = COALESCE(driver_identity.profile_submitted_at, VALUES(profile_submitted_at)),
           profile_reviewed_at = NULL,
@@ -3016,6 +3156,8 @@ router.post('/documents', requireAuth, async (req, res) => {
         [
           req.userId,
           driverKind,
+          existing.registrationCountryCode || null,
+          nextValues.identityDocumentType,
           nextValues.nationalIdFrontUrl,
           nextValues.nationalIdBackUrl,
           nextValues.driverLicenceUrl,
@@ -3025,6 +3167,18 @@ router.post('/documents', requireAuth, async (req, res) => {
           nextValues.driverLicenceNumber || null,
           nextValues.dateOfBirth || null,
           nextValues.driverLicenceExpiresAt || null,
+          nextValues.residentialAddress,
+          nextValues.proofOfAddressUrl,
+          nextValues.prdpNumber,
+          nextValues.prdpUrl,
+          nextValues.prdpExpiresAt,
+          nextValues.criminalRecordReportUrl,
+          criminalDeclarationAccepted ? submittedAt : null,
+          ricaEcaDeclarationAccepted ? submittedAt : null,
+          operatorAgreementAccepted ? SA_OPERATOR_AGREEMENT_VERSION : null,
+          operatorAgreementAccepted ? submittedAt : null,
+          nextValues.operatorAgreementSignature,
+          operatingLicenceConditionAccepted ? submittedAt : null,
           submittedAt,
         ]
       );
@@ -3110,6 +3264,15 @@ router.post('/vehicle', requireAuth, async (req, res) => {
       hasLargeLuggageSpace,
       hasSlidingDoors,
       isHighEnd,
+      firstRegisteredAt,
+      operatingLicenceNumber,
+      operatingLicenceUrl,
+      operatingLicenceExpiresAt,
+      operatorLegalName,
+      operatorBusinessAddress,
+      panicDeviceProofUrl,
+      vehicleMarkingLeftUrl,
+      vehicleMarkingRightUrl,
     } = req.body || {};
 
     const normalizedPhotoUrls = Array.from(
@@ -3180,6 +3343,15 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     const nextHasLargeLuggageSpace = hasLargeLuggageSpace === undefined ? !!existingVehicle?.has_large_luggage_space : hasLargeLuggageSpace === true;
     const nextHasSlidingDoors = hasSlidingDoors === undefined ? !!existingVehicle?.has_sliding_doors : hasSlidingDoors === true;
     const nextIsHighEnd = isHighEnd === undefined ? !!existingVehicle?.is_high_end : isHighEnd === true;
+    const nextFirstRegisteredAt = normalizeDateOfBirth(firstRegisteredAt || existingVehicle?.first_registered_at);
+    const nextOperatingLicenceNumber = String(operatingLicenceNumber || existingVehicle?.operating_licence_number || '').trim().toUpperCase() || null;
+    const nextOperatingLicenceUrl = String(operatingLicenceUrl || existingVehicle?.operating_licence_url || '').trim() || null;
+    const nextOperatingLicenceExpiresAt = normalizeDateOfBirth(operatingLicenceExpiresAt || existingVehicle?.operating_licence_expires_at);
+    const nextOperatorLegalName = String(operatorLegalName || existingVehicle?.operator_legal_name || '').trim() || null;
+    const nextOperatorBusinessAddress = String(operatorBusinessAddress || existingVehicle?.operator_business_address || '').trim() || null;
+    const nextPanicDeviceProofUrl = String(panicDeviceProofUrl || existingVehicle?.panic_device_proof_url || '').trim() || null;
+    const nextVehicleMarkingLeftUrl = String(vehicleMarkingLeftUrl || existingVehicle?.vehicle_marking_left_url || '').trim() || null;
+    const nextVehicleMarkingRightUrl = String(vehicleMarkingRightUrl || existingVehicle?.vehicle_marking_right_url || '').trim() || null;
 
     const providedVehicleCount = [
       nextNumberPlate,
@@ -3206,6 +3378,25 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     }
     if (nextDoorCount !== null && (!Number.isInteger(nextDoorCount) || nextDoorCount < 1)) {
       return res.status(400).json({ error: 'doorCount must be a valid whole number when provided' });
+    }
+    if (verification.registrationCountryCode === 'ZA') {
+      const compliance = getSaDriverCompliance(
+        { registration_country_code: 'ZA' },
+        {
+          first_registered_at: nextFirstRegisteredAt,
+          operating_licence_number: nextOperatingLicenceNumber,
+          operating_licence_url: nextOperatingLicenceUrl,
+          operating_licence_expires_at: nextOperatingLicenceExpiresAt,
+          operator_legal_name: nextOperatorLegalName,
+          operator_business_address: nextOperatorBusinessAddress,
+          panic_device_proof_url: nextPanicDeviceProofUrl,
+          vehicle_marking_left_url: nextVehicleMarkingLeftUrl,
+          vehicle_marking_right_url: nextVehicleMarkingRightUrl,
+        }
+      ).vehicle;
+      if (!compliance.complete) {
+        return res.status(400).json({ error: `Complete the SA vehicle compliance requirements: ${compliance.missing.join(', ')}` });
+      }
     }
     let tierKey = truckDriver ? null : (nextTierKey || null);
     let tierName = truckDriver ? null : (nextTierNameInput || null);
@@ -3240,12 +3431,15 @@ router.post('/vehicle', requireAuth, async (req, res) => {
       `INSERT INTO driver_vehicle (
         driver_user_id, car_photo_front_url, car_photo_rear_url, car_photo_urls,
         vehicle_registration_url, vehicle_registration_book_url, insurance_url, zinara_url,
-        number_plate, make, model, year, color, vehicle_tier_key, vehicle_tier_name,
+        operating_licence_number, operating_licence_url, operating_licence_expires_at,
+        operator_legal_name, operator_business_address, panic_device_proof_url,
+        vehicle_marking_left_url, vehicle_marking_right_url,
+        number_plate, make, model, year, first_registered_at, color, vehicle_tier_key, vehicle_tier_name,
         seat_count, door_count, vehicle_category,
         has_air_conditioning, has_charging_ports, has_wifi, has_leather_seats,
         has_large_luggage_space, has_sliding_doors, is_high_end,
         vehicle_status, vehicle_submitted_at, vehicle_rejection_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
       ON DUPLICATE KEY UPDATE
         car_photo_front_url = VALUES(car_photo_front_url),
         car_photo_rear_url = VALUES(car_photo_rear_url),
@@ -3254,10 +3448,19 @@ router.post('/vehicle', requireAuth, async (req, res) => {
         vehicle_registration_book_url = VALUES(vehicle_registration_book_url),
         insurance_url = VALUES(insurance_url),
         zinara_url = VALUES(zinara_url),
+        operating_licence_number = VALUES(operating_licence_number),
+        operating_licence_url = VALUES(operating_licence_url),
+        operating_licence_expires_at = VALUES(operating_licence_expires_at),
+        operator_legal_name = VALUES(operator_legal_name),
+        operator_business_address = VALUES(operator_business_address),
+        panic_device_proof_url = VALUES(panic_device_proof_url),
+        vehicle_marking_left_url = VALUES(vehicle_marking_left_url),
+        vehicle_marking_right_url = VALUES(vehicle_marking_right_url),
         number_plate = VALUES(number_plate),
         make = VALUES(make),
         model = VALUES(model),
         year = VALUES(year),
+        first_registered_at = VALUES(first_registered_at),
         color = VALUES(color),
         vehicle_tier_key = VALUES(vehicle_tier_key),
         vehicle_tier_name = VALUES(vehicle_tier_name),
@@ -3285,10 +3488,19 @@ router.post('/vehicle', requireAuth, async (req, res) => {
         nextRegistrationBookUrl || null,
         nextInsuranceUrl || null,
         nextZinaraUrl || null,
+        nextOperatingLicenceNumber,
+        nextOperatingLicenceUrl,
+        nextOperatingLicenceExpiresAt,
+        nextOperatorLegalName,
+        nextOperatorBusinessAddress,
+        nextPanicDeviceProofUrl,
+        nextVehicleMarkingLeftUrl,
+        nextVehicleMarkingRightUrl,
         nextNumberPlate || null,
         nextMake || null,
         nextModel || null,
         nextYear,
+        nextFirstRegisteredAt,
         nextColor,
         tierKey,
         tierName,

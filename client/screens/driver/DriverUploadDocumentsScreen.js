@@ -39,6 +39,11 @@ const DOCS = [
   { key: 'selfie', label: 'Identity verification', subtitle: 'Clear selfie', icon: 'person-outline' },
   { key: 'selfieWithIdCard', label: 'Selfie with national ID', subtitle: 'Hold your national ID next to your face', icon: 'camera-outline' },
 ];
+const SA_DOCS = [
+  { key: 'proofOfAddress', label: 'Proof of address', subtitle: 'Recent municipal, bank or utility document', icon: 'home-outline' },
+  { key: 'prdp', label: 'PrDP document', subtitle: 'Professional Driving Permit', icon: 'document-text-outline' },
+  { key: 'criminalRecordReport', label: 'SAPS criminal-record report', subtitle: 'Upload the issued report', icon: 'shield-checkmark-outline' },
+];
 
 function askCropPreference() {
   return new Promise((resolve) => {
@@ -170,6 +175,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     || String(vehicle?.status || '').trim().toLowerCase() === 'verified';
   const enhancedSelfieOnly = route.params?.enhancedSelfieOnly === true
     || (profileApproved && !profile?.selfieWithIdCardUrl);
+  const isSouthAfrica = String(driverStatus?.registrationCountryCode || profile?.registrationCountryCode || '').toUpperCase() === 'ZA';
 
   const [uris, setUris] = useState({
     nationalIdFront: null,
@@ -177,6 +183,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     driverLicence: null,
     selfie: null,
     selfieWithIdCard: null,
+    proofOfAddress: null,
+    prdp: null,
+    criminalRecordReport: null,
   });
   const [nationalIdNumber, setNationalIdNumber] = useState(
     () => String(profile?.nationalIdNumber || '').trim()
@@ -190,6 +199,15 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const [driverLicenceExpiresAt, setDriverLicenceExpiresAt] = useState(
     () => String(profile?.driverLicenceExpiresAt || '').trim()
   );
+  const [identityDocumentType, setIdentityDocumentType] = useState(profile?.identityDocumentType || 'sa_id');
+  const [residentialAddress, setResidentialAddress] = useState(profile?.residentialAddress || '');
+  const [prdpNumber, setPrdpNumber] = useState(profile?.prdpNumber || '');
+  const [prdpExpiresAt, setPrdpExpiresAt] = useState(profile?.prdpExpiresAt || '');
+  const [operatorAgreementSignature, setOperatorAgreementSignature] = useState(profile?.operatorAgreementSignature || '');
+  const [criminalDeclarationAccepted, setCriminalDeclarationAccepted] = useState(!!profile?.criminalDeclarationAcceptedAt);
+  const [ricaEcaDeclarationAccepted, setRicaEcaDeclarationAccepted] = useState(!!profile?.ricaEcaDeclarationAcceptedAt);
+  const [operatorAgreementAccepted, setOperatorAgreementAccepted] = useState(!!profile?.operatorAgreementAcceptedAt);
+  const [operatingLicenceConditionAccepted, setOperatingLicenceConditionAccepted] = useState(!!profile?.operatingLicenceConditionAcceptedAt);
   const [loading, setLoading] = useState(false);
   const [lockedSelfieDocKey, setLockedSelfieDocKey] = useState(null);
   const [capturingLockedSelfie, setCapturingLockedSelfie] = useState(false);
@@ -205,6 +223,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     if (key === 'nationalIdBack') return profile?.nationalIdBackUrl || null;
     if (key === 'selfie') return profile?.selfieUrl || null;
     if (key === 'selfieWithIdCard') return profile?.selfieWithIdCardUrl || null;
+    if (key === 'proofOfAddress') return profile?.proofOfAddressUrl || null;
+    if (key === 'prdp') return profile?.prdpUrl || null;
+    if (key === 'criminalRecordReport') return profile?.criminalRecordReportUrl || null;
     return null;
   };
 
@@ -221,13 +242,13 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const hasAtLeastOneDoc = enhancedSelfieOnly
     ? !!(uris.selfieWithIdCard || getExistingDocUrl('selfieWithIdCard'))
     : DOCS.some(({ key }) => !!(uris[key] || getExistingDocUrl(key)));
-  const docsToRender = DOCS;
+  const docsToRender = isSouthAfrica ? [...DOCS, ...SA_DOCS] : DOCS;
 
   const getEffectiveDocUri = (key) => uris[key] || getExistingDocUrl(key);
 
   const missingRequiredDocs = enhancedSelfieOnly
     ? (getEffectiveDocUri('selfieWithIdCard') ? [] : ['Selfie with national ID'])
-    : DOCS.filter(({ key }) => !getEffectiveDocUri(key)).map(({ label }) => label);
+    : docsToRender.filter(({ key }) => !getEffectiveDocUri(key)).map(({ label }) => label);
 
   useEffect(() => {
     if (profileApproved && vehicleApproved) {
@@ -254,6 +275,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       driverLicence: prev.driverLicence || profile?.driverLicenceUrl || null,
       selfie: prev.selfie || profile?.selfieUrl || null,
       selfieWithIdCard: prev.selfieWithIdCard || profile?.selfieWithIdCardUrl || null,
+      proofOfAddress: prev.proofOfAddress || profile?.proofOfAddressUrl || null,
+      prdp: prev.prdp || profile?.prdpUrl || null,
+      criminalRecordReport: prev.criminalRecordReport || profile?.criminalRecordReportUrl || null,
     }));
   }, [
     profile?.nationalIdFrontUrl,
@@ -261,6 +285,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     profile?.driverLicenceUrl,
     profile?.selfieUrl,
     profile?.selfieWithIdCardUrl,
+    profile?.proofOfAddressUrl,
+    profile?.prdpUrl,
+    profile?.criminalRecordReportUrl,
   ]);
 
   // Pending review: leave upload screen once — do not re-replace when driverStatus refreshes.
@@ -481,6 +508,20 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       Alert.alert('Licence expiration required', 'Enter the licence expiration date as YYYY-MM-DD.');
       return;
     }
+    if (isSouthAfrica) {
+      if (!residentialAddress.trim() || !prdpNumber.trim() || !isIsoDate(prdpExpiresAt)) {
+        Alert.alert('SA compliance details required', 'Enter your residential address, PrDP number and PrDP expiry date.');
+        return;
+      }
+      if (!operatorAgreementSignature.trim()) {
+        Alert.alert('Electronic signature required', 'Type your full legal name as your electronic signature.');
+        return;
+      }
+      if (!criminalDeclarationAccepted || !ricaEcaDeclarationAccepted || !operatorAgreementAccepted || !operatingLicenceConditionAccepted) {
+        Alert.alert('Declarations required', 'Accept all South African declarations and the operator agreement before submitting.');
+        return;
+      }
+    }
 
     setLoading(true);
     try {
@@ -508,6 +549,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         const driverLicenceUrl = await uploadUri(token, getEffectiveDocUri('driverLicence'), "Driver's license");
         const selfieUrl = await uploadUri(token, getEffectiveDocUri('selfie'), 'Selfie');
         const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
+        const proofOfAddressUrl = isSouthAfrica ? await uploadUri(token, getEffectiveDocUri('proofOfAddress'), 'Proof of address') : null;
+        const prdpUrl = isSouthAfrica ? await uploadUri(token, getEffectiveDocUri('prdp'), 'PrDP') : null;
+        const criminalRecordReportUrl = isSouthAfrica ? await uploadUri(token, getEffectiveDocUri('criminalRecordReport'), 'SAPS criminal-record report') : null;
         const documentPayload = {
           nationalIdFrontUrl,
           nationalIdBackUrl,
@@ -519,6 +563,20 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           dateOfBirth: String(dateOfBirth || '').trim(),
           driverLicenceExpiresAt: String(driverLicenceExpiresAt || '').trim(),
           driverKind,
+          ...(isSouthAfrica ? {
+            identityDocumentType,
+            residentialAddress: residentialAddress.trim(),
+            proofOfAddressUrl,
+            prdpNumber: prdpNumber.trim(),
+            prdpUrl,
+            prdpExpiresAt,
+            criminalRecordReportUrl,
+            criminalDeclarationAccepted,
+            ricaEcaDeclarationAccepted,
+            operatorAgreementAccepted,
+            operatorAgreementSignature: operatorAgreementSignature.trim(),
+            operatingLicenceConditionAccepted,
+          } : {}),
         };
         console.log('[DriverUploadDocumentsScreen] submit documents payload', {
           hasToken: !!token,
@@ -730,13 +788,24 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         </View>
 
         <Text className="mt-6 mb-2 text-2xl font-bold text-gray-900">
-          {enhancedSelfieOnly ? 'Take a selfie with your national ID' : 'Upload Documents'}
+          {enhancedSelfieOnly
+            ? 'Take a selfie with your national ID'
+            : isSouthAfrica
+              ? 'South Africa driver registration'
+              : 'Upload Documents'}
         </Text>
         <Text className="mb-4 text-sm text-gray-600">
           {enhancedSelfieOnly
             ? 'Hold your national ID next to your face and take a clear selfie so we can strengthen driver authenticity.'
             : 'Valid documentation is required for passenger safety. Please upload clear photos where all text is readable.'}
         </Text>
+
+        {isSouthAfrica && !enhancedSelfieOnly ? (
+          <View className="mb-4 flex-row items-center self-start rounded-full border border-blue-200 bg-blue-50 px-3 py-2">
+            <Ionicons name="location-outline" size={16} color={PRIMARY_BLUE} />
+            <Text className="ml-2 text-xs font-bold uppercase tracking-wide text-blue-700">South Africa application</Text>
+          </View>
+        ) : null}
 
         {enhancedSelfieOnly ? (
           <View className="mb-4 rounded-xl bg-amber-50 px-4 py-3">
@@ -817,6 +886,44 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               helpText="Use the expiry date printed on your driver licence."
               onChange={setDriverLicenceExpiresAt}
             />
+            {isSouthAfrica ? (
+              <View className="mt-2 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <Text className="mb-4 text-lg font-bold text-gray-900">South Africa compliance</Text>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Identity document type</Text>
+                <View className="mb-4 flex-row gap-2">
+                  {[['sa_id', 'SA ID'], ['passport', 'Passport']].map(([value, label]) => (
+                    <TouchableOpacity key={value} onPress={() => setIdentityDocumentType(value)} className={`flex-1 rounded-xl border p-3 ${identityDocumentType === value ? 'border-blue-600 bg-white' : 'border-gray-200 bg-gray-50'}`}>
+                      <Text className={`text-center font-semibold ${identityDocumentType === value ? 'text-blue-700' : 'text-gray-600'}`}>{label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text className="mb-2 text-sm font-medium text-gray-700">Residential address <Text className="text-red-500">*</Text></Text>
+                <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" multiline value={residentialAddress} onChangeText={setResidentialAddress} placeholder="Full residential address" />
+                <Text className="mb-2 text-sm font-medium text-gray-700">PrDP number <Text className="text-red-500">*</Text></Text>
+                <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={prdpNumber} onChangeText={setPrdpNumber} autoCapitalize="characters" placeholder="Enter PrDP number" />
+                <DateSelectField label="PrDP expiration" value={prdpExpiresAt} placeholder="Select PrDP expiry date" required minYear={CURRENT_YEAR} maxYear={CURRENT_YEAR + 10} fallbackYear={CURRENT_YEAR + 1} onChange={setPrdpExpiresAt} />
+                <Text className="mb-2 mt-2 text-sm font-medium text-gray-700">Electronic signature <Text className="text-red-500">*</Text></Text>
+                <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={operatorAgreementSignature} onChangeText={setOperatorAgreementSignature} placeholder="Type your full legal name" />
+                {[
+                  [criminalDeclarationAccepted, setCriminalDeclarationAccepted, 'I declare that I have no relevant pending criminal investigations.'],
+                  [ricaEcaDeclarationAccepted, setRicaEcaDeclarationAccepted, 'I confirm that my mobile device and SIM comply with RICA/ECA requirements.'],
+                  [operatorAgreementAccepted, setOperatorAgreementAccepted, 'I accept the Trust Express South Africa operator agreement (version ZA-1.0).'],
+                  [operatingLicenceConditionAccepted, setOperatingLicenceConditionAccepted, 'I understand activation is conditional on obtaining and maintaining a valid operating licence.'],
+                ].map(([checked, setter, label]) => (
+                  <TouchableOpacity key={label} onPress={() => setter(!checked)} className="mb-3 flex-row items-start">
+                    <Ionicons name={checked ? 'checkbox' : 'square-outline'} size={23} color={checked ? PRIMARY_BLUE : '#64748b'} />
+                    <Text className="ml-3 flex-1 text-sm leading-5 text-gray-700">{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {!enhancedSelfieOnly ? (
+          <View className="mb-3 mt-1">
+            <Text className="text-lg font-bold text-gray-900">Identity documents</Text>
+            <Text className="mt-1 text-sm text-gray-500">Upload clear, uncropped images of each required document.</Text>
           </View>
         ) : null}
 
@@ -826,7 +933,14 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           const hasDoc = !!effectiveUri;
 
           return (
-          <View key={key} className="mb-4 flex-row items-center rounded-2xl border border-gray-200 bg-white p-4">
+          <React.Fragment key={key}>
+          {isSouthAfrica && key === 'proofOfAddress' ? (
+            <View className="mb-3 mt-3 border-t border-gray-100 pt-5">
+              <Text className="text-lg font-bold text-gray-900">SA compliance documents</Text>
+              <Text className="mt-1 text-sm leading-5 text-gray-500">These documents are reviewed separately before your account can be approved.</Text>
+            </View>
+          ) : null}
+          <View className="mb-4 flex-row items-center rounded-2xl border border-gray-200 bg-white p-4">
             {displayUri ? (
               <Image source={{ uri: displayUri }} className="mr-4 h-12 w-12 rounded-xl" />
             ) : (
@@ -860,6 +974,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               </TouchableOpacity>
             )}
           </View>
+          </React.Fragment>
           );
         })}
 

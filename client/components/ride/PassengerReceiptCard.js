@@ -2,14 +2,15 @@ import React from 'react';
 import { ActivityIndicator, Image, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { formatMarketCurrency, getMarket } from '../../constants/market';
 
 const HEADER_BLUE = '#0b3f9f';
 const INK = '#07153d';
 const MUTED = '#667085';
 const LINE = '#e5e7eb';
 
-function money(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+function money(value, currencyCode) {
+  return formatMarketCurrency(value, currencyCode);
 }
 
 function cleanLocationLabel(value) {
@@ -19,11 +20,11 @@ function cleanLocationLabel(value) {
     .trim() || '-';
 }
 
-function formatReceiptDate(value, includeTime = false) {
+function formatReceiptDate(value, includeTime = false, countryCode = null) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Africa/Harare',
+    timeZone: getMarket(countryCode).timeZone,
     day: '2-digit',
     month: includeTime ? 'short' : 'long',
     year: includeTime ? undefined : 'numeric',
@@ -72,6 +73,8 @@ export default function PassengerReceiptCard({
   const discount = Number(ride?.discountAmount || 0);
   const finalFare = Number(ride?.finalEstimatedAmount || fareAmount || 0);
   const receiptNumber = `RCPT-${ride?.id || '-'}`;
+  const currencyCode = ride?.currencyCode || 'USD';
+  const countryCode = ride?.countryCode || (currencyCode === 'ZAR' ? 'ZA' : 'ZW');
   const tripReference = ride?.publicId || `TR-${String(ride?.id || '').padStart(5, '0')}`;
   const routeRows = [
     { label: 'Pickup', value: cleanLocationLabel(pickupLabel) },
@@ -101,7 +104,7 @@ export default function PassengerReceiptCard({
           <View className="flex-[0.85] items-end pt-2">
             <Text className="text-[14px] font-extrabold text-white">TRIP RECEIPT</Text>
             <Text className="mt-3 text-[12px] font-semibold text-white/90">{receiptNumber}</Text>
-            <Text className="mt-1 text-[11px] text-white/90">{formatReceiptDate(ride?.completedAt)}</Text>
+            <Text className="mt-1 text-[11px] text-white/90">{formatReceiptDate(ride?.completedAt, false, countryCode)}</Text>
           </View>
         </View>
       </View>
@@ -136,22 +139,30 @@ export default function PassengerReceiptCard({
             <DetailCell label="Service tier" value={ride?.requestedTierName || 'Trust Express'} />
             <DetailCell label="Trip ID" value={`TR-${String(ride?.id || '').padStart(6, '0')}`} />
             <DetailCell label="Trip reference" value={tripReference} />
-            <DetailCell label="Started" value={formatReceiptDate(ride?.startedAt || ride?.requestedAt, true)} />
-            <DetailCell label="Completed" value={formatReceiptDate(ride?.completedAt, true)} />
+            <DetailCell label="Started" value={formatReceiptDate(ride?.startedAt || ride?.requestedAt, true, countryCode)} />
+            <DetailCell label="Completed" value={formatReceiptDate(ride?.completedAt, true, countryCode)} />
+            <DetailCell label="Vehicle" value={[driver?.vehicleMake || ride?.vehicleMake, driver?.vehicleModel || ride?.vehicleModel, driver?.vehicleColor || ride?.vehicleColor, driver?.numberPlate || ride?.numberPlate].filter(Boolean).join(' · ')} />
+            <DetailCell label="Operating licence" value={driver?.operatingLicenceNumber || ride?.operatingLicenceNumber} />
+            {(driver?.operatorBusinessAddress || ride?.operatorBusinessAddress) ? (
+              <View className="mb-4 w-full">
+                <Text className="text-xs" style={{ color: MUTED }}>Operator business address</Text>
+                <Text className="mt-1 text-[15px] font-extrabold" style={{ color: INK }}>{driver?.operatorBusinessAddress || ride?.operatorBusinessAddress}</Text>
+              </View>
+            ) : null}
           </View>
         </View>
 
         <View className="py-5">
           <SectionTitle>Fare breakdown</SectionTitle>
-          <FareRow label="Original fare" value={money(originalFare)} />
-          <FareRow label="Discount" value={`-${money(discount)}`} />
-          <FareRow label="Fare" value={money(finalFare)} />
-          <FareRow label="Tip" value={money(tipAmount)} />
+          <FareRow label="Original fare" value={money(originalFare, currencyCode)} />
+          <FareRow label="Discount" value={`-${money(discount, currencyCode)}`} />
+          <FareRow label="Fare" value={money(finalFare, currencyCode)} />
+          <FareRow label="Tip" value={money(tipAmount, currencyCode)} />
         </View>
 
         <View className="flex-row items-center justify-between rounded-[10px] bg-[#edf3ff] px-4 py-4">
           <Text className="text-[14px] font-extrabold" style={{ color: HEADER_BLUE }}>TOTAL CHARGED</Text>
-          <Text className="text-[30px] font-extrabold" style={{ color: HEADER_BLUE }}>{money(totalAmount)}</Text>
+          <Text className="text-[30px] font-extrabold" style={{ color: HEADER_BLUE }}>{money(totalAmount, currencyCode)}</Text>
         </View>
 
         <View className="mt-5 flex-row items-center justify-between">

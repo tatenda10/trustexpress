@@ -20,6 +20,7 @@ import Constants from 'expo-constants';
 import { deleteMe, getMe, getPassengerRideHistory, resolveUploadedMediaUrl, updateMe, uploadFile } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import BiometricSignInSetting from '../../components/BiometricSignInSetting';
+import { getMarket } from '../../constants/market';
 
 const STATUS_TONES = {
   done: { bg: '#dcfce7', text: '#166534', label: 'Verified' },
@@ -27,12 +28,6 @@ const STATUS_TONES = {
   action: { bg: '#fef3c7', text: '#92400e', label: 'Action needed' },
   rejected: { bg: '#fee2e2', text: '#b91c1c', label: 'Resubmit' },
 };
-
-const EMERGENCY_CONTACTS = [
-  { key: 'police', label: 'Police', number: '995', icon: 'shield-checkmark-outline' },
-  { key: 'ambulance', label: 'Ambulance', number: '994', icon: 'medkit-outline' },
-  { key: 'fire', label: 'Fire brigade', number: '993', icon: 'flame-outline' },
-];
 
 function SectionTitle({ children }) {
   return (
@@ -288,6 +283,7 @@ const PassengerAccountScreen = ({ navigation }) => {
     : { bg: '#fef3c7', text: '#92400e' };
   const verificationHeadline = allVerified ? 'Fully verified' : phoneVerified ? 'Phone verified' : 'Verification needed';
   const walletActive = passengerIdentity?.smileCashStatus === 'active';
+  const market = getMarket(profile?.registrationCountryCode);
   const appVersion = Constants.expoConfig?.version || null;
 
   const verificationRows = [
@@ -333,13 +329,13 @@ const PassengerAccountScreen = ({ navigation }) => {
       icon: 'person-outline',
       onPress: () => navigation.navigate('PassengerProfileDetails'),
     },
-    {
+    ...(market.supportsSmileCash ? [{
       key: 'smile-cash',
       title: 'Online wallet',
       subtitle: walletActive ? passengerIdentity.smileCashMobile : 'Link your SmileCash wallet',
       icon: 'wallet-outline',
       onPress: () => navigation.navigate('PassengerSmileCash'),
-    },
+    }] : []),
     {
       key: 'reviews',
       title: 'Reviews',
@@ -486,13 +482,15 @@ const PassengerAccountScreen = ({ navigation }) => {
                 label="Trips"
                 onPress={() => navigation.getParent?.()?.navigate?.('PassengerActivity')}
               />
-              <StatTile
-                icon="wallet"
-                iconColor="#16a34a"
-                value={walletActive ? 'Linked' : 'Off'}
-                label="Wallet"
-                onPress={() => navigation.navigate('PassengerSmileCash')}
-              />
+              {market.supportsSmileCash ? (
+                <StatTile
+                  icon="wallet"
+                  iconColor="#16a34a"
+                  value={walletActive ? 'Linked' : 'Off'}
+                  label="Wallet"
+                  onPress={() => navigation.navigate('PassengerSmileCash')}
+                />
+              ) : null}
             </View>
           </Card>
 
@@ -606,7 +604,7 @@ const PassengerAccountScreen = ({ navigation }) => {
           <View className="mb-4 h-1 w-10 self-center rounded-full bg-gray-200" />
           <Text className="text-lg font-bold text-gray-900">Emergency numbers</Text>
           <Text className="mb-4 mt-1 text-sm text-gray-500">Tap a service to call it.</Text>
-          {EMERGENCY_CONTACTS.map((contact) => (
+          {market.emergencyContacts.map((contact) => (
             <TouchableOpacity
               key={contact.key}
               className="mb-2 flex-row items-center rounded-2xl bg-[#fef2f2] px-4 py-3.5"

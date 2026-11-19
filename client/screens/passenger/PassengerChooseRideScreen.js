@@ -21,6 +21,7 @@ import { PAYMENT_METHOD_CASH, PAYMENT_METHOD_ONLINE } from '../../constants/paym
 import { SERVICE_AREA_LABEL, isCoordinateInBulawayoServiceArea } from '../../constants/serviceArea';
 import { connectRealtime } from '../../realtime';
 import RideTierCarIcon from '../../components/RideTierCarIcon';
+import { formatMarketCurrency, getMarket } from '../../constants/market';
 
 function getTierMaxPassengerCount(tier) {
   const tierKey = String(tier?.tierKey || '').toLowerCase();
@@ -113,7 +114,7 @@ function TierRow({ tier, selected, onPress, distanceKm, appliedDiscount }) {
         <Text style={styles.tierSub}>{meta}</Text>
       </View>
       <View style={styles.tierPriceWrap}>
-        <Text style={styles.tierPrice}>${visibleTierAmount.toFixed(2)}</Text>
+        <Text style={styles.tierPrice}>{formatMarketCurrency(visibleTierAmount, tier?.currencyCode)}</Text>
         {tier.surgeMultiplier && Number(tier.surgeMultiplier) > 1 ? (
           <Text style={styles.surgeText}>
             {tier.surgeMultiplier}× {tier.surgeName || 'busy pricing'}
@@ -586,9 +587,9 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
                 </View>
                 <Text style={[styles.summaryName, { flex: 1 }]}>{selectedTier?.tierName || 'Ride'}</Text>
                 <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.summaryPrice}>${finalEstimatedAmount.toFixed(2)}</Text>
+                  <Text style={styles.summaryPrice}>{formatMarketCurrency(finalEstimatedAmount, selectedTier?.currencyCode)}</Text>
                   {hasDiscount ? (
-                    <Text style={styles.summaryOldPrice}>${originalEstimatedAmount.toFixed(2)}</Text>
+                    <Text style={styles.summaryOldPrice}>{formatMarketCurrency(originalEstimatedAmount, selectedTier?.currencyCode)}</Text>
                   ) : null}
                 </View>
               </View>
@@ -628,7 +629,9 @@ export default function PassengerChooseRideScreen({ navigation, route }) {
             <Text style={styles.sectionLabel}>How will you pay?</Text>
             {[
               { value: PAYMENT_METHOD_CASH, label: 'Cash', hint: 'Pay the driver at the end', icon: 'cash-outline' },
-              { value: PAYMENT_METHOD_ONLINE, label: 'Pay online', hint: 'Card or Smile&Pay after the trip', icon: 'card-outline' },
+              ...(getMarket().supportsSmilePay
+                ? [{ value: PAYMENT_METHOD_ONLINE, label: 'Pay online', hint: 'Card or Smile&Pay after the trip', icon: 'card-outline' }]
+                : []),
             ].map((option) => {
               const active = paymentMethod === option.value;
               return (

@@ -80,10 +80,12 @@ function readChannel(value, fallback) {
 
 router.post('/phone/send-code', async (req, res) => {
   try {
-    const phone = normalizePhone(req.body?.phone);
-    if (!phone) throw badRequest('Enter a valid number starting with 07 (e.g. 0771234567).', 'INVALID_PHONE');
+    const countryCode = String(req.body?.countryCode || 'ZW').trim().toUpperCase();
+    const phone = normalizePhone(req.body?.phone, countryCode);
+    if (!phone) throw badRequest(countryCode === 'ZA' ? 'Enter a valid South African mobile number.' : 'Enter a valid number starting with 07 (e.g. 0771234567).', 'INVALID_PHONE');
     const channel = readChannel(req.body?.channel, 'whatsapp');
     if (channel === 'email') throw badRequest('Choose SMS or WhatsApp');
+    if (countryCode === 'ZA' && channel === 'sms') throw badRequest('South African verification is currently available through WhatsApp.', 'SMS_NOT_AVAILABLE');
     const role = normalizeRole(req.body?.role);
 
     // Same response whether or not an account exists; the verify step decides sign-in vs sign-up.
@@ -96,7 +98,8 @@ router.post('/phone/send-code', async (req, res) => {
 
 router.post('/phone/verify', async (req, res) => {
   try {
-    const phone = normalizePhone(req.body?.phone);
+    const countryCode = String(req.body?.countryCode || 'ZW').trim().toUpperCase();
+    const phone = normalizePhone(req.body?.phone, countryCode);
     if (!phone) throw badRequest('Enter a valid phone number.', 'INVALID_PHONE');
     const role = normalizeRole(req.body?.role);
     await verifyCode({ purpose: 'sign_in', destination: phone, code: req.body?.code });
@@ -108,7 +111,7 @@ router.post('/phone/verify', async (req, res) => {
     }
 
     // New number: the app collects a name, then calls /phone/complete-sign-up with this token.
-    const signupToken = signJwt({ typ: 'phone_signup', phone, role }, PHONE_SIGNUP_TOKEN_TTL_SECONDS);
+    const signupToken = signJwt({ typ: 'phone_signup', phone, role, countryCode }, PHONE_SIGNUP_TOKEN_TTL_SECONDS);
     return res.json({ ok: true, status: 'needs_profile', signupToken });
   } catch (error) {
     return sendError(res, error, 'phone/verify');
@@ -144,6 +147,7 @@ router.post('/phone/complete-sign-up', async (req, res) => {
       email,
       firstName,
       lastName,
+      registrationCountryCode: claims.countryCode,
     });
     return res.status(201).json({ ok: true, status: 'signed_in', ...(await startSession(req, user)) });
   } catch (error) {
@@ -159,6 +163,7 @@ router.post('/email/sign-up', async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     if (!email) throw badRequest('Enter a valid email address.', 'INVALID_EMAIL');
     const role = normalizeRole(req.body?.role);
+    const countryCode = String(req.body?.countryCode || 'ZW').trim().toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
     assertPasswordStrength(req.body?.password);
     const firstName = String(req.body?.firstName || '').trim();
     const lastName = String(req.body?.lastName || '').trim();
@@ -177,7 +182,7 @@ router.post('/email/sign-up', async (req, res) => {
       // Unfinished earlier sign-up: take the new details and resend the code.
       await setUserPassword(existing.id, passwordHash);
     } else {
-      await createUser({ role, email, firstName, lastName, passwordHash });
+      await createUser({ role, email, firstName, lastName, passwordHash, registrationCountryCode: countryCode });
     }
 
     const result = await sendCode({ purpose: 'verify_email', channel: 'email', destination: email, role, ipAddress: getClientIp(req) });
@@ -263,7 +268,7 @@ async function resolveResetTarget(body) {
     if (!email) throw badRequest('Enter a valid email address.', 'INVALID_EMAIL');
     return { role, destination: email, user: await findUserByEmail(email, role), channel: 'email' };
   }
-  const phone = normalizePhone(identifier);
+  const phone = normalizePhone(identifier, body?.countryCode);
   if (!phone) throw badRequest('Enter your email or phone number.', 'INVALID_IDENTIFIER');
   const channel = readChannel(body?.channel, 'whatsapp');
   if (channel === 'email') throw badRequest('Choose SMS or WhatsApp');

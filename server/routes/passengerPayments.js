@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { query } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getUserById, normalizeRole, toAppUser } from '../lib/users.js';
 import {
@@ -20,13 +21,27 @@ async function requirePassenger(req, res) {
     res.status(403).json({ error: 'Passenger account required' });
     return null;
   }
-  return { clerkUser, user };
+  const [market] = await query(
+    'SELECT registration_country_code FROM users WHERE clerk_user_id = ? LIMIT 1',
+    [req.userId]
+  );
+  return { clerkUser, user, countryCode: market?.registration_country_code === 'ZA' ? 'ZA' : 'ZW' };
+}
+
+function rejectUnsupportedSaWallet(res, passenger) {
+  if (passenger?.countryCode !== 'ZA') return false;
+  res.status(422).json({
+    error: 'This payment option is not available for South African accounts yet. Please choose cash.',
+    code: 'PAYMENT_METHOD_NOT_AVAILABLE',
+  });
+  return true;
 }
 
 router.post('/smile-cash/open', requireAuth, async (req, res) => {
   try {
     const passenger = await requirePassenger(req, res);
     if (!passenger) return;
+    if (rejectUnsupportedSaWallet(res, passenger)) return;
     const smileCash = await openPassengerSmileCash({
       passengerUserId: req.userId,
       clerkUser: passenger.clerkUser,
@@ -46,6 +61,7 @@ router.post('/smile-cash/link', requireAuth, async (req, res) => {
   try {
     const passenger = await requirePassenger(req, res);
     if (!passenger) return;
+    if (rejectUnsupportedSaWallet(res, passenger)) return;
     const smileCash = await linkPassengerSmileCash({
       passengerUserId: req.userId,
       clerkUser: passenger.clerkUser,
@@ -84,6 +100,7 @@ router.post('/rides/:rideRequestId/smilepay/initiate', requireAuth, async (req, 
   try {
     const passenger = await requirePassenger(req, res);
     if (!passenger) return;
+    if (rejectUnsupportedSaWallet(res, passenger)) return;
     const rideRequestId = Number(req.params.rideRequestId);
     if (!Number.isInteger(rideRequestId)) {
       return res.status(400).json({ error: 'Invalid rideRequestId' });

@@ -58,6 +58,16 @@ function mapPassenger(user, passengerIdentity = null) {
     savedAddresses: Array.isArray(privateMeta.savedAddresses) ? privateMeta.savedAddresses : [],
     emergencyContact: privateMeta.emergencyContact || null,
     paymentMethods: Array.isArray(privateMeta.paymentMethods) ? privateMeta.paymentMethods : [],
+    registrationCity: user.registrationCity || null,
+    registrationCountryCode: user.registrationCountryCode || null,
+    registrationSource: user.registrationSource || null,
+    registrationDetectedAt: user.registrationDetectedAt || null,
+    termsAndPrivacyAcceptedAt: privateMeta.termsAndPrivacyAcceptedAt || null,
+    termsAndPrivacyVersion: privateMeta.termsAndPrivacyVersion || null,
+    termsAndPrivacyCountryCode: privateMeta.termsAndPrivacyCountryCode || null,
+    source: String(user.registrationSource || '').startsWith('whatsapp') || String(user.id || '').startsWith('whatsapp:')
+      ? 'whatsapp'
+      : 'app',
     passengerIdentity,
     _role: normalizeRole(publicMeta.role),
   };
@@ -84,7 +94,9 @@ function mapMysqlPassenger(row, passengerIdentity = null) {
     paymentMethods: [],
     passengerIdentity,
     registrationCity: row.registration_city || null,
+    registrationCountryCode: row.registration_country_code || null,
     registrationSource: row.registration_source || null,
+    registrationDetectedAt: row.registration_detected_at || null,
     source: String(row.registration_source || '').startsWith('whatsapp') || String(row.clerk_user_id || '').startsWith('whatsapp:')
       ? 'whatsapp'
       : 'app',
@@ -124,6 +136,7 @@ async function loadPassengerRideStats(passengerUserIds = []) {
   const rows = await query(
     `SELECT
        passenger_user_id,
+       COALESCE(NULLIF(currency_code, ''), CASE WHEN country_code = 'ZA' THEN 'ZAR' ELSE 'USD' END) AS currency_code,
        COUNT(CASE WHEN status = 'completed' THEN 1 END) AS total_rides,
        COALESCE(SUM(CASE
          WHEN status = 'completed' THEN COALESCE(final_estimated_amount, estimated_amount, 0) + COALESCE(tip_amount, 0)
@@ -132,20 +145,28 @@ async function loadPassengerRideStats(passengerUserIds = []) {
        MAX(CASE WHEN status = 'completed' THEN COALESCE(completed_at, started_at, assigned_at, requested_at) END) AS last_ride_at
      FROM ride_requests
      WHERE passenger_user_id IN (${placeholders})
-     GROUP BY passenger_user_id`,
+     GROUP BY passenger_user_id, COALESCE(NULLIF(currency_code, ''), CASE WHEN country_code = 'ZA' THEN 'ZAR' ELSE 'USD' END)`,
     normalizedIds
   );
-
-  return new Map(
-    rows.map((row) => [
-      row.passenger_user_id,
-      {
-        totalRides: Number(row.total_rides || 0),
-        totalSpend: Number(row.total_spend || 0),
-        lastRideAt: row.last_ride_at || null,
-      },
-    ])
-  );
+  const stats = new Map();
+  for (const row of rows) {
+    const current = stats.get(row.passenger_user_id) || {
+      totalRides: 0,
+      totalSpend: 0,
+      totalSpendByCurrency: {},
+      lastRideAt: null,
+    };
+    const currencyCode = String(row.currency_code || 'USD').toUpperCase();
+    const spend = Number(row.total_spend || 0);
+    current.totalRides += Number(row.total_rides || 0);
+    current.totalSpend += spend;
+    current.totalSpendByCurrency[currencyCode] = Number(current.totalSpendByCurrency[currencyCode] || 0) + spend;
+    if (!current.lastRideAt || new Date(row.last_ride_at || 0) > new Date(current.lastRideAt || 0)) {
+      current.lastRideAt = row.last_ride_at || current.lastRideAt;
+    }
+    stats.set(row.passenger_user_id, current);
+  }
+  return stats;
 }
 
 function applyPassengerRideStats(passenger, statsMap) {
@@ -155,6 +176,7 @@ function applyPassengerRideStats(passenger, statsMap) {
     ...passenger,
     totalRides: Number(stats.totalRides || 0),
     totalSpend: Number(stats.totalSpend || 0),
+    totalSpendByCurrency: stats.totalSpendByCurrency || {},
     lastRideAt: stats.lastRideAt || null,
   };
 }
@@ -185,6 +207,7 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
     const search = String(req.query.search || '').trim().toLowerCase();
     const status = String(req.query.status || 'all').toLowerCase();
     const identityStatus = String(req.query.identityStatus || 'all').toLowerCase();
+    const countryCode = String(req.query.countryCode || 'all').trim().toUpperCase();
     const page = Math.max(Number(req.query.page) || 1, 1);
     const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 100);
     const sortBy = String(req.query.sortBy || 'createdAt');
@@ -222,12 +245,16 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
 
     if (search) {
       passengers = passengers.filter((item) => {
-        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName, item.registrationCity, item.registrationSource, item.source]
+        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName, item.registrationCity, item.registrationCountryCode, item.registrationSource, item.source]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();
         return haystack.includes(search);
       });
+    }
+
+    if (['ZA', 'ZW'].includes(countryCode)) {
+      passengers = passengers.filter((item) => item.registrationCountryCode === countryCode);
     }
 
     if (['active', 'blocked', 'flagged'].includes(status)) {
@@ -293,6 +320,7 @@ async function exportPassengersWorkbook(req, res) {
     const search = String(req.query.search || '').trim().toLowerCase();
     const status = String(req.query.status || 'all').toLowerCase();
     const identityStatus = String(req.query.identityStatus || 'all').toLowerCase();
+    const countryCode = String(req.query.countryCode || 'all').trim().toUpperCase();
 
     const clerkUsers = await loadAllClerkUsers('-created_at');
     const passengerUsers = clerkUsers.filter((item) => normalizeRole(item?.publicMetadata?.role) === 'passenger');
@@ -326,12 +354,16 @@ async function exportPassengersWorkbook(req, res) {
 
     if (search) {
       passengers = passengers.filter((item) => {
-        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName, item.registrationCity, item.registrationSource, item.source]
+        const haystack = [item.id, item.email, item.phoneNumber, item.firstName, item.lastName, item.fullName, item.registrationCity, item.registrationCountryCode, item.registrationSource, item.source]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();
         return haystack.includes(search);
       });
+    }
+
+    if (['ZA', 'ZW'].includes(countryCode)) {
+      passengers = passengers.filter((item) => item.registrationCountryCode === countryCode);
     }
 
     if (['active', 'blocked', 'flagged'].includes(status)) {

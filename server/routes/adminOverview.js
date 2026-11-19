@@ -146,9 +146,12 @@ router.get('/', requireAdminAuth, requirePermission('overview.read'), async (_re
          LIMIT 4`
       ),
       query(
-        `SELECT COALESCE(SUM(estimated_amount), 0) AS total
+        `SELECT
+           COALESCE(NULLIF(currency_code, ''), CASE WHEN country_code = 'ZA' THEN 'ZAR' ELSE 'USD' END) AS currency_code,
+           COALESCE(SUM(COALESCE(final_estimated_amount, estimated_amount, 0)), 0) AS total
          FROM ride_requests
-         WHERE DATE(requested_at) = CURDATE()`
+         WHERE DATE(requested_at) = CURDATE()
+         GROUP BY COALESCE(NULLIF(currency_code, ''), CASE WHEN country_code = 'ZA' THEN 'ZAR' ELSE 'USD' END)`
       ),
     ]);
 
@@ -226,7 +229,9 @@ router.get('/', requireAdminAuth, requirePermission('overview.read'), async (_re
         },
       },
       spotlight: {
-        grossRideValueToday: formatCurrency(rideValueTodayRows?.[0]?.total),
+        grossRideValueTodayByCurrency: Object.fromEntries(
+          rideValueTodayRows.map((row) => [String(row.currency_code || 'USD').toUpperCase(), formatCurrency(row.total)])
+        ),
         totalRequestedToday: ridesToday,
         supportOpen: openSupport,
       },

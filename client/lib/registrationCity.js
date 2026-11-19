@@ -31,11 +31,14 @@ export async function getRegistrationCityPayload() {
         longitude: Number(current?.coords?.longitude),
       };
       const serviceArea = getServiceAreaForCoordinate(coordinate);
-      if (!serviceArea?.label) return {};
+      const reverseGeocoded = await Location.reverseGeocodeAsync(coordinate).catch(() => []);
+      const place = reverseGeocoded?.[0] || null;
+      const detectedCountryCode = String(place?.isoCountryCode || '').trim().toUpperCase();
+      if (!['ZA', 'ZW'].includes(detectedCountryCode) && !serviceArea?.label) return {};
 
       cachedRegistrationCity = {
-        registrationCity: serviceArea.label,
-        registrationCountryCode: 'ZW',
+        registrationCity: serviceArea?.label || place?.city || place?.subregion || place?.region || null,
+        registrationCountryCode: ['ZA', 'ZW'].includes(detectedCountryCode) ? detectedCountryCode : 'ZW',
         registrationLatitude: coordinate.latitude,
         registrationLongitude: coordinate.longitude,
         registrationSource: 'device_location',

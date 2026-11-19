@@ -16,6 +16,8 @@ export const BULAWAYO_GEO_LOCK_ENABLED =
   String(process.env.EXPO_PUBLIC_ENABLE_BULAWAYO_GEO_LOCK ?? 'true').toLowerCase() !== 'false';
 
 export let SERVICE_AREA_LABEL = 'Bulawayo and Gweru';
+let activeCountryCode = 'ZW';
+let allConfiguredServiceAreas = [];
 
 export let TRUST_EXPRESS_SERVICE_AREAS = [
   {
@@ -45,7 +47,7 @@ export let BULAWAYO_SERVICE_BOUNDS_ARRAY = [
   Math.max(...TRUST_EXPRESS_SERVICE_AREAS.map((area) => area.bounds.north)),
 ];
 
-export const BULAWAYO_CENTER_COORDINATE = {
+export let BULAWAYO_CENTER_COORDINATE = {
   latitude: -20.1535,
   longitude: 28.5870,
 };
@@ -67,11 +69,39 @@ function buildBoundsArray(areas) {
   ];
 }
 
+function applyActiveCountryAreas() {
+  const countryAreas = allConfiguredServiceAreas.filter((area) => area.countryCode === activeCountryCode);
+  const nextAreas = countryAreas.length ? countryAreas : (activeCountryCode === 'ZW' ? TRUST_EXPRESS_SERVICE_AREAS : []);
+  TRUST_EXPRESS_SERVICE_AREAS = nextAreas;
+  SERVICE_AREA_LABEL = buildServiceLabel(nextAreas);
+  if (nextAreas.length) {
+    BULAWAYO_SERVICE_BOUNDS_ARRAY = buildBoundsArray(nextAreas);
+    BULAWAYO_CENTER_COORDINATE = nextAreas[0].centerCoordinate;
+    BULAWAYO_DEFAULT_REGION = {
+      ...nextAreas[0].centerCoordinate,
+      latitudeDelta: 0.12,
+      longitudeDelta: 0.12,
+    };
+  } else if (activeCountryCode === 'ZA') {
+    BULAWAYO_SERVICE_BOUNDS_ARRAY = undefined;
+    BULAWAYO_CENTER_COORDINATE = { latitude: -26.2041, longitude: 28.0473 };
+    BULAWAYO_DEFAULT_REGION = { ...BULAWAYO_CENTER_COORDINATE, latitudeDelta: 0.35, longitudeDelta: 0.35 };
+    SERVICE_AREA_LABEL = 'configured South African service areas';
+  }
+  return TRUST_EXPRESS_SERVICE_AREAS;
+}
+
+export function configureServiceAreaCountry(countryCode) {
+  activeCountryCode = String(countryCode || '').trim().toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
+  return applyActiveCountryAreas();
+}
+
 export function configureServiceAreas(areas = []) {
   const nextAreas = (Array.isArray(areas) ? areas : [])
     .map((area) => ({
       key: String(area.key || area.areaKey || area.label || '').trim().toLowerCase(),
       label: String(area.label || area.name || '').trim(),
+      countryCode: String(area.countryCode || 'ZW').trim().toUpperCase(),
       bounds: {
         west: Number(area.bounds?.west ?? area.westLng ?? area.west),
         south: Number(area.bounds?.south ?? area.southLat ?? area.south),
@@ -94,13 +124,11 @@ export function configureServiceAreas(areas = []) {
     ));
 
   if (!nextAreas.length) return TRUST_EXPRESS_SERVICE_AREAS;
-  TRUST_EXPRESS_SERVICE_AREAS = nextAreas;
-  BULAWAYO_SERVICE_BOUNDS_ARRAY = buildBoundsArray(nextAreas);
-  SERVICE_AREA_LABEL = buildServiceLabel(nextAreas);
-  return TRUST_EXPRESS_SERVICE_AREAS;
+  allConfiguredServiceAreas = nextAreas;
+  return applyActiveCountryAreas();
 }
 
-export const BULAWAYO_DEFAULT_REGION = {
+export let BULAWAYO_DEFAULT_REGION = {
   ...BULAWAYO_CENTER_COORDINATE,
   latitudeDelta: 0.12,
   longitudeDelta: 0.12,

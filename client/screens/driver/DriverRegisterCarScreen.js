@@ -24,6 +24,7 @@ import { navigationRef } from '../../navigationRef';
 import { VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 import { isTruckDriver, TRUCK_VEHICLE_CATEGORIES } from '../../constants/driverKind';
+import DateSelectField from '../../components/DateSelectField';
 
 function navigateToDriverAccountTab() {
   if (!navigationRef.isReady()) return;
@@ -234,6 +235,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
     || route.params?.mode === 'truck'
     || isTruckDriver(driverStatus);
   const vehicle = driverStatus?.vehicle;
+  const isSouthAfrica = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA';
   const isPending = vehicle?.status === 'pending';
   const isRejected = vehicle?.status === 'rejected';
   const isChangingApprovedVehicle = route.params?.changeVehicle === true || vehicle?.status === 'approved';
@@ -260,6 +262,15 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [regBookUri, setRegBookUri] = useState(vehicle?.vehicleRegistrationBookUrl || vehicle?.vehicleRegistrationUrl || null);
   const [insuranceUri, setInsuranceUri] = useState(vehicle?.insuranceUrl || null);
   const [zinaraUri, setZinaraUri] = useState(vehicle?.zinaraUrl || null);
+  const [firstRegisteredAt, setFirstRegisteredAt] = useState(vehicle?.firstRegisteredAt || '');
+  const [operatingLicenceNumber, setOperatingLicenceNumber] = useState(vehicle?.operatingLicenceNumber || '');
+  const [operatingLicenceExpiresAt, setOperatingLicenceExpiresAt] = useState(vehicle?.operatingLicenceExpiresAt || '');
+  const [operatorLegalName, setOperatorLegalName] = useState(vehicle?.operatorLegalName || '');
+  const [operatorBusinessAddress, setOperatorBusinessAddress] = useState(vehicle?.operatorBusinessAddress || '');
+  const [operatingLicenceUri, setOperatingLicenceUri] = useState(vehicle?.operatingLicenceUrl || null);
+  const [panicDeviceProofUri, setPanicDeviceProofUri] = useState(vehicle?.panicDeviceProofUrl || null);
+  const [vehicleMarkingLeftUri, setVehicleMarkingLeftUri] = useState(vehicle?.vehicleMarkingLeftUrl || null);
+  const [vehicleMarkingRightUri, setVehicleMarkingRightUri] = useState(vehicle?.vehicleMarkingRightUrl || null);
   const [loading, setLoading] = useState(false);
   const [tiers, setTiers] = useState([]);
   const [tiersLoading, setTiersLoading] = useState(true);
@@ -510,8 +521,16 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       Alert.alert('Insurance required', 'Upload the insurance document.');
       return;
     }
-    if (!zinaraUri) {
+    if (!isSouthAfrica && !zinaraUri) {
       Alert.alert('Zinara required', 'Upload the Zinara document.');
+      return;
+    }
+    if (isSouthAfrica && (!firstRegisteredAt || !operatingLicenceNumber.trim() || !operatingLicenceExpiresAt || !operatorLegalName.trim() || !operatorBusinessAddress.trim())) {
+      Alert.alert('SA vehicle details required', 'Complete the first-registration, operating-licence and operator details.');
+      return;
+    }
+    if (isSouthAfrica && (!operatingLicenceUri || !panicDeviceProofUri || !vehicleMarkingLeftUri || !vehicleMarkingRightUri)) {
+      Alert.alert('SA compliance documents required', 'Upload the operating licence, panic-device proof and both vehicle-marking photographs.');
       return;
     }
     if (!numberPlate.trim() || !make.trim() || !model.trim() || !year.trim()) {
@@ -553,7 +572,11 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       );
       const registrationBookUrl = await uploadUri(token, regBookUri, 'registration-book.jpg');
       const insuranceUrl = await uploadUri(token, insuranceUri, 'insurance.jpg');
-      const zinaraUrl = await uploadUri(token, zinaraUri, 'zinara.jpg');
+      const zinaraUrl = zinaraUri ? await uploadUri(token, zinaraUri, 'zinara.jpg') : null;
+      const operatingLicenceUrl = isSouthAfrica ? await uploadUri(token, operatingLicenceUri, 'operating-licence.jpg') : null;
+      const panicDeviceProofUrl = isSouthAfrica ? await uploadUri(token, panicDeviceProofUri, 'panic-device-proof.jpg') : null;
+      const vehicleMarkingLeftUrl = isSouthAfrica ? await uploadUri(token, vehicleMarkingLeftUri, 'vehicle-marking-left.jpg') : null;
+      const vehicleMarkingRightUrl = isSouthAfrica ? await uploadUri(token, vehicleMarkingRightUri, 'vehicle-marking-right.jpg') : null;
       const selectedTier = tiers.find((tier) => tier.tierKey === selectedTierKey) || null;
 
       await submitVehicle(token, {
@@ -581,6 +604,17 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         zinaraUrl,
         vehicleTierKey: isTruckMode ? null : selectedTierKey,
         vehicleTierName: isTruckMode ? null : (selectedTier?.tierName || null),
+        ...(isSouthAfrica ? {
+          firstRegisteredAt,
+          operatingLicenceNumber: operatingLicenceNumber.trim(),
+          operatingLicenceUrl,
+          operatingLicenceExpiresAt,
+          operatorLegalName: operatorLegalName.trim(),
+          operatorBusinessAddress: operatorBusinessAddress.trim(),
+          panicDeviceProofUrl,
+          vehicleMarkingLeftUrl,
+          vehicleMarkingRightUrl,
+        } : {}),
       });
 
       pendingSubmitAlertRef.current = true;
@@ -668,12 +702,21 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
             : (isChangingApprovedVehicle ? 'Change your car' : 'Register your car')}
         </Text>
         <Text className="text-sm text-gray-600 mb-4">
-          {isTruckMode
+          {isSouthAfrica
+            ? 'Add your vehicle details, operating licence and safety-compliance documents. Everything is saved securely for admin review.'
+            : isTruckMode
             ? 'Upload at least 3 truck photos plus registration, insurance and Zinara. Admin reviews this the same way as cars.'
             : isChangingApprovedVehicle
               ? 'Submit the new car details and documents for admin review. You will be offline until the new car is approved.'
               : 'Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.'}
         </Text>
+
+        {isSouthAfrica ? (
+          <View className="mb-5 flex-row items-center self-start rounded-full border border-blue-200 bg-blue-50 px-3 py-2">
+            <Ionicons name="location-outline" size={16} color="#206EFF" />
+            <Text className="ml-2 text-xs font-bold uppercase tracking-wide text-blue-700">South Africa vehicle application</Text>
+          </View>
+        ) : null}
 
         {isRejected && vehicle?.rejectionReason && (
           <View className="mb-4 p-3 bg-red-50 rounded-xl">
@@ -788,6 +831,19 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           placeholder="Choose a color or type your own"
           onPress={() => setShowColorModal(true)}
         />
+        {isSouthAfrica ? (
+          <View className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+            <Text className="mb-4 text-lg font-bold text-gray-900">South Africa vehicle compliance</Text>
+            <DateSelectField label="Vehicle first-registration date" value={firstRegisteredAt} placeholder="Select first-registration date" required minYear={1980} maxYear={new Date().getFullYear()} fallbackYear={Number(year) || new Date().getFullYear()} onChange={setFirstRegisteredAt} />
+            <Text className="mb-2 text-sm font-medium text-gray-700">Operating-licence number <Text className="text-red-500">*</Text></Text>
+            <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={operatingLicenceNumber} onChangeText={setOperatingLicenceNumber} autoCapitalize="characters" placeholder="Enter operating-licence number" />
+            <DateSelectField label="Operating-licence expiration" value={operatingLicenceExpiresAt} placeholder="Select expiry date" required minYear={new Date().getFullYear()} maxYear={new Date().getFullYear() + 20} fallbackYear={new Date().getFullYear() + 1} onChange={setOperatingLicenceExpiresAt} />
+            <Text className="mb-2 text-sm font-medium text-gray-700">Operator legal name <Text className="text-red-500">*</Text></Text>
+            <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={operatorLegalName} onChangeText={setOperatorLegalName} placeholder="Legal person or business name" />
+            <Text className="mb-2 text-sm font-medium text-gray-700">Operator business address <Text className="text-red-500">*</Text></Text>
+            <TextInput className="rounded-xl border border-gray-200 bg-white p-4 text-base" multiline value={operatorBusinessAddress} onChangeText={setOperatorBusinessAddress} placeholder="Full business address" />
+          </View>
+        ) : null}
         <Text className="text-sm font-medium text-gray-700 mb-2">{isTruckMode ? 'Seats' : 'Passenger seats'} <Text className="text-red-500">*</Text></Text>
         <TextInput
           className="border border-gray-200 rounded-xl p-4 text-base mb-4"
@@ -879,7 +935,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           )}
         </TouchableOpacity>
 
-        <Text className="text-sm font-medium text-gray-700 mb-2">Zinara <Text className="text-red-500">*</Text></Text>
+        {!isSouthAfrica ? <><Text className="text-sm font-medium text-gray-700 mb-2">Zinara <Text className="text-red-500">*</Text></Text>
         <TouchableOpacity onPress={() => pickSingleImage(setZinaraUri)} className="mb-6 border border-gray-200 rounded-xl p-4 items-center">
           {zinaraUri ? (
             <>
@@ -892,7 +948,29 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
               <Text className="text-gray-500 mt-2">Tap to upload Zinara</Text>
             </>
           )}
-        </TouchableOpacity>
+        </TouchableOpacity></> : null}
+
+        {isSouthAfrica ? (
+          <View className="mb-3 mt-1 border-t border-gray-100 pt-5">
+            <Text className="text-lg font-bold text-gray-900">SA compliance documents</Text>
+            <Text className="mt-1 text-sm leading-5 text-gray-500">Upload readable proof for the operating licence, panic device and required vehicle markings.</Text>
+          </View>
+        ) : null}
+
+        {isSouthAfrica ? ([
+          ['Operating licence', operatingLicenceUri, setOperatingLicenceUri],
+          ['Panic-device installation proof', panicDeviceProofUri, setPanicDeviceProofUri],
+          ['Vehicle marking photograph (left)', vehicleMarkingLeftUri, setVehicleMarkingLeftUri],
+          ['Vehicle marking photograph (right)', vehicleMarkingRightUri, setVehicleMarkingRightUri],
+        ].map(([label, uri, setter]) => (
+          <View key={label}>
+            <Text className="mb-2 text-sm font-medium text-gray-700">{label} <Text className="text-red-500">*</Text></Text>
+            <TouchableOpacity onPress={() => pickSingleImage(setter)} className="mb-6 items-center rounded-xl border border-gray-200 p-4">
+              <Ionicons name={uri ? 'checkmark-circle-outline' : 'document-outline'} size={32} color={uri ? '#206EFF' : '#9ca3af'} />
+              <Text className={`mt-2 font-medium ${uri ? 'text-primary' : 'text-gray-500'}`}>{uri ? `${label} added` : `Upload ${label.toLowerCase()}`}</Text>
+            </TouchableOpacity>
+          </View>
+        ))) : null}
 
         <TouchableOpacity
           className={`p-4 rounded-xl bg-primary items-center ${loading || (!isTruckMode && (tiersLoading || tiers.length === 0)) ? 'opacity-70' : ''}`}

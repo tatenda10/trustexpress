@@ -29,6 +29,14 @@ router.get('/ride-options', requireAuth, async (req, res) => {
     const user = await requirePassenger(req, res);
     if (!user) return;
 
+    const [marketRow] = await query(
+      `SELECT registration_country_code
+       FROM users
+       WHERE clerk_user_id = ?
+       LIMIT 1`,
+      [req.userId]
+    );
+    const countryCode = marketRow?.registration_country_code === 'ZA' ? 'ZA' : 'ZW';
     const rows = await query(
       `SELECT
         t.id,
@@ -38,20 +46,27 @@ router.get('/ride-options', requireAuth, async (req, res) => {
         t.base_fare,
         t.per_minute_rate,
         t.minimum_fare,
-        t.sort_order
+        t.sort_order,
+        r.region_name,
+        r.city,
+        r.country_code,
+        r.currency_code
       FROM operating_region_pricing_tiers t
       INNER JOIN operating_regions r ON r.id = t.region_id
-      WHERE r.is_active = 1 AND t.is_active = 1
+      WHERE r.is_active = 1 AND t.is_active = 1 AND r.country_code = ?
       ORDER BY t.sort_order ASC, t.id ASC`
+      , [countryCode]
     );
 
     if (!rows.length) {
-      return res.json({ tiers: [] });
+      return res.json({ tiers: [], countryCode, currencyCode: countryCode === 'ZA' ? 'ZAR' : 'USD' });
     }
 
     const surgeMap = await getActiveSurgeMap(rows.map((row) => row.tier_key));
 
     return res.json({
+      countryCode,
+      currencyCode: rows[0]?.currency_code || (countryCode === 'ZA' ? 'ZAR' : 'USD'),
       tiers: rows.map((row) => {
         const surge = surgeMap.get(String(row.tier_key || '').trim().toLowerCase()) || { multiplier: 1, name: null };
         return {
@@ -63,9 +78,10 @@ router.get('/ride-options', requireAuth, async (req, res) => {
         perMinuteRate: Number(row.per_minute_rate || 0),
         minimumFare: Number(row.minimum_fare || 0),
         sortOrder: Number(row.sort_order || 0),
-        regionName: null,
-        city: null,
-        countryCode: null,
+        regionName: row.region_name || null,
+        city: row.city || null,
+        countryCode: row.country_code || countryCode,
+        currencyCode: row.currency_code || (countryCode === 'ZA' ? 'ZAR' : 'USD'),
         surgeMultiplier: surge.multiplier,
         surgeName: surge.name,
       };

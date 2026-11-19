@@ -87,6 +87,7 @@ export default function ServiceAreasPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [countryFilter, setCountryFilter] = useState('ALL')
   const [visibleMapBounds, setVisibleMapBounds] = useState(null)
 
   const canManage = admin?.role === 'super_admin' || can('pricing.manage')
@@ -186,12 +187,17 @@ export default function ServiceAreasPage() {
     }
   }
 
+  const visibleAreas = countryFilter === 'ALL'
+    ? areas
+    : areas.filter((area) => area.countryCode === countryFilter)
   const selectedCenter = toPoint(form.centerLat, form.centerLng)
   const selectedPath = buildAreaPath(form)
   const selectedBounds = buildAreaBounds(form)
-  const editMapCenter = selectedCenter || toPoint(-17.8292, 31.0522)
+  const editMapCenter = selectedCenter || (form.countryCode === 'ZA'
+    ? toPoint(-26.2041, 28.0473)
+    : toPoint(-17.8292, 31.0522))
   const mapMarkers = [
-    ...areas.map((area) => {
+    ...visibleAreas.map((area) => {
       const point = toPoint(area.centerLat, area.centerLng)
       if (!point) return null
       return {
@@ -258,8 +264,21 @@ export default function ServiceAreasPage() {
       <div className="space-y-4">
         <div className="border border-slate-300 bg-white">
           <div className="border-b border-slate-200 px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">Active and inactive areas</p>
-            <p className="mt-1 text-xs text-slate-500">Bounds are rectangular: west/south/east/north coordinates.</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Active and inactive areas</p>
+                <p className="mt-1 text-xs text-slate-500">Bounds are rectangular: west/south/east/north coordinates.</p>
+              </div>
+              <select
+                value={countryFilter}
+                onChange={(event) => setCountryFilter(event.target.value)}
+                className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-700"
+              >
+                <option value="ALL">All countries</option>
+                <option value="ZW">Zimbabwe</option>
+                <option value="ZA">South Africa</option>
+              </select>
+            </div>
           </div>
           {loading ? (
             <div className="px-4 py-8 text-sm text-slate-500">Loading service areas...</div>
@@ -269,6 +288,7 @@ export default function ServiceAreasPage() {
                 <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-[0.16em] text-slate-500">
                   <tr>
                     <th className="px-4 py-3">Area</th>
+                    <th className="px-4 py-3">Country</th>
                     <th className="px-4 py-3">Center</th>
                     <th className="px-4 py-3">Bounds</th>
                     <th className="px-4 py-3">Status</th>
@@ -276,11 +296,16 @@ export default function ServiceAreasPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {areas.map((area) => (
+                  {visibleAreas.map((area) => (
                     <tr key={area.id}>
                       <td className="px-4 py-3">
                         <p className="font-semibold text-slate-900">{area.label}</p>
                         <p className="text-xs text-slate-500">{area.areaKey}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${area.countryCode === 'ZA' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>
+                          {area.countryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-600">{area.centerLat}, {area.centerLng}</td>
                       <td className="px-4 py-3 text-xs text-slate-600">
@@ -303,7 +328,7 @@ export default function ServiceAreasPage() {
                   ))}
                 </tbody>
               </table>
-              {!areas.length ? <div className="px-4 py-8 text-sm text-slate-500">No service areas configured.</div> : null}
+              {!visibleAreas.length ? <div className="px-4 py-8 text-sm text-slate-500">No service areas configured for this country.</div> : null}
             </div>
           )}
         </div>
@@ -364,7 +389,17 @@ export default function ServiceAreasPage() {
           <Input label="Area name" value={form.label} onChange={(value) => updateForm('label', value)} placeholder="e.g. Harare" />
           <Input label="Area key" value={form.areaKey} onChange={(value) => updateForm('areaKey', value)} placeholder="harare" />
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Country" value={form.countryCode} onChange={(value) => updateForm('countryCode', value)} />
+            <label className="block">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Country</span>
+              <select
+                value={form.countryCode}
+                onChange={(event) => updateForm('countryCode', event.target.value)}
+                className="mt-1 h-10 w-full border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-indigo-500"
+              >
+                <option value="ZW">Zimbabwe</option>
+                <option value="ZA">South Africa</option>
+              </select>
+            </label>
             <Input label="Sort order" type="number" value={form.sortOrder} onChange={(value) => updateForm('sortOrder', value)} />
           </div>
           <div className="grid grid-cols-2 gap-3">

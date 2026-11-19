@@ -4,7 +4,7 @@ import { getUserById, mergePrivateMetadata, normalizeRole } from '../lib/users.j
 import { getUserStore } from '../lib/user-store.js';
 import { query } from '../db/connection.js';
 import { upsertClerkUserToMysql } from '../lib/user-sync.js';
-import { normalizeZimbabwePhoneNumber } from '../lib/phone-number.js';
+import { normalizePhoneNumber } from '../lib/phone-number.js';
 import { sendCode, verifyCode } from '../lib/auth/codes.js';
 import { createRestriction, listUserRestrictions } from '../lib/account-restrictions.js';
 
@@ -43,13 +43,17 @@ async function blockDuplicateAccountsForPhone(phoneNumber, role) {
 
 router.post('/send-code', requireAuth, async (req, res) => {
   try {
-    const phoneResult = normalizeZimbabwePhoneNumber(req.body?.phoneNumber);
+    const countryCode = String(req.body?.countryCode || 'ZW').trim().toUpperCase();
+    const phoneResult = normalizePhoneNumber(req.body?.phoneNumber, countryCode);
     if (!phoneResult.ok) {
       return res.status(400).json({ error: phoneResult.error });
     }
     const channel = String(req.body?.channel || 'whatsapp').trim().toLowerCase();
     if (!['sms', 'whatsapp'].includes(channel)) {
       return res.status(400).json({ error: 'Choose SMS or WhatsApp' });
+    }
+    if (countryCode === 'ZA' && channel === 'sms') {
+      return res.status(400).json({ error: 'South African verification is currently available through WhatsApp.' });
     }
     const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
     const result = await sendCode({
@@ -83,7 +87,7 @@ router.post('/confirm', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'phoneNumber required' });
     }
 
-    const phoneResult = normalizeZimbabwePhoneNumber(rawPhone);
+    const phoneResult = normalizePhoneNumber(rawPhone, req.body?.countryCode);
     if (!phoneResult.ok) {
       return res.status(400).json({ error: phoneResult.error });
     }

@@ -24,6 +24,7 @@ import { LetterMarker, PIN_COLORS, stopLetter } from '../../components/maps/Lett
 import * as Location from 'expo-location';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { formatMarketCurrency, getMarket } from '../../constants/market';
 import {
   BULAWAYO_GEO_LOCK_ENABLED,
   BULAWAYO_DEFAULT_REGION,
@@ -1406,7 +1407,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                       {routeDistanceKm > 0 ? `${distanceKm.toFixed(1)} km • ${estimatedMinutes} min away` : 'Calculating road distance...'}
                     </Text>
                   </View>
-                  <Text className="text-[28px] font-bold text-gray-950">${estimatedAmount.toFixed(2)}</Text>
+                  <Text className="text-[28px] font-bold text-gray-950">{formatMarketCurrency(estimatedAmount, selectedTier?.currencyCode)}</Text>
                 </View>
               </View>
 
@@ -1481,7 +1482,7 @@ export default function PassengerHomeScreen({ navigation, route }) {
                               </Text>
                             </View>
                             {routeDistanceKm > 0 ? (
-                              <Text className="text-[22px] font-bold text-gray-950">${tierAmount.toFixed(2)}</Text>
+                              <Text className="text-[22px] font-bold text-gray-950">{formatMarketCurrency(tierAmount, tier?.currencyCode)}</Text>
                             ) : isCalculating ? (
                               <ActivityIndicator size="small" color="#9ca3af" />
                             ) : (
@@ -1614,12 +1615,12 @@ export default function PassengerHomeScreen({ navigation, route }) {
               <View className="mt-4 flex-row gap-3">
                 {[
                   { key: 'trips', icon: 'receipt', label: 'My trips', onPress: () => navigation.navigate('PassengerActivity') },
-                  {
+                  ...(getMarket().supportsSmileCash ? [{
                     key: 'smile',
                     icon: 'wallet',
                     label: 'Smile Cash',
                     onPress: () => navigation.navigate('PassengerAccount', { screen: 'PassengerSmileCash', initial: false }),
-                  },
+                  }] : []),
                   {
                     key: 'help',
                     icon: 'chatbubble-ellipses',

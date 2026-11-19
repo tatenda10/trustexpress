@@ -140,6 +140,7 @@ function buildRideFilters(req) {
   const status = String(req.query.status || 'all').trim().toLowerCase();
   const dateFrom = String(req.query.dateFrom || '').trim();
   const dateTo = String(req.query.dateTo || '').trim();
+  const countryCode = String(req.query.countryCode || 'all').trim().toUpperCase();
   const clauses = [];
   const params = [];
   const activityTimestampSql = `COALESCE(completed_at, cancelled_at, started_at, arrived_at, assigned_at, driver_found_at, requested_at)`;
@@ -174,6 +175,11 @@ function buildRideFilters(req) {
   if (dateTo) {
     clauses.push(`DATE(${activityTimestampSql}) <= ?`);
     params.push(dateTo);
+  }
+
+  if (countryCode === 'ZA' || countryCode === 'ZW') {
+    clauses.push('country_code = ?');
+    params.push(countryCode);
   }
 
   return {
@@ -308,6 +314,8 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
           rr.driver_reimbursement_amount,
           rr.discount_code,
           rr.tip_amount,
+          rr.country_code,
+          rr.currency_code,
           rr.payment_status,
           rr.payment_provider,
           rr.payment_method,
@@ -392,7 +400,9 @@ router.get('/', requireAdminAuth, requirePermission('ride_ops.read'), async (req
         rider: row.passenger_name || 'Passenger',
         driver: row.driver_name || 'No driver assigned',
         route: `${row.pickup_label} -> ${row.dropoff_label}`,
-        fare: `$${Number(row.final_estimated_amount || row.estimated_amount || 0).toFixed(2)}`,
+        fare: `${row.currency_code || (row.country_code === 'ZA' ? 'ZAR' : 'USD')} ${Number(row.final_estimated_amount || row.estimated_amount || 0).toFixed(2)}`,
+        countryCode: row.country_code || 'ZW',
+        currencyCode: row.currency_code || (row.country_code === 'ZA' ? 'ZAR' : 'USD'),
         fareAmount: Number(row.final_estimated_amount || row.estimated_amount || 0),
         originalEstimatedAmount: Number(row.original_estimated_amount || row.estimated_amount || 0),
         discountAmount: Number(row.discount_amount || 0),
@@ -1063,6 +1073,8 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         ride_requests.driver_reimbursement_amount,
         ride_requests.discount_code,
         ride_requests.tip_amount,
+        ride_requests.country_code,
+        ride_requests.currency_code,
         ride_requests.status,
         ride_requests.requested_at,
         ride_requests.assigned_at,
@@ -1226,6 +1238,8 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
         discountCode: row.discount_code || null,
         tipAmount: Number(row.tip_amount || 0),
         totalAmount: Number(row.final_estimated_amount || row.estimated_amount || 0) + Number(row.tip_amount || 0),
+        countryCode: row.country_code || 'ZW',
+        currencyCode: row.currency_code || (row.country_code === 'ZA' ? 'ZAR' : 'USD'),
         requestedAt: row.requested_at || null,
         assignedAt: row.assigned_at || null,
         arrivedAt: row.arrived_at || null,

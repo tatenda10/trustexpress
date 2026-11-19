@@ -23,6 +23,12 @@ function Field({ label, value }) {
   )
 }
 
+function formatSpend(passenger) {
+  const entries = Object.entries(passenger?.totalSpendByCurrency || {}).filter(([, amount]) => Number(amount) !== 0)
+  if (entries.length) return entries.map(([currency, amount]) => `${currency} ${Number(amount).toFixed(2)}`).join(' / ')
+  return `${passenger?.registrationCountryCode === 'ZA' ? 'ZAR' : 'USD'} ${Number(passenger?.totalSpend || 0).toFixed(2)}`
+}
+
 export default function PassengerDetailsPage() {
   const { token, can, admin } = useAuth()
   const { passengerId } = useParams()
@@ -187,6 +193,11 @@ export default function PassengerDetailsPage() {
           <Field label="Phone" value={passenger.phoneNumber} />
           <Field label="Phone Verified" value={passenger.phoneVerified ? 'Yes' : 'No'} />
           <Field label="Status" value={passenger.status} />
+          <Field label="Registration Country" value={passenger.registrationCountryCode === 'ZA' ? 'South Africa' : passenger.registrationCountryCode === 'ZW' ? 'Zimbabwe' : 'Not set'} />
+          <Field label="Registration City" value={passenger.registrationCity} />
+          <Field label="Registration Source" value={passenger.registrationSource || passenger.source} />
+          <Field label="Terms Accepted" value={passenger.termsAndPrivacyAcceptedAt ? `Yes — ${passenger.termsAndPrivacyAcceptedAt}` : 'Not recorded'} />
+          <Field label="Terms Version" value={passenger.termsAndPrivacyVersion} />
           <Field label="Joined" value={String(passenger.createdAt || '').slice(0, 19).replace('T', ' ')} />
           </div>
 
@@ -243,7 +254,7 @@ export default function PassengerDetailsPage() {
       {activeTab === 'activity' ? (
         <section className="grid gap-3 rounded-sm border border-slate-300 bg-white p-4 md:grid-cols-2">
           <Field label="Completed Rides" value={passenger.totalRides} />
-          <Field label="Total Spend" value={`$${Number(passenger.totalSpend || 0).toFixed(2)}`} />
+          <Field label="Total Spend" value={formatSpend(passenger)} />
           <Field label="Last Completed Ride" value={passenger.lastRideAt || '-'} />
           <Field label="Saved Addresses" value={passenger.savedAddresses?.length || 0} />
         </section>
@@ -331,7 +342,7 @@ export default function PassengerDetailsPage() {
       {activeTab === 'payment' ? (
         <section className="grid gap-3 rounded-sm border border-slate-300 bg-white p-4 md:grid-cols-2">
           <Field label="Payment Methods" value={passenger.paymentMethods?.length || 0} />
-          <Field label="Total Spend" value={`$${Number(passenger.totalSpend || 0).toFixed(2)}`} />
+          <Field label="Total Spend" value={formatSpend(passenger)} />
         </section>
       ) : null}
 

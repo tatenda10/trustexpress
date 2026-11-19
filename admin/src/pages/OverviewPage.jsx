@@ -97,8 +97,10 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(Number(value || 0))
 }
 
-function formatCurrency(value) {
-  return `$${Number(value || 0).toFixed(2)}`
+function formatCurrencyTotals(values = {}) {
+  const entries = Object.entries(values || {})
+  if (!entries.length) return 'USD 0.00 / ZAR 0.00'
+  return entries.map(([currency, amount]) => `${currency} ${Number(amount || 0).toFixed(2)}`).join(' / ')
 }
 
 export default function OverviewPage() {
@@ -178,7 +180,7 @@ export default function OverviewPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:min-w-[420px]">
             <div className="border border-slate-200 bg-slate-50 px-4 py-3">
               <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Ride Value Today</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(spotlight.grossRideValueToday || 0)}</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrencyTotals(spotlight.grossRideValueTodayByCurrency)}</p>
             </div>
             <div className="border border-slate-200 bg-slate-50 px-4 py-3">
               <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Requested Today</p>
@@ -220,7 +222,7 @@ export default function OverviewPage() {
               <div className="mt-4 space-y-4">
                 <div className="border border-slate-100 bg-slate-50 px-4 py-4">
                   <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Ride Value</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-950">{formatCurrency(spotlight.grossRideValueToday || 0)}</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{formatCurrencyTotals(spotlight.grossRideValueTodayByCurrency)}</p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="border border-slate-100 bg-slate-50 px-4 py-4">

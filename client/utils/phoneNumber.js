@@ -46,11 +46,30 @@ export function normalizeZimbabwePhoneNumber(value) {
   };
 }
 
+export function normalizeSouthAfricaPhoneNumber(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  let national = '';
+  if (/^27[6-8]\d{8}$/.test(digits)) national = digits.slice(2);
+  else if (/^0[6-8]\d{8}$/.test(digits)) national = digits.slice(1);
+  else if (/^[6-8]\d{8}$/.test(digits)) national = digits;
+  if (!national) {
+    return { ok: false, error: 'Enter a valid South African mobile number.', localPhone: null, e164Phone: null };
+  }
+  return { ok: true, error: null, localPhone: `0${national}`, e164Phone: `+27${national}` };
+}
+
+export function normalizePhoneNumber(value, countryCode = 'ZW') {
+  return String(countryCode || '').toUpperCase() === 'ZA'
+    ? normalizeSouthAfricaPhoneNumber(value)
+    : normalizeZimbabwePhoneNumber(value);
+}
+
 export function e164ToLocalPhone(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.startsWith('263') && digits.length === 12) {
     const local = `0${digits.slice(3)}`;
     return LOCAL_PHONE_REGEX.test(local) ? local : '';
   }
+  if (digits.startsWith('27') && digits.length === 11) return `0${digits.slice(2)}`;
   return LOCAL_PHONE_REGEX.test(digits) ? digits : '';
 }

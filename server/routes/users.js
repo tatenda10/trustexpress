@@ -35,11 +35,12 @@ async function normalizeRegistrationCity(input = {}) {
   const rawCity = String(input.registrationCity || input.city || '').trim();
   const city = serviceArea?.label || rawCity.slice(0, 80);
 
-  if (!city) return null;
+  const countryCode = String(input.registrationCountryCode || input.countryCode || '').trim().slice(0, 2).toUpperCase();
+  if (!city && !countryCode) return null;
 
   return {
-    city,
-    countryCode: String(input.registrationCountryCode || input.countryCode || 'ZW').trim().slice(0, 2).toUpperCase() || 'ZW',
+    city: city || null,
+    countryCode: ['ZA', 'ZW'].includes(countryCode) ? countryCode : 'ZW',
     latitude: coordinate ? latitude : null,
     longitude: coordinate ? longitude : null,
     source: String(input.registrationSource || 'device_location').trim().slice(0, 40) || 'device_location',
@@ -47,7 +48,7 @@ async function normalizeRegistrationCity(input = {}) {
 }
 
 async function saveRegistrationCity(userId, registrationCity) {
-  if (!userId || !registrationCity?.city) return;
+  if (!userId || !registrationCity?.countryCode) return;
   await query(
     `UPDATE users
      SET registration_city = ?,
@@ -58,7 +59,7 @@ async function saveRegistrationCity(userId, registrationCity) {
          registration_detected_at = COALESCE(registration_detected_at, CURRENT_TIMESTAMP),
          updated_at = CURRENT_TIMESTAMP
      WHERE clerk_user_id = ?
-       AND (registration_city IS NULL OR registration_city = '' OR registration_source = 'device_location')`,
+       AND (registration_country_code IS NULL OR registration_country_code = '' OR registration_source = 'device_location' OR ? = 'manual_country_selection')`,
     [
       registrationCity.city,
       registrationCity.countryCode,
@@ -66,6 +67,7 @@ async function saveRegistrationCity(userId, registrationCity) {
       registrationCity.longitude,
       registrationCity.source,
       userId,
+      registrationCity.source,
     ]
   );
 }
@@ -111,7 +113,7 @@ router.get('/me', requireAuth, async (req, res) => {
     // MySQL is the durable role source. Clerk metadata can briefly lag or get cleared,
     // which used to make /me report "passenger" for real drivers and trigger client sign-out.
     const [mysqlUser] = await query(
-      `SELECT role
+      `SELECT role, registration_country_code, registration_city
        FROM users
        WHERE clerk_user_id = ?
        LIMIT 1`,
@@ -131,6 +133,8 @@ router.get('/me', requireAuth, async (req, res) => {
     const resolvedUser = {
       ...appUser,
       role: resolvedRole,
+      registrationCountryCode: mysqlUser?.registration_country_code || null,
+      registrationCity: mysqlUser?.registration_city || null,
       publicMetadata: {
         ...(appUser.publicMetadata || {}),
         role: resolvedRole,
@@ -157,6 +161,7 @@ router.post('/register', requireAuth, async (req, res) => {
     const { role, inviteToken, referrerEmail } = req.body || {};
     const requestedRole = normalizeRole(role);
     const registrationCity = await normalizeRegistrationCity(req.body || {});
+    const acceptTermsAndPrivacy = req.body?.acceptTermsAndPrivacy === true;
     const [existingMysqlUser] = await query(
       `SELECT role
        FROM users
@@ -172,6 +177,13 @@ router.post('/register', requireAuth, async (req, res) => {
       });
     }
     await setRoleForUser(req.userId, requestedRole);
+    if (acceptTermsAndPrivacy && registrationCity?.countryCode === 'ZA') {
+      await mergePrivateMetadata(req.userId, {
+        termsAndPrivacyAcceptedAt: new Date().toISOString(),
+        termsAndPrivacyVersion: 'ZA-1.0',
+        termsAndPrivacyCountryCode: 'ZA',
+      });
+    }
 
     let referral = null;
     if (requestedRole === 'driver' && inviteToken) {
@@ -310,6 +322,13 @@ router.patch('/me', requireAuth, async (req, res) => {
     const lastName = req.body?.lastName === undefined ? currentUser.lastName : String(req.body.lastName || '').trim();
     const phoneVisibleToDrivers = req.body?.phoneVisibleToDrivers;
     const profileImageUrl = req.body?.profileImageUrl;
+    const acceptTermsAndPrivacy = req.body?.acceptTermsAndPrivacy === true;
+    const requestedCountryCode = req.body?.registrationCountryCode === undefined
+      ? null
+      : String(req.body.registrationCountryCode || '').trim().toUpperCase();
+    if (requestedCountryCode && !['ZA', 'ZW'].includes(requestedCountryCode)) {
+      return res.status(400).json({ error: 'registrationCountryCode must be ZA or ZW' });
+    }
     const nextProfileImageUrl = profileImageUrl === undefined
       ? undefined
       : (profileImageUrl ? String(profileImageUrl).trim() : null);
@@ -319,9 +338,14 @@ router.patch('/me', requireAuth, async (req, res) => {
       lastName: lastName || null,
     });
 
-    if (phoneVisibleToDrivers !== undefined || profileImageUrl !== undefined) {
+    if (phoneVisibleToDrivers !== undefined || profileImageUrl !== undefined || acceptTermsAndPrivacy) {
       const nextPrivateMetadataPatch = {
         ...(phoneVisibleToDrivers !== undefined ? { phoneVisibleToDrivers: phoneVisibleToDrivers === true } : {}),
+        ...(acceptTermsAndPrivacy ? {
+          termsAndPrivacyAcceptedAt: new Date().toISOString(),
+          termsAndPrivacyVersion: 'ZA-1.0',
+          termsAndPrivacyCountryCode: requestedCountryCode || 'ZA',
+        } : {}),
       };
 
       if (nextProfileImageUrl !== undefined) {
@@ -341,7 +365,16 @@ router.patch('/me', requireAuth, async (req, res) => {
 
     const nextUser = await getUserById(req.userId);
     await upsertClerkUserToMysql(nextUser);
-    return res.json(toAppUser(nextUser));
+    if (requestedCountryCode) {
+      await saveRegistrationCity(req.userId, {
+        city: null,
+        countryCode: requestedCountryCode,
+        latitude: null,
+        longitude: null,
+        source: 'manual_country_selection',
+      });
+    }
+    return res.json({ ...toAppUser(nextUser), registrationCountryCode: requestedCountryCode || undefined });
   } catch (err) {
     console.error('PATCH /api/users/me', err);
     return res.status(500).json({ error: 'Server error' });

@@ -45,11 +45,22 @@ function requiredDocumentEntries(driver) {
       { key: 'driver-licence', label: 'Driver License', url: resolveMediaUrl(profileDocs.driverLicenceUrl) },
       { key: 'selfie', label: 'Selfie', url: resolveMediaUrl(profileDocs.selfieUrl) },
       { key: 'selfie-with-id', label: 'Selfie with National ID', url: resolveMediaUrl(profileDocs.selfieWithIdCardUrl) },
+      ...(profileDocs.registrationCountryCode === 'ZA' ? [
+        { key: 'proof-of-address', label: 'Proof of Address', url: resolveMediaUrl(profileDocs.proofOfAddressUrl) },
+        { key: 'prdp', label: 'PrDP', url: resolveMediaUrl(profileDocs.prdpUrl) },
+        { key: 'criminal-record', label: 'SAPS Criminal-record Report', url: resolveMediaUrl(profileDocs.criminalRecordReportUrl) },
+      ] : []),
     ],
     vehicle: [
       { key: 'vehicle-registration', label: 'Vehicle Registration', url: resolveMediaUrl(vehicleDocs.vehicleRegistrationUrl || vehicleDocs.vehicleRegistrationBookUrl) },
       { key: 'insurance', label: 'Insurance', url: resolveMediaUrl(vehicleDocs.insuranceUrl) },
       { key: 'zinara', label: 'Zinara', url: resolveMediaUrl(vehicleDocs.zinaraUrl) },
+      ...(profileDocs.registrationCountryCode === 'ZA' ? [
+        { key: 'operating-licence', label: 'Operating Licence', url: resolveMediaUrl(vehicleDocs.operatingLicenceUrl) },
+        { key: 'panic-device', label: 'Panic-device Installation Proof', url: resolveMediaUrl(vehicleDocs.panicDeviceProofUrl) },
+        { key: 'vehicle-marking-left', label: 'Vehicle Marking (Left)', url: resolveMediaUrl(vehicleDocs.vehicleMarkingLeftUrl) },
+        { key: 'vehicle-marking-right', label: 'Vehicle Marking (Right)', url: resolveMediaUrl(vehicleDocs.vehicleMarkingRightUrl) },
+      ] : []),
     ],
     carPhotos: uniqueRawCarPhotos.map((rawUrl, index) => ({
       key: `car-photo-${index + 1}`,
@@ -594,6 +605,7 @@ export default function DriverVerificationDetailPage() {
               <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
               <Field label="Licence Expiration" value={formatAdminDate(profileDocs.driverLicenceExpiresAt)} />
               <Field label="Date of Birth" value={formatAdminDate(profileDocs.dateOfBirth || driver.profile?.dateOfBirth)} />
+              <Field label="Registration Country" value={profileDocs.registrationCountryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'} />
               <Field
                 label="Referred By Agent"
                 value={
@@ -676,6 +688,28 @@ export default function DriverVerificationDetailPage() {
           <h2 className="text-sm font-semibold text-slate-800">Verification Documents</h2>
         </div>
         <div className="p-4">
+          {profileDocs.registrationCountryCode === 'ZA' ? (
+            <div className="mb-6 rounded border border-indigo-200 bg-indigo-50 p-4">
+              <h3 className="text-sm font-semibold text-indigo-900">SA Compliance Checklist</h3>
+              <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                <Field label="Identity Type" value={profileDocs.identityDocumentType} />
+                <Field label="Residential Address" value={profileDocs.residentialAddress} />
+                <Field label="PrDP Number" value={profileDocs.prdpNumber} />
+                <Field label="PrDP Expiry" value={formatAdminDate(profileDocs.prdpExpiresAt)} />
+                <Field label="Criminal Declaration" value={profileDocs.criminalDeclarationAcceptedAt ? 'Accepted' : 'Missing'} />
+                <Field label="RICA/ECA Declaration" value={profileDocs.ricaEcaDeclarationAcceptedAt ? 'Accepted' : 'Missing'} />
+                <Field label="Agreement Version" value={profileDocs.operatorAgreementVersion} />
+                <Field label="Agreement Accepted" value={profileDocs.operatorAgreementAcceptedAt ? 'Yes' : 'Missing'} />
+                <Field label="Electronic Signature" value={profileDocs.operatorAgreementSignature} />
+                <Field label="Operating Licence Condition" value={profileDocs.operatingLicenceConditionAcceptedAt ? 'Accepted' : 'Missing'} />
+                <Field label="Operating Licence Number" value={vehicleDocs.operatingLicenceNumber} />
+                <Field label="Operating Licence Expiry" value={formatAdminDate(vehicleDocs.operatingLicenceExpiresAt)} />
+                <Field label="First Registration" value={formatAdminDate(vehicleDocs.firstRegisteredAt)} />
+                <Field label="Operator Legal Name" value={vehicleDocs.operatorLegalName} />
+                <Field label="Operator Business Address" value={vehicleDocs.operatorBusinessAddress} />
+              </div>
+            </div>
+          ) : null}
           <div className="space-y-6">
             <div>
               <div className="mb-3 flex items-center justify-between">

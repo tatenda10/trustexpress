@@ -8,6 +8,7 @@ import { getLegacyClerkClient, importClerkUserById, isClerkImportAvailable } fro
 
 const USER_SELECT = `SELECT clerk_user_id, email, first_name, last_name, image_url, role,
   phone_number, phone_verified_at, email_verified_at, password_hash,
+  registration_city, registration_country_code, registration_source, registration_detected_at,
   public_metadata, private_metadata, unsafe_metadata, clerk_imported_at,
   created_at, updated_at, last_sign_in_at
   FROM users`;
@@ -70,6 +71,10 @@ function rowToUser(row) {
     createdAt: toMs(row.created_at),
     updatedAt: toMs(row.updated_at),
     lastSignInAt: toMs(row.last_sign_in_at),
+    registrationCity: row.registration_city || null,
+    registrationCountryCode: row.registration_country_code || null,
+    registrationSource: row.registration_source || null,
+    registrationDetectedAt: toIso(row.registration_detected_at),
     banned: false,
   };
 }
@@ -117,8 +122,9 @@ const ORDER_BY = {
 function phoneVariants(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (!digits) return [];
-  const national = digits.startsWith('263') ? digits.slice(3) : digits.replace(/^0/, '');
-  return [`+263${national}`, `263${national}`, `0${national}`];
+  const countryDigits = digits.startsWith('263') ? '263' : digits.startsWith('27') ? '27' : '263';
+  const national = digits.startsWith(countryDigits) ? digits.slice(countryDigits.length) : digits.replace(/^0/, '');
+  return [`+${countryDigits}${national}`, `${countryDigits}${national}`, `0${national}`];
 }
 
 export const userStore = {
