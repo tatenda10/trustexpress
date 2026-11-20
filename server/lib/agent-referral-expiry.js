@@ -12,6 +12,7 @@ let reconcileTimer = null;
 let reconcileRunning = false;
 
 export async function expireAgentDriverLinks({ limit = 500 } = {}) {
+  const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500));
   const expiredRows = await query(
     `SELECT id, driver_user_id, agent_user_id, expires_at, is_active, metadata_cleared_at
      FROM agent_driver_referrals
@@ -19,8 +20,7 @@ export async function expireAgentDriverLinks({ limit = 500 } = {}) {
        AND expires_at <= CURRENT_TIMESTAMP
        AND (is_active = 1 OR metadata_cleared_at IS NULL)
      ORDER BY expires_at ASC, id ASC
-     LIMIT ?`,
-    [Math.max(1, Math.min(2000, Number(limit) || 500))]
+     LIMIT ${safeLimit}`
   );
 
   if (!expiredRows.length) {
