@@ -15,6 +15,25 @@ export function formatWalletDate(value) {
 }
 
 export function getTransactionMeta(transaction) {
+  const transactionType = String(transaction?.transactionType || '').trim().toLowerCase();
+  if (transactionType === 'cancellation_reserve_refund' || transactionType === 'promo_cancellation_reserve_refund') {
+    return {
+      icon: 'return-down-back-outline',
+      iconBg: '#DCFCE7',
+      amountColor: 'text-green-600',
+      amountPrefix: '+',
+      title: transaction?.tripId ? `Trip #${transaction.tripId} cancellation reserve refunded` : 'Cancellation reserve refunded',
+    };
+  }
+  if (transactionType === 'cancellation_reserve_hold' || transactionType === 'promo_cancellation_reserve_hold') {
+    return {
+      icon: 'time-outline',
+      iconBg: '#FFEDD5',
+      amountColor: 'text-orange-600',
+      amountPrefix: '-',
+      title: transaction?.tripId ? `Trip #${transaction.tripId} cancellation reserve` : 'Cancellation commission under review',
+    };
+  }
   if (transaction?.transactionType === 'top_up_credit' || transaction?.transactionType === 'manual_credit') {
     return {
       icon: 'cash-outline',
@@ -71,6 +90,10 @@ export function formatTransactionTypeLabel(transactionType) {
   if (type === 'captain_promo_credit') return 'REWARD BALANCE';
   if (type === 'manual_credit') return 'WALLET CREDIT';
   if (type === 'manual_debit') return 'WALLET DEBIT';
+  if (type === 'cancellation_reserve_hold') return 'CANCELLATION RESERVE';
+  if (type === 'promo_cancellation_reserve_hold') return 'REWARD CANCELLATION RESERVE';
+  if (type === 'cancellation_reserve_refund') return 'CANCELLATION RESERVE REFUND';
+  if (type === 'promo_cancellation_reserve_refund') return 'REWARD RESERVE REFUND';
   return String(transactionType || '').replace(/_/g, ' ').toUpperCase();
 }
 
@@ -92,10 +115,10 @@ export function getTransactionDetailRows(transaction, fallbackCurrency = 'ZAR') 
       ? ['Service fee', `${Number(transaction.commissionRatePercent).toFixed(1)}%`]
       : null,
     transaction.balanceBefore != null
-      ? [transaction.transactionType === 'promo_commission_debit' ? 'Reward balance before' : 'Balance before', formatWalletCurrency(transaction.balanceBefore, currency)]
+      ? [['promo_commission_debit', 'promo_cancellation_reserve_hold', 'promo_cancellation_reserve_refund'].includes(transaction.transactionType) ? 'Reward balance before' : 'Balance before', formatWalletCurrency(transaction.balanceBefore, currency)]
       : null,
     transaction.balanceAfter != null
-      ? [transaction.transactionType === 'promo_commission_debit' ? 'Reward balance after' : 'Balance after', formatWalletCurrency(transaction.balanceAfter, currency)]
+      ? [['promo_commission_debit', 'promo_cancellation_reserve_hold', 'promo_cancellation_reserve_refund'].includes(transaction.transactionType) ? 'Reward balance after' : 'Balance after', formatWalletCurrency(transaction.balanceAfter, currency)]
       : null,
   ].filter(Boolean);
 }

@@ -216,7 +216,7 @@ const DriverWalletScreen = ({ navigation }) => {
   const matchesFilter = (transaction) => {
     const type = String(transaction?.transactionType || '').toLowerCase();
     if (filter === 'in') return isCredit(transaction) && type !== 'captain_promo_credit';
-    if (filter === 'fees') return type === 'commission_debit' || type === 'promo_commission_debit';
+    if (filter === 'fees') return ['commission_debit', 'promo_commission_debit', 'cancellation_reserve_hold', 'promo_cancellation_reserve_hold', 'cancellation_reserve_refund', 'promo_cancellation_reserve_refund'].includes(type);
     if (filter === 'rewards') return type === 'captain_promo_credit' || type === 'promo_commission_debit';
     return true;
   };

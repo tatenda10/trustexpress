@@ -1546,9 +1546,9 @@ export async function getAdminDriverWalletLedger({
 
   const [summaryRow] = await query(
     `SELECT
-       COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit', 'captain_promo_credit') THEN amount ELSE 0 END), 0) AS total_credits,
-       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit', 'promo_commission_debit') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
-       COALESCE(SUM(CASE WHEN transaction_type = 'promo_commission_debit' THEN ABS(amount) ELSE 0 END), 0) AS total_promotional_debits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('top_up_credit', 'manual_credit', 'captain_promo_credit', 'cancellation_reserve_refund', 'promo_cancellation_reserve_refund') THEN amount ELSE 0 END), 0) AS total_credits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('commission_debit', 'manual_debit', 'promo_commission_debit', 'cancellation_reserve_hold', 'promo_cancellation_reserve_hold') THEN ABS(amount) ELSE 0 END), 0) AS total_debits,
+       COALESCE(SUM(CASE WHEN transaction_type IN ('promo_commission_debit', 'promo_cancellation_reserve_hold') THEN ABS(amount) ELSE 0 END), 0) AS total_promotional_debits,
        COUNT(*) AS transaction_count
      FROM driver_wallet_transactions
      WHERE driver_user_id = ?`,

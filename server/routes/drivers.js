@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query } from '../db/connection.js';
+import { query, withTransaction } from '../db/connection.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getUserById, mergePrivateMetadata, normalizeRole, toAppUser } from '../lib/users.js';
 import { syncClerkUserForRequest } from '../lib/user-sync.js';
@@ -68,6 +68,7 @@ import {
 } from '../lib/whatsapp/ride-notifications.js';
 import { mapHireDriverStage, mapHirePassengerStage } from '../lib/hire.js';
 import { evaluateDriverResponsePolicy } from '../lib/driver-response-policy.js';
+import { holdDriverCancellationCommission } from '../lib/driver-cancellation-reserve.js';
 
 const router = Router();
 const STALE_SIM_ACTIVE_RIDE_TTL_MINUTES = 20;
@@ -2462,35 +2463,52 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
 
     const reason = String(req.body?.reason || 'Driver cancelled').trim();
 
-    const [rideBefore] = await query(
-      `SELECT id, status, started_at, payment_status, passenger_user_id
-       FROM ride_requests
-       WHERE id = ?
-         AND driver_user_id = ?
-       LIMIT 1`,
-      [rideRequestId, req.userId]
-    );
-    if (!rideBefore) {
-      return res.status(404).json({ error: 'Ride request not found' });
-    }
+    const cancellationResult = await withTransaction(async (connection) => {
+      const [rideRows] = await connection.execute(
+        `SELECT id, public_id, status, started_at, payment_status, passenger_user_id,
+                passenger_name, final_estimated_amount, estimated_amount, currency_code
+         FROM ride_requests
+         WHERE id = ? AND driver_user_id = ?
+         FOR UPDATE`,
+        [rideRequestId, req.userId]
+      );
+      const rideBefore = rideRows[0];
+      if (!rideBefore) {
+        const error = new Error('Ride request not found');
+        error.status = 404;
+        throw error;
+      }
 
-    const previousStatus = String(rideBefore.status || '').trim().toLowerCase();
-    const cancellableStatuses = new Set(['driver_assigned', 'driver_arrived', 'in_progress']);
-    if (!cancellableStatuses.has(previousStatus)) {
-      return res.status(409).json({ error: 'This ride cannot be cancelled in its current state.' });
-    }
+      const previousStatus = String(rideBefore.status || '').trim().toLowerCase();
+      const cancellableStatuses = new Set(['driver_assigned', 'driver_arrived', 'in_progress']);
+      if (!cancellableStatuses.has(previousStatus)) {
+        const error = new Error('This ride cannot be cancelled in its current state.');
+        error.status = 409;
+        throw error;
+      }
 
-    await queryWithDeadlockRetry(
-      `UPDATE ride_requests
-       SET status = 'cancelled',
-           cancellation_reason = ?,
-           cancelled_by = 'driver',
-           cancelled_at = CURRENT_TIMESTAMP
-       WHERE id = ?
-         AND driver_user_id = ?
-         AND status IN ('driver_assigned', 'driver_arrived', 'in_progress')`,
-      [reason, rideRequestId, req.userId]
-    );
+      await connection.execute(
+        `UPDATE ride_requests
+         SET status = 'cancelled', cancellation_reason = ?, cancelled_by = 'driver',
+             cancelled_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND driver_user_id = ?`,
+        [reason, rideRequestId, req.userId]
+      );
+
+      const commissionReserve = await holdDriverCancellationCommission(connection, {
+        rideRequestId,
+        ridePublicId: rideBefore.public_id,
+        driverUserId: req.userId,
+        passengerUserId: rideBefore.passenger_user_id,
+        passengerName: rideBefore.passenger_name,
+        fareAmount: rideBefore.final_estimated_amount || rideBefore.estimated_amount,
+        currency: rideBefore.currency_code || 'USD',
+        cancellationReason: reason,
+        previousStatus,
+      });
+      return { rideBefore, previousStatus, commissionReserve };
+    });
+    const { rideBefore, previousStatus, commissionReserve } = cancellationResult;
 
     const [ride] = await query(
       `SELECT passenger_user_id, started_at, payment_status
@@ -2554,6 +2572,10 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
     return res.json({
       ok: true,
       paymentStatus,
+      commissionReserve,
+      message: commissionReserve
+        ? `${commissionReserve.currency} ${commissionReserve.reservedAmount.toFixed(2)} commission held pending admin review.`
+        : null,
       refund: refund
         ? {
             attempted: refund.attempted,
@@ -2565,7 +2587,7 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
     });
   } catch (err) {
     console.error('PATCH /api/drivers/current-ride/:rideRequestId/cancel', err);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(Number(err?.status) || 500).json({ error: err?.message || 'Server error' });
   }
 });
 

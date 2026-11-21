@@ -32,6 +32,10 @@ import {
   assignAcceptedDriverToRide,
   isAdminDispatchedRide,
 } from '../lib/assign-ride-driver.js';
+import {
+  getDriverCancellationReserveByRide,
+  reviewDriverCancellationReserve,
+} from '../lib/driver-cancellation-reserve.js';
 
 const router = Router();
 const LIVE_MAP_PLACE_RADIUS_KM = 8;
@@ -1204,6 +1208,7 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
          rr.id ASC`,
       [Number(row.id)]
     );
+    const cancellationCommissionReserve = await getDriverCancellationReserveByRide(Number(row.id));
 
     return res.json({
       ride: {
@@ -1278,6 +1283,7 @@ router.get('/:rideId', requireAdminAuth, requirePermission('ride_ops.read'), asy
           }
         })(),
         driverPassengerRatedAt: row.driver_passenger_rated_at || null,
+        cancellationCommissionReserve,
         bookingSource: String(row.booking_source || 'app').trim().toLowerCase() || 'app',
         isAdminDispatch: isAdminDispatchedRide(row),
         canAssignAcceptedDriver: isAdminDispatchedRide(row)
@@ -1456,6 +1462,45 @@ router.patch('/:rideId/assign-driver', requireAdminAuth, requirePermission('ride
   } catch (err) {
     console.error('PATCH /api/admin/rides/:rideId/assign-driver', err);
     return res.status(err?.status || 500).json({ error: err?.message || 'Server error' });
+  }
+});
+
+router.patch('/:rideId/cancellation-reserve', requireAdminAuth, requirePermission('ride_ops.read'), async (req, res) => {
+  try {
+    const rideId = String(req.params.rideId || '').trim();
+    if (!rideId) return res.status(400).json({ error: 'Invalid ride id' });
+
+    const [ride] = await query(
+      `SELECT id FROM ride_requests
+       WHERE public_id = ? OR id = ?
+       LIMIT 1`,
+      [rideId, Number(rideId) || -1]
+    );
+    if (!ride) return res.status(404).json({ error: 'Ride not found' });
+
+    const reserve = await reviewDriverCancellationReserve({
+      rideRequestId: Number(ride.id),
+      action: req.body?.action,
+      adminId: req.admin?.id,
+      adminName: req.admin?.full_name || req.admin?.email || 'Admin',
+      note: req.body?.note,
+    });
+    const refunded = reserve.status === 'refunded';
+    await notifyUserPush(reserve.driverUserId, {
+      title: refunded ? 'Cancellation approved' : 'Cancellation review completed',
+      body: refunded
+        ? `${reserve.currency} ${reserve.reservedAmount.toFixed(2)} has been returned to your wallet.`
+        : `${reserve.currency} ${reserve.reservedAmount.toFixed(2)} was kept as the cancellation commission.`,
+      data: {
+        type: 'driver_cancellation_reserve_review',
+        rideRequestId: reserve.rideRequestId,
+        reserveStatus: reserve.status,
+      },
+    });
+    return res.json({ ok: true, reserve });
+  } catch (err) {
+    console.error('PATCH /api/admin/rides/:rideId/cancellation-reserve', err);
+    return res.status(Number(err?.status) || 500).json({ error: err?.message || 'Server error' });
   }
 });
 

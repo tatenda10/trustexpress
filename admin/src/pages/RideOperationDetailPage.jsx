@@ -157,6 +157,9 @@ export default function RideOperationDetailPage() {
   const [cancelling, setCancelling] = useState(false)
   const [assigningDriverId, setAssigningDriverId] = useState('')
   const [actionMessage, setActionMessage] = useState('')
+  const [reserveReviewing, setReserveReviewing] = useState('')
+  const [reserveReviewNote, setReserveReviewNote] = useState('')
+  const [reserveMessage, setReserveMessage] = useState('')
   const fromDriverId = location.state?.fromDriverId || ''
   const fromDriverName = location.state?.fromDriverName || 'driver'
   const canCancelRide = admin?.role === 'super_admin' || can('ride_ops.read')
@@ -333,6 +336,39 @@ export default function RideOperationDetailPage() {
       setError(err?.response?.data?.error || err?.message || 'Failed to assign driver')
     } finally {
       setAssigningDriverId('')
+    }
+  }
+
+  const reviewCancellationReserve = async (action) => {
+    if (!token || !rideId || !ride?.cancellationCommissionReserve) return
+    const isRefund = action === 'refund'
+    const confirmed = window.confirm(
+      isRefund
+        ? 'Approve this cancellation and return the reserved commission to the driver?'
+        : 'Reject this cancellation reason and keep the reserved amount as final commission?',
+    )
+    if (!confirmed) return
+
+    setReserveReviewing(action)
+    setReserveMessage('')
+    setError('')
+    try {
+      await axios.patch(
+        `${BASE_URL}/api/admin/rides/${rideId}/cancellation-reserve`,
+        { action, note: reserveReviewNote.trim() || undefined },
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      setReserveReviewNote('')
+      setReserveMessage(
+        isRefund
+          ? 'Cancellation approved and reserved commission refunded.'
+          : 'Cancellation rejected and reserved commission captured.',
+      )
+      await refreshRideDetails()
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to review cancellation reserve')
+    } finally {
+      setReserveReviewing('')
     }
   }
 
@@ -729,6 +765,66 @@ export default function RideOperationDetailPage() {
               <div className="border border-slate-200 bg-slate-50 px-4 py-3">
                 <p className="text-[11px] uppercase tracking-wide text-slate-500">Cancellation Reason</p>
                 <p className="mt-1 text-sm text-slate-700">{ride.cancellationReason}</p>
+              </div>
+            ) : null}
+
+            {ride.cancellationCommissionReserve ? (
+              <div className="border border-orange-200 bg-orange-50 px-4 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-orange-800">
+                      Driver cancellation commission reserve
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {ride.cancellationCommissionReserve.currency} {Number(ride.cancellationCommissionReserve.reservedAmount || 0).toFixed(2)}
+                    </p>
+                    <p className="mt-1 text-xs text-orange-900/80">
+                      Held at {Number(ride.cancellationCommissionReserve.commissionRatePercent || 0).toFixed(2)}% pending admin review.
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-orange-300 bg-white px-3 py-1 text-xs font-semibold uppercase text-orange-800">
+                    {ride.cancellationCommissionReserve.status}
+                  </span>
+                </div>
+
+                {ride.cancellationCommissionReserve.status === 'pending' ? (
+                  <>
+                    <textarea
+                      value={reserveReviewNote}
+                      onChange={(event) => setReserveReviewNote(event.target.value)}
+                      rows={3}
+                      placeholder="Optional admin review note"
+                      className="mt-3 w-full border border-orange-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-orange-400"
+                    />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={Boolean(reserveReviewing)}
+                        onClick={() => reviewCancellationReserve('refund')}
+                        className="rounded-md bg-emerald-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                      >
+                        {reserveReviewing === 'refund' ? 'Refunding...' : 'Approve cancellation & refund'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={Boolean(reserveReviewing)}
+                        onClick={() => reviewCancellationReserve('capture')}
+                        className="rounded-md bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                      >
+                        {reserveReviewing === 'capture' ? 'Capturing...' : 'Reject reason & keep commission'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-3 text-xs text-slate-700">
+                    Reviewed by {ride.cancellationCommissionReserve.reviewedByAdminName || 'Admin'} on{' '}
+                    {formatDateTime(ride.cancellationCommissionReserve.reviewedAt)}.
+                    {ride.cancellationCommissionReserve.reviewNote
+                      ? ` Note: ${ride.cancellationCommissionReserve.reviewNote}`
+                      : ''}
+                  </p>
+                )}
+                {reserveMessage ? <p className="mt-2 text-xs font-medium text-emerald-700">{reserveMessage}</p> : null}
               </div>
             ) : null}
 
