@@ -57,6 +57,8 @@ export async function holdDriverCancellationCommission(connection, {
   passengerName = null,
   fareAmount,
   currency = 'USD',
+  paymentStatus = null,
+  paymentMethod = null,
   cancellationReason = null,
   previousStatus = null,
 }) {
@@ -65,7 +67,26 @@ export async function holdDriverCancellationCommission(connection, {
      WHERE ride_request_id = ? LIMIT 1`,
     [rideRequestId]
   );
-  if (existingRows[0]) return mapReserve(existingRows[0]);
+  if (existingRows[0]) {
+    if (cancellationReason && !existingRows[0].cancellation_reason) {
+      await connection.execute(
+        `UPDATE driver_cancellation_commission_reserves
+         SET cancellation_reason = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [cancellationReason, existingRows[0].id]
+      );
+      existingRows[0].cancellation_reason = cancellationReason;
+    }
+    return mapReserve(existingRows[0]);
+  }
+
+  const normalizedPaymentStatus = String(paymentStatus || '').trim().toLowerCase();
+  const normalizedPaymentMethod = String(paymentMethod || '').trim().toLowerCase();
+  if (normalizedPaymentStatus === 'paid'
+    && normalizedPaymentMethod
+    && normalizedPaymentMethod !== 'cash') {
+    return null;
+  }
 
   const settings = await getDriverWalletSettings();
   const commissionRatePercent = Number(settings.commissionRatePercent || 9.5);
@@ -152,6 +173,60 @@ export async function getDriverCancellationReserveByRide(rideRequestId) {
     [rideRequestId]
   );
   return mapReserve(rows[0]);
+}
+
+export async function captureDriverCommissionReserveForCompletedRide(rideRequestId) {
+  return withTransaction(async (connection) => {
+    const [rows] = await connection.execute(
+      `SELECT * FROM driver_cancellation_commission_reserves
+       WHERE ride_request_id = ? FOR UPDATE`,
+      [rideRequestId]
+    );
+    const reserve = rows[0];
+    if (!reserve) return null;
+    if (reserve.status === 'captured') {
+      return { ...mapReserve(reserve), alreadyCaptured: true };
+    }
+    if (reserve.status !== 'pending') return mapReserve(reserve);
+
+    if (reserve.cash_hold_transaction_id) {
+      await connection.execute(
+        `UPDATE driver_wallet_transactions
+         SET transaction_type = 'commission_debit',
+             source_type = 'trip_commission',
+             source_id = ?,
+             description = ?
+         WHERE id = ?`,
+        [String(rideRequestId), `Trust Express service fee for completed trip #${rideRequestId}`, reserve.cash_hold_transaction_id]
+      );
+    }
+    if (reserve.promotional_hold_transaction_id) {
+      await connection.execute(
+        `UPDATE driver_wallet_transactions
+         SET transaction_type = 'promo_commission_debit',
+             source_type = 'trip_commission',
+             source_id = ?,
+             description = ?
+         WHERE id = ?`,
+        [`${rideRequestId}:promo`, `Promotional balance applied to completed trip #${rideRequestId}`, reserve.promotional_hold_transaction_id]
+      );
+    }
+
+    await connection.execute(
+      `UPDATE driver_cancellation_commission_reserves
+       SET status = 'captured',
+           review_note = 'Automatically captured when the ride was completed.',
+           reviewed_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [reserve.id]
+    );
+    const [updatedRows] = await connection.execute(
+      'SELECT * FROM driver_cancellation_commission_reserves WHERE id = ? LIMIT 1',
+      [reserve.id]
+    );
+    return mapReserve(updatedRows[0]);
+  });
 }
 
 export async function reviewDriverCancellationReserve({

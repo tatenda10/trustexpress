@@ -2465,7 +2465,7 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
 
     const cancellationResult = await withTransaction(async (connection) => {
       const [rideRows] = await connection.execute(
-        `SELECT id, public_id, status, started_at, payment_status, passenger_user_id,
+        `SELECT id, public_id, status, started_at, payment_status, payment_method, passenger_user_id,
                 passenger_name, final_estimated_amount, estimated_amount, currency_code
          FROM ride_requests
          WHERE id = ? AND driver_user_id = ?
@@ -2503,6 +2503,8 @@ router.patch('/current-ride/:rideRequestId/cancel', requireAuth, async (req, res
         passengerName: rideBefore.passenger_name,
         fareAmount: rideBefore.final_estimated_amount || rideBefore.estimated_amount,
         currency: rideBefore.currency_code || 'USD',
+        paymentStatus: rideBefore.payment_status,
+        paymentMethod: rideBefore.payment_method,
         cancellationReason: reason,
         previousStatus,
       });

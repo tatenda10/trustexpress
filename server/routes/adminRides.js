@@ -1471,12 +1471,15 @@ router.patch('/:rideId/cancellation-reserve', requireAdminAuth, requirePermissio
     if (!rideId) return res.status(400).json({ error: 'Invalid ride id' });
 
     const [ride] = await query(
-      `SELECT id FROM ride_requests
+      `SELECT id, status FROM ride_requests
        WHERE public_id = ? OR id = ?
        LIMIT 1`,
       [rideId, Number(rideId) || -1]
     );
     if (!ride) return res.status(404).json({ error: 'Ride not found' });
+    if (!['cancelled', 'expired'].includes(String(ride.status || '').trim().toLowerCase())) {
+      return res.status(409).json({ error: 'Commission reserves can only be manually reviewed after a ride is cancelled.' });
+    }
 
     const reserve = await reviewDriverCancellationReserve({
       rideRequestId: Number(ride.id),

@@ -1,6 +1,7 @@
-import { query } from '../db/connection.js';
+import { query, withTransaction } from '../db/connection.js';
 import { assignSafetyPinIfNeeded } from './ride-safety-pin.js';
 import { syncDiscountRedemptionForRide } from './ride-discounts.js';
+import { holdDriverCancellationCommission } from './driver-cancellation-reserve.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideStatusToDriver,
@@ -51,49 +52,64 @@ export async function assignAcceptedDriverToRide({
   const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
   const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
 
-  const updateResult = await query(
-    `UPDATE ride_requests
-     SET driver_user_id = ?,
-         driver_name = ?,
-         driver_phone = ?,
-         driver_distance_km = ?,
-         driver_eta_minutes = ?,
-         status = 'driver_assigned',
-         assigned_at = CURRENT_TIMESTAMP
-     WHERE id = ?
-       AND status IN ('requested', 'driver_found')
-       AND driver_user_id IS NULL`,
-    [
-      driverUserId,
-      driverAvailability.driver_name,
-      driverAvailability.phone_number,
-      Number(driverDistanceKm.toFixed(2)),
-      driverEtaMinutes,
+  const commissionReserve = await withTransaction(async (connection) => {
+    const [lockedRideRows] = await connection.execute(
+      `SELECT * FROM ride_requests WHERE id = ? FOR UPDATE`,
+      [rideRequestId]
+    );
+    const lockedRide = lockedRideRows[0];
+    if (!lockedRide
+      || !['requested', 'driver_found'].includes(String(lockedRide.status || ''))
+      || lockedRide.driver_user_id) {
+      const error = new Error('This ride could not be assigned to the driver anymore.');
+      error.status = 409;
+      throw error;
+    }
+
+    await connection.execute(
+      `UPDATE ride_requests
+       SET driver_user_id = ?, driver_name = ?, driver_phone = ?,
+           driver_distance_km = ?, driver_eta_minutes = ?,
+           status = 'driver_assigned', assigned_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [
+        driverUserId,
+        driverAvailability.driver_name,
+        driverAvailability.phone_number,
+        Number(driverDistanceKm.toFixed(2)),
+        driverEtaMinutes,
+        rideRequestId,
+      ]
+    );
+
+    await connection.execute(
+      `UPDATE ride_request_driver_responses
+       SET status = CASE WHEN driver_user_id = ? THEN 'selected' ELSE status END,
+           selected_at = CASE WHEN driver_user_id = ? THEN CURRENT_TIMESTAMP ELSE selected_at END
+       WHERE ride_request_id = ?`,
+      [driverUserId, driverUserId, rideRequestId]
+    );
+
+    await connection.execute(
+      `UPDATE driver_availability
+       SET is_online = 0, last_seen_at = CURRENT_TIMESTAMP
+       WHERE driver_user_id = ?`,
+      [driverUserId]
+    );
+
+    return holdDriverCancellationCommission(connection, {
       rideRequestId,
-    ]
-  );
-
-  if (Number(updateResult?.affectedRows || 0) < 1) {
-    const error = new Error('This ride could not be assigned to the driver anymore.');
-    error.status = 409;
-    throw error;
-  }
-
-  await query(
-    `UPDATE ride_request_driver_responses
-     SET status = CASE WHEN driver_user_id = ? THEN 'selected' ELSE status END,
-         selected_at = CASE WHEN driver_user_id = ? THEN CURRENT_TIMESTAMP ELSE selected_at END
-     WHERE ride_request_id = ?`,
-    [driverUserId, driverUserId, rideRequestId]
-  );
-
-  await query(
-    `UPDATE driver_availability
-     SET is_online = 0,
-         last_seen_at = CURRENT_TIMESTAMP
-     WHERE driver_user_id = ?`,
-    [driverUserId]
-  );
+      ridePublicId: lockedRide.public_id,
+      driverUserId,
+      passengerUserId: lockedRide.passenger_user_id,
+      passengerName: lockedRide.passenger_name,
+      fareAmount: lockedRide.final_estimated_amount || lockedRide.estimated_amount,
+      currency: lockedRide.currency_code || 'USD',
+      paymentStatus: lockedRide.payment_status,
+      paymentMethod: lockedRide.payment_method,
+      previousStatus: lockedRide.status,
+    });
+  });
 
   if (Number(ride.discount_code_id || 0) > 0 || Number(ride.discount_amount || 0) > 0) {
     await syncDiscountRedemptionForRide({
@@ -148,5 +164,6 @@ export async function assignAcceptedDriverToRide({
   return {
     driverDistanceKm: Number(driverDistanceKm.toFixed(2)),
     driverEtaMinutes,
+    commissionReserve,
   };
 }

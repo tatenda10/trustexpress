@@ -35,6 +35,12 @@ export async function chargeMissingRideCommissions({ limit = BATCH_LIMIT } = {})
          WHERE t.trip_id = r.id
            AND t.source_type = 'trip_commission'
        )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM driver_cancellation_commission_reserves cr
+         WHERE cr.ride_request_id = r.id
+           AND cr.status = 'captured'
+       )
      ORDER BY r.completed_at ASC
      LIMIT ${Math.max(1, Math.min(Number(limit) || BATCH_LIMIT, 200))}`
   );

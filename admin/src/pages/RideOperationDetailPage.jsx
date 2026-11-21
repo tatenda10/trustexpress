@@ -773,13 +773,13 @@ export default function RideOperationDetailPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-orange-800">
-                      Driver cancellation commission reserve
+                      Trip commission reserve
                     </p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">
                       {ride.cancellationCommissionReserve.currency} {Number(ride.cancellationCommissionReserve.reservedAmount || 0).toFixed(2)}
                     </p>
                     <p className="mt-1 text-xs text-orange-900/80">
-                      Held at {Number(ride.cancellationCommissionReserve.commissionRatePercent || 0).toFixed(2)}% pending admin review.
+                      Held at {Number(ride.cancellationCommissionReserve.commissionRatePercent || 0).toFixed(2)}% when the driver was assigned.
                     </p>
                   </div>
                   <span className="rounded-full border border-orange-300 bg-white px-3 py-1 text-xs font-semibold uppercase text-orange-800">
@@ -787,7 +787,7 @@ export default function RideOperationDetailPage() {
                   </span>
                 </div>
 
-                {ride.cancellationCommissionReserve.status === 'pending' ? (
+                {ride.cancellationCommissionReserve.status === 'pending' && ['cancelled', 'expired'].includes(String(ride.rawStatus || '').toLowerCase()) ? (
                   <>
                     <textarea
                       value={reserveReviewNote}
@@ -815,10 +815,15 @@ export default function RideOperationDetailPage() {
                       </button>
                     </div>
                   </>
+                ) : ride.cancellationCommissionReserve.status === 'pending' ? (
+                  <p className="mt-3 text-xs text-slate-700">
+                    The amount stays reserved while the ride is active. It will be captured automatically when completed or held for admin review if cancelled.
+                  </p>
                 ) : (
                   <p className="mt-3 text-xs text-slate-700">
-                    Reviewed by {ride.cancellationCommissionReserve.reviewedByAdminName || 'Admin'} on{' '}
-                    {formatDateTime(ride.cancellationCommissionReserve.reviewedAt)}.
+                    {ride.cancellationCommissionReserve.status === 'captured' && !ride.cancellationCommissionReserve.reviewedByAdminName
+                      ? `Automatically captured when the ride completed on ${formatDateTime(ride.cancellationCommissionReserve.reviewedAt)}.`
+                      : `Reviewed by ${ride.cancellationCommissionReserve.reviewedByAdminName || 'Admin'} on ${formatDateTime(ride.cancellationCommissionReserve.reviewedAt)}.`}
                     {ride.cancellationCommissionReserve.reviewNote
                       ? ` Note: ${ride.cancellationCommissionReserve.reviewNote}`
                       : ''}

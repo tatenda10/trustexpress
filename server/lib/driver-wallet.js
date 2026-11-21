@@ -7,6 +7,7 @@ import {
 } from './hire-commission.js';
 import { getPaymentProvider, normalizePaymentProvider } from './payment-providers/index.js';
 import { createSmileCashPayoutPublicId, executeSmileCashExternalCashout, isCompanySmileCashNumber, normalizeZimMobile } from './smile-cash.js';
+import { captureDriverCommissionReserveForCompletedRide } from './driver-cancellation-reserve.js';
 
 /** @deprecated Use getDriverWalletSettings().commissionRatePercent */
 export const DRIVER_WALLET_COMMISSION_RATE = 0.095;
@@ -1119,6 +1120,17 @@ export async function deductCommissionForCompletedRide({
   const commissionRatePercent = Number(settings.commissionRatePercent || 9.5);
   const commissionRate = commissionRatePercent / 100;
   const fareAmount = normalizeMoney(tripFareAmount);
+
+  const capturedReserve = await captureDriverCommissionReserveForCompletedRide(rideRequestId);
+  if (capturedReserve?.status === 'captured') {
+    return {
+      charged: capturedReserve.alreadyCaptured !== true,
+      alreadyCharged: capturedReserve.alreadyCaptured === true,
+      reservedAtAssignment: true,
+      commissionAmount: capturedReserve.reservedAmount,
+      commissionRatePercent: capturedReserve.commissionRatePercent,
+    };
+  }
 
   const [ridePayment] = await query(
     `SELECT payment_status, payment_method
