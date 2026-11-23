@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from '../../components/maps/MapViewCompat';
 import IncomingRidePreviewMap from '../../components/driver/IncomingRidePreviewMap';
 import IncomingRideRequestList from '../../components/driver/IncomingRideRequestList';
+import CancellationReasonModal from '../../components/ride/CancellationReasonModal';
 import * as Location from 'expo-location';
 import { connectRealtime } from '../../realtime';
 import { showLocalRideNotification, clearRideRequestNotifications } from '../../notifications';
@@ -345,6 +346,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
   const { getToken } = useAuth();
   const { patchDriverStatus, driverStatus } = useDriverStatus();
   const truckDriver = isTruckDriver(driverStatus);
+  const isSouthAfrica = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA';
   const getTokenRef = useRef(getToken);
   const isFocused = useIsFocused();
   const [isOnline, setIsOnline] = useState(false);
@@ -547,7 +549,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
         };
 
         const handleHireRequest = (payload = {}) => {
-          if (!active) return;
+          if (!active || isSouthAfrica) return;
           DeviceEventEmitter.emit('TrustHiringNewRequest', payload);
           setRealtimeSignal((value) => value + 1);
           try {
@@ -600,7 +602,7 @@ const DriverHomeScreen = ({ navigation, route }) => {
       active = false;
       localSocket?.__driverHomeCleanup?.();
     };
-  }, [isFocused, loadCurrentRide, pendingSelectionRide?.id]);
+  }, [isFocused, isSouthAfrica, loadCurrentRide, pendingSelectionRide?.id]);
 
   useEffect(() => {
     currentRideRef.current = currentRide;
@@ -2832,37 +2834,15 @@ const DriverHomeScreen = ({ navigation, route }) => {
         </View>
       </Modal>
 
-      <Modal visible={showCancelReasonModal} transparent animationType="fade">
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setShowCancelReasonModal(false)}
-          className="flex-1 justify-end"
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-            className="rounded-t-2xl bg-white px-5 pt-4"
-            style={{ paddingBottom: Math.max(insets.bottom + 12, 24) }}
-          >
-            <Text className="text-lg font-bold text-gray-900">Why are you cancelling?</Text>
-            <Text className="mt-1 text-sm text-gray-500">The passenger will be notified.</Text>
-            <ScrollView className="mt-4 max-h-64" showsVerticalScrollIndicator={false}>
-              {DRIVER_CANCELLATION_REASONS.map((r) => (
-                <TouchableOpacity
-                  key={r.id}
-                  onPress={() => handleConfirmCancelWithReason(r.label)}
-                  className="border-b border-gray-100 py-4"
-                >
-                  <Text className="text-base font-medium text-gray-900">{r.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <TouchableOpacity onPress={() => setShowCancelReasonModal(false)} className="mt-4 py-3 items-center">
-              <Text className="text-base text-gray-500">Keep ride</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      <CancellationReasonModal
+        visible={showCancelReasonModal}
+        reasons={DRIVER_CANCELLATION_REASONS}
+        onClose={() => setShowCancelReasonModal(false)}
+        onSubmit={handleConfirmCancelWithReason}
+        submitting={cancellingCurrentRide}
+        subtitle="The passenger will be notified."
+        keepLabel="Keep ride"
+      />
     </SafeAreaView>
   );
 };

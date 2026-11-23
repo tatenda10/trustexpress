@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Linking } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Linking, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth, useUser } from '../../auth/AuthProvider';
@@ -7,6 +7,7 @@ import { getMe, updateMe } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { configureMarket } from '../../constants/market';
 import { configureServiceAreaCountry } from '../../constants/serviceArea';
+import CountrySelectField from '../../components/CountrySelectField';
 
 export default function CompleteProfileScreen({ route, role: roleProp, onCompleted: onCompletedProp }) {
   const insets = useSafeAreaInsets();
@@ -95,17 +96,26 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className={role === 'driver' ? 'flex-1 bg-[#f6f7fb]' : 'flex-1 bg-white'} edges={['left', 'right', 'bottom']}>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View className="flex-1 px-6" style={{ paddingTop: insets.top + 18, paddingBottom: Math.max(insets.bottom + 24, 32) }}>
-          <View className="mt-8">
-            <Text className="text-sm tracking-[0.3em] text-gray-500">TRUST EXPRESS</Text>
-            <Text className="mt-4 text-3xl font-bold text-gray-900">Complete your profile</Text>
-            <Text className="mt-2 text-base leading-6 text-gray-500">
-              Add your real first name and last name to continue using the {role} app.
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingTop: role === 'driver' ? insets.top + 22 : insets.top + 50, paddingBottom: Math.max(insets.bottom + 24, 32) }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View>
+            {role !== 'driver' ? <Text className="text-sm tracking-[0.3em] text-gray-500">TRUST EXPRESS</Text> : null}
+            <Text className={`${role === 'driver' ? 'text-2xl' : 'mt-4 text-3xl'} font-bold text-slate-950`}>
+              {role === 'driver' ? 'Set up your account' : 'Complete your profile'}
+            </Text>
+            <Text className="mt-2 text-base leading-6 text-slate-500">
+              {role === 'driver'
+                ? 'Enter your name and select the country where you will drive.'
+                : `Add your real first name and last name to continue using the ${role} app.`}
             </Text>
           </View>
 
@@ -114,16 +124,19 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
               <ActivityIndicator size="large" color={PRIMARY_BLUE} />
             </View>
           ) : (
-            <View className="mt-10">
+            <View className={role === 'driver' ? 'mt-6 rounded-3xl border border-slate-100 bg-white p-5' : 'mt-10'}>
               {!!loadWarning && (
                 <View className="mb-4 rounded-xl bg-amber-50 px-4 py-3">
                   <Text className="text-sm leading-5 text-amber-800">{loadWarning}</Text>
                 </View>
               )}
 
-              <Text className="mb-2 text-sm font-medium text-gray-700">First name</Text>
+              <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl bg-blue-50">
+                <Ionicons name="person-outline" size={24} color={PRIMARY_BLUE} />
+              </View>
+              <Text className="mb-2 text-sm font-medium text-slate-700">First name</Text>
               <TextInput
-                className="rounded-xl border border-gray-200 bg-white p-4 text-base mb-4"
+                className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-base"
                 placeholder="Enter your first name"
                 placeholderTextColor="#9ca3af"
                 value={firstName}
@@ -131,27 +144,23 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
                 autoCapitalize="words"
               />
 
-              <Text className="mb-2 mt-5 text-sm font-medium text-gray-700">Registration country</Text>
-              <View className="flex-row gap-3">
-                {[
-                  { code: 'ZW', label: 'Zimbabwe' },
-                  { code: 'ZA', label: 'South Africa' },
-                ].map((country) => {
-                  const selected = registrationCountryCode === country.code;
-                  return (
-                    <TouchableOpacity
-                      key={country.code}
-                      onPress={() => setRegistrationCountryCode(country.code)}
-                      className={`flex-1 rounded-xl border px-4 py-4 ${selected ? 'border-blue-600 bg-blue-50' : 'border-gray-200 bg-white'}`}
-                    >
-                      <Text className={`text-center text-base font-semibold ${selected ? 'text-blue-700' : 'text-gray-700'}`}>{country.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              <Text className="mb-2 text-sm font-medium text-slate-700">Last name</Text>
+              <TextInput
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-base"
+                placeholder="Enter your last name"
+                placeholderTextColor="#9ca3af"
+                value={lastName}
+                onChangeText={setLastName}
+                autoCapitalize="words"
+              />
+
+              <View className="mt-5">
+                <CountrySelectField
+                  label="Registration country"
+                  value={registrationCountryCode}
+                  onChange={setRegistrationCountryCode}
+                />
               </View>
-              <Text className="mt-2 text-xs leading-5 text-gray-500">
-                This controls phone formats, service areas, currency, payments and emergency information in the app.
-              </Text>
 
               {registrationCountryCode === 'ZA' ? (
                 <View className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 p-4">
@@ -172,21 +181,12 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
                 </View>
               ) : null}
 
-              <Text className="mb-2 text-sm font-medium text-gray-700">Last name</Text>
-              <TextInput
-                className="rounded-xl border border-gray-200 bg-white p-4 text-base"
-                placeholder="Enter your last name"
-                placeholderTextColor="#9ca3af"
-                value={lastName}
-                onChangeText={setLastName}
-                autoCapitalize="words"
-              />
             </View>
           )}
 
-          <View className="mt-auto">
+          <View className="mt-auto pt-6">
             <TouchableOpacity
-              className="h-14 items-center justify-center rounded-xl"
+              className="h-14 items-center justify-center rounded-2xl"
               style={{ backgroundColor: PRIMARY_BLUE, opacity: loading || saving ? 0.7 : 1 }}
               disabled={loading || saving}
               onPress={handleSave}
@@ -198,7 +198,7 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
               )}
             </TouchableOpacity>
           </View>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

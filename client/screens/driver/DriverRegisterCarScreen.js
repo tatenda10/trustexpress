@@ -25,6 +25,7 @@ import { VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehic
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 import { isTruckDriver, TRUCK_VEHICLE_CATEGORIES } from '../../constants/driverKind';
 import DateSelectField from '../../components/DateSelectField';
+import DriverRegistrationProgress from '../../components/driver/DriverRegistrationProgress';
 
 function navigateToDriverAccountTab() {
   if (!navigationRef.isReady()) return;
@@ -82,6 +83,56 @@ const VEHICLE_COLOR_OPTIONS = [
 function getVehicleModelsFromCatalog(catalog = [], make) {
   const match = catalog.find((item) => String(item?.make || '').trim().toLowerCase() === String(make || '').trim().toLowerCase());
   return Array.isArray(match?.models) ? match.models : [];
+}
+
+function normalizeTierKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/_/g, '-');
+}
+
+function getTierVehicleDefaults(tierKey) {
+  const key = normalizeTierKey(tierKey);
+  if (key.includes('xl')) {
+    return { seatCount: '6', doorCount: '4', vehicleCategory: 'mpv', hasAirConditioning: true, hasLargeLuggageSpace: true };
+  }
+  if (key.includes('luxury')) {
+    return { seatCount: '4', doorCount: '4', vehicleCategory: 'sedan', hasAirConditioning: true, isHighEnd: true };
+  }
+  return { seatCount: '4', doorCount: '4' };
+}
+
+function findMatchingVehicleTier(tiers, make, model, year = null) {
+  const makeModel = `${make || ''} ${model || ''}`.trim().toLowerCase();
+  const modelOnly = String(model || '').trim().toLowerCase();
+  if (!makeModel || !modelOnly) return null;
+  const priority = { 'trust-luxury': 3, 'trust-xl': 2, 'trust-express': 1 };
+  const configuredMatch = tiers
+    .filter((tier) => (Array.isArray(tier?.exampleVehicles) ? tier.exampleVehicles : []).some((example) => {
+      const normalizedExample = String(example || '').trim().toLowerCase();
+      return normalizedExample && (
+        makeModel.includes(normalizedExample)
+        || normalizedExample.includes(makeModel)
+        || modelOnly === normalizedExample
+      );
+    }))
+    .sort((left, right) => (priority[normalizeTierKey(right?.tierKey)] || 0) - (priority[normalizeTierKey(left?.tierKey)] || 0))[0] || null;
+  if (configuredMatch) return configuredMatch;
+
+  const tierByKey = (key) => tiers.find((tier) => normalizeTierKey(tier?.tierKey) === key) || null;
+  const xlModels = ['avanza', 'ertiga', 'rumion', 'sienta', 'noah', 'voxy', 'alphard', 'wish', 'freed', 'stepwgn', 'serena', 'nv200', 'h-1', 'carens', 'v-class'];
+  if (xlModels.some((value) => modelOnly.includes(value))) return tierByKey('trust-xl');
+
+  const vehicleYear = Number(year || 0);
+  const luxuryYearEligible = !vehicleYear || vehicleYear >= 2015;
+  const luxuryMakes = ['mercedes-benz', 'bmw', 'lexus'];
+  const luxuryModels = ['mark x', 'harrier', 'prado', 'land cruiser', 'crown', 'camry', 'accord'];
+  if (luxuryYearEligible && (
+    luxuryMakes.includes(String(make || '').trim().toLowerCase())
+    || luxuryModels.some((value) => modelOnly.includes(value))
+  )) {
+    return tierByKey('trust-luxury');
+  }
+
+  return tierByKey('trust-express') || tiers[0] || null;
 }
 
 function SelectionModal({
@@ -265,16 +316,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const [firstRegisteredAt, setFirstRegisteredAt] = useState(vehicle?.firstRegisteredAt || '');
   const [operatingLicenceNumber, setOperatingLicenceNumber] = useState(vehicle?.operatingLicenceNumber || '');
   const [operatingLicenceExpiresAt, setOperatingLicenceExpiresAt] = useState(vehicle?.operatingLicenceExpiresAt || '');
-  const [operatorLegalName, setOperatorLegalName] = useState(vehicle?.operatorLegalName || '');
-  const [operatorBusinessAddress, setOperatorBusinessAddress] = useState(vehicle?.operatorBusinessAddress || '');
   const [operatingLicenceUri, setOperatingLicenceUri] = useState(vehicle?.operatingLicenceUrl || null);
   const [panicDeviceProofUri, setPanicDeviceProofUri] = useState(vehicle?.panicDeviceProofUrl || null);
-  const [vehicleMarkingLeftUri, setVehicleMarkingLeftUri] = useState(vehicle?.vehicleMarkingLeftUrl || null);
-  const [vehicleMarkingRightUri, setVehicleMarkingRightUri] = useState(vehicle?.vehicleMarkingRightUrl || null);
   const [loading, setLoading] = useState(false);
   const [tiers, setTiers] = useState([]);
   const [tiersLoading, setTiersLoading] = useState(true);
-  const [vehicleCatalog, setVehicleCatalog] = useState(VEHICLE_MAKE_MODELS);
+  const [vehicleCatalog, setVehicleCatalog] = useState(isSouthAfrica ? [] : VEHICLE_MAKE_MODELS);
   const [selectedTierKey, setSelectedTierKey] = useState(vehicle?.vehicleTierKey || '');
   const [showMakeModal, setShowMakeModal] = useState(false);
   const [showModelModal, setShowModelModal] = useState(false);
@@ -284,6 +331,18 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   const pendingSubmitAlertRef = useRef(false);
   const makeOptions = vehicleCatalog.map((item) => item.make);
   const modelOptions = getVehicleModelsFromCatalog(vehicleCatalog, make);
+
+  const applyTierDefaults = (tierKey, { overwrite = false } = {}) => {
+    const defaults = getTierVehicleDefaults(tierKey);
+    setSeatCount((current) => (overwrite || !String(current || '').trim() ? defaults.seatCount : current));
+    setDoorCount((current) => (overwrite || !String(current || '').trim() ? defaults.doorCount : current));
+    if (defaults.vehicleCategory) {
+      setVehicleCategory((current) => (overwrite || !current ? defaults.vehicleCategory : current));
+    }
+    if (defaults.hasAirConditioning) setHasAirConditioning(true);
+    if (defaults.hasLargeLuggageSpace) setHasLargeLuggageSpace(true);
+    if (defaults.isHighEnd) setIsHighEnd(true);
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -316,7 +375,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         if (!token) throw new Error('Not signed in');
         const data = await getDriverVehicleOptions(token);
         if (!active) return;
-        const nextTiers = Array.isArray(data?.tiers) ? data.tiers.slice(0, 3) : [];
+        const nextTiers = Array.isArray(data?.tiers)
+          ? data.tiers.slice(0, 3).map((tier) => ({
+              ...tier,
+              exampleVehicles: Array.isArray(tier?.exampleVehicles) ? tier.exampleVehicles : [],
+            }))
+          : [];
         const nextCatalog = Array.isArray(data?.catalog) && data.catalog.length > 0
           ? data.catalog
               .map((item, index) => ({
@@ -327,17 +391,19 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
                 sortOrder: Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : index,
               }))
               .filter((item) => item.make && item.models.length > 0)
-          : VEHICLE_MAKE_MODELS;
+          : (isSouthAfrica ? [] : VEHICLE_MAKE_MODELS);
         setTiers(nextTiers);
-        setVehicleCatalog(nextCatalog.length > 0 ? nextCatalog : VEHICLE_MAKE_MODELS);
+        setVehicleCatalog(nextCatalog.length > 0 ? nextCatalog : (isSouthAfrica ? [] : VEHICLE_MAKE_MODELS));
         if (!isTruckMode && !selectedTierKey && nextTiers[0]?.tierKey) {
           setSelectedTierKey(nextTiers[0].tierKey);
+          applyTierDefaults(nextTiers[0].tierKey);
         }
       } catch (error) {
         if (!active) return;
         setTiers([]);
+        if (isSouthAfrica) setVehicleCatalog([]);
         if (!isTruckMode) {
-          Alert.alert('Vehicle tiers unavailable', error?.message || 'Could not load vehicle tier options');
+          Alert.alert('Vehicle options unavailable', error?.message || 'Could not load vehicle makes, models and tier options');
         }
       } finally {
         if (active) setTiersLoading(false);
@@ -348,7 +414,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
     return () => {
       active = false;
     };
-  }, [isTruckMode]);
+  }, [isSouthAfrica, isTruckMode]);
 
   const pickCarPhotos = async () => {
     try {
@@ -513,24 +579,16 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
       Alert.alert('More photos needed', `Upload at least ${MIN_CAR_PHOTOS} vehicle photos.`);
       return;
     }
-    if (!regBookUri) {
+    if (!isSouthAfrica && !regBookUri) {
       Alert.alert('Registration book required', 'Upload the vehicle registration book.');
       return;
     }
-    if (!insuranceUri) {
+    if (!isSouthAfrica && !insuranceUri) {
       Alert.alert('Insurance required', 'Upload the insurance document.');
       return;
     }
     if (!isSouthAfrica && !zinaraUri) {
       Alert.alert('Zinara required', 'Upload the Zinara document.');
-      return;
-    }
-    if (isSouthAfrica && (!firstRegisteredAt || !operatingLicenceNumber.trim() || !operatingLicenceExpiresAt || !operatorLegalName.trim() || !operatorBusinessAddress.trim())) {
-      Alert.alert('SA vehicle details required', 'Complete the first-registration, operating-licence and operator details.');
-      return;
-    }
-    if (isSouthAfrica && (!operatingLicenceUri || !panicDeviceProofUri || !vehicleMarkingLeftUri || !vehicleMarkingRightUri)) {
-      Alert.alert('SA compliance documents required', 'Upload the operating licence, panic-device proof and both vehicle-marking photographs.');
       return;
     }
     if (!numberPlate.trim() || !make.trim() || !model.trim() || !year.trim()) {
@@ -544,7 +602,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
     const yearNum = Number(year);
     const currentYear = new Date().getFullYear();
-    const minYear = isTruckMode ? 1990 : 2010;
+    const minYear = isTruckMode ? 1990 : (isSouthAfrica ? 2012 : 2010);
     if (!Number.isInteger(yearNum) || yearNum < minYear || yearNum > currentYear + 1) {
       Alert.alert('Invalid year', `Enter a year between ${minYear} and ${currentYear + 1}.`);
       return;
@@ -570,13 +628,15 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         1,
         async (uri, index) => uploadUri(token, uri, `car-photo-${index + 1}.jpg`)
       );
-      const registrationBookUrl = await uploadUri(token, regBookUri, 'registration-book.jpg');
-      const insuranceUrl = await uploadUri(token, insuranceUri, 'insurance.jpg');
+      const registrationBookUrl = regBookUri
+        ? await uploadUri(token, regBookUri, isSouthAfrica ? 'registration-disc.jpg' : 'registration-book.jpg')
+        : null;
+      const insuranceUrl = insuranceUri ? await uploadUri(token, insuranceUri, 'insurance.jpg') : null;
       const zinaraUrl = zinaraUri ? await uploadUri(token, zinaraUri, 'zinara.jpg') : null;
-      const operatingLicenceUrl = isSouthAfrica ? await uploadUri(token, operatingLicenceUri, 'operating-licence.jpg') : null;
+      const operatingLicenceUrl = isSouthAfrica && operatingLicenceUri
+        ? await uploadUri(token, operatingLicenceUri, 'operating-licence.jpg')
+        : null;
       const panicDeviceProofUrl = isSouthAfrica ? await uploadUri(token, panicDeviceProofUri, 'panic-device-proof.jpg') : null;
-      const vehicleMarkingLeftUrl = isSouthAfrica ? await uploadUri(token, vehicleMarkingLeftUri, 'vehicle-marking-left.jpg') : null;
-      const vehicleMarkingRightUrl = isSouthAfrica ? await uploadUri(token, vehicleMarkingRightUri, 'vehicle-marking-right.jpg') : null;
       const selectedTier = tiers.find((tier) => tier.tierKey === selectedTierKey) || null;
 
       await submitVehicle(token, {
@@ -609,11 +669,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           operatingLicenceNumber: operatingLicenceNumber.trim(),
           operatingLicenceUrl,
           operatingLicenceExpiresAt,
-          operatorLegalName: operatorLegalName.trim(),
-          operatorBusinessAddress: operatorBusinessAddress.trim(),
           panicDeviceProofUrl,
-          vehicleMarkingLeftUrl,
-          vehicleMarkingRightUrl,
         } : {}),
       });
 
@@ -686,36 +742,38 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   }
 
   return (
-    <View className="flex-1 bg-white">
-      <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-        <TouchableOpacity onPress={() => goBackOrDriverTabs(navigation)} className="p-2 -ml-2">
-          <Ionicons name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
-      </View>
+    <View className={isSouthAfrica ? 'flex-1 bg-[#f6f7fb]' : 'flex-1 bg-white'}>
+      {isSouthAfrica ? (
+        <DriverRegistrationProgress
+          currentStep={3}
+          topInset={insets.top}
+          onBack={() => goBackOrDriverTabs(navigation)}
+          onHelp={() => Alert.alert('Vehicle help', 'Add accurate vehicle details and clear photos. Optional documents are marked.')}
+        />
+      ) : (
+        <View style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity onPress={() => goBackOrDriverTabs(navigation)} className="p-2 -ml-2">
+            <Ionicons name="arrow-back" size={24} color="#000" />
+          </TouchableOpacity>
+        </View>
+      )}
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 24) }}
         showsVerticalScrollIndicator={false}
       >
-        <Text className="text-2xl font-bold text-gray-900 mb-2">
+        <Text className="mt-5 text-2xl font-bold text-slate-950 mb-2">
           {isTruckMode
             ? (isChangingApprovedVehicle ? 'Change your truck' : 'Register your truck')
-            : (isChangingApprovedVehicle ? 'Change your car' : 'Register your car')}
+            : (isChangingApprovedVehicle ? 'Change your car' : isSouthAfrica ? 'Vehicle details' : 'Register your car')}
         </Text>
-        <Text className="text-sm text-gray-600 mb-4">
-          {isSouthAfrica
-            ? 'Add your vehicle details, operating licence and safety-compliance documents. Everything is saved securely for admin review.'
-            : isTruckMode
-            ? 'Upload at least 3 truck photos plus registration, insurance and Zinara. Admin reviews this the same way as cars.'
-            : isChangingApprovedVehicle
-              ? 'Submit the new car details and documents for admin review. You will be offline until the new car is approved.'
-              : 'Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.'}
-        </Text>
-
-        {isSouthAfrica ? (
-          <View className="mb-5 flex-row items-center self-start rounded-full border border-blue-200 bg-blue-50 px-3 py-2">
-            <Ionicons name="location-outline" size={16} color="#206EFF" />
-            <Text className="ml-2 text-xs font-bold uppercase tracking-wide text-blue-700">South Africa vehicle application</Text>
-          </View>
+        {!isSouthAfrica ? (
+          <Text className="text-sm text-gray-600 mb-4">
+            {isTruckMode
+              ? 'Upload at least 3 truck photos plus registration, insurance and Zinara. Admin reviews this the same way as cars.'
+              : isChangingApprovedVehicle
+                ? 'Submit the new car details and documents for admin review. You will be offline until the new car is approved.'
+                : 'Upload at least 3 car photos, your registration book, and choose the car tier configured by admin.'}
+          </Text>
         ) : null}
 
         {isRejected && vehicle?.rejectionReason && (
@@ -774,7 +832,10 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
               return (
                 <TouchableOpacity
                   key={tier.tierKey}
-                  onPress={() => setSelectedTierKey(tier.tierKey)}
+                  onPress={() => {
+                    setSelectedTierKey(tier.tierKey);
+                    applyTierDefaults(tier.tierKey, { overwrite: true });
+                  }}
                   className={`rounded-xl border p-4 ${selected ? 'border-primary bg-blue-50' : 'border-gray-200 bg-white'}`}
                 >
                   <View className="flex-row items-center justify-between">
@@ -809,8 +870,9 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         <SelectField
           label="Make"
           value={make}
-          placeholder="Choose a vehicle make"
+          placeholder={isSouthAfrica && vehicleCatalog.length === 0 ? 'No backend vehicle makes available' : 'Choose a vehicle make'}
           onPress={() => setShowMakeModal(true)}
+          disabled={isSouthAfrica && vehicleCatalog.length === 0}
         />
         <SelectField
           label="Model"
@@ -822,7 +884,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         <SelectField
           label="Year"
           value={year}
-          placeholder={isTruckMode ? 'Choose a year from 1990 onwards' : 'Choose a year from 2010 onwards'}
+          placeholder={isTruckMode ? 'Choose a year from 1990 onwards' : `Choose a year from ${isSouthAfrica ? 2012 : 2010} onwards`}
           onPress={() => setShowYearModal(true)}
         />
         <SelectField
@@ -833,15 +895,11 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         />
         {isSouthAfrica ? (
           <View className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-4">
-            <Text className="mb-4 text-lg font-bold text-gray-900">South Africa vehicle compliance</Text>
-            <DateSelectField label="Vehicle first-registration date" value={firstRegisteredAt} placeholder="Select first-registration date" required minYear={1980} maxYear={new Date().getFullYear()} fallbackYear={Number(year) || new Date().getFullYear()} onChange={setFirstRegisteredAt} />
-            <Text className="mb-2 text-sm font-medium text-gray-700">Operating-licence number <Text className="text-red-500">*</Text></Text>
+            <Text className="mb-4 text-lg font-bold text-gray-900">Vehicle registration details</Text>
+            <DateSelectField label="Vehicle first-registration date (optional)" value={firstRegisteredAt} placeholder="Select first-registration date" minYear={1980} maxYear={new Date().getFullYear()} fallbackYear={Number(year) || new Date().getFullYear()} onChange={setFirstRegisteredAt} />
+            <Text className="mb-2 text-sm font-medium text-gray-700">Operating-licence number <Text className="text-gray-400">(optional)</Text></Text>
             <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={operatingLicenceNumber} onChangeText={setOperatingLicenceNumber} autoCapitalize="characters" placeholder="Enter operating-licence number" />
-            <DateSelectField label="Operating-licence expiration" value={operatingLicenceExpiresAt} placeholder="Select expiry date" required minYear={new Date().getFullYear()} maxYear={new Date().getFullYear() + 20} fallbackYear={new Date().getFullYear() + 1} onChange={setOperatingLicenceExpiresAt} />
-            <Text className="mb-2 text-sm font-medium text-gray-700">Operator legal name <Text className="text-red-500">*</Text></Text>
-            <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={operatorLegalName} onChangeText={setOperatorLegalName} placeholder="Legal person or business name" />
-            <Text className="mb-2 text-sm font-medium text-gray-700">Operator business address <Text className="text-red-500">*</Text></Text>
-            <TextInput className="rounded-xl border border-gray-200 bg-white p-4 text-base" multiline value={operatorBusinessAddress} onChangeText={setOperatorBusinessAddress} placeholder="Full business address" />
+            <DateSelectField label="Operating-licence expiration (optional)" value={operatingLicenceExpiresAt} placeholder="Select expiry date" minYear={new Date().getFullYear()} maxYear={new Date().getFullYear() + 20} fallbackYear={new Date().getFullYear() + 1} onChange={setOperatingLicenceExpiresAt} />
           </View>
         ) : null}
         <Text className="text-sm font-medium text-gray-700 mb-2">{isTruckMode ? 'Seats' : 'Passenger seats'} <Text className="text-red-500">*</Text></Text>
@@ -905,35 +963,42 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
           ))}
         </View>
 
-        <Text className="text-sm font-medium text-gray-700 mb-2">{isTruckMode ? 'Vehicle registration book' : 'Car registration book'} <Text className="text-red-500">*</Text></Text>
+        <Text className="text-sm font-medium text-gray-700 mb-2">
+          {isSouthAfrica ? 'Registration disc' : (isTruckMode ? 'Vehicle registration book' : 'Car registration book')}{' '}
+          {isSouthAfrica ? <Text className="text-gray-400">(optional)</Text> : <Text className="text-red-500">*</Text>}
+        </Text>
         <TouchableOpacity onPress={() => pickSingleImage(setRegBookUri)} className="mb-6 border border-gray-200 rounded-xl p-4 items-center">
           {regBookUri ? (
             <>
               <Ionicons name="document-text-outline" size={32} color="#206EFF" />
-              <Text className="text-primary mt-2 font-medium">Registration book added</Text>
+              <Text className="text-primary mt-2 font-medium">{isSouthAfrica ? 'Registration disc added' : 'Registration book added'}</Text>
             </>
           ) : (
             <>
               <Ionicons name="document-outline" size={32} color="#9ca3af" />
-              <Text className="text-gray-500 mt-2">Tap to upload</Text>
+              <Text className="text-gray-500 mt-2">{isSouthAfrica ? 'Tap to upload registration disc' : 'Tap to upload'}</Text>
             </>
           )}
         </TouchableOpacity>
 
-        <Text className="text-sm font-medium text-gray-700 mb-2">Insurance <Text className="text-red-500">*</Text></Text>
-        <TouchableOpacity onPress={() => pickSingleImage(setInsuranceUri)} className="mb-6 border border-gray-200 rounded-xl p-4 items-center">
-          {insuranceUri ? (
-            <>
-              <Ionicons name="shield-checkmark-outline" size={32} color="#206EFF" />
-              <Text className="text-primary mt-2 font-medium">Insurance added</Text>
-            </>
-          ) : (
-            <>
-              <Ionicons name="shield-outline" size={32} color="#9ca3af" />
-              <Text className="text-gray-500 mt-2">Tap to upload insurance</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {!isSouthAfrica ? <>
+          <Text className="text-sm font-medium text-gray-700 mb-2">
+            Insurance <Text className="text-red-500">*</Text>
+          </Text>
+          <TouchableOpacity onPress={() => pickSingleImage(setInsuranceUri)} className="mb-6 border border-gray-200 rounded-xl p-4 items-center">
+            {insuranceUri ? (
+              <>
+                <Ionicons name="shield-checkmark-outline" size={32} color="#206EFF" />
+                <Text className="text-primary mt-2 font-medium">Insurance added</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="shield-outline" size={32} color="#9ca3af" />
+                <Text className="text-gray-500 mt-2">Tap to upload insurance</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </> : null}
 
         {!isSouthAfrica ? <><Text className="text-sm font-medium text-gray-700 mb-2">Zinara <Text className="text-red-500">*</Text></Text>
         <TouchableOpacity onPress={() => pickSingleImage(setZinaraUri)} className="mb-6 border border-gray-200 rounded-xl p-4 items-center">
@@ -952,19 +1017,18 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
 
         {isSouthAfrica ? (
           <View className="mb-3 mt-1 border-t border-gray-100 pt-5">
-            <Text className="text-lg font-bold text-gray-900">SA compliance documents</Text>
-            <Text className="mt-1 text-sm leading-5 text-gray-500">Upload readable proof for the operating licence, panic device and required vehicle markings.</Text>
+            <Text className="text-lg font-bold text-gray-900">Vehicle documents</Text>
           </View>
         ) : null}
 
         {isSouthAfrica ? ([
-          ['Operating licence', operatingLicenceUri, setOperatingLicenceUri],
-          ['Panic-device installation proof', panicDeviceProofUri, setPanicDeviceProofUri],
-          ['Vehicle marking photograph (left)', vehicleMarkingLeftUri, setVehicleMarkingLeftUri],
-          ['Vehicle marking photograph (right)', vehicleMarkingRightUri, setVehicleMarkingRightUri],
-        ].map(([label, uri, setter]) => (
+          ['Operating licence', operatingLicenceUri, setOperatingLicenceUri, false],
+          ['Panic-device installation proof', panicDeviceProofUri, setPanicDeviceProofUri, false],
+        ].map(([label, uri, setter, required]) => (
           <View key={label}>
-            <Text className="mb-2 text-sm font-medium text-gray-700">{label} <Text className="text-red-500">*</Text></Text>
+            <Text className="mb-2 text-sm font-medium text-gray-700">
+              {label} {required ? <Text className="text-red-500">*</Text> : <Text className="text-gray-400">(optional)</Text>}
+            </Text>
             <TouchableOpacity onPress={() => pickSingleImage(setter)} className="mb-6 items-center rounded-xl border border-gray-200 p-4">
               <Ionicons name={uri ? 'checkmark-circle-outline' : 'document-outline'} size={32} color={uri ? '#206EFF' : '#9ca3af'} />
               <Text className={`mt-2 font-medium ${uri ? 'text-primary' : 'text-gray-500'}`}>{uri ? `${label} added` : `Upload ${label.toLowerCase()}`}</Text>
@@ -1003,14 +1067,21 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         options={modelOptions}
         selectedValue={model}
         searchPlaceholder="Search vehicle model"
-        customCreateLabel={make ? `Use typed ${make} model` : 'Use typed vehicle model'}
+        customCreateLabel={isSouthAfrica ? null : (make ? `Use typed ${make} model` : 'Use typed vehicle model')}
         onClose={() => setShowModelModal(false)}
-        onCustomCreate={(value) => {
+        onCustomCreate={isSouthAfrica ? null : (value) => {
           setModel(value);
           setShowModelModal(false);
         }}
         onSelect={(value) => {
           setModel(value);
+          const detectedTier = findMatchingVehicleTier(tiers, make, value, year);
+          if (detectedTier?.tierKey) {
+            setSelectedTierKey(detectedTier.tierKey);
+            applyTierDefaults(detectedTier.tierKey, { overwrite: true });
+          } else if (selectedTierKey) {
+            applyTierDefaults(selectedTierKey);
+          }
           setShowModelModal(false);
         }}
       />
@@ -1020,12 +1091,19 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         title="Select Vehicle Year"
         options={isTruckMode
           ? Array.from({ length: Math.max(new Date().getFullYear() - 1990 + 2, 1) }, (_, index) => String(new Date().getFullYear() + 1 - index))
-          : VEHICLE_YEAR_OPTIONS}
+          : isSouthAfrica
+            ? Array.from({ length: Math.max(new Date().getFullYear() - 2012 + 2, 1) }, (_, index) => String(new Date().getFullYear() + 1 - index))
+            : VEHICLE_YEAR_OPTIONS}
         selectedValue={year}
         searchPlaceholder="Search year"
         onClose={() => setShowYearModal(false)}
         onSelect={(value) => {
           setYear(value);
+          const detectedTier = findMatchingVehicleTier(tiers, make, model, value);
+          if (detectedTier?.tierKey) {
+            setSelectedTierKey(detectedTier.tierKey);
+            applyTierDefaults(detectedTier.tierKey, { overwrite: true });
+          }
           setShowYearModal(false);
         }}
       />

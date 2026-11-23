@@ -253,8 +253,10 @@ router.get('/', requireAdminAuth, requirePermission('passengers.read'), async (r
       });
     }
 
-    if (['ZA', 'ZW'].includes(countryCode)) {
-      passengers = passengers.filter((item) => item.registrationCountryCode === countryCode);
+    if (countryCode === 'ZA') {
+      passengers = passengers.filter((item) => item.registrationCountryCode === 'ZA');
+    } else if (countryCode === 'ZW') {
+      passengers = passengers.filter((item) => item.registrationCountryCode !== 'ZA');
     }
 
     if (['active', 'blocked', 'flagged'].includes(status)) {
@@ -362,8 +364,10 @@ async function exportPassengersWorkbook(req, res) {
       });
     }
 
-    if (['ZA', 'ZW'].includes(countryCode)) {
-      passengers = passengers.filter((item) => item.registrationCountryCode === countryCode);
+    if (countryCode === 'ZA') {
+      passengers = passengers.filter((item) => item.registrationCountryCode === 'ZA');
+    } else if (countryCode === 'ZW') {
+      passengers = passengers.filter((item) => item.registrationCountryCode !== 'ZA');
     }
 
     if (['active', 'blocked', 'flagged'].includes(status)) {

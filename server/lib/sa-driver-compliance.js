@@ -17,18 +17,14 @@ export function getSaProfileCompliance(identity, now = new Date()) {
   if (!isSouthAfricanDriver(identity)) return { applies: false, complete: true, active: true, missing: [], expired: [] };
   const requirements = [
     ['Identity document type', identity?.identity_document_type],
-    ['Residential address', identity?.residential_address],
-    ['Proof of address', identity?.proof_of_address_url],
-    ['PrDP number', identity?.prdp_number],
-    ['PrDP document', identity?.prdp_url],
-    ['PrDP expiry date', identity?.prdp_expires_at],
-    ['SAPS criminal-record report', identity?.criminal_record_report_url],
     ['Criminal-investigation declaration', identity?.criminal_declaration_accepted_at],
     ['RICA/ECA declaration', identity?.rica_eca_declaration_accepted_at],
     ['Operator agreement version', identity?.operator_agreement_version],
     ['Operator agreement acceptance', identity?.operator_agreement_accepted_at],
-    ['Electronic signature', identity?.operator_agreement_signature],
     ['Operating-licence condition', identity?.operating_licence_condition_accepted_at],
+    ['PrDP number', identity?.prdp_number],
+    ['PrDP document', identity?.prdp_url],
+    ['PrDP expiration date', identity?.prdp_expires_at],
   ];
   const missing = requirements.filter(([, value]) => !value).map(([label]) => label);
   const expired = [
@@ -40,21 +36,9 @@ export function getSaProfileCompliance(identity, now = new Date()) {
 
 export function getSaVehicleCompliance(vehicle, now = new Date()) {
   if (!vehicle) return { applies: false, complete: true, active: true, missing: [], expired: [] };
-  const requirements = [
-    ['Operating-licence number', vehicle.operating_licence_number],
-    ['Operating-licence document', vehicle.operating_licence_url],
-    ['Operating-licence expiry date', vehicle.operating_licence_expires_at],
-    ['Vehicle first-registration date', vehicle.first_registered_at],
-    ['Operator legal name', vehicle.operator_legal_name],
-    ['Operator business address', vehicle.operator_business_address],
-    ['Panic-device installation proof', vehicle.panic_device_proof_url],
-    ['Left vehicle marking photograph', vehicle.vehicle_marking_left_url],
-    ['Right vehicle marking photograph', vehicle.vehicle_marking_right_url],
-  ];
+  const requirements = [];
   const missing = requirements.filter(([, value]) => !value).map(([label]) => label);
-  const expired = vehicle.operating_licence_expires_at && isExpired(vehicle.operating_licence_expires_at, now)
-    ? ['Operating licence']
-    : [];
+  const expired = [];
   return { applies: true, complete: missing.length === 0, active: missing.length === 0 && expired.length === 0, missing, expired };
 }
 

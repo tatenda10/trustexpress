@@ -14,6 +14,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { cancelRideRequest, getApiUrl, getDirectionsRoute, getPassengerRideRequestStatus, choosePassengerRideCashPayment, initiatePassengerRideSmilePay, reportLostItem, resolveUploadedMediaUrl, sendRidePanicAlert, submitPassengerDriverRating, tipDriver, confirmPassengerPickup, verifyPassengerRideSmilePay } from '../../api';
 import RideRatingTagPicker from '../../components/ride/RideRatingTagPicker';
 import PassengerReceiptCard from '../../components/ride/PassengerReceiptCard';
+import CancellationReasonModal from '../../components/ride/CancellationReasonModal';
 import { downloadReceiptPdf } from '../../services/receiptPrint';
 import { receiptPaymentMethodLabel } from '../../constants/payment';
 import { PRIMARY_BLUE } from '../../constants/colors';
@@ -344,6 +345,8 @@ async function fetchTrackingDirections(token, origin, destination, waypoints = [
     origin: safeOrigin,
     destination: safeDestination,
     waypoints: safeWaypoints,
+    includeTraffic: true,
+    cachePrecision: 3,
     cacheTtlSeconds: LIVE_DIRECTIONS_CACHE_TTL_SECONDS,
   });
   const route = data?.route || {};
@@ -2643,36 +2646,13 @@ export default function PassengerRideTrackingScreen({ navigation, route }) {
         ) : null}
       </View>
 
-      <Modal visible={showCancelReasonModal} transparent animationType="slide">
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setShowCancelReasonModal(false)}
-          className="flex-1 justify-end"
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-            className="rounded-t-2xl bg-white px-5 pt-4"
-            style={{ paddingBottom: Math.max(insets.bottom + 12, 24) }}
-          >
-            <Text className="text-lg font-bold text-gray-900">Why are you cancelling?</Text>
-            <ScrollView className="mt-4 max-h-64" showsVerticalScrollIndicator={false}>
-              {PASSENGER_CANCELLATION_REASONS.map((r) => (
-                <TouchableOpacity
-                  key={r.id}
-                  onPress={() => handleConfirmCancelWithReason(r.label)}
-                  className="border-b border-gray-100 py-4"
-                >
-                  <Text className="text-base font-medium text-gray-900">{r.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <TouchableOpacity onPress={() => setShowCancelReasonModal(false)} className="mt-4 py-3 items-center">
-              <Text className="text-base text-gray-500">Keep ride</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      <CancellationReasonModal
+        visible={showCancelReasonModal}
+        reasons={PASSENGER_CANCELLATION_REASONS}
+        onClose={() => setShowCancelReasonModal(false)}
+        onSubmit={handleConfirmCancelWithReason}
+        keepLabel="Keep ride"
+      />
 
       <Modal visible={showDriverRatingModal} animationType="slide" onRequestClose={handleSkipRating}>
         <SafeAreaView className="flex-1 bg-white" edges={['top', 'bottom', 'left', 'right']}>

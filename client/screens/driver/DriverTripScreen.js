@@ -34,6 +34,7 @@ import {
 } from '../../services/driverBackgroundLocation';
 import { useRideCalls } from '../../calls/CallProvider';
 import CallOptionsSheet from '../../calls/CallOptionsSheet';
+import CancellationReasonModal from '../../components/ride/CancellationReasonModal';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import {
   DriverTripEmptyState,
@@ -380,6 +381,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const [loading, setLoading] = useState(() => !initialRide);
   const [submitting, setSubmitting] = useState(false);
   const [cancellingRide, setCancellingRide] = useState(false);
+  const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [voiceGuidanceEnabled, setVoiceGuidanceEnabled] = useState(true);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
@@ -1249,52 +1251,37 @@ export default function DriverTripScreen({ navigation, route }) {
 
   const handleCancelRide = useCallback(() => {
     if (!ride?.id || cancellingRide || submitting) return;
+    setShowCancelReasonModal(true);
+  }, [cancellingRide, ride?.id, submitting]);
 
-    const preferredReasons = [
-      DRIVER_CANCELLATION_REASONS.find((item) => item.id === 'passenger_no_show')?.label,
-      DRIVER_CANCELLATION_REASONS.find((item) => item.id === 'safety_concern')?.label,
-      DRIVER_CANCELLATION_REASONS.find((item) => item.id === 'other')?.label,
-    ].filter(Boolean);
-
-    Alert.alert(
-      'Cancel ride',
-      'Are you sure you want to cancel this ride?',
-      [
-        { text: 'Keep ride', style: 'cancel' },
-        ...preferredReasons.slice(0, 2).map((reasonLabel) => ({
-          text: reasonLabel,
-          onPress: async () => {
-            try {
-              setCancellingRide(true);
-              const token = await getTokenRef.current();
-              if (!token) throw new Error('Not signed in');
-              await cancelDriverCurrentRide(token, ride.id, reasonLabel);
-              stopDriverVoice();
-              setRouteCoordinates([]);
-              setRouteDistanceMeters(0);
-              setRouteDurationSeconds(0);
-              setNextInstruction('');
-              setRide(null);
-              setRealtimeSignal((current) => current + 1);
-              clearRideRequestNotifications().catch(() => {});
-              Alert.alert('Ride cancelled', 'The ride has been cancelled.');
-              const parentNavigator = navigation.getParent?.();
-              if (parentNavigator) {
-                parentNavigator.navigate('DriverAccount', {
-                  screen: 'DriverIncomeStack',
-                });
-              }
-              else navigation.goBack();
-            } catch (error) {
-              Alert.alert('Cancel ride failed', error?.message || 'Could not cancel this ride.');
-            } finally {
-              setCancellingRide(false);
-            }
-          },
-          style: 'destructive',
-        })),
-      ],
-    );
+  const handleConfirmCancelWithReason = useCallback(async (reasonLabel) => {
+    if (!ride?.id || cancellingRide || submitting || !reasonLabel) return;
+    setShowCancelReasonModal(false);
+    try {
+      setCancellingRide(true);
+      const token = await getTokenRef.current();
+      if (!token) throw new Error('Not signed in');
+      await cancelDriverCurrentRide(token, ride.id, reasonLabel);
+      stopDriverVoice();
+      setRouteCoordinates([]);
+      setRouteDistanceMeters(0);
+      setRouteDurationSeconds(0);
+      setNextInstruction('');
+      setRide(null);
+      setRealtimeSignal((current) => current + 1);
+      clearRideRequestNotifications().catch(() => {});
+      Alert.alert('Ride cancelled', 'The ride has been cancelled.');
+      const parentNavigator = navigation.getParent?.();
+      if (parentNavigator) {
+        parentNavigator.navigate('DriverAccount', { screen: 'DriverIncomeStack' });
+      } else {
+        navigation.goBack();
+      }
+    } catch (error) {
+      Alert.alert('Cancel ride failed', error?.message || 'Could not cancel this ride.');
+    } finally {
+      setCancellingRide(false);
+    }
   }, [cancellingRide, navigation, ride?.id, stopDriverVoice, submitting]);
 
   const handleCompleteRide = async () => {
@@ -1958,6 +1945,15 @@ export default function DriverTripScreen({ navigation, route }) {
         </View>
       </KeyboardAvoidingView>
     </Modal>
+    <CancellationReasonModal
+      visible={showCancelReasonModal}
+      reasons={DRIVER_CANCELLATION_REASONS}
+      onClose={() => setShowCancelReasonModal(false)}
+      onSubmit={handleConfirmCancelWithReason}
+      submitting={cancellingRide}
+      subtitle="The passenger will be notified."
+      keepLabel="Keep ride"
+    />
     <CallOptionsSheet
       visible={showCallOptions}
       onClose={() => setShowCallOptions(false)}

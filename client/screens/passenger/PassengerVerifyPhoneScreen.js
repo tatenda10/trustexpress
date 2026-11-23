@@ -11,34 +11,35 @@ import {
   Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '../../auth/AuthProvider';
+import { useAuth, useUser } from '../../auth/AuthProvider';
 import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import {
-  INVALID_LOCAL_PHONE_MESSAGE,
-  isValidLocalPhoneNumber,
-  normalizeZimbabwePhoneNumber,
-  sanitizeLocalPhoneInput,
+  isValidPhoneNumber,
+  normalizePhoneNumber,
+  sanitizePhoneInput,
 } from '../../utils/phoneNumber';
 
-const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = null }) => {
+const PassengerVerifyPhoneScreen = ({ navigation, route, onVerified, nextRouteName = null }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const { user } = useUser();
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
+  const countryCode = String(route?.params?.registrationCountryCode || user?.registrationCountryCode || '').toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
 
-  const canSend = isValidLocalPhoneNumber(phone);
+  const canSend = isValidPhoneNumber(phone, countryCode);
   const handleVerify = async () => {
-    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    const phoneResult = normalizePhoneNumber(phone, countryCode);
     if (!phoneResult.ok) {
-      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
+      Alert.alert('Invalid number', phoneResult.error || 'Enter a valid mobile number.');
       return;
     }
     setLoading(true);
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, phoneResult.e164Phone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone, countryCode);
       Alert.alert('Phone saved', 'Your phone number has been saved on your account.', [
         {
           text: 'Continue',
@@ -83,21 +84,23 @@ const PassengerVerifyPhoneScreen = ({ navigation, onVerified, nextRouteName = nu
       >
         <Text className="mt-8 text-3xl font-bold text-gray-900">Add your phone number</Text>
         <Text className="mt-3 text-base leading-7 text-gray-500">
-          Add your Zimbabwe mobile number for ride updates and account security.
+          Add your {countryCode === 'ZA' ? 'South African' : 'Zimbabwean'} mobile number for ride updates and account security.
         </Text>
 
         <Text className="mb-2 mt-8 text-sm font-medium text-gray-700">Phone number</Text>
         <TextInput
           className="rounded-xl border border-gray-200 px-4 py-3 text-base text-gray-900"
-          placeholder="0771234567"
+          placeholder={countryCode === 'ZA' ? '+27712345678' : '0771234567'}
           placeholderTextColor="#9ca3af"
           value={phone}
-          onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
+          onChangeText={(value) => setPhone(sanitizePhoneInput(value, countryCode))}
           keyboardType="phone-pad"
-          maxLength={10}
+          maxLength={countryCode === 'ZA' ? 12 : 10}
           editable={!loading}
         />
-        <Text className="mt-2 text-xs text-gray-500">10 digits starting with 07.</Text>
+        {countryCode !== 'ZA' ? (
+          <Text className="mt-2 text-xs text-gray-500">10 digits starting with 07.</Text>
+        ) : null}
       </ScrollView>
 
       <View

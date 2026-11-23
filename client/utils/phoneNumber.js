@@ -9,6 +9,13 @@ export function sanitizeLocalPhoneInput(value) {
   return String(value || '').replace(/\D/g, '').slice(0, LOCAL_PHONE_LENGTH);
 }
 
+export function sanitizePhoneInput(value, countryCode = 'ZW') {
+  if (String(countryCode || '').toUpperCase() !== 'ZA') return sanitizeLocalPhoneInput(value);
+  const raw = String(value || '').trim();
+  const digits = raw.replace(/\D/g, '').slice(0, 11);
+  return raw.startsWith('+') && digits.startsWith('27') ? `+${digits}` : digits;
+}
+
 export function toLocalPhoneDigits(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (LOCAL_PHONE_REGEX.test(digits)) return digits;
@@ -62,6 +69,10 @@ export function normalizePhoneNumber(value, countryCode = 'ZW') {
   return String(countryCode || '').toUpperCase() === 'ZA'
     ? normalizeSouthAfricaPhoneNumber(value)
     : normalizeZimbabwePhoneNumber(value);
+}
+
+export function isValidPhoneNumber(value, countryCode = 'ZW') {
+  return normalizePhoneNumber(value, countryCode).ok;
 }
 
 export function e164ToLocalPhone(value) {

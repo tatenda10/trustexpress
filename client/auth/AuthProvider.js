@@ -195,6 +195,7 @@ export function useUser() {
       primaryPhoneNumber: rawUser.phoneNumber ? { phoneNumber: rawUser.phoneNumber, verified: rawUser.phoneVerified } : null,
       passwordEnabled: Boolean(rawUser.hasPassword),
       role: rawUser.role,
+      registrationCountryCode: rawUser.registrationCountryCode || null,
       update: async ({ firstName, lastName } = {}) => {
         const token = await getToken();
         await apiFetch('/api/users/me', { method: 'PATCH', body: JSON.stringify({ firstName, lastName }) }, token);

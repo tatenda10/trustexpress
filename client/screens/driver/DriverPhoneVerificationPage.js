@@ -17,10 +17,9 @@ import { confirmPhoneVerification } from '../../api';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import {
-  INVALID_LOCAL_PHONE_MESSAGE,
-  isValidLocalPhoneNumber,
-  normalizeZimbabwePhoneNumber,
-  sanitizeLocalPhoneInput,
+  isValidPhoneNumber,
+  normalizePhoneNumber,
+  sanitizePhoneInput,
 } from '../../utils/phoneNumber';
 
 const DriverPhoneVerificationPage = ({ navigation, route }) => {
@@ -29,16 +28,17 @@ const DriverPhoneVerificationPage = ({ navigation, route }) => {
   const { driverStatus: contextDriverStatus, refetchDriverStatus } = useDriverStatus();
   const driverStatus = contextDriverStatus ?? route.params?.driverStatus ?? null;
   const phoneVerified = driverStatus?.phoneVerified === true;
+  const countryCode = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
 
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const canSend = isValidLocalPhoneNumber(phone);
+  const canSend = isValidPhoneNumber(phone, countryCode);
 
   const handleVerify = async () => {
-    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    const phoneResult = normalizePhoneNumber(phone, countryCode);
     if (!phoneResult.ok) {
-      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
+      Alert.alert('Invalid number', phoneResult.error || 'Enter a valid mobile number.');
       return;
     }
 
@@ -46,7 +46,7 @@ const DriverPhoneVerificationPage = ({ navigation, route }) => {
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, phoneResult.e164Phone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone, countryCode);
       await refetchDriverStatus?.();
       Alert.alert('Phone verified', 'Your phone number was verified successfully.', [
         { text: 'OK', onPress: () => navigation.goBack() },
@@ -104,16 +104,18 @@ const DriverPhoneVerificationPage = ({ navigation, route }) => {
             <Text className="mb-2 text-sm font-medium text-gray-700">Phone number</Text>
             <TextInput
               className="mb-1 rounded-xl border border-gray-200 bg-white px-4 py-3 text-base text-gray-900"
-              placeholder="0771234567"
+              placeholder={countryCode === 'ZA' ? '+27712345678' : '0771234567'}
               placeholderTextColor="#9ca3af"
               value={phone}
-              onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
+              onChangeText={(value) => setPhone(sanitizePhoneInput(value, countryCode))}
               keyboardType="phone-pad"
-              maxLength={10}
+              maxLength={countryCode === 'ZA' ? 12 : 10}
               autoCapitalize="none"
               editable={!submitting}
             />
-            <Text className="mb-4 text-xs text-gray-500">10 digits starting with 07.</Text>
+            {countryCode !== 'ZA' ? (
+              <Text className="mb-4 text-xs text-gray-500">10 digits starting with 07.</Text>
+            ) : null}
 
             <TouchableOpacity
               className="items-center justify-center rounded-[16px] py-4"

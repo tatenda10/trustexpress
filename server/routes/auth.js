@@ -8,6 +8,7 @@ import {
   checkPassword,
   createUser,
   findUserByEmail,
+  findUserByEmailAnyRole,
   findUserById,
   findUserByPhone,
   hashPassword,
@@ -32,6 +33,15 @@ import {
 
 const router = Router();
 const PHONE_SIGNUP_TOKEN_TTL_SECONDS = 15 * 60;
+
+function canBypassEmailVerification(email) {
+  if (String(process.env.AUTH_DEMO_EMAIL_BYPASS_ENABLED || '').trim().toLowerCase() !== 'true') return false;
+  const allowedEmails = String(process.env.AUTH_DEMO_EMAIL_BYPASS_ALLOWLIST || '')
+    .split(',')
+    .map((value) => normalizeEmail(value))
+    .filter(Boolean);
+  return allowedEmails.includes(normalizeEmail(email));
+}
 
 function getClientIp(req) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
@@ -133,10 +143,11 @@ router.post('/phone/complete-sign-up', async (req, res) => {
     if (existing) {
       return res.json({ ok: true, status: 'signed_in', ...(await startSession(req, existing)) });
     }
-    if (email && await findUserByEmail(email, claims.role)) {
-      throw Object.assign(new Error('That email already has an account. Sign in with email instead.'), {
+    const existingEmailAccount = email ? await findUserByEmailAnyRole(email) : null;
+    if (existingEmailAccount) {
+      throw Object.assign(new Error(`That email is already registered as a ${existingEmailAccount.role}. Use a different email address.`), {
         status: 409,
-        code: 'EMAIL_IN_USE',
+        code: 'EMAIL_IN_USE_OTHER_ACCOUNT',
       });
     }
 
@@ -170,6 +181,13 @@ router.post('/email/sign-up', async (req, res) => {
     if (!firstName) throw badRequest('Enter your first name.');
 
     const existing = await findUserByEmail(email, role);
+    const existingOtherRole = await findUserByEmailAnyRole(email, existing?.id || null);
+    if (existingOtherRole) {
+      throw Object.assign(new Error(`That email is already registered as a ${existingOtherRole.role}. Use a different email address.`), {
+        status: 409,
+        code: 'EMAIL_IN_USE_OTHER_ACCOUNT',
+      });
+    }
     if (existing?.email_verified_at) {
       throw Object.assign(new Error('That email already has an account. Please sign in.'), {
         status: 409,
@@ -183,6 +201,19 @@ router.post('/email/sign-up', async (req, res) => {
       await setUserPassword(existing.id, passwordHash);
     } else {
       await createUser({ role, email, firstName, lastName, passwordHash, registrationCountryCode: countryCode });
+    }
+
+    if (canBypassEmailVerification(email)) {
+      const demoUser = await findUserByEmail(email, role);
+      if (!demoUser) throw Object.assign(new Error('Demo account could not be loaded.'), { status: 500 });
+      await markEmailVerified(demoUser.id);
+      console.warn('[auth] demo email verification bypass used', { email, role });
+      return res.status(201).json({
+        ok: true,
+        status: 'signed_in',
+        demoEmailBypass: true,
+        ...(await startSession(req, await findUserById(demoUser.id))),
+      });
     }
 
     const result = await sendCode({ purpose: 'verify_email', channel: 'email', destination: email, role, ipAddress: getClientIp(req) });

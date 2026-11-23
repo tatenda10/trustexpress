@@ -125,7 +125,7 @@ function resolveDriversTab(value) {
   return tabs.some((item) => item.key === tab) ? tab : 'all'
 }
 
-export default function DriversPage() {
+export default function DriversPage({ countryCode = 'ZW' }) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { token } = useAuth()
@@ -144,6 +144,8 @@ export default function DriversPage() {
   const [onlineSummary, setOnlineSummary] = useState(null)
   const [onlineRefreshedAt, setOnlineRefreshedAt] = useState(null)
   const isOnlineTab = activeTab === 'online'
+  const marketName = countryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'
+  const marketPath = countryCode === 'ZA' ? 'sa' : 'zim'
 
   useEffect(() => {
     const nextTab = resolveDriversTab(searchParams.get('tab'))
@@ -177,6 +179,7 @@ export default function DriversPage() {
           },
           params: {
             search: search || undefined,
+            countryCode,
           },
         })
 
@@ -199,6 +202,7 @@ export default function DriversPage() {
           sortOrder,
           page,
           pageSize,
+          countryCode,
         },
       })
 
@@ -220,7 +224,7 @@ export default function DriversPage() {
   useEffect(() => {
     loadDrivers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeTab, search, sortBy, sortOrder, page, pageSize])
+  }, [token, activeTab, search, sortBy, sortOrder, page, pageSize, countryCode])
 
   useEffect(() => {
     if (!isOnlineTab || !token) return undefined
@@ -231,7 +235,7 @@ export default function DriversPage() {
 
     return () => window.clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnlineTab, token, search])
+  }, [isOnlineTab, token, search, countryCode])
 
   const rows = useMemo(() => drivers, [drivers])
   const approvedCount = useMemo(() => rows.filter((driver) => driver.profile?.status === 'approved').length, [rows])
@@ -272,6 +276,7 @@ export default function DriversPage() {
         params: {
           verificationStatus: activeTab,
           search: search || undefined,
+          countryCode,
         },
         responseType: 'blob',
       })
@@ -283,7 +288,7 @@ export default function DriversPage() {
       )
       const anchor = document.createElement('a')
       anchor.href = blobUrl
-      anchor.download = `drivers_export_${Date.now()}.xlsx`
+      anchor.download = `${countryCode.toLowerCase()}_drivers_export_${Date.now()}.xlsx`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -297,11 +302,11 @@ export default function DriversPage() {
   return (
     <section className="space-y-3">
       <div className="border border-slate-300 bg-white px-4 py-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Users / Drivers</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Users / {marketName} / Drivers</p>
         <div className="mt-1 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-slate-900">Drivers</h1>
-            <p className="text-xs text-slate-500">Manage driver accounts, verification progress, and vehicle onboarding.</p>
+            <h1 className="text-xl font-semibold text-slate-900">{marketName} Drivers</h1>
+            <p className="text-xs text-slate-500">Manage only {marketName} driver accounts, verification progress, and vehicle onboarding.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
@@ -540,7 +545,7 @@ export default function DriversPage() {
                       <div className="flex justify-end gap-3">
                         <button
                           type="button"
-                          onClick={() => navigate(`/dashboard/drivers/${driver.id}`, { state: { driver } })}
+                          onClick={() => navigate(`/dashboard/drivers/${driver.id}`, { state: { driver, returnTo: `/dashboard/drivers/${marketPath}` } })}
                           className="text-slate-700 transition hover:text-indigo-600"
                           title="View"
                         >

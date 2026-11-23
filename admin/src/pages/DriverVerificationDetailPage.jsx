@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../authcontext/AuthContext'
@@ -26,6 +26,7 @@ function AssessmentBadge({ passed, children }) {
 function requiredDocumentEntries(driver) {
   const profileDocs = driver?.profileDocs || {}
   const vehicleDocs = driver?.vehicleDocs || {}
+  const usesPassport = profileDocs.identityDocumentType === 'passport'
   const rawCarPhotoSources = [
     vehicleDocs.carPhotoFrontUrl,
     vehicleDocs.carPhotoRearUrl,
@@ -40,26 +41,36 @@ function requiredDocumentEntries(driver) {
 
   return {
     identity: [
-      { key: 'national-id-front', label: 'National ID Front', url: resolveMediaUrl(profileDocs.nationalIdFrontUrl) },
-      { key: 'national-id-back', label: 'National ID Back', url: resolveMediaUrl(profileDocs.nationalIdBackUrl) },
+      { key: 'national-id-front', label: usesPassport ? 'Passport Bio Page' : 'National ID Front', url: resolveMediaUrl(profileDocs.nationalIdFrontUrl) },
+      ...(usesPassport ? [] : [{ key: 'national-id-back', label: 'National ID Back', url: resolveMediaUrl(profileDocs.nationalIdBackUrl) }]),
       { key: 'driver-licence', label: 'Driver License', url: resolveMediaUrl(profileDocs.driverLicenceUrl) },
       { key: 'selfie', label: 'Selfie', url: resolveMediaUrl(profileDocs.selfieUrl) },
-      { key: 'selfie-with-id', label: 'Selfie with National ID', url: resolveMediaUrl(profileDocs.selfieWithIdCardUrl) },
+      { key: 'selfie-with-id', label: usesPassport ? 'Selfie with Passport' : 'Selfie with National ID', url: resolveMediaUrl(profileDocs.selfieWithIdCardUrl) },
       ...(profileDocs.registrationCountryCode === 'ZA' ? [
-        { key: 'proof-of-address', label: 'Proof of Address', url: resolveMediaUrl(profileDocs.proofOfAddressUrl) },
+        { key: 'proof-of-address', label: 'Proof of Address (Optional)', url: resolveMediaUrl(profileDocs.proofOfAddressUrl), required: false },
         { key: 'prdp', label: 'PrDP', url: resolveMediaUrl(profileDocs.prdpUrl) },
-        { key: 'criminal-record', label: 'SAPS Criminal-record Report', url: resolveMediaUrl(profileDocs.criminalRecordReportUrl) },
+        { key: 'criminal-record', label: 'SAPS Criminal-record Report (Optional)', url: resolveMediaUrl(profileDocs.criminalRecordReportUrl), required: false },
       ] : []),
     ],
     vehicle: [
-      { key: 'vehicle-registration', label: 'Vehicle Registration', url: resolveMediaUrl(vehicleDocs.vehicleRegistrationUrl || vehicleDocs.vehicleRegistrationBookUrl) },
-      { key: 'insurance', label: 'Insurance', url: resolveMediaUrl(vehicleDocs.insuranceUrl) },
-      { key: 'zinara', label: 'Zinara', url: resolveMediaUrl(vehicleDocs.zinaraUrl) },
+      {
+        key: 'vehicle-registration',
+        label: profileDocs.registrationCountryCode === 'ZA' ? 'Registration Disc (Optional)' : 'Vehicle Registration',
+        url: resolveMediaUrl(vehicleDocs.vehicleRegistrationUrl || vehicleDocs.vehicleRegistrationBookUrl),
+        required: profileDocs.registrationCountryCode !== 'ZA',
+      },
+      {
+        key: 'insurance',
+        label: profileDocs.registrationCountryCode === 'ZA' ? 'Insurance (Optional)' : 'Insurance',
+        url: resolveMediaUrl(vehicleDocs.insuranceUrl),
+        required: profileDocs.registrationCountryCode !== 'ZA',
+      },
+      ...(profileDocs.registrationCountryCode !== 'ZA' ? [
+        { key: 'zinara', label: 'Zinara', url: resolveMediaUrl(vehicleDocs.zinaraUrl) },
+      ] : []),
       ...(profileDocs.registrationCountryCode === 'ZA' ? [
-        { key: 'operating-licence', label: 'Operating Licence', url: resolveMediaUrl(vehicleDocs.operatingLicenceUrl) },
-        { key: 'panic-device', label: 'Panic-device Installation Proof', url: resolveMediaUrl(vehicleDocs.panicDeviceProofUrl) },
-        { key: 'vehicle-marking-left', label: 'Vehicle Marking (Left)', url: resolveMediaUrl(vehicleDocs.vehicleMarkingLeftUrl) },
-        { key: 'vehicle-marking-right', label: 'Vehicle Marking (Right)', url: resolveMediaUrl(vehicleDocs.vehicleMarkingRightUrl) },
+        { key: 'operating-licence', label: 'Operating Licence (Optional)', url: resolveMediaUrl(vehicleDocs.operatingLicenceUrl), required: false },
+        { key: 'panic-device', label: 'Panic-device Installation Proof (Optional)', url: resolveMediaUrl(vehicleDocs.panicDeviceProofUrl), required: false },
       ] : []),
     ],
     carPhotos: uniqueRawCarPhotos.map((rawUrl, index) => ({
@@ -80,19 +91,16 @@ function getDocumentKind(url) {
 }
 
 function DocumentPreview({ url, label }) {
-  if (!url) {
-    return <div className="px-3 py-6 text-sm text-slate-500">No file uploaded yet.</div>
-  }
-
+  const [previewState, setPreviewState] = useState({ url: null, index: 0 })
   const kind = getDocumentKind(url)
   const candidates = resolveMediaCandidates(url)
-  const [activeUrlIndex, setActiveUrlIndex] = useState(0)
+  const activeUrlIndex = previewState.url === url ? previewState.index : 0
   const activeUrl = candidates[activeUrlIndex] || url
   const fallbackOpenUrl = candidates[candidates.length - 1] || url
 
-  useEffect(() => {
-    setActiveUrlIndex(0)
-  }, [url])
+  if (!url) {
+    return <div className="px-3 py-6 text-sm text-slate-500">No file uploaded yet.</div>
+  }
 
   if (kind === 'image') {
     return (
@@ -103,9 +111,10 @@ function DocumentPreview({ url, label }) {
             alt={label}
             className="h-64 w-full object-contain bg-slate-100"
             onError={() => {
-              setActiveUrlIndex((current) => {
-                if (current >= candidates.length - 1) return current
-                return current + 1
+              setPreviewState((current) => {
+                const currentIndex = current.url === url ? current.index : 0
+                if (currentIndex >= candidates.length - 1) return { url, index: currentIndex }
+                return { url, index: currentIndex + 1 }
               })
             }}
           />
@@ -208,7 +217,7 @@ export default function DriverVerificationDetailPage() {
   const [customRejectReason, setCustomRejectReason] = useState('')
   const [headerImageUrlIndex, setHeaderImageUrlIndex] = useState(0)
 
-  const loadDriver = async () => {
+  const loadDriver = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
@@ -224,11 +233,11 @@ export default function DriverVerificationDetailPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [driverId, token])
 
   useEffect(() => {
     loadDriver()
-  }, [driverId, token])
+  }, [loadDriver])
 
   useEffect(() => {
     let active = true
@@ -257,6 +266,7 @@ export default function DriverVerificationDetailPage() {
 
   const documentGroups = useMemo(() => requiredDocumentEntries(driver), [driver])
   const profileDocs = driver?.profileDocs || {}
+  const vehicleDocs = driver?.vehicleDocs || {}
   const identityDocuments = documentGroups.identity
   const vehicleDocuments = documentGroups.vehicle
   const hasProfileDocuments = identityDocuments.some((doc) => !!doc.url)
@@ -324,8 +334,8 @@ export default function DriverVerificationDetailPage() {
       : driver?.profile?.submittedAt
   const submittedAtLabel = formatAdminDateTime(submittedAt)
   const canReview = admin?.role === 'super_admin' || can('verification.review')
-  const missingIdentityCount = identityDocuments.filter((doc) => !doc.url).length
-  const missingVehicleCount = vehicleDocuments.filter((doc) => !doc.url).length + (documentGroups.carPhotos.length === 0 ? 1 : 0)
+  const missingIdentityCount = identityDocuments.filter((doc) => doc.required !== false && !doc.url).length
+  const missingVehicleCount = vehicleDocuments.filter((doc) => doc.required !== false && !doc.url).length + (documentGroups.carPhotos.length === 0 ? 1 : 0)
   const missingDocumentCount = missingIdentityCount + missingVehicleCount
   // Allow approve when docs exist but status isn't approved (fix drivers approved before Clerk fix / re-sync)
   const canApproveProfile = canReview && !!driver?.profile && !!hasProfileDocuments && missingIdentityCount === 0 && driver.profile.status !== 'approved'
@@ -601,7 +611,7 @@ export default function DriverVerificationDetailPage() {
               <Field label="Email" value={driver.email || '-'} />
               <Field label="Submitted At" value={submittedAtLabel} />
               <Field label="Current Status" value={verificationStatusLabel} />
-              <Field label="National ID Number" value={profileDocs.nationalIdNumber || '-'} />
+              <Field label={profileDocs.identityDocumentType === 'passport' ? 'Passport Number' : 'National ID Number'} value={profileDocs.nationalIdNumber || '-'} />
               <Field label="Driver Licence Number" value={profileDocs.driverLicenceNumber || '-'} />
               <Field label="Licence Expiration" value={formatAdminDate(profileDocs.driverLicenceExpiresAt)} />
               <Field label="Date of Birth" value={formatAdminDate(profileDocs.dateOfBirth || driver.profile?.dateOfBirth)} />
@@ -693,20 +703,17 @@ export default function DriverVerificationDetailPage() {
               <h3 className="text-sm font-semibold text-indigo-900">SA Compliance Checklist</h3>
               <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                 <Field label="Identity Type" value={profileDocs.identityDocumentType} />
-                <Field label="Residential Address" value={profileDocs.residentialAddress} />
-                <Field label="PrDP Number" value={profileDocs.prdpNumber} />
+                <Field label="Residential Address (Optional)" value={profileDocs.residentialAddress} />
+                <Field label="PrDP Number (Optional)" value={profileDocs.prdpNumber} />
                 <Field label="PrDP Expiry" value={formatAdminDate(profileDocs.prdpExpiresAt)} />
                 <Field label="Criminal Declaration" value={profileDocs.criminalDeclarationAcceptedAt ? 'Accepted' : 'Missing'} />
                 <Field label="RICA/ECA Declaration" value={profileDocs.ricaEcaDeclarationAcceptedAt ? 'Accepted' : 'Missing'} />
                 <Field label="Agreement Version" value={profileDocs.operatorAgreementVersion} />
                 <Field label="Agreement Accepted" value={profileDocs.operatorAgreementAcceptedAt ? 'Yes' : 'Missing'} />
-                <Field label="Electronic Signature" value={profileDocs.operatorAgreementSignature} />
                 <Field label="Operating Licence Condition" value={profileDocs.operatingLicenceConditionAcceptedAt ? 'Accepted' : 'Missing'} />
-                <Field label="Operating Licence Number" value={vehicleDocs.operatingLicenceNumber} />
-                <Field label="Operating Licence Expiry" value={formatAdminDate(vehicleDocs.operatingLicenceExpiresAt)} />
+                <Field label="Operating Licence Number (Optional)" value={vehicleDocs.operatingLicenceNumber} />
+                <Field label="Operating Licence Expiry (Optional)" value={formatAdminDate(vehicleDocs.operatingLicenceExpiresAt)} />
                 <Field label="First Registration" value={formatAdminDate(vehicleDocs.firstRegisteredAt)} />
-                <Field label="Operator Legal Name" value={vehicleDocs.operatorLegalName} />
-                <Field label="Operator Business Address" value={vehicleDocs.operatorBusinessAddress} />
               </div>
             </div>
           ) : null}

@@ -37,6 +37,7 @@ export default function PassengerDetailsPage() {
   const [loading, setLoading] = useState(false)
   const [warning, setWarning] = useState('')
   const [passenger, setPassenger] = useState(location.state?.passenger || null)
+  const returnTo = location.state?.returnTo || (passenger?.registrationCountryCode === 'ZA' ? '/dashboard/passengers/sa' : '/dashboard/passengers/zim')
   const [reviewing, setReviewing] = useState(false)
   const [referralSummary, setReferralSummary] = useState(null)
 
@@ -365,7 +366,7 @@ export default function PassengerDetailsPage() {
         </section>
       ) : null}
 
-      <Link to="/dashboard/passengers" className="inline-block text-sm font-semibold text-indigo-700 hover:text-indigo-500">
+      <Link to={returnTo} className="inline-block text-sm font-semibold text-indigo-700 hover:text-indigo-500">
         Back to passengers
       </Link>
     </section>

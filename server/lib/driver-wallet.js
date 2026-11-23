@@ -33,6 +33,35 @@ function buildWalletError(message, status = 400) {
   return error;
 }
 
+async function getDriverMarketWalletSettings(driverUserId, baseSettings = null) {
+  const settings = baseSettings || await getDriverWalletSettings();
+  const [marketRow] = await query(
+    `SELECT COALESCE(di.registration_country_code, u.registration_country_code) AS country_code
+     FROM users u
+     LEFT JOIN driver_identity di ON di.driver_user_id = u.clerk_user_id
+     WHERE u.clerk_user_id = ?
+     LIMIT 1`,
+    [driverUserId]
+  ).catch(() => []);
+  const countryCode = String(marketRow?.country_code || 'ZW').trim().toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
+  if (countryCode === 'ZA') {
+    return {
+      ...settings,
+      countryCode,
+      currency: 'ZAR',
+      paymentProvider: 'smilepay',
+      supportsSmileCash: false,
+      supportsEcoCash: false,
+    };
+  }
+  return {
+    ...settings,
+    countryCode,
+    supportsSmileCash: true,
+    supportsEcoCash: true,
+  };
+}
+
 function makeReference(driverUserId) {
   const rawId = String(driverUserId || 'driver').replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'driver';
   return `dw_${rawId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -100,6 +129,9 @@ function mapWalletStatus(walletRow, settings) {
     walletEnabled,
     paymentsEnabled,
     paymentProvider: normalizePaymentProvider(settings?.paymentProvider, 'paystack'),
+    countryCode: settings?.countryCode || 'ZW',
+    supportsSmileCash: settings?.supportsSmileCash !== false,
+    supportsEcoCash: settings?.supportsEcoCash !== false,
     paymentsUnavailableMessage: paymentsEnabled ? '' : PAYMENTS_UNAVAILABLE_MESSAGE,
     sufficientBalance,
     lowBalanceMessage: sufficientBalance ? '' : LOW_BALANCE_MESSAGE,
@@ -134,10 +166,11 @@ async function getDriverWithdrawableBalance(driverUserId, connection = null) {
 }
 
 export async function getDriverWalletStatus(driverUserId) {
-  const [wallet, settings] = await Promise.all([
+  const [wallet, baseSettings] = await Promise.all([
     ensureDriverWallet(driverUserId),
     getDriverWalletSettings(),
   ]);
+  const settings = await getDriverMarketWalletSettings(driverUserId, baseSettings);
   return mapWalletStatus(wallet, settings);
 }
 
@@ -267,10 +300,11 @@ async function abandonStalePendingTopups(driverUserId = null) {
 export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}) {
   await abandonStalePendingTopups(driverUserId);
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
-  const [wallet, settings] = await Promise.all([
+  const [wallet, baseSettings] = await Promise.all([
     ensureDriverWallet(driverUserId),
     getDriverWalletSettings(),
   ]);
+  const settings = await getDriverMarketWalletSettings(driverUserId, baseSettings);
   const [summaryRow] = await query(
     `SELECT
        COALESCE(SUM(CASE WHEN transaction_type = 'top_up_credit' THEN amount ELSE 0 END), 0) AS total_topups,
@@ -322,6 +356,10 @@ export async function getDriverWalletDashboard(driverUserId, { limit = 50 } = {}
       walletEnabled: settings.walletEnabled !== false,
       paymentsEnabled: settings.paymentsEnabled === true,
       paymentProvider: normalizePaymentProvider(settings.paymentProvider, 'paystack'),
+      currency: settings.currency || DRIVER_WALLET_CURRENCY,
+      countryCode: settings.countryCode || 'ZW',
+      supportsSmileCash: settings.supportsSmileCash !== false,
+      supportsEcoCash: settings.supportsEcoCash !== false,
       paymentsUnavailableMessage: settings.paymentsEnabled === true ? '' : PAYMENTS_UNAVAILABLE_MESSAGE,
     },
     summary: {
@@ -344,7 +382,7 @@ export async function initializeDriverWalletTopup({
   checkoutMode = null,
   cardDetails = null,
 }) {
-  const settings = await getDriverWalletSettings();
+  const settings = await getDriverMarketWalletSettings(driverUserId);
   if (settings.paymentsEnabled !== true) {
     const error = buildWalletError(PAYMENTS_UNAVAILABLE_MESSAGE, 403);
     error.code = 'DRIVER_WALLET_PAYMENTS_DISABLED';
@@ -577,7 +615,7 @@ async function applyVerifiedTopupCredit({
 }
 
 export async function verifyDriverWalletTopup(driverUserId, reference) {
-  const settings = await getDriverWalletSettings();
+  const settings = await getDriverMarketWalletSettings(driverUserId);
   const currency = settings.currency || DRIVER_WALLET_CURRENCY;
   const safeReference = String(reference || '').trim();
   if (!safeReference) {
@@ -838,6 +876,10 @@ export async function cashOutDriverWallet({
   amount = null,
   narration = 'Trust Express wallet cash out',
 } = {}) {
+  const settings = await getDriverMarketWalletSettings(driverUserId);
+  if (settings.supportsSmileCash === false) {
+    throw buildWalletError('SmileCash cash-outs are not available for South African accounts.', 403);
+  }
   const requestedAmount = amount == null ? null : normalizeMoney(amount);
   if (requestedAmount !== null && !(requestedAmount > 0)) {
     throw buildWalletError('Cash-out amount must be greater than zero');
@@ -861,7 +903,6 @@ export async function cashOutDriverWallet({
     );
   }
 
-  const settings = await getDriverWalletSettings();
   const currency = String(settings.currency || DRIVER_WALLET_CURRENCY || 'USD').toUpperCase();
   const publicId = createSmileCashPayoutPublicId();
 
@@ -1115,7 +1156,7 @@ export async function deductCommissionForCompletedRide({
   passengerUserId = null,
   passengerName = null,
 }) {
-  const settings = await getDriverWalletSettings();
+  const settings = await getDriverMarketWalletSettings(driverUserId);
   const currency = settings.currency || DRIVER_WALLET_CURRENCY;
   const commissionRatePercent = Number(settings.commissionRatePercent || 9.5);
   const commissionRate = commissionRatePercent / 100;

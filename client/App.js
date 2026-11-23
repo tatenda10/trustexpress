@@ -122,7 +122,7 @@ import {
   DRIVER_SKIP_ONBOARDING_KEY,
 } from './screens/driver/DriverUploadDocumentsScreen';
 import { DRIVER_SKIP_PHONE_VERIFY_KEY } from './screens/driver/DriverVerifyPhoneScreen';
-import { clearPendingDriverKind, getDriverVehicleRoute, mergePendingDriverKind, normalizeDriverKind, readPendingDriverKind } from './constants/driverKind';
+import { clearPendingDriverKind, DRIVER_KIND_STANDARD, getDriverVehicleRoute, mergePendingDriverKind, normalizeDriverKind, readPendingDriverKind } from './constants/driverKind';
 
 const ROLE_STORAGE_KEY = 'trust_express_role';
 const getDriverStatusCacheKey = (userId) => `trust_express_driver_status:${userId}`;
@@ -1499,8 +1499,16 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
   const needVehicle =
     profileApproved &&
     (!vehicle || (!vehicleApproved && vehicleStatus !== 'pending'));
-  const driverKind = normalizeDriverKind(profile?.driverKind || pendingDriverKind);
-  const needDriverKind = !driverKind && !vehicle;
+  const isSouthAfricanDriver = String(
+    driverStatus?.registrationCountryCode
+      || profile?.registrationCountryCode
+      || userProfile?.registrationCountryCode
+      || ''
+  ).toUpperCase() === 'ZA';
+  const driverKind = isSouthAfricanDriver
+    ? DRIVER_KIND_STANDARD
+    : normalizeDriverKind(profile?.driverKind || pendingDriverKind);
+  const needDriverKind = !isSouthAfricanDriver && !driverKind && !vehicle;
   const vehicleRoute = getDriverVehicleRoute({ driverProfile: { ...profile, driverKind } });
   const canGoOnline = profileApproved && vehicleApproved;
 
@@ -1549,10 +1557,11 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
                 const profileData = await refetchUserProfile();
                 const profileStillMissing = !String(profileData?.first_name || '').trim() || !String(profileData?.last_name || '').trim();
                 if (profileStillMissing && !canGoOnline) return;
+                const completedInSouthAfrica = String(profileData?.registrationCountryCode || '').toUpperCase() === 'ZA';
                 props.navigation.replace(
                   canGoOnline
                     ? 'DriverTabs'
-                    : needDriverKind
+                    : needDriverKind && !completedInSouthAfrica
                       ? 'DriverTypeSelection'
                     : needPhoneVerify
                       ? 'DriverVerifyPhone'

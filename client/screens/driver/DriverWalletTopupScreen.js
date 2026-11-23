@@ -28,7 +28,9 @@ const SMILEPAY_METHODS = [
 
 function formatCurrency(value, currency = 'USD') {
   const amount = Number(value || 0);
-  return `${currency === 'USD' ? '$' : `${currency} `}${amount.toFixed(2)}`;
+  if (currency === 'USD') return `$${amount.toFixed(2)}`;
+  if (currency === 'ZAR') return `R ${amount.toFixed(2)}`;
+  return `${currency} ${amount.toFixed(2)}`;
 }
 
 function formatCardNumber(value) {
@@ -81,13 +83,17 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   const wallet = route?.params?.wallet || {};
+  const isSouthAfrica = String(wallet.countryCode || '').toUpperCase() === 'ZA' || String(wallet.currency || '').toUpperCase() === 'ZAR';
   const isSmilePay = wallet.paymentProvider === 'smilepay';
   const providerLabel = isSmilePay ? 'Smile&Pay' : 'Paystack';
-  const currency = wallet.currency || 'USD';
+  const currency = isSouthAfrica ? 'ZAR' : (wallet.currency || 'USD');
+  const paymentMethods = isSouthAfrica
+    ? SMILEPAY_METHODS.filter((option) => option.key === 'card')
+    : SMILEPAY_METHODS;
   const minAmount = Number(wallet.topupMinAmount || 1);
   const maxAmount = Number(wallet.topupMaxAmount || 500);
   const [amount, setAmount] = useState(String(Math.max(minAmount, 5)));
-  const [method, setMethod] = useState('ecocash');
+  const [method, setMethod] = useState(isSouthAfrica ? 'card' : (isSmilePay ? 'ecocash' : 'card'));
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvv, setCardCvv] = useState('');
@@ -308,7 +314,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
               ) : null}
             </View>
             <View className="mt-2 flex-row items-center justify-center">
-              <Text className="text-[34px] font-bold text-gray-400">{currency === 'USD' ? '$' : currency}</Text>
+              <Text className="text-[34px] font-bold text-gray-400">{currency === 'USD' ? '$' : currency === 'ZAR' ? 'R' : currency}</Text>
               <TextInput
                 value={amount}
                 onChangeText={(value) => setAmount(value.replace(/[^0-9.]/g, '').slice(0, 7))}
@@ -334,7 +340,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
                     style={{ backgroundColor: selected ? PRIMARY_BLUE : '#f3f4f6' }}
                   >
                     <Text className={`text-[14px] font-semibold ${selected ? 'text-white' : 'text-gray-800'}`}>
-                      {currency === 'USD' ? '$' : ''}{value}
+                      {currency === 'USD' ? '$' : currency === 'ZAR' ? 'R ' : ''}{value}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -348,7 +354,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
                 Pay with
               </Text>
               <View className="overflow-hidden rounded-[24px] bg-white">
-                {SMILEPAY_METHODS.map((option, index) => {
+                {paymentMethods.map((option, index) => {
                   const selected = method === option.key;
                   return (
                     <TouchableOpacity
@@ -383,7 +389,7 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
                           <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: PRIMARY_BLUE }} />
                         ) : null}
                       </View>
-                      {index < SMILEPAY_METHODS.length - 1 ? (
+                      {index < paymentMethods.length - 1 ? (
                         <View className="absolute bottom-0 left-[68px] right-4 bg-gray-100" style={{ height: 1 }} />
                       ) : null}
                     </TouchableOpacity>
@@ -458,7 +464,23 @@ export default function DriverWalletTopupScreen({ navigation, route }) {
                 )}
               </View>
             </>
-          ) : null}
+          ) : (
+            <>
+              <Text className="mb-2 mt-5 px-1 text-xs font-semibold uppercase tracking-[1.2px] text-gray-500">
+                Pay with
+              </Text>
+              <View className="flex-row items-center rounded-[24px] border border-blue-200 bg-white px-4 py-4">
+                <View className="h-12 w-12 items-center justify-center rounded-2xl bg-blue-50">
+                  <Ionicons name="card-outline" size={24} color={PRIMARY_BLUE} />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className="text-[16px] font-semibold text-gray-900">Debit or credit card</Text>
+                  <Text className="mt-1 text-[12px] text-gray-500">Visa or Mastercard · secure Paystack checkout</Text>
+                </View>
+                <Ionicons name="checkmark-circle" size={24} color={PRIMARY_BLUE} />
+              </View>
+            </>
+          )}
 
           <View className="mt-4 flex-row items-center justify-center">
             <Ionicons name="lock-closed" size={12} color="#9ca3af" />

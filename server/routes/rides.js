@@ -45,6 +45,7 @@ import {
 } from '../lib/driver-push-tokens.js';
 import { getDriverWalletSummariesByUserIds } from '../lib/driver-wallet.js';
 import { attachActiveSurgeToTier } from '../lib/surge-pricing.js';
+import { getDriverApproachEstimate } from '../lib/driver-approach-estimate.js';
 
 const router = Router();
 const PASSENGER_FARE_EDITING_ENABLED = false;
@@ -294,6 +295,18 @@ function mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount = 0) {
     respondedAt,
     offerExpiresAt,
     remainingSeconds,
+  };
+}
+
+async function mapAcceptedDriverOfferWithRoadEta(row, pickupCoordinate, estimatedAmount = 0) {
+  const offer = mapAcceptedDriverOffer(row, pickupCoordinate, estimatedAmount);
+  if (!offer.coordinate) return offer;
+  const estimate = await getDriverApproachEstimate(offer.coordinate, pickupCoordinate);
+  return {
+    ...offer,
+    etaMinutes: estimate.etaMinutes,
+    driverDistanceKm: estimate.distanceKm,
+    etaSource: estimate.source,
   };
 }
 
@@ -1429,7 +1442,7 @@ router.get('/passenger/current-ride', requireAuth, async (req, res) => {
 
     const acceptedDrivers = await Promise.all(
       respondingDrivers.map(async (row) => ({
-        ...mapAcceptedDriverOffer(
+        ...await mapAcceptedDriverOfferWithRoadEta(
           attachDriverRideStats(row, driverStatsMap),
           pickupCoordinate,
           ride.final_estimated_amount || ride.estimated_amount
@@ -1639,7 +1652,7 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
       ]);
       acceptedDrivers = await Promise.all(
         respondingDrivers.map(async (row) => ({
-          ...mapAcceptedDriverOffer(
+          ...await mapAcceptedDriverOfferWithRoadEta(
             attachDriverRideStats(row, driverStatsMap),
             pickupCoordinate,
             ride.final_estimated_amount || ride.estimated_amount
@@ -1719,10 +1732,11 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     const driverLocationUpdatedAt = assignedDriver?.locationUpdatedAt || null;
     const driverLocationAgeSeconds = getLocationAgeSeconds(driverLocationUpdatedAt);
     const driverLocationFresh = isFreshDriverLocation(driverLocationUpdatedAt);
-    const liveDriverDistanceKm = driverCoordinate ? calculateDistanceKm(driverCoordinate, pickupCoordinate) : null;
-    const liveDriverEtaMinutes = driverLocationFresh && liveDriverDistanceKm !== null
-      ? Math.max(1, Math.round(liveDriverDistanceKm * 4))
+    const liveApproachEstimate = driverLocationFresh && driverCoordinate
+      ? await getDriverApproachEstimate(driverCoordinate, pickupCoordinate)
       : null;
+    const liveDriverDistanceKm = liveApproachEstimate?.distanceKm ?? null;
+    const liveDriverEtaMinutes = liveApproachEstimate?.etaMinutes ?? null;
     if (assignedDriver) {
       assignedDriver.locationFresh = driverLocationFresh;
       assignedDriver.locationAgeSeconds = driverLocationAgeSeconds;
@@ -2406,8 +2420,9 @@ router.patch('/passenger/:rideRequestId/select-driver', requireAuth, async (req,
 
     const pickupPoint = { latitude: Number(ride.pickup_lat), longitude: Number(ride.pickup_lng) };
     const driverPoint = { latitude: Number(driverAvailability.current_lat), longitude: Number(driverAvailability.current_lng) };
-    const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
-    const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
+    const approachEstimate = await getDriverApproachEstimate(driverPoint, pickupPoint);
+    const driverDistanceKm = approachEstimate.distanceKm;
+    const driverEtaMinutes = approachEstimate.etaMinutes;
 
     const updateResult = await query(
       `UPDATE ride_requests

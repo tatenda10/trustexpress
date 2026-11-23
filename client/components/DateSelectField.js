@@ -191,7 +191,8 @@ export default function DateSelectField({
       <TouchableOpacity
         onPress={() => setVisible(true)}
         activeOpacity={0.85}
-        className="mb-1 h-14 flex-row items-center justify-between rounded-xl border border-gray-200 bg-white px-4"
+        className="mb-1 h-14 flex-row items-center justify-between rounded-2xl bg-white px-4"
+        style={{ borderWidth: 1, borderColor: '#E5E7EB' }}
       >
         <Text className={`text-base ${displayValue ? 'text-gray-900' : 'text-gray-400'}`}>
           {displayValue || placeholder}

@@ -118,7 +118,7 @@ function statusLabel(status) {
   return 'Not submitted'
 }
 
-export default function DriverVerificationPage() {
+export default function DriverVerificationPage({ countryCode = 'ZW' }) {
   const navigate = useNavigate()
   const { token } = useAuth()
   const [activeTab, setActiveTab] = useState('incoming')
@@ -135,6 +135,8 @@ export default function DriverVerificationPage() {
   const [appliedKindFilter, setAppliedKindFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const marketName = countryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'
+  const marketPath = countryCode === 'ZA' ? 'sa' : 'zim'
 
   useEffect(() => {
     const loadDrivers = async () => {
@@ -155,6 +157,7 @@ export default function DriverVerificationPage() {
             pageSize,
             sortBy: 'createdAt',
             sortOrder: 'desc',
+            countryCode,
           },
         })
 
@@ -170,7 +173,7 @@ export default function DriverVerificationPage() {
     }
 
     loadDrivers()
-  }, [activeTab, appliedSearch, appliedKindFilter, appliedTypeFilter, page, pageSize, token])
+  }, [activeTab, appliedSearch, appliedKindFilter, appliedTypeFilter, page, pageSize, token, countryCode])
 
   useEffect(() => {
     setPage(1)
@@ -192,8 +195,8 @@ export default function DriverVerificationPage() {
   return (
     <section className="space-y-3">
       <div className="border border-slate-300 bg-white px-4 py-3">
-        <h1 className="text-sm font-semibold text-slate-900">Driver Verification</h1>
-        <p className="text-xs text-slate-500">Track real driver verification requests from the admin API.</p>
+        <h1 className="text-sm font-semibold text-slate-900">{marketName} Driver Verification</h1>
+        <p className="text-xs text-slate-500">Review only {marketName} driver identity, vehicle, and compliance submissions.</p>
       </div>
 
       <AdminTabs label="Actions" tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
@@ -286,7 +289,7 @@ export default function DriverVerificationPage() {
                 <td className="px-4 py-3 text-right">
                   <button
                     type="button"
-                    onClick={() => navigate(`/dashboard/driver-verification/${row.id}`)}
+                    onClick={() => navigate(`/dashboard/driver-verification/${row.id}`, { state: { returnTo: `/dashboard/driver-verification/${marketPath}` } })}
                     title="Review"
                     aria-label="Review"
                     className="inline-flex h-8 w-8 items-center justify-center text-slate-500 transition hover:text-indigo-700"

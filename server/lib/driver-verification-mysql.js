@@ -67,7 +67,7 @@ function shapeProfileFromRow(row) {
     : 'not_submitted';
   return {
     id: `profile_${row.driver_user_id}`,
-    driverKind: row.driver_kind || null,
+    driverKind: row.registration_country_code === 'ZA' ? 'standard' : (row.driver_kind || null),
     registrationCountryCode: row.registration_country_code || null,
     identityDocumentType: row.identity_document_type || null,
     status: effectiveStatus,

@@ -21,7 +21,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import {
   e164ToLocalPhone,
   normalizePhoneNumber,
-  sanitizeLocalPhoneInput,
+  sanitizePhoneInput,
 } from '../../utils/phoneNumber';
 
 export default function PassengerPhoneVerificationScreen({ navigation }) {
@@ -166,17 +166,17 @@ export default function PassengerPhoneVerificationScreen({ navigation }) {
                   <Text className="mb-2 text-sm font-medium text-gray-700">Phone number</Text>
                   <TextInput
                     value={phone}
-                    onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
-                    placeholder={countryCode === 'ZA' ? '0712345678' : '0771234567'}
+                    onChangeText={(value) => setPhone(sanitizePhoneInput(value, countryCode))}
+                    placeholder={countryCode === 'ZA' ? '+27712345678' : '0771234567'}
                     placeholderTextColor="#9ca3af"
                     keyboardType="phone-pad"
-                    maxLength={10}
+                    maxLength={countryCode === 'ZA' ? 12 : 10}
                     editable={!submitting}
                     className="rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-lg font-medium text-gray-900"
                   />
-                  <Text className="mt-2 text-xs text-gray-500">
-                    {countryCode === 'ZA' ? 'Enter a South African mobile number, for example 0712345678.' : '10 digits starting with 07 (e.g. 0771234567).'}
-                  </Text>
+                  {countryCode !== 'ZA' ? (
+                    <Text className="mt-2 text-xs text-gray-500">10 digits starting with 07 (e.g. 0771234567).</Text>
+                  ) : null}
                 </View>
               ) : null}
             </View>

@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   Image,
   Alert,
-  Modal,
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Circle, Polyline } from '../../components/maps/MapViewCompat';
 import { LetterMarker, PIN_COLORS } from '../../components/maps/LetterPin';
 import DriverVehicleMapMarker from '../../components/maps/DriverVehicleMapMarker';
+import CancellationReasonModal from '../../components/ride/CancellationReasonModal';
 import { useAuth } from '../../auth/AuthProvider';
 import {
   cancelRideRequest,
@@ -287,7 +287,6 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
   const [assignedDriver, setAssignedDriver] = useState(null);
   const [nearbyLiveDrivers, setNearbyLiveDrivers] = useState([]);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
-  const [selectedCancelReason, setSelectedCancelReason] = useState('');
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [nowTick, setNowTick] = useState(Date.now());
   const [realtimeSignal, setRealtimeSignal] = useState(0);
@@ -718,16 +717,16 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
     }
   };
 
-  const handleCancelRequest = () => { setSelectedCancelReason(''); setShowCancelReasonModal(true); };
+  const handleCancelRequest = () => setShowCancelReasonModal(true);
 
-  const handleConfirmCancelWithReason = async () => {
-    if (!selectedCancelReason || isCancellingRequest) return;
+  const handleConfirmCancelWithReason = async (reasonLabel) => {
+    if (!reasonLabel || isCancellingRequest) return;
     setShowCancelReasonModal(false);
     setIsCancellingRequest(true);
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      if (rideRequest?.id) await cancelRideRequest(token, rideRequest.id, selectedCancelReason);
+      if (rideRequest?.id) await cancelRideRequest(token, rideRequest.id, reasonLabel);
       navigation.reset({ index: 0, routes: [{ name: 'PassengerBookingHome', params: { resetRideDraftAt: Date.now() } }] });
     } catch (error) {
       Alert.alert('Cancel request failed', error?.message || 'Could not cancel this request.');
@@ -906,72 +905,14 @@ export default function PassengerNearbyCarsScreen({ navigation, route }) {
         </View>
       </View>
 
-      {/* ── Cancel reason modal ── */}
-      <Modal visible={showCancelReasonModal} transparent animationType="slide">
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setShowCancelReasonModal(false)}
-          className="flex-1 justify-end bg-black/50"
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-            className="rounded-t-3xl bg-white px-5 pt-5"
-            style={{ paddingBottom: Math.max(insets.bottom + 12, 24) }}
-          >
-            {/* Handle */}
-            <View className="mb-5 items-center">
-              <View className="h-1 w-12 rounded-full bg-gray-200" />
-            </View>
-
-            <Text className="text-xl font-bold text-gray-900">Why are you cancelling?</Text>
-            <Text className="mt-1 text-sm text-gray-400">Select a reason to continue</Text>
-
-            <ScrollView className="mt-4 max-h-64" showsVerticalScrollIndicator={false}>
-              {PASSENGER_CANCELLATION_REASONS.map((r) => {
-                const selected = selectedCancelReason === r.label;
-                return (
-                  <TouchableOpacity
-                    key={r.id}
-                    onPress={() => setSelectedCancelReason(r.label)}
-                    className={`mb-2 flex-row items-center justify-between rounded-xl px-4 py-3.5 ${selected ? 'bg-blue-50' : 'bg-gray-50'}`}
-                  >
-                    <Text className={`flex-1 pr-3 text-sm font-medium ${selected ? 'text-blue-700' : 'text-gray-800'}`}>
-                      {r.label}
-                    </Text>
-                    <View
-                      className="h-5 w-5 items-center justify-center rounded-full border-2"
-                      style={{ borderColor: selected ? PRIMARY_BLUE : '#d1d5db', backgroundColor: selected ? PRIMARY_BLUE : '#fff' }}
-                    >
-                      {selected && <Ionicons name="checkmark" size={11} color="#fff" />}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            <TouchableOpacity
-              onPress={handleConfirmCancelWithReason}
-              disabled={!selectedCancelReason || isCancellingRequest}
-              className="mt-5 h-14 items-center justify-center rounded-2xl"
-              style={{ backgroundColor: !selectedCancelReason || isCancellingRequest ? '#bfdbfe' : PRIMARY_BLUE }}
-            >
-              {isCancellingRequest ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text className="text-base font-bold text-white">Confirm cancellation</Text>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setShowCancelReasonModal(false)}
-              className="mt-3 items-center py-3"
-            >
-              <Text className="text-sm font-semibold text-gray-500">Keep my request</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      <CancellationReasonModal
+        visible={showCancelReasonModal}
+        reasons={PASSENGER_CANCELLATION_REASONS}
+        onClose={() => setShowCancelReasonModal(false)}
+        onSubmit={handleConfirmCancelWithReason}
+        submitting={isCancellingRequest}
+        keepLabel="Keep my request"
+      />
     </View>
   );
 }

@@ -4,7 +4,7 @@ import { hasPermission } from '../lib/admin-rbac.js';
 import { query } from '../db/connection.js';
 import {
   assertPasswordStrength,
-  findUserByEmail,
+  findUserByEmailAnyRole,
   findUserById,
   findUserByPhone,
   hashPassword,
@@ -92,9 +92,9 @@ router.patch('/:userId', requireAdminAuth, async (req, res) => {
           return res.status(400).json({ error: 'Enter a valid email address.' });
         }
         if (email !== String(row.email || '').toLowerCase()) {
-          const existing = await findUserByEmail(email, role);
+          const existing = await findUserByEmailAnyRole(email, row.id);
           if (existing && existing.id !== row.id) {
-            return res.status(409).json({ error: `Another ${role} account already uses this email.` });
+            return res.status(409).json({ error: `Another ${existing.role} account already uses this email.` });
           }
           sets.push('email = ?', 'email_verified_at = CURRENT_TIMESTAMP');
           params.push(email);

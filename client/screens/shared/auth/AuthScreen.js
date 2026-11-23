@@ -11,6 +11,7 @@ import { KeyboardAwareScrollView, KeyboardAvoidingView } from 'react-native-keyb
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AuthFeedbackModal from '../../../components/AuthFeedbackModal';
+import CountrySelectField from '../../../components/CountrySelectField';
 import { useSignIn } from '../../../auth/AuthProvider';
 import {
   completePhoneSignUp,
@@ -28,6 +29,7 @@ import { lookupAccountRole, registerUser } from '../../../api';
 import { useAgentInvite } from '../../../context/AgentInviteContext';
 import { usePassengerReferral } from '../../../context/PassengerReferralContext';
 import { PRIMARY_BLUE } from '../../../constants/colors';
+import { sanitizePhoneInput } from '../../../utils/phoneNumber';
 import {
   BIOMETRIC_LABEL,
   clearBiometricCredentials,
@@ -320,6 +322,10 @@ export default function AuthScreen({ navigation, role, mode }) {
     try {
       const result = await emailSignUp({ email: email.trim(), password, firstName: firstName.trim(), lastName: lastName.trim(), role, countryCode: phoneCountryCode });
       createdAccountRef.current = true;
+      if (result.status === 'signed_in') {
+        await finishSignIn(result, { biometricPassword: password });
+        return;
+      }
       setResendIn(result.resendAfterSeconds || 30);
       goToStep('email_code');
     } catch (error) {
@@ -368,7 +374,7 @@ export default function AuthScreen({ navigation, role, mode }) {
   const requestPhoneCode = async (nextChannel = channel) => {
     if (!phone.trim()) {
       showInfo('Phone number needed', phoneCountryCode === 'ZA'
-        ? 'Enter your South African mobile number, e.g. 0712345678.'
+        ? 'Enter your South African mobile number in +27 format.'
         : 'Enter your phone number, e.g. 0771234567.');
       return false;
     }
@@ -534,19 +540,13 @@ export default function AuthScreen({ navigation, role, mode }) {
   );
 
   const countryPicker = () => (
-    <Field label="Country">
-      <SegmentedControl
-        value={phoneCountryCode}
-        onChange={(value) => {
-          setPhoneCountryCode(value);
-          if (value === 'ZA') setChannel('whatsapp');
-        }}
-        options={[
-          { value: 'ZW', label: 'Zimbabwe' },
-          { value: 'ZA', label: 'South Africa' },
-        ]}
-      />
-    </Field>
+    <CountrySelectField
+      value={phoneCountryCode}
+      onChange={(value) => {
+        setPhoneCountryCode(value);
+        if (value === 'ZA') setChannel('whatsapp');
+      }}
+    />
   );
 
   const saConsent = () => phoneCountryCode === 'ZA' ? (
@@ -666,7 +666,13 @@ export default function AuthScreen({ navigation, role, mode }) {
           <>
             {countryPicker()}
             <Field label="Phone number">
-              <Input placeholder={phoneCountryCode === 'ZA' ? '0712345678' : '0771234567'} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+              <Input
+                placeholder={phoneCountryCode === 'ZA' ? '+27712345678' : '0771234567'}
+                value={phone}
+                onChangeText={(value) => setPhone(sanitizePhoneInput(value, phoneCountryCode))}
+                keyboardType="phone-pad"
+                maxLength={phoneCountryCode === 'ZA' ? 12 : 10}
+              />
             </Field>
             {WHATSAPP_OTP_ENABLED ? channelPicker(channel, setChannel) : null}
             <PrimaryButton label="Send code" onPress={handleSendPhoneCode} loading={loading} />

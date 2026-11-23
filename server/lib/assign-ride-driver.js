@@ -2,6 +2,7 @@ import { query, withTransaction } from '../db/connection.js';
 import { assignSafetyPinIfNeeded } from './ride-safety-pin.js';
 import { syncDiscountRedemptionForRide } from './ride-discounts.js';
 import { holdDriverCancellationCommission } from './driver-cancellation-reserve.js';
+import { getDriverApproachEstimate } from './driver-approach-estimate.js';
 import {
   emitRideRequestRemovedFromDriver,
   emitRideStatusToDriver,
@@ -11,22 +12,6 @@ import {
 export function isAdminDispatchedRide(ride) {
   return String(ride?.booking_source || '') === 'admin_dispatch'
     || String(ride?.passenger_user_id || '').startsWith('dispatch:');
-}
-
-function calculateDistanceKm(start, end) {
-  if (!start || !end) return 0;
-  const earthRadiusKm = 6371;
-  const toRadians = (value) => (value * Math.PI) / 180;
-  const dLat = toRadians(end.latitude - start.latitude);
-  const dLng = toRadians(end.longitude - start.longitude);
-  const lat1 = toRadians(start.latitude);
-  const lat2 = toRadians(end.latitude);
-  const a = (
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2)
-  );
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadiusKm * c;
 }
 
 export async function assignAcceptedDriverToRide({
@@ -49,8 +34,9 @@ export async function assignAcceptedDriverToRide({
     latitude: Number(driverAvailability.current_lat),
     longitude: Number(driverAvailability.current_lng),
   };
-  const driverDistanceKm = calculateDistanceKm(driverPoint, pickupPoint);
-  const driverEtaMinutes = Math.max(1, Math.round(driverDistanceKm * 4));
+  const approachEstimate = await getDriverApproachEstimate(driverPoint, pickupPoint);
+  const driverDistanceKm = approachEstimate.distanceKm;
+  const driverEtaMinutes = approachEstimate.etaMinutes;
 
   const commissionReserve = await withTransaction(async (connection) => {
     const [lockedRideRows] = await connection.execute(

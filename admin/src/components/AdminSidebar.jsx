@@ -9,7 +9,8 @@ const navSections = [
     label: null,
     items: [
       { id: 'overview', label: 'Overview', icon: GridIcon, to: '/dashboard/overview', permission: 'overview.read' },
-      { id: 'verification', label: 'Driver Verification', icon: FolderIcon, to: '/dashboard/driver-verification', permission: 'verification.read' },
+      { id: 'zw-verification', label: 'Zimbabwe Verification', icon: FolderIcon, to: '/dashboard/driver-verification/zim', permission: 'verification.read' },
+      { id: 'sa-verification', label: 'SA Verification', icon: FolderIcon, to: '/dashboard/driver-verification/sa', permission: 'verification.read' },
       { id: 'hire-vehicles', label: 'Hire Vehicles', icon: FolderIcon, to: '/dashboard/hire-vehicles', permission: 'verification.read' },
       { id: 'hire-jobs', label: 'Hire Jobs', icon: BriefcaseIcon, to: '/dashboard/hire-jobs', permission: 'ride_ops.read' },
       { id: 'rides', label: 'Ride Operations', icon: BriefcaseIcon, to: '/dashboard/ride-operations', permission: 'ride_ops.read' },
@@ -21,8 +22,10 @@ const navSections = [
   {
     label: 'Users',
     items: [
-      { id: 'drivers', label: 'Drivers', icon: UsersIcon, to: '/dashboard/drivers', permission: 'drivers.read' },
-      { id: 'passengers', label: 'Passengers', icon: UsersIcon, to: '/dashboard/passengers', permission: 'passengers.read' },
+      { id: 'zw-drivers', label: 'Zimbabwe Drivers', icon: UsersIcon, to: '/dashboard/drivers/zim', permission: 'drivers.read' },
+      { id: 'sa-drivers', label: 'South Africa Drivers', icon: UsersIcon, to: '/dashboard/drivers/sa', permission: 'drivers.read' },
+      { id: 'zw-passengers', label: 'Zimbabwe Passengers', icon: UsersIcon, to: '/dashboard/passengers/zim', permission: 'passengers.read' },
+      { id: 'sa-passengers', label: 'South Africa Passengers', icon: UsersIcon, to: '/dashboard/passengers/sa', permission: 'passengers.read' },
       { id: 'passenger-referrals', label: 'Passenger Referrals', icon: UsersIcon, to: '/dashboard/passenger-referrals', permission: 'passengers.read' },
       { id: 'agents', label: 'Agents', icon: UsersIcon, to: '/dashboard/agents', permission: 'agents.read' },
       { id: 'support', label: 'Support Tickets', icon: LockIcon, to: '/dashboard/support', permission: 'support.read' },

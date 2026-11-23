@@ -50,7 +50,7 @@ function formatSpend(passenger) {
   return `${currency} ${Number(passenger?.totalSpend || 0).toFixed(2)}`
 }
 
-export default function PassengersPage() {
+export default function PassengersPage({ countryCode = 'ZW' }) {
   const { token } = useAuth()
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState('all')
@@ -59,7 +59,6 @@ export default function PassengersPage() {
   const [sortBy, setSortBy] = useState('createdAt')
   const [sortOrder, setSortOrder] = useState('desc')
   const [identityFilter, setIdentityFilter] = useState('all')
-  const [countryFilter, setCountryFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
@@ -67,6 +66,8 @@ export default function PassengersPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [passengers, setPassengers] = useState([])
+  const marketName = countryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'
+  const marketPath = countryCode === 'ZA' ? 'sa' : 'zim'
 
   const loadPassengers = async () => {
     setLoading(true)
@@ -80,7 +81,7 @@ export default function PassengersPage() {
         params: {
           status: activeTab,
           identityStatus: identityFilter,
-          countryCode: countryFilter,
+          countryCode,
           search: search || undefined,
           sortBy,
           sortOrder,
@@ -102,7 +103,7 @@ export default function PassengersPage() {
   useEffect(() => {
     loadPassengers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeTab, identityFilter, countryFilter, search, sortBy, sortOrder, page, pageSize])
+  }, [token, activeTab, identityFilter, countryCode, search, sortBy, sortOrder, page, pageSize])
 
   const rows = useMemo(() => passengers, [passengers])
   const activeCount = useMemo(() => rows.filter((passenger) => passenger.status === 'active').length, [rows])
@@ -142,7 +143,7 @@ export default function PassengersPage() {
         params: {
           status: activeTab,
           identityStatus: identityFilter,
-          countryCode: countryFilter,
+          countryCode,
           search: search || undefined,
         },
         responseType: 'blob',
@@ -155,7 +156,7 @@ export default function PassengersPage() {
       )
       const anchor = document.createElement('a')
       anchor.href = blobUrl
-      anchor.download = `passengers_export_${Date.now()}.xlsx`
+      anchor.download = `${countryCode.toLowerCase()}_passengers_export_${Date.now()}.xlsx`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -169,11 +170,11 @@ export default function PassengersPage() {
   return (
     <section className="space-y-3">
       <div className="border border-slate-300 bg-white px-4 py-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Users / Passengers</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Users / {marketName} / Passengers</p>
         <div className="mt-1 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-slate-900">Passengers</h1>
-            <p className="text-xs text-slate-500">Manage passenger accounts, account state, and identity verification.</p>
+            <h1 className="text-xl font-semibold text-slate-900">{marketName} Passengers</h1>
+            <p className="text-xs text-slate-500">Manage only {marketName} passenger accounts, account state, and identity verification.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             <div className="min-w-[110px] border border-slate-200 bg-slate-50 px-3 py-2">
@@ -212,7 +213,7 @@ export default function PassengersPage() {
 
       <div className="border border-slate-300 bg-white px-4 py-3">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_140px_140px_116px_88px_110px]">
+          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_140px_116px_88px_110px]">
             <div className="relative">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
@@ -241,18 +242,6 @@ export default function PassengersPage() {
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
               <option value="not_submitted">Not submitted</option>
-            </select>
-            <select
-              value={countryFilter}
-              onChange={(event) => {
-                setCountryFilter(event.target.value)
-                setPage(1)
-              }}
-              className="h-10 border border-slate-300 bg-white px-2 text-xs"
-            >
-              <option value="all">All countries</option>
-              <option value="ZW">Zimbabwe</option>
-              <option value="ZA">South Africa</option>
             </select>
             <select
               value={sortBy}
@@ -377,7 +366,7 @@ export default function PassengersPage() {
                       <div className="flex justify-end gap-3">
                         <button
                           type="button"
-                          onClick={() => navigate(`/dashboard/passengers/${passenger.id}`, { state: { passenger } })}
+                          onClick={() => navigate(`/dashboard/passengers/${passenger.id}`, { state: { passenger, returnTo: `/dashboard/passengers/${marketPath}` } })}
                           className="text-slate-700 transition hover:text-indigo-600"
                           title={passenger.passengerIdentity?.status === 'pending' ? 'Review verification' : 'View'}
                         >

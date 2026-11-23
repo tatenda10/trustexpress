@@ -21,10 +21,9 @@ import { getDriverVehicleRoute } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
 import {
-  INVALID_LOCAL_PHONE_MESSAGE,
-  isValidLocalPhoneNumber,
-  normalizeZimbabwePhoneNumber,
-  sanitizeLocalPhoneInput,
+  isValidPhoneNumber,
+  normalizePhoneNumber,
+  sanitizePhoneInput,
 } from '../../utils/phoneNumber';
 
 export const DRIVER_SKIP_PHONE_VERIFY_KEY = 'trust_express_driver_skip_phone_verify';
@@ -80,9 +79,6 @@ function resetRootToDriverRoute(routeName) {
   }
 }
 
-const STEP_CURRENT = 5;
-const STEP_TOTAL = 6;
-
 const DriverVerifyPhoneScreen = () => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
@@ -93,19 +89,31 @@ const DriverVerifyPhoneScreen = () => {
 
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
+  const countryCode = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
 
-  const canSend = isValidLocalPhoneNumber(phone);
+  const updatePhone = (value) => {
+    if (countryCode !== 'ZA') {
+      setPhone(sanitizePhoneInput(value, countryCode));
+      return;
+    }
+    let digits = String(value || '').replace(/\D/g, '');
+    if (digits.startsWith('27')) digits = digits.slice(2);
+    if (digits.startsWith('0')) digits = digits.slice(1);
+    setPhone(digits.slice(0, 9));
+  };
+
+  const canSend = isValidPhoneNumber(phone, countryCode);
   const handleVerify = async () => {
-    const phoneResult = normalizeZimbabwePhoneNumber(phone);
+    const phoneResult = normalizePhoneNumber(phone, countryCode);
     if (!phoneResult.ok) {
-      Alert.alert('Invalid number', phoneResult.error || INVALID_LOCAL_PHONE_MESSAGE);
+      Alert.alert('Invalid number', phoneResult.error || 'Enter a valid mobile number.');
       return;
     }
     setLoading(true);
     try {
       const token = await getToken();
       if (!token) throw new Error('Not signed in');
-      await confirmPhoneVerification(token, phoneResult.e164Phone);
+      await confirmPhoneVerification(token, phoneResult.e164Phone, countryCode);
       // Do not refetch before this Alert: refetch updates App's driver stack `key` and remounts the
       // navigator, which invalidates this screen's `navigation` object.
       // After Continue: merge `phoneVerified` (confirm already succeeded), then root `reset` — survives
@@ -146,13 +154,13 @@ const DriverVerifyPhoneScreen = () => {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-white"
+      className="flex-1 bg-[#f6f7fb]"
     >
       <View
-        className="items-center justify-center border-b border-gray-100 bg-white"
-        style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 14 }}
+        className="items-center justify-center bg-white"
+        style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 16 }}
       >
-        <Text className="text-lg font-bold text-gray-900">Verify phone</Text>
+        <Text className="text-lg font-bold text-slate-950">Verify phone</Text>
       </View>
 
       <ScrollView
@@ -161,40 +169,42 @@ const DriverVerifyPhoneScreen = () => {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text className="text-sm font-semibold text-gray-500 mt-4">STEP {STEP_CURRENT} OF {STEP_TOTAL}</Text>
-        <View className="flex-row items-center gap-2 mt-2 mb-1">
-          <View className="flex-1 flex-row gap-1 h-2 rounded-full bg-gray-200 overflow-hidden">
-            {Array.from({ length: STEP_TOTAL }).map((_, i) => (
-              <View
-                key={i}
-                className="flex-1 rounded-full"
-                style={{ backgroundColor: i < STEP_CURRENT ? PRIMARY_BLUE : '#e5e7eb' }}
-              />
-            ))}
+        <View className="mt-5 rounded-3xl bg-white p-5">
+          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl bg-blue-50">
+            <Ionicons name="phone-portrait-outline" size={24} color={PRIMARY_BLUE} />
           </View>
-          <Text className="text-sm text-gray-400">Phone</Text>
-        </View>
-
-        <Text className="text-2xl font-bold text-gray-900 mt-6 mb-2">Verify your phone number</Text>
-        <Text className="text-sm text-gray-600 mb-6">
-          We'll send a one-time code by SMS. Use it to confirm your number for ride notifications and account security.
-        </Text>
-        <>
+          <Text className="mb-2 text-2xl font-bold text-slate-950">Verify your phone</Text>
+          <Text className="mb-6 text-sm leading-5 text-slate-500">
+            We'll send a one-time code by SMS to secure your account and keep you updated about rides.
+          </Text>
           <Text className="text-sm font-medium text-gray-700 mb-2">Phone number</Text>
-          <TextInput
-            className="border border-gray-200 rounded-xl px-4 py-3 text-base text-gray-900 mb-1"
-            placeholder="0771234567"
-            placeholderTextColor="#9ca3af"
-            value={phone}
-            onChangeText={(value) => setPhone(sanitizeLocalPhoneInput(value))}
-            keyboardType="phone-pad"
-            maxLength={10}
-            autoCapitalize="none"
-            editable={!loading}
-          />
-          <Text className="text-xs text-gray-500 mb-4">10 digits starting with 07.</Text>
+          <View
+            className="mb-1 h-14 flex-row items-center rounded-2xl bg-white"
+            style={{ borderWidth: 1, borderColor: '#E5E7EB' }}
+          >
+            {countryCode === 'ZA' ? (
+              <View className="h-full items-center justify-center px-4">
+                <Text className="text-base font-semibold text-slate-700">+27</Text>
+              </View>
+            ) : null}
+            <TextInput
+              className="h-full flex-1 px-4 text-base text-slate-950"
+              placeholder={countryCode === 'ZA' ? '712345678' : '0771234567'}
+              placeholderTextColor="#9ca3af"
+              value={phone}
+              onChangeText={updatePhone}
+              keyboardType="phone-pad"
+              maxLength={countryCode === 'ZA' ? 9 : 10}
+              autoCapitalize="none"
+              underlineColorAndroid="transparent"
+              editable={!loading}
+            />
+          </View>
+          {countryCode !== 'ZA' ? (
+            <Text className="text-xs text-gray-500 mb-4">10 digits starting with 07.</Text>
+          ) : null}
           <TouchableOpacity
-            className="flex-row items-center justify-center gap-2 py-4 rounded-xl mb-2"
+            className="mb-1 mt-4 flex-row items-center justify-center gap-2 rounded-2xl py-4"
             style={{ backgroundColor: canSend ? PRIMARY_BLUE : '#cbd5e1' }}
             onPress={handleVerify}
             disabled={loading || !canSend}
@@ -208,7 +218,7 @@ const DriverVerifyPhoneScreen = () => {
             </>
           )}
           </TouchableOpacity>
-        </>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );

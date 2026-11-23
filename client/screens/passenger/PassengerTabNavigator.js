@@ -8,6 +8,7 @@ import PassengerActivityStack from './PassengerActivityStack';
 import PassengerHireStack from './PassengerHireStack';
 import PassengerAccountStack from './PassengerAccountStack';
 import { PRIMARY_BLUE } from '../../constants/colors';
+import { useUser } from '../../auth/AuthProvider';
 
 const Tab = createBottomTabNavigator();
 
@@ -37,6 +38,8 @@ function shouldHideTabBar(route) {
 
 export default function PassengerTabNavigator() {
   const insets = useSafeAreaInsets();
+  const { user } = useUser();
+  const isSouthAfrica = String(user?.registrationCountryCode || '').toUpperCase() === 'ZA';
 
   const tabBarStyle = {
     height: 58 + insets.bottom,
@@ -70,7 +73,7 @@ export default function PassengerTabNavigator() {
       }}
     >
       <Tab.Screen name="PassengerHome" component={PassengerHomeStack} options={optionsFor('Home')} />
-      <Tab.Screen name="PassengerHiring" component={PassengerHireStack} options={optionsFor('Hiring')} />
+      {!isSouthAfrica ? <Tab.Screen name="PassengerHiring" component={PassengerHireStack} options={optionsFor('Hiring')} /> : null}
       <Tab.Screen name="PassengerActivity" component={PassengerActivityStack} options={optionsFor('Activity')} />
       <Tab.Screen
         name="PassengerAccount"

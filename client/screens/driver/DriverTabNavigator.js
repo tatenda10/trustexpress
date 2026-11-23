@@ -37,6 +37,7 @@ export default function DriverTabNavigator({ route }) {
   const insets = useSafeAreaInsets();
   const { driverStatus: contextDriverStatus } = useDriverStatus() || {};
   const driverStatus = contextDriverStatus ?? route?.params?.driverStatus ?? null;
+  const isSouthAfrica = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA';
   const canAcceptTrips = isDriverVerifiedForTrips(driverStatus);
   const [hiringBadgeCount, setHiringBadgeCount] = useState(0);
 
@@ -84,7 +85,7 @@ export default function DriverTabNavigator({ route }) {
     >
       <Tab.Screen name="DriverHome" component={DriverHomeStack} options={optionsFor('Home')} />
       <Tab.Screen name="DriverWallet" component={DriverWalletStack} options={optionsFor('Wallet')} />
-      <Tab.Screen
+      {!isSouthAfrica ? <Tab.Screen
         name="DriverHireJobs"
         component={DriverHireStack}
         listeners={{
@@ -100,7 +101,7 @@ export default function DriverTabNavigator({ route }) {
           tabBarBadge: hiringBadgeCount > 0 ? hiringBadgeCount : undefined,
           tabBarBadgeStyle: { fontSize: 10, minWidth: 16, height: 16, lineHeight: 16 },
         })}
-      />
+      /> : null}
       <Tab.Screen
         name="DriverAccount"
         component={DriverAccountStack}

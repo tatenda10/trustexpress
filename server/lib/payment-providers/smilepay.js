@@ -109,8 +109,9 @@ export function toSmilePayCurrencyCode(currency) {
   const code = String(currency || '').trim().toUpperCase();
   if (code === '840' || code === 'USD') return '840';
   if (code === '924' || code === 'ZWG' || code === 'ZWL') return '924';
+  if (code === '710' || code === 'ZAR') return '710';
   throw buildError(
-    `Smile&Pay only supports USD (840) or ZWG (924). Current wallet currency is ${code || 'unset'}.`,
+    `Smile&Pay only supports USD (840), ZWG (924), or ZAR (710). Current wallet currency is ${code || 'unset'}.`,
     400
   );
 }
@@ -119,6 +120,7 @@ export function fromSmilePayCurrencyCode(currencyCode, fallback = 'USD') {
   const code = String(currencyCode || '').trim();
   if (code === '840' || String(currencyCode || '').toUpperCase() === 'USD') return 'USD';
   if (code === '924' || ['ZWG', 'ZWL'].includes(String(currencyCode || '').toUpperCase())) return 'ZWG';
+  if (code === '710' || String(currencyCode || '').toUpperCase() === 'ZAR') return 'ZAR';
   return String(fallback || 'USD').toUpperCase();
 }
 

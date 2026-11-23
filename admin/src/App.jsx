@@ -106,7 +106,15 @@ function AppRoutes() {
         />
         <Route
           path="driver-verification"
-          element={<PermissionRoute permission="verification.read"><DriverVerificationPage /></PermissionRoute>}
+          element={<Navigate to="/dashboard/driver-verification/zim" replace />}
+        />
+        <Route
+          path="driver-verification/zim"
+          element={<PermissionRoute permission="verification.read"><DriverVerificationPage countryCode="ZW" /></PermissionRoute>}
+        />
+        <Route
+          path="driver-verification/sa"
+          element={<PermissionRoute permission="verification.read"><DriverVerificationPage countryCode="ZA" /></PermissionRoute>}
         />
         <Route
           path="driver-verification/:driverId"
@@ -146,7 +154,15 @@ function AppRoutes() {
         />
         <Route
           path="drivers"
-          element={<PermissionRoute permission="drivers.read"><DriversPage /></PermissionRoute>}
+          element={<Navigate to="/dashboard/drivers/zim" replace />}
+        />
+        <Route
+          path="drivers/zim"
+          element={<PermissionRoute permission="drivers.read"><DriversPage countryCode="ZW" /></PermissionRoute>}
+        />
+        <Route
+          path="drivers/sa"
+          element={<PermissionRoute permission="drivers.read"><DriversPage countryCode="ZA" /></PermissionRoute>}
         />
         <Route
           path="drivers/:driverId"
@@ -154,7 +170,15 @@ function AppRoutes() {
         />
         <Route
           path="passengers"
-          element={<PermissionRoute permission="passengers.read"><PassengersPage /></PermissionRoute>}
+          element={<Navigate to="/dashboard/passengers/zim" replace />}
+        />
+        <Route
+          path="passengers/zim"
+          element={<PermissionRoute permission="passengers.read"><PassengersPage countryCode="ZW" /></PermissionRoute>}
+        />
+        <Route
+          path="passengers/sa"
+          element={<PermissionRoute permission="passengers.read"><PassengersPage countryCode="ZA" /></PermissionRoute>}
         />
         <Route
           path="passenger-referrals"

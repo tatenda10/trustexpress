@@ -1,5 +1,8 @@
 export function formatWalletCurrency(value, currency = 'ZAR') {
-  return `${String(currency || 'ZAR').toUpperCase()} ${Number(value || 0).toFixed(2)}`;
+  const currencyCode = String(currency || 'ZAR').toUpperCase();
+  if (currencyCode === 'ZAR') return `R ${Number(value || 0).toFixed(2)}`;
+  if (currencyCode === 'USD') return `$${Number(value || 0).toFixed(2)}`;
+  return `${currencyCode} ${Number(value || 0).toFixed(2)}`;
 }
 
 export function formatWalletDate(value) {

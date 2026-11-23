@@ -11,6 +11,7 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import BiometricSignInSetting from '../../components/BiometricSignInSetting';
 import { getDriverVehicleRoute, isTruckDriver } from '../../constants/driverKind';
 import { useDriverStatus } from '../../context/DriverStatusContext';
+import { getMarket } from '../../constants/market';
 
 const STATUS_TONES = {
   done: { bg: '#dcfce7', text: '#166534', label: 'Verified' },
@@ -290,6 +291,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
   const phoneVerified = driverStatus?.phoneVerified === true;
   const profile = driverStatus?.driverProfile;
+  const market = getMarket(driverStatus?.registrationCountryCode || profile?.registrationCountryCode);
   const vehicle = driverStatus?.vehicle;
   const hasSubmittedProfileDocs = !!(
     profile?.driverLicenceUrl ||
@@ -457,7 +459,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
   ];
 
   const earningsRows = [
-    {
+    ...(market.supportsSmileCash ? [{
       key: 'smile-cash',
       title: 'Online wallet',
       subtitle: driverStatus?.driverProfile?.smileCashStatus === 'active'
@@ -465,7 +467,7 @@ const DriverAccountScreen = ({ navigation, route }) => {
         : 'Link your SmileCash wallet',
       icon: 'wallet-outline',
       onPress: () => navigation.navigate('DriverSmileCash'),
-    },
+    }] : []),
     {
       key: 'income',
       title: 'Income',
@@ -487,13 +489,13 @@ const DriverAccountScreen = ({ navigation, route }) => {
       icon: 'star-outline',
       onPress: () => navigation.navigate('DriverReviews'),
     },
-    {
+    ...(market.countryCode !== 'ZA' ? [{
       key: 'hire-vehicles',
       title: 'Hire vehicles',
       subtitle: 'Trucks and vans you offer for hire',
       icon: 'bus-outline',
       onPress: () => navigation.navigate('DriverHireVehicles'),
-    },
+    }] : []),
   ];
 
   const helpRows = [

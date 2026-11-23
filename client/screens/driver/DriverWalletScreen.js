@@ -9,7 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../../auth/AuthProvider';
+import { useAuth, useUser } from '../../auth/AuthProvider';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { cashOutDriverWallet, getDriverWallet, verifyDriverWalletTopup } from '../../api';
@@ -67,6 +67,8 @@ function groupByDay(transactions) {
 const DriverWalletScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const { user } = useUser();
+  const isSouthAfrica = String(user?.registrationCountryCode || '').toUpperCase() === 'ZA';
   const getTokenRef = useRef(getToken);
   const isFocused = useIsFocused();
   const [transactions, setTransactions] = useState([]);
@@ -74,13 +76,15 @@ const DriverWalletScreen = ({ navigation }) => {
     availableBalance: 0,
     cashBalance: 0,
     promotionalBalance: 0,
-    currency: 'USD',
+    currency: isSouthAfrica ? 'ZAR' : 'USD',
     minimumRequiredBalance: 1,
     topupMinAmount: 1,
     topupMaxAmount: 500,
     commissionRatePercent: 9.5,
     paymentsEnabled: false,
     paymentProvider: 'paystack',
+    countryCode: isSouthAfrica ? 'ZA' : 'ZW',
+    supportsSmileCash: !isSouthAfrica,
     paymentsUnavailableMessage: '',
     sufficientBalance: true,
     lowBalanceMessage: '',
@@ -126,13 +130,15 @@ const DriverWalletScreen = ({ navigation }) => {
         availableBalance: Number(data?.wallet?.availableBalance || 0),
         cashBalance: Number(data?.wallet?.cashBalance || 0),
         promotionalBalance: Number(data?.wallet?.promotionalBalance || 0),
-        currency: data?.wallet?.currency || 'USD',
+        currency: data?.wallet?.currency || (isSouthAfrica ? 'ZAR' : 'USD'),
         minimumRequiredBalance: Number(data?.wallet?.minimumRequiredBalance || 1),
         topupMinAmount: Number(data?.wallet?.topupMinAmount || data?.settings?.topupMinAmount || 1),
         topupMaxAmount: Number(data?.wallet?.topupMaxAmount || data?.settings?.topupMaxAmount || 500),
         commissionRatePercent: Number(data?.wallet?.commissionRatePercent || data?.settings?.commissionRatePercent || 9.5),
         paymentsEnabled: data?.wallet?.paymentsEnabled === true || data?.settings?.paymentsEnabled === true,
         paymentProvider: String(data?.wallet?.paymentProvider || data?.settings?.paymentProvider || 'paystack').toLowerCase(),
+        countryCode: String(data?.wallet?.countryCode || data?.settings?.countryCode || 'ZW').toUpperCase(),
+        supportsSmileCash: data?.wallet?.supportsSmileCash !== false && data?.settings?.supportsSmileCash !== false,
         paymentsUnavailableMessage: data?.wallet?.paymentsUnavailableMessage || data?.settings?.paymentsUnavailableMessage || '',
         sufficientBalance: data?.wallet?.sufficientBalance !== false,
         lowBalanceMessage: data?.wallet?.lowBalanceMessage || '',
@@ -147,13 +153,15 @@ const DriverWalletScreen = ({ navigation }) => {
         availableBalance: 0,
         cashBalance: 0,
         promotionalBalance: 0,
-        currency: 'USD',
+        currency: isSouthAfrica ? 'ZAR' : 'USD',
         minimumRequiredBalance: 1,
         topupMinAmount: 1,
         topupMaxAmount: 500,
         commissionRatePercent: 9.5,
         paymentsEnabled: false,
         paymentProvider: 'paystack',
+        countryCode: isSouthAfrica ? 'ZA' : 'ZW',
+        supportsSmileCash: !isSouthAfrica,
         paymentsUnavailableMessage: '',
         sufficientBalance: true,
         lowBalanceMessage: '',
@@ -223,7 +231,7 @@ const DriverWalletScreen = ({ navigation }) => {
   const visibleTransactions = transactions.filter(matchesFilter);
   const transactionGroups = groupByDay(visibleTransactions);
   const withdrawable = Number(wallet.withdrawableBalance || 0);
-  const canCashOut = !cashingOut && withdrawable > 0;
+  const canCashOut = wallet.supportsSmileCash !== false && !cashingOut && withdrawable > 0;
   const pendingReferences = pendingTopups.map((topup) => topup?.reference).filter(Boolean);
 
   return (
@@ -274,12 +282,14 @@ const DriverWalletScreen = ({ navigation }) => {
                   {formatCurrency(wallet.promotionalBalance, wallet.currency)}
                 </Text>
               </View>
-              <View className="flex-1 rounded-2xl bg-white/10 px-3 py-2.5">
-                <Text className="text-[11px] font-medium text-white/60">Can cash out</Text>
-                <Text className="mt-0.5 text-[15px] font-semibold text-white">
-                  {formatCurrency(withdrawable, wallet.currency)}
-                </Text>
-              </View>
+              {wallet.supportsSmileCash !== false ? (
+                <View className="flex-1 rounded-2xl bg-white/10 px-3 py-2.5">
+                  <Text className="text-[11px] font-medium text-white/60">Can cash out</Text>
+                  <Text className="mt-0.5 text-[15px] font-semibold text-white">
+                    {formatCurrency(withdrawable, wallet.currency)}
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             <View className="mt-4 flex-row gap-3">
@@ -291,22 +301,24 @@ const DriverWalletScreen = ({ navigation }) => {
                 <Ionicons name="add-circle" size={20} color="#111827" />
                 <Text className="ml-1.5 text-[15px] font-bold text-gray-900">Top up</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleCashOut}
-                disabled={!canCashOut}
-                className="h-12 flex-1 flex-row items-center justify-center rounded-2xl bg-white/15"
-                style={{ opacity: canCashOut ? 1 : 0.5 }}
-                activeOpacity={0.85}
-              >
-                {cashingOut ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="arrow-up-circle-outline" size={20} color="#fff" />
-                    <Text className="ml-1.5 text-[15px] font-bold text-white">Cash out</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              {wallet.supportsSmileCash !== false ? (
+                <TouchableOpacity
+                  onPress={handleCashOut}
+                  disabled={!canCashOut}
+                  className="h-12 flex-1 flex-row items-center justify-center rounded-2xl bg-white/15"
+                  style={{ opacity: canCashOut ? 1 : 0.5 }}
+                  activeOpacity={0.85}
+                >
+                  {cashingOut ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="arrow-up-circle-outline" size={20} color="#fff" />
+                      <Text className="ml-1.5 text-[15px] font-bold text-white">Cash out</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
 

@@ -60,7 +60,7 @@ import { refundOnlinePaymentsForDriverCancelBeforeStart } from '../lib/passenger
 import { upsertDriverPushTokens } from '../lib/driver-push-tokens.js';
 import { getSaDriverCompliance, getSaProfileCompliance, SA_OPERATOR_AGREEMENT_VERSION } from '../lib/sa-driver-compliance.js';
 import { findDriverByLocationKey, issueDriverLocationKey } from '../lib/driver-location-keys.js';
-import { isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
+import { DRIVER_KIND_STANDARD, isTruckDriver, normalizeDriverKind } from '../lib/driver-kind.js';
 import {
   notifyWhatsAppDriverArrived,
   notifyWhatsAppDriverOffer,
@@ -357,7 +357,10 @@ router.post('/me/kind', requireAuth, async (req, res) => {
     const user = await requireDriver(req, res);
     if (!user) return;
 
-    const driverKind = normalizeDriverKind(req.body?.driverKind);
+    const currentVerification = await getDriverVerificationFromMysql(req.userId, user);
+    const driverKind = currentVerification.registrationCountryCode === 'ZA'
+      ? DRIVER_KIND_STANDARD
+      : normalizeDriverKind(req.body?.driverKind);
     if (!driverKind) {
       return res.status(400).json({ error: 'Choose truck or normal driver' });
     }
@@ -409,6 +412,9 @@ router.post('/me/smile-cash/open', requireAuth, async (req, res) => {
 
     const appUser = toAppUser(user);
     const verification = await getDriverVerificationFromMysql(req.userId, user);
+    if (verification?.registrationCountryCode === 'ZA') {
+      return res.status(422).json({ error: 'SmileCash is not available for South African accounts.' });
+    }
     const profile = verification?.driverProfile || {};
 
     const firstName = String(appUser.first_name || user?.firstName || '').trim();
@@ -512,6 +518,9 @@ router.post('/me/smile-cash/link', requireAuth, async (req, res) => {
 
     const appUser = toAppUser(user);
     const verification = await getDriverVerificationFromMysql(req.userId, user);
+    if (verification?.registrationCountryCode === 'ZA') {
+      return res.status(422).json({ error: 'SmileCash is not available for South African accounts.' });
+    }
     const profile = verification?.driverProfile || {};
     const idNumber = String(req.body?.idNumber || '').trim().toUpperCase();
     const dateOfBirth = String(req.body?.dateOfBirth || profile.dateOfBirth || '').trim();
@@ -618,6 +627,7 @@ router.get('/vehicle-options', requireAuth, async (req, res) => {
           tierName: rule.tierName,
           sortOrder: rule.sortOrder,
           shortDescription: rule.shortDescription || null,
+          exampleVehicles: Array.isArray(rule.exampleVehicles) ? rule.exampleVehicles : [],
           regionName: null,
           city: null,
           countryCode: null,
@@ -2968,7 +2978,6 @@ router.post('/documents', requireAuth, async (req, res) => {
       criminalDeclarationAccepted,
       ricaEcaDeclarationAccepted,
       operatorAgreementAccepted,
-      operatorAgreementSignature,
       operatingLicenceConditionAccepted,
     } = req.body || {};
     console.log('[POST /api/drivers/documents] received payload', {
@@ -2985,7 +2994,9 @@ router.post('/documents', requireAuth, async (req, res) => {
       driverLicenceExpiresAt: driverLicenceExpiresAt || null,
       rawDriverKind: rawDriverKind || null,
     });
-    const driverKind = normalizeDriverKind(rawDriverKind || existing.driverProfile?.driverKind);
+    const driverKind = existing.registrationCountryCode === 'ZA'
+      ? DRIVER_KIND_STANDARD
+      : normalizeDriverKind(rawDriverKind || existing.driverProfile?.driverKind);
     const currentProfile = existing.driverProfile || null;
     const currentValues = {
       nationalIdFrontUrl: currentProfile?.nationalIdFrontUrl || null,
@@ -3004,7 +3015,6 @@ router.post('/documents', requireAuth, async (req, res) => {
       prdpUrl: currentProfile?.prdpUrl || null,
       prdpExpiresAt: currentProfile?.prdpExpiresAt || null,
       criminalRecordReportUrl: currentProfile?.criminalRecordReportUrl || null,
-      operatorAgreementSignature: currentProfile?.operatorAgreementSignature || null,
     };
     const nextValues = {
       nationalIdFrontUrl: nationalIdFrontUrl || currentValues.nationalIdFrontUrl,
@@ -3021,9 +3031,8 @@ router.post('/documents', requireAuth, async (req, res) => {
       proofOfAddressUrl: proofOfAddressUrl || currentValues.proofOfAddressUrl,
       prdpNumber: String(prdpNumber || currentValues.prdpNumber || '').trim().toUpperCase() || null,
       prdpUrl: prdpUrl || currentValues.prdpUrl,
-      prdpExpiresAt: normalizeDateOfBirth(prdpExpiresAt || currentValues.prdpExpiresAt),
+      prdpExpiresAt: normalizeDateOfBirth(prdpExpiresAt || currentValues.prdpExpiresAt) || null,
       criminalRecordReportUrl: criminalRecordReportUrl || currentValues.criminalRecordReportUrl,
-      operatorAgreementSignature: String(operatorAgreementSignature || currentValues.operatorAgreementSignature || '').trim() || null,
     };
     console.log('[POST /api/drivers/documents] resolved next values', {
       userId: req.userId,
@@ -3050,10 +3059,18 @@ router.post('/documents', requireAuth, async (req, res) => {
       });
     }
 
-    const isFullIdentitySubmit = providedCount >= 5;
     const isSouthAfrican = existing.registrationCountryCode === 'ZA';
+    const usesPassport = isSouthAfrican && nextValues.identityDocumentType === 'passport';
+    const requiredIdentityDocuments = [
+      nextValues.nationalIdFrontUrl,
+      ...(usesPassport ? [] : [nextValues.nationalIdBackUrl]),
+      nextValues.driverLicenceUrl,
+      nextValues.selfieUrl,
+      nextValues.selfieWithIdCardUrl,
+    ];
+    const isFullIdentitySubmit = requiredIdentityDocuments.every(Boolean);
     if (isFullIdentitySubmit && !nextValues.nationalIdNumber) {
-      return res.status(400).json({ error: 'National ID number is required' });
+      return res.status(400).json({ error: isSouthAfrican ? 'Identity document number is required' : 'National ID number is required' });
     }
     if (isFullIdentitySubmit && !nextValues.driverLicenceNumber) {
       return res.status(400).json({ error: 'Driver licence number is required' });
@@ -3063,6 +3080,15 @@ router.post('/documents', requireAuth, async (req, res) => {
     }
     if (isFullIdentitySubmit && !nextValues.driverLicenceExpiresAt) {
       return res.status(400).json({ error: 'Licence expiration date is required' });
+    }
+    if (isSouthAfrican && isFullIdentitySubmit && !nextValues.prdpExpiresAt) {
+      return res.status(400).json({ error: 'PrDP expiration date is required' });
+    }
+    if (isSouthAfrican && isFullIdentitySubmit && !nextValues.prdpNumber) {
+      return res.status(400).json({ error: 'PrDP number is required' });
+    }
+    if (isSouthAfrican && isFullIdentitySubmit && !nextValues.prdpUrl) {
+      return res.status(400).json({ error: 'PrDP document is required' });
     }
     if (nextValues.dateOfBirth) {
       const dob = new Date(`${nextValues.dateOfBirth}T00:00:00Z`);
@@ -3092,13 +3118,12 @@ router.post('/documents', requireAuth, async (req, res) => {
         rica_eca_declaration_accepted_at: ricaEcaDeclarationAccepted ? new Date() : currentProfile?.ricaEcaDeclarationAcceptedAt,
         operator_agreement_version: operatorAgreementAccepted ? SA_OPERATOR_AGREEMENT_VERSION : currentProfile?.operatorAgreementVersion,
         operator_agreement_accepted_at: operatorAgreementAccepted ? new Date() : currentProfile?.operatorAgreementAcceptedAt,
-        operator_agreement_signature: nextValues.operatorAgreementSignature,
         operating_licence_condition_accepted_at: operatingLicenceConditionAccepted ? new Date() : currentProfile?.operatingLicenceConditionAcceptedAt,
         driver_licence_expires_at: nextValues.driverLicenceExpiresAt,
       };
       const compliance = getSaProfileCompliance(prospectiveIdentity);
       if (!compliance.complete) {
-        return res.status(400).json({ error: `Complete the SA compliance requirements: ${compliance.missing.join(', ')}` });
+        return res.status(400).json({ error: `Complete the required driver details: ${compliance.missing.join(', ')}` });
       }
     }
 
@@ -3195,13 +3220,13 @@ router.post('/documents', requireAuth, async (req, res) => {
           nextValues.proofOfAddressUrl,
           nextValues.prdpNumber,
           nextValues.prdpUrl,
-          nextValues.prdpExpiresAt,
+          nextValues.prdpExpiresAt || null,
           nextValues.criminalRecordReportUrl,
           criminalDeclarationAccepted ? submittedAt : null,
           ricaEcaDeclarationAccepted ? submittedAt : null,
           operatorAgreementAccepted ? SA_OPERATOR_AGREEMENT_VERSION : null,
           operatorAgreementAccepted ? submittedAt : null,
-          nextValues.operatorAgreementSignature,
+          null,
           operatingLicenceConditionAccepted ? submittedAt : null,
           submittedAt,
         ]
@@ -3370,7 +3395,7 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     const nextFirstRegisteredAt = normalizeDateOfBirth(firstRegisteredAt || existingVehicle?.first_registered_at);
     const nextOperatingLicenceNumber = String(operatingLicenceNumber || existingVehicle?.operating_licence_number || '').trim().toUpperCase() || null;
     const nextOperatingLicenceUrl = String(operatingLicenceUrl || existingVehicle?.operating_licence_url || '').trim() || null;
-    const nextOperatingLicenceExpiresAt = normalizeDateOfBirth(operatingLicenceExpiresAt || existingVehicle?.operating_licence_expires_at);
+    const nextOperatingLicenceExpiresAt = normalizeDateOfBirth(operatingLicenceExpiresAt || existingVehicle?.operating_licence_expires_at) || null;
     const nextOperatorLegalName = String(operatorLegalName || existingVehicle?.operator_legal_name || '').trim() || null;
     const nextOperatorBusinessAddress = String(operatorBusinessAddress || existingVehicle?.operator_business_address || '').trim() || null;
     const nextPanicDeviceProofUrl = String(panicDeviceProofUrl || existingVehicle?.panic_device_proof_url || '').trim() || null;
@@ -3393,7 +3418,7 @@ router.post('/vehicle', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Submit at least one vehicle detail or document to save progress' });
     }
     const truckDriver = isTruckDriver(verification.driverProfile);
-    const minYear = truckDriver ? 1990 : 2010;
+    const minYear = truckDriver ? 1990 : (verification.registrationCountryCode === 'ZA' ? 2012 : 2010);
     if (nextYear !== null && (!Number.isInteger(Number(nextYear)) || Number(nextYear) < minYear)) {
       return res.status(400).json({ error: `Vehicle year must be ${minYear} or newer` });
     }
@@ -3404,6 +3429,18 @@ router.post('/vehicle', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'doorCount must be a valid whole number when provided' });
     }
     if (verification.registrationCountryCode === 'ZA') {
+      const configuredVehicleCatalog = await loadVehicleCatalog();
+      const configuredMake = configuredVehicleCatalog.find(
+        (item) => String(item?.make || '').trim().toLowerCase() === nextMake.toLowerCase()
+      );
+      const configuredModel = configuredMake?.models?.find(
+        (item) => String(item || '').trim().toLowerCase() === nextModel.toLowerCase()
+      );
+      if (!configuredMake || !configuredModel) {
+        return res.status(400).json({
+          error: 'Select a vehicle make and model configured by admin in the Vehicle Catalog.',
+        });
+      }
       const compliance = getSaDriverCompliance(
         { registration_country_code: 'ZA' },
         {

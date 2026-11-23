@@ -18,17 +18,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../auth/AuthProvider';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { submitDriverDocuments, uploadFile, resolveUploadedMediaUrl } from '../../api';
-import { applyDriverKindToStatus, getDriverVehicleRoute, normalizeDriverKind, readPendingDriverKind } from '../../constants/driverKind';
+import { applyDriverKindToStatus, DRIVER_KIND_STANDARD, getDriverVehicleRoute, normalizeDriverKind, readPendingDriverKind } from '../../constants/driverKind';
 import { PRIMARY_BLUE } from '../../constants/colors';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { persistLocalImageUri, prepareImageForUpload } from '../../services/localImageUpload';
 import DateSelectField from '../../components/DateSelectField';
+import DriverRegistrationProgress from '../../components/driver/DriverRegistrationProgress';
 
 export const DRIVER_SKIP_ONBOARDING_KEY = 'trust_express_driver_skip_onboarding';
 export const DRIVER_SKIP_ENHANCED_SELFIE_KEY = 'trust_express_driver_skip_enhanced_selfie';
 
-const STEP_CURRENT = 4;
-const STEP_TOTAL = 6;
 const CURRENT_YEAR = new Date().getFullYear();
 const DOCUMENT_UPLOAD_RETRY_COUNT = 2;
 
@@ -39,12 +38,13 @@ const DOCS = [
   { key: 'selfie', label: 'Identity verification', subtitle: 'Clear selfie', icon: 'person-outline' },
   { key: 'selfieWithIdCard', label: 'Selfie with national ID', subtitle: 'Hold your national ID next to your face', icon: 'camera-outline' },
 ];
-const SA_DOCS = [
-  { key: 'proofOfAddress', label: 'Proof of address', subtitle: 'Recent municipal, bank or utility document', icon: 'home-outline' },
-  { key: 'prdp', label: 'PrDP document', subtitle: 'Professional Driving Permit', icon: 'document-text-outline' },
-  { key: 'criminalRecordReport', label: 'SAPS criminal-record report', subtitle: 'Upload the issued report', icon: 'shield-checkmark-outline' },
+const SA_OPTIONAL_DOCS = [
+  { key: 'proofOfAddress', label: 'Proof of address (optional)', subtitle: 'Recent municipal, bank or utility document', icon: 'home-outline', required: false },
+  { key: 'criminalRecordReport', label: 'SAPS criminal-record report (optional)', subtitle: 'Upload the issued report', icon: 'shield-checkmark-outline', required: false },
 ];
-
+const SA_REQUIRED_DOCS = [
+  { key: 'prdp', label: 'PrDP document', subtitle: 'Professional Driving Permit', icon: 'document-text-outline', required: true },
+];
 function askCropPreference() {
   return new Promise((resolve) => {
     Alert.alert(
@@ -203,7 +203,8 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const [residentialAddress, setResidentialAddress] = useState(profile?.residentialAddress || '');
   const [prdpNumber, setPrdpNumber] = useState(profile?.prdpNumber || '');
   const [prdpExpiresAt, setPrdpExpiresAt] = useState(profile?.prdpExpiresAt || '');
-  const [operatorAgreementSignature, setOperatorAgreementSignature] = useState(profile?.operatorAgreementSignature || '');
+  const [registrationStage, setRegistrationStage] = useState(enhancedSelfieOnly ? 'documents' : 'personal');
+  const formScrollRef = useRef(null);
   const [criminalDeclarationAccepted, setCriminalDeclarationAccepted] = useState(!!profile?.criminalDeclarationAcceptedAt);
   const [ricaEcaDeclarationAccepted, setRicaEcaDeclarationAccepted] = useState(!!profile?.ricaEcaDeclarationAcceptedAt);
   const [operatorAgreementAccepted, setOperatorAgreementAccepted] = useState(!!profile?.operatorAgreementAcceptedAt);
@@ -242,13 +243,28 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
   const hasAtLeastOneDoc = enhancedSelfieOnly
     ? !!(uris.selfieWithIdCard || getExistingDocUrl('selfieWithIdCard'))
     : DOCS.some(({ key }) => !!(uris[key] || getExistingDocUrl(key)));
-  const docsToRender = isSouthAfrica ? [...DOCS, ...SA_DOCS] : DOCS;
+  const identityDocs = isSouthAfrica
+    ? [
+      DOCS[0],
+      identityDocumentType === 'passport'
+        ? { ...DOCS[1], label: 'Passport bio page', subtitle: 'Page showing your photo and passport number' }
+        : DOCS[1],
+      ...(identityDocumentType === 'passport' ? [] : [DOCS[2]]),
+      { ...DOCS[3], subtitle: identityDocumentType === 'passport' ? 'Clear identity selfie' : DOCS[3].subtitle },
+      {
+        ...DOCS[4],
+        label: identityDocumentType === 'passport' ? 'Selfie with passport' : DOCS[4].label,
+        subtitle: identityDocumentType === 'passport' ? 'Hold your passport bio page next to your face' : DOCS[4].subtitle,
+      },
+    ]
+    : DOCS;
+  const docsToRender = isSouthAfrica ? [...identityDocs, ...SA_REQUIRED_DOCS, ...SA_OPTIONAL_DOCS] : identityDocs;
 
   const getEffectiveDocUri = (key) => uris[key] || getExistingDocUrl(key);
 
   const missingRequiredDocs = enhancedSelfieOnly
-    ? (getEffectiveDocUri('selfieWithIdCard') ? [] : ['Selfie with national ID'])
-    : docsToRender.filter(({ key }) => !getEffectiveDocUri(key)).map(({ label }) => label);
+    ? (getEffectiveDocUri('selfieWithIdCard') ? [] : [`Selfie with ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}`])
+    : docsToRender.filter(({ key, required = true }) => required && !getEffectiveDocUri(key)).map(({ label }) => label);
 
   useEffect(() => {
     if (profileApproved && vehicleApproved) {
@@ -298,7 +314,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     pendingRedirectRef.current = true;
     let cancelled = false;
     (async () => {
-      const fallbackKind = normalizeDriverKind(profile?.driverKind || await readPendingDriverKind(userId));
+      const fallbackKind = isSouthAfrica
+        ? DRIVER_KIND_STANDARD
+        : normalizeDriverKind(profile?.driverKind || await readPendingDriverKind(userId));
       if (cancelled) {
         pendingRedirectRef.current = false;
         return;
@@ -314,7 +332,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     return () => {
       cancelled = true;
     };
-  }, [isPending, enhancedSelfieOnly, navigation, profile?.driverKind, userId]);
+  }, [isPending, enhancedSelfieOnly, isSouthAfrica, navigation, profile?.driverKind, userId]);
 
   const handleSkip = async () => {
     try {
@@ -336,7 +354,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         Alert.alert(
           'Front camera permission needed',
           key === 'selfieWithIdCard'
-            ? 'Allow camera access so you can take a live selfie while holding your national ID.'
+            ? `Allow camera access so you can take a live selfie while holding your ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}.`
             : 'Allow camera access so you can take your live identity selfie.',
         );
         return;
@@ -484,7 +502,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
 
     if (enhancedSelfieOnly) {
       if (!getEffectiveDocUri('selfieWithIdCard')) {
-        Alert.alert('Missing selfie', 'Please take a selfie while holding your national ID.');
+        Alert.alert('Missing selfie', `Please take a selfie while holding your ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}.`);
         return;
       }
     } else if (missingRequiredDocs.length > 0) {
@@ -496,7 +514,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       );
       return;
     } else if (!trimmedNationalIdNumber) {
-      Alert.alert('National ID number required', 'Enter the national ID number exactly as shown on your ID card.');
+      Alert.alert(
+        isSouthAfrica ? 'Identity document number required' : 'National ID number required',
+        isSouthAfrica
+          ? `Enter the number exactly as shown on your ${identityDocumentType === 'passport' ? 'passport' : 'SA ID'}.`
+          : 'Enter the national ID number exactly as shown on your ID card.',
+      );
       return;
     } else if (!trimmedDriverLicenceNumber) {
       Alert.alert('Licence number required', 'Enter the driver licence number exactly as shown on your licence.');
@@ -509,16 +532,16 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       return;
     }
     if (isSouthAfrica) {
-      if (!residentialAddress.trim() || !prdpNumber.trim() || !isIsoDate(prdpExpiresAt)) {
-        Alert.alert('SA compliance details required', 'Enter your residential address, PrDP number and PrDP expiry date.');
+      if (!String(prdpNumber || '').trim()) {
+        Alert.alert('PrDP number required', 'Enter the number shown on your PrDP.');
         return;
       }
-      if (!operatorAgreementSignature.trim()) {
-        Alert.alert('Electronic signature required', 'Type your full legal name as your electronic signature.');
+      if (!isIsoDate(prdpExpiresAt)) {
+        Alert.alert('PrDP expiration required', 'Select the expiration date shown on your PrDP.');
         return;
       }
       if (!criminalDeclarationAccepted || !ricaEcaDeclarationAccepted || !operatorAgreementAccepted || !operatingLicenceConditionAccepted) {
-        Alert.alert('Declarations required', 'Accept all South African declarations and the operator agreement before submitting.');
+        Alert.alert('Declarations required', 'Accept all required declarations before submitting.');
         return;
       }
     }
@@ -527,12 +550,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     try {
       const token = await getToken({ skipCache: true });
       if (!token) throw new Error('Not signed in');
-      const driverKind = normalizeDriverKind(
-        profile?.driverKind || await readPendingDriverKind(userId)
-      );
+      const driverKind = isSouthAfrica
+        ? DRIVER_KIND_STANDARD
+        : normalizeDriverKind(profile?.driverKind || await readPendingDriverKind(userId));
 
       if (enhancedSelfieOnly) {
-        const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
+        const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), `Selfie with ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}`);
         try {
           await submitDriverDocuments(token, { selfieWithIdCardUrl, driverKind }, { suppressAuthErrorHandler: true });
         } catch (error) {
@@ -541,14 +564,16 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
             error: error?.message || null,
             apiError: error?.response?.data || null,
           });
-          throw new Error(formatUploadErrorMessage(error, 'Could not submit your selfie with national ID. Please try again.'));
+          throw new Error(formatUploadErrorMessage(error, `Could not submit your selfie with ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}. Please try again.`));
         }
       } else {
-        const nationalIdFrontUrl = await uploadUri(token, getEffectiveDocUri('nationalIdFront'), 'National ID front');
-        const nationalIdBackUrl = await uploadUri(token, getEffectiveDocUri('nationalIdBack'), 'National ID back');
+        const nationalIdFrontUrl = await uploadUri(token, getEffectiveDocUri('nationalIdFront'), identityDocumentType === 'passport' ? 'Passport bio page' : 'National ID front');
+        const nationalIdBackUrl = identityDocumentType === 'passport'
+          ? null
+          : await uploadUri(token, getEffectiveDocUri('nationalIdBack'), 'National ID back');
         const driverLicenceUrl = await uploadUri(token, getEffectiveDocUri('driverLicence'), "Driver's license");
         const selfieUrl = await uploadUri(token, getEffectiveDocUri('selfie'), 'Selfie');
-        const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), 'Selfie with national ID');
+        const selfieWithIdCardUrl = await uploadUri(token, getEffectiveDocUri('selfieWithIdCard'), `Selfie with ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}`);
         const proofOfAddressUrl = isSouthAfrica ? await uploadUri(token, getEffectiveDocUri('proofOfAddress'), 'Proof of address') : null;
         const prdpUrl = isSouthAfrica ? await uploadUri(token, getEffectiveDocUri('prdp'), 'PrDP') : null;
         const criminalRecordReportUrl = isSouthAfrica ? await uploadUri(token, getEffectiveDocUri('criminalRecordReport'), 'SAPS criminal-record report') : null;
@@ -574,7 +599,6 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
             criminalDeclarationAccepted,
             ricaEcaDeclarationAccepted,
             operatorAgreementAccepted,
-            operatorAgreementSignature: operatorAgreementSignature.trim(),
             operatingLicenceConditionAccepted,
           } : {}),
         };
@@ -607,9 +631,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       }
 
       pendingSubmitAlertRef.current = true;
-      const fallbackKind = normalizeDriverKind(
-        driverKind || profile?.driverKind || await readPendingDriverKind(userId)
-      );
+      const fallbackKind = isSouthAfrica
+        ? DRIVER_KIND_STANDARD
+        : normalizeDriverKind(driverKind || profile?.driverKind || await readPendingDriverKind(userId));
       const latest = applyDriverKindToStatus(await refetchDriverStatus(), fallbackKind);
       if (typeof patchDriverStatus === 'function' && latest) {
         patchDriverStatus(latest);
@@ -630,7 +654,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
       Alert.alert(
         enhancedSelfieOnly ? 'Submitted' : 'Documents under review',
         enhancedSelfieOnly
-          ? 'Your selfie with national ID was submitted successfully.'
+          ? `Your selfie with ${identityDocumentType === 'passport' ? 'passport' : 'national ID'} was submitted successfully.`
           : target === 'DriverRegisterCar' || target === 'DriverRegisterTruck'
             ? 'Documents saved. Continue by registering your vehicle now so both checks can run in parallel.'
             : needsPhone
@@ -645,6 +669,41 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const continueToDocuments = () => {
+    const trimmedNationalIdNumber = String(nationalIdNumber || '').trim();
+    const trimmedDriverLicenceNumber = String(driverLicenceNumber || '').trim();
+    if (!trimmedNationalIdNumber) {
+      Alert.alert('Identity number required', `Enter the number shown on your ${identityDocumentType === 'passport' ? 'passport' : 'identity document'}.`);
+      return;
+    }
+    if (!trimmedDriverLicenceNumber) {
+      Alert.alert('Licence number required', 'Enter the number shown on your driver licence.');
+      return;
+    }
+    if (!isIsoDate(dateOfBirth)) {
+      Alert.alert('Date of birth required', 'Select your date of birth.');
+      return;
+    }
+    if (!isIsoDate(driverLicenceExpiresAt)) {
+      Alert.alert('Licence expiration required', 'Select your driver licence expiration date.');
+      return;
+    }
+    if (isSouthAfrica && !isIsoDate(prdpExpiresAt)) {
+      Alert.alert('PrDP expiration required', 'Select the expiration date shown on your PrDP.');
+      return;
+    }
+    if (isSouthAfrica && !String(prdpNumber || '').trim()) {
+      Alert.alert('PrDP number required', 'Enter the number shown on your PrDP.');
+      return;
+    }
+    if (isSouthAfrica && (!criminalDeclarationAccepted || !ricaEcaDeclarationAccepted || !operatorAgreementAccepted || !operatingLicenceConditionAccepted)) {
+      Alert.alert('Declarations required', 'Accept all required declarations before continuing.');
+      return;
+    }
+    setRegistrationStage('documents');
+    requestAnimationFrame(() => formScrollRef.current?.scrollTo?.({ y: 0, animated: true }));
   };
 
   if (isPending && !enhancedSelfieOnly && !pendingSubmitAlertRef.current) {
@@ -685,7 +744,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
 
   return (
     <KeyboardAvoidingView
-      className="flex-1 bg-white"
+      className="flex-1 bg-[#f6f7fb]"
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Modal
@@ -736,7 +795,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
             <View className="mb-4 rounded-2xl bg-black/45 px-4 py-3">
               <Text className="text-center text-sm text-white">
                 {lockedSelfieDocKey === 'selfieWithIdCard'
-                  ? 'Gallery is disabled here. Use the front camera and make sure both your face and national ID are clearly visible.'
+                  ? `Gallery is disabled here. Use the front camera and make sure both your face and ${identityDocumentType === 'passport' ? 'passport' : 'national ID'} are clearly visible.`
                   : 'Gallery is disabled here. Use the front camera and make sure your full face is clearly visible.'}
               </Text>
             </View>
@@ -756,78 +815,41 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
         </View>
       </Modal>
 
-      <View
-        className="flex-row items-center justify-between border-b border-gray-100 bg-white"
-        style={{ paddingTop: insets.top, paddingHorizontal: 20, paddingBottom: 12 }}
-      >
-        <View className="h-10 w-10" />
-        <Text className="text-lg font-bold text-gray-900">Registration</Text>
-        <TouchableOpacity className="p-2">
-          <Ionicons name="help-circle-outline" size={24} color="#6b7280" />
-        </TouchableOpacity>
-      </View>
+      <DriverRegistrationProgress
+        currentStep={registrationStage === 'personal' ? 1 : 2}
+        topInset={insets.top}
+        onBack={registrationStage === 'documents' && !enhancedSelfieOnly ? () => setRegistrationStage('personal') : null}
+        onHelp={() => Alert.alert('Need help?', registrationStage === 'personal' ? 'Enter the details exactly as they appear on your official documents.' : 'Upload clear, readable photos. Optional documents are marked.')}
+      />
 
       <ScrollView
+        ref={formScrollRef}
         className="flex-1"
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 24) }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <Text className="mt-4 text-sm font-semibold text-gray-500">STEP {STEP_CURRENT} OF {STEP_TOTAL}</Text>
-        <View className="mt-2 mb-1 flex-row items-center gap-2">
-          <View className="h-2 flex-1 flex-row gap-1 overflow-hidden rounded-full bg-gray-200">
-            {Array.from({ length: STEP_TOTAL }).map((_, i) => (
-              <View
-                key={i}
-                className="flex-1 rounded-full"
-                style={{ backgroundColor: i < STEP_CURRENT ? PRIMARY_BLUE : '#e5e7eb' }}
-              />
-            ))}
-          </View>
-          <Text className="text-sm text-gray-400">Documents</Text>
-        </View>
-
-        <Text className="mt-6 mb-2 text-2xl font-bold text-gray-900">
+        <Text className="mt-6 mb-2 text-2xl font-bold text-slate-950">
           {enhancedSelfieOnly
-            ? 'Take a selfie with your national ID'
-            : isSouthAfrica
-              ? 'South Africa driver registration'
-              : 'Upload Documents'}
+            ? `Take a selfie with your ${identityDocumentType === 'passport' ? 'passport' : 'national ID'}`
+            : registrationStage === 'personal'
+              ? 'Personal details'
+              : 'Documents'}
         </Text>
-        <Text className="mb-4 text-sm text-gray-600">
-          {enhancedSelfieOnly
-            ? 'Hold your national ID next to your face and take a clear selfie so we can strengthen driver authenticity.'
-            : 'Valid documentation is required for passenger safety. Please upload clear photos where all text is readable.'}
-        </Text>
-
-        {isSouthAfrica && !enhancedSelfieOnly ? (
-          <View className="mb-4 flex-row items-center self-start rounded-full border border-blue-200 bg-blue-50 px-3 py-2">
-            <Ionicons name="location-outline" size={16} color={PRIMARY_BLUE} />
-            <Text className="ml-2 text-xs font-bold uppercase tracking-wide text-blue-700">South Africa application</Text>
-          </View>
+        {enhancedSelfieOnly ? (
+          <Text className="mb-4 text-sm text-gray-600">
+            Hold your {identityDocumentType === 'passport' ? 'passport bio page' : 'national ID'} next to your face and take a clear selfie.
+          </Text>
         ) : null}
 
         {enhancedSelfieOnly ? (
           <View className="mb-4 rounded-xl bg-amber-50 px-4 py-3">
             <Text className="text-sm font-semibold text-amber-900">One thing left</Text>
             <Text className="mt-1 text-sm leading-5 text-amber-800">
-              Your other identity documents are already uploaded. The only missing item is your selfie with your national ID.
+              Your other identity documents are already uploaded. The only missing item is your selfie with your {identityDocumentType === 'passport' ? 'passport' : 'national ID'}.
             </Text>
           </View>
         ) : null}
-
-        <View className="mb-6 rounded-xl p-4" style={{ backgroundColor: '#EFF6FF' }}>
-          <View className="mb-2 flex-row items-center gap-2">
-            <Ionicons name="information-circle" size={20} color={PRIMARY_BLUE} />
-            <Text className="text-sm font-semibold text-gray-900">Requirements for photos:</Text>
-          </View>
-          <Text className="ml-6 text-sm text-gray-600">- All four corners must be visible</Text>
-          <Text className="ml-6 text-sm text-gray-600">- No camera flash glares or shadows</Text>
-          <Text className="ml-6 text-sm text-gray-600">- Text must be sharp and legible</Text>
-          {enhancedSelfieOnly ? (
-            <Text className="ml-6 text-sm text-gray-600">- Your face and national ID must both be clearly visible</Text>
-          ) : null}
-        </View>
 
         {isRejected && profile?.rejectionReason ? (
           <View className="mb-4 rounded-xl bg-red-50 p-3">
@@ -836,14 +858,16 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           </View>
         ) : null}
 
-        {!enhancedSelfieOnly ? (
+        {!enhancedSelfieOnly && registrationStage === 'personal' ? (
           <View className="mb-6">
             <Text className="mb-2 text-sm font-medium text-gray-700">
-              National ID number <Text className="text-red-500">*</Text>
+              {isSouthAfrica ? 'Identity document number' : 'National ID number'} <Text className="text-red-500">*</Text>
             </Text>
             <TextInput
-              className="mb-4 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
-              placeholder="e.g. 63-123456A12"
+              className="mb-4 h-14 rounded-2xl border border-slate-200 bg-white px-4 text-base text-gray-900"
+              style={{ borderWidth: 1, borderColor: '#E5E7EB' }}
+              underlineColorAndroid="transparent"
+              placeholder={isSouthAfrica && identityDocumentType === 'passport' ? 'Enter passport number' : 'e.g. 63-123456A12'}
               placeholderTextColor="#9ca3af"
               autoCapitalize="characters"
               autoCorrect={false}
@@ -854,7 +878,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               Driver licence number <Text className="text-red-500">*</Text>
             </Text>
             <TextInput
-              className="mb-1 rounded-xl border border-gray-200 p-4 text-base text-gray-900"
+              className="mb-1 h-14 rounded-2xl border border-slate-200 bg-white px-4 text-base text-gray-900"
+              style={{ borderWidth: 1, borderColor: '#E5E7EB' }}
+              underlineColorAndroid="transparent"
               placeholder="Enter licence number"
               placeholderTextColor="#9ca3af"
               autoCapitalize="characters"
@@ -862,9 +888,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               value={driverLicenceNumber}
               onChangeText={setDriverLicenceNumber}
             />
-            <Text className="mb-4 text-xs text-gray-500">
-              These numbers must match your documents and cannot be reused on another account.
-            </Text>
+            <View className="mb-3" />
             <DateSelectField
               label="Date of birth"
               value={dateOfBirth}
@@ -883,31 +907,33 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
               minYear={CURRENT_YEAR}
               maxYear={CURRENT_YEAR + 20}
               fallbackYear={CURRENT_YEAR + 1}
-              helpText="Use the expiry date printed on your driver licence."
               onChange={setDriverLicenceExpiresAt}
             />
             {isSouthAfrica ? (
-              <View className="mt-2 rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                <Text className="mb-4 text-lg font-bold text-gray-900">South Africa compliance</Text>
+              <View className="mt-2 rounded-2xl border border-slate-200 bg-white p-4">
+                <Text className="mb-4 text-lg font-bold text-gray-900">Identity and permit details</Text>
                 <Text className="mb-2 text-sm font-medium text-gray-700">Identity document type</Text>
                 <View className="mb-4 flex-row gap-2">
-                  {[['sa_id', 'SA ID'], ['passport', 'Passport']].map(([value, label]) => (
-                    <TouchableOpacity key={value} onPress={() => setIdentityDocumentType(value)} className={`flex-1 rounded-xl border p-3 ${identityDocumentType === value ? 'border-blue-600 bg-white' : 'border-gray-200 bg-gray-50'}`}>
+                  {[['sa_id', 'ID document'], ['passport', 'Passport']].map(([value, label]) => (
+                    <TouchableOpacity
+                      key={value}
+                      onPress={() => setIdentityDocumentType(value)}
+                      className={`h-14 flex-1 items-center justify-center rounded-2xl ${identityDocumentType === value ? 'bg-blue-50' : 'bg-white'}`}
+                      style={{ borderWidth: 1, borderColor: identityDocumentType === value ? PRIMARY_BLUE : '#E5E7EB' }}
+                    >
                       <Text className={`text-center font-semibold ${identityDocumentType === value ? 'text-blue-700' : 'text-gray-600'}`}>{label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
-                <Text className="mb-2 text-sm font-medium text-gray-700">Residential address <Text className="text-red-500">*</Text></Text>
-                <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" multiline value={residentialAddress} onChangeText={setResidentialAddress} placeholder="Full residential address" />
+                <Text className="mb-2 text-sm font-medium text-gray-700">Residential address <Text className="text-gray-400">(optional)</Text></Text>
+                <TextInput className="mb-4 min-h-14 rounded-2xl bg-white px-4 py-4 text-base" style={{ borderWidth: 1, borderColor: '#E5E7EB' }} underlineColorAndroid="transparent" multiline value={residentialAddress} onChangeText={setResidentialAddress} placeholder="Full residential address" />
                 <Text className="mb-2 text-sm font-medium text-gray-700">PrDP number <Text className="text-red-500">*</Text></Text>
-                <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={prdpNumber} onChangeText={setPrdpNumber} autoCapitalize="characters" placeholder="Enter PrDP number" />
+                <TextInput className="mb-4 h-14 rounded-2xl bg-white px-4 text-base" style={{ borderWidth: 1, borderColor: '#E5E7EB' }} underlineColorAndroid="transparent" value={prdpNumber} onChangeText={setPrdpNumber} autoCapitalize="characters" placeholder="Enter PrDP number" />
                 <DateSelectField label="PrDP expiration" value={prdpExpiresAt} placeholder="Select PrDP expiry date" required minYear={CURRENT_YEAR} maxYear={CURRENT_YEAR + 10} fallbackYear={CURRENT_YEAR + 1} onChange={setPrdpExpiresAt} />
-                <Text className="mb-2 mt-2 text-sm font-medium text-gray-700">Electronic signature <Text className="text-red-500">*</Text></Text>
-                <TextInput className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-base" value={operatorAgreementSignature} onChangeText={setOperatorAgreementSignature} placeholder="Type your full legal name" />
                 {[
                   [criminalDeclarationAccepted, setCriminalDeclarationAccepted, 'I declare that I have no relevant pending criminal investigations.'],
                   [ricaEcaDeclarationAccepted, setRicaEcaDeclarationAccepted, 'I confirm that my mobile device and SIM comply with RICA/ECA requirements.'],
-                  [operatorAgreementAccepted, setOperatorAgreementAccepted, 'I accept the Trust Express South Africa operator agreement (version ZA-1.0).'],
+                  [operatorAgreementAccepted, setOperatorAgreementAccepted, 'I accept the Trust Express operator agreement.'],
                   [operatingLicenceConditionAccepted, setOperatingLicenceConditionAccepted, 'I understand activation is conditional on obtaining and maintaining a valid operating licence.'],
                 ].map(([checked, setter, label]) => (
                   <TouchableOpacity key={label} onPress={() => setter(!checked)} className="mb-3 flex-row items-start">
@@ -920,14 +946,24 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           </View>
         ) : null}
 
-        {!enhancedSelfieOnly ? (
+        {!enhancedSelfieOnly && registrationStage === 'personal' ? (
+          <TouchableOpacity
+            className="mb-4 flex-row items-center justify-center gap-2 rounded-2xl py-4"
+            style={{ backgroundColor: PRIMARY_BLUE }}
+            onPress={continueToDocuments}
+          >
+            <Text className="text-lg font-semibold text-white">Next</Text>
+            <Ionicons name="arrow-forward" size={20} color="#fff" />
+          </TouchableOpacity>
+        ) : null}
+
+        {!enhancedSelfieOnly && registrationStage === 'documents' ? (
           <View className="mb-3 mt-1">
             <Text className="text-lg font-bold text-gray-900">Identity documents</Text>
-            <Text className="mt-1 text-sm text-gray-500">Upload clear, uncropped images of each required document.</Text>
           </View>
         ) : null}
 
-        {docsToRender.map(({ key, label, subtitle, icon }) => {
+        {registrationStage === 'documents' ? docsToRender.map(({ key, label, subtitle, icon }) => {
           const effectiveUri = getEffectiveDocUri(key);
           const displayUri = getDisplayImageUri(effectiveUri);
           const hasDoc = !!effectiveUri;
@@ -936,8 +972,7 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           <React.Fragment key={key}>
           {isSouthAfrica && key === 'proofOfAddress' ? (
             <View className="mb-3 mt-3 border-t border-gray-100 pt-5">
-              <Text className="text-lg font-bold text-gray-900">SA compliance documents</Text>
-              <Text className="mt-1 text-sm leading-5 text-gray-500">These documents are reviewed separately before your account can be approved.</Text>
+              <Text className="text-lg font-bold text-gray-900">Optional documents</Text>
             </View>
           ) : null}
           <View className="mb-4 flex-row items-center rounded-2xl border border-gray-200 bg-white p-4">
@@ -976,14 +1011,9 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           </View>
           </React.Fragment>
           );
-        })}
+        }) : null}
 
-        <View className="my-4 flex-row items-center justify-center gap-2">
-          <Ionicons name="lock-closed-outline" size={16} color="#9ca3af" />
-          <Text className="text-xs font-medium uppercase tracking-wide text-gray-400">Encrypted & Secure</Text>
-        </View>
-
-        <TouchableOpacity
+        {registrationStage === 'documents' ? <TouchableOpacity
           className={`mb-2 flex-row items-center justify-center gap-2 rounded-xl py-4 ${missingRequiredDocs.length > 0 && !enhancedSelfieOnly ? 'opacity-60' : !hasAtLeastOneDoc ? 'opacity-60' : ''}`}
           style={{ backgroundColor: '#EFF6FF' }}
           onPress={handleSubmit}
@@ -994,14 +1024,12 @@ export default function DriverUploadDocumentsScreen({ navigation, route }) {
           ) : (
             <>
               <Text className="text-lg font-semibold" style={{ color: PRIMARY_BLUE }}>
-                {enhancedSelfieOnly ? 'Submit selfie' : 'Submit for Verification'}
+                {enhancedSelfieOnly ? 'Submit selfie' : 'Next'}
               </Text>
               <Ionicons name="arrow-forward" size={20} color={PRIMARY_BLUE} />
             </>
           )}
-        </TouchableOpacity>
-
-        <Text className="mb-2 text-center text-xs text-gray-400">Reviewing usually takes less than 24 hours.</Text>
+        </TouchableOpacity> : null}
 
         {/*
         <TouchableOpacity className="items-center py-3" onPress={handleSkip}>

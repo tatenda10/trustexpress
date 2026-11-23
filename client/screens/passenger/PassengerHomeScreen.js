@@ -1596,20 +1596,22 @@ export default function PassengerHomeScreen({ navigation, route }) {
                   <Text className="mt-2 text-[17px] font-bold text-gray-900">Normal ride</Text>
                   <Text className="mt-0.5 text-[12px] text-gray-600">Get around town at a fair price</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => openBookingMap('hire', { search: true })}
-                  activeOpacity={0.85}
-                  className="flex-1 rounded-2xl px-4 pb-4 pt-3"
-                  style={{ backgroundColor: '#fff7ed' }}
-                >
-                  <Image
-                    source={require('../../assets/truck.png')}
-                    style={{ width: 72, height: 46 }}
-                    resizeMode="contain"
-                  />
-                  <Text className="mt-2 text-[17px] font-bold text-gray-900">Truck hire</Text>
-                  <Text className="mt-0.5 text-[12px] text-gray-600">Moving, deliveries and loads</Text>
-                </TouchableOpacity>
+                {getMarket().countryCode !== 'ZA' ? (
+                  <TouchableOpacity
+                    onPress={() => openBookingMap('hire', { search: true })}
+                    activeOpacity={0.85}
+                    className="flex-1 rounded-2xl px-4 pb-4 pt-3"
+                    style={{ backgroundColor: '#fff7ed' }}
+                  >
+                    <Image
+                      source={require('../../assets/truck.png')}
+                      style={{ width: 72, height: 46 }}
+                      resizeMode="contain"
+                    />
+                    <Text className="mt-2 text-[17px] font-bold text-gray-900">Truck hire</Text>
+                    <Text className="mt-0.5 text-[12px] text-gray-600">Moving, deliveries and loads</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
 
               <View className="mt-4 flex-row gap-3">

@@ -6,13 +6,16 @@ import { PRIMARY_BLUE } from '../../constants/colors';
 import { getApiUrl } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 
-const DOC_ITEMS = [
-  { key: 'driverLicenceUrl', title: "Driver's licence", subtitle: 'Licence document', icon: 'id-card-outline' },
-  { key: 'nationalIdFrontUrl', title: 'National ID front', subtitle: 'Front side of ID', icon: 'document-outline' },
-  { key: 'nationalIdBackUrl', title: 'National ID back', subtitle: 'Back side of ID', icon: 'document-outline' },
-  { key: 'selfieUrl', title: 'Verification selfie', subtitle: 'Selfie used for identity check', icon: 'person-outline' },
-  { key: 'selfieWithIdCardUrl', title: 'Selfie with national ID', subtitle: 'Face shown while holding ID card', icon: 'camera-outline' },
-];
+function getDocumentItems(profile) {
+  const usesPassport = profile?.identityDocumentType === 'passport';
+  return [
+    { key: 'driverLicenceUrl', title: "Driver's licence", subtitle: 'Licence document', icon: 'id-card-outline' },
+    { key: 'nationalIdFrontUrl', title: usesPassport ? 'Passport bio page' : 'National ID front', subtitle: usesPassport ? 'Photo and passport-number page' : 'Front side of ID', icon: 'document-outline' },
+    ...(usesPassport ? [] : [{ key: 'nationalIdBackUrl', title: 'National ID back', subtitle: 'Back side of ID', icon: 'document-outline' }]),
+    { key: 'selfieUrl', title: 'Verification selfie', subtitle: 'Selfie used for identity check', icon: 'person-outline' },
+    { key: 'selfieWithIdCardUrl', title: usesPassport ? 'Selfie with passport' : 'Selfie with national ID', subtitle: usesPassport ? 'Face shown while holding passport' : 'Face shown while holding ID card', icon: 'camera-outline' },
+  ];
+}
 
 function getDocumentStatus(profile, key) {
   const hasFile = !!profile?.[key];
@@ -69,7 +72,7 @@ export default function DriverDocumentationPage({ navigation, route }) {
 
   const uploadedDocs = useMemo(
     () =>
-      DOC_ITEMS.map((item) => ({
+      getDocumentItems(profile).map((item) => ({
         ...item,
         url: normalizeDocumentUrl(profile?.[item.key]),
         statusMeta: getDocumentStatus(profile, item.key),
@@ -121,7 +124,7 @@ export default function DriverDocumentationPage({ navigation, route }) {
           )}
           <Text className="mb-1 text-xl font-semibold text-gray-900">{statusLabel}</Text>
           <Text className="px-4 text-center text-sm text-gray-500">
-            {notSubmitted && 'Submit your driver licence, national ID, selfie, and selfie with your ID for verification.'}
+            {notSubmitted && `Submit your driver licence, ${profile?.identityDocumentType === 'passport' ? 'passport' : 'national ID'}, selfie, and selfie with your identity document for verification.`}
             {isPending && 'Your documents are being reviewed. The files you submitted are listed below.'}
             {isApproved && 'Your identity documents have been verified. You can review them below.'}
             {isRejected && !canResubmit && 'You are not allowed to resubmit. Contact support if you believe this is an error.'}
@@ -134,7 +137,7 @@ export default function DriverDocumentationPage({ navigation, route }) {
             <Text className="mb-3 text-sm font-semibold text-gray-900">Registered identity details</Text>
             {profile?.nationalIdNumber ? (
               <View className="mb-2">
-                <Text className="text-xs text-gray-500">National ID number</Text>
+                <Text className="text-xs text-gray-500">{profile?.identityDocumentType === 'passport' ? 'Passport number' : 'National ID number'}</Text>
                 <Text className="mt-0.5 text-base font-medium text-gray-900">{profile.nationalIdNumber}</Text>
               </View>
             ) : null}

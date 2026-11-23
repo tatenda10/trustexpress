@@ -202,6 +202,7 @@ export default function DriverDetailsPage() {
   const [settingDisplayPhoto, setSettingDisplayPhoto] = useState(false)
   const [warning, setWarning] = useState('')
   const [driver, setDriver] = useState(location.state?.driver || null)
+  const returnTo = location.state?.returnTo || (driver?.registrationCountryCode === 'ZA' ? '/dashboard/drivers/sa' : '/dashboard/drivers/zim')
   const [carPhotoIndex, setCarPhotoIndex] = useState(0)
   const [manualDocsSubmitting, setManualDocsSubmitting] = useState(false)
   const [manualDocsMessage, setManualDocsMessage] = useState('')
@@ -478,7 +479,7 @@ export default function DriverDetailsPage() {
           <div className="min-w-0 flex-1">
             <button
               type="button"
-              onClick={() => navigate('/dashboard/drivers')}
+              onClick={() => navigate(returnTo)}
               className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-800"
             >
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
@@ -556,6 +557,7 @@ export default function DriverDetailsPage() {
           <Field label="Last Name" value={driver.lastName || '-'} />
           <Field label="Email" value={driver.email} />
           <Field label="Phone" value={driver.phoneNumber} />
+          <Field label="Market" value={driver.registrationCountryCode === 'ZA' ? 'South Africa' : 'Zimbabwe'} />
           <Field label="Phone Verified" value={driver.phoneVerified ? 'Yes' : 'No'} />
           <Field label="Account status" value={accountStatusLabel} />
           <Field label="Block / restriction reason" value={accountStatusReasons.join(' · ') || '-'} />

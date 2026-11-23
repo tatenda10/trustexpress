@@ -44,6 +44,29 @@ export async function importClerkUser(clerkUser) {
     ? new Date(privateMeta.phoneVerifiedAt)
     : (phone?.verification?.status === 'verified' ? toDate(clerkUser.createdAt) : null);
   const emailVerified = email?.verification?.status === 'verified' || Boolean(email);
+  const normalizedEmail = email?.emailAddress ? String(email.emailAddress).toLowerCase() : null;
+  if (normalizedEmail) {
+    const [currentUser] = await query(
+      'SELECT email FROM users WHERE clerk_user_id = ? LIMIT 1',
+      [clerkUser.id]
+    );
+    if (!currentUser || String(currentUser.email || '').toLowerCase() !== normalizedEmail) {
+      const [duplicateEmailUser] = await query(
+        `SELECT clerk_user_id, role
+         FROM users
+         WHERE LOWER(email) = ?
+           AND clerk_user_id <> ?
+         LIMIT 1`,
+        [normalizedEmail, clerkUser.id]
+      );
+      if (duplicateEmailUser) {
+        throw Object.assign(new Error(`Email already belongs to a ${duplicateEmailUser.role} account`), {
+          status: 409,
+          code: 'EMAIL_IN_USE_OTHER_ACCOUNT',
+        });
+      }
+    }
+  }
 
   await query(
     `INSERT INTO users (
@@ -68,7 +91,7 @@ export async function importClerkUser(clerkUser) {
        clerk_imported_at = CURRENT_TIMESTAMP`,
     [
       clerkUser.id,
-      email?.emailAddress ? String(email.emailAddress).toLowerCase() : null,
+      normalizedEmail,
       clerkUser.firstName || null,
       clerkUser.lastName || null,
       clerkUser.imageUrl && clerkUser.hasImage !== false ? clerkUser.imageUrl : null,

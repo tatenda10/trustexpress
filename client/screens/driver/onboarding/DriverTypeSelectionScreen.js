@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../auth/AuthProvider';
@@ -27,8 +27,14 @@ export default function DriverTypeSelectionScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { getToken, userId } = useAuth();
   const { driverStatus, refetchDriverStatus, patchDriverStatus } = useDriverStatus() || {};
-  const [selected, setSelected] = useState(null);
+  const isSouthAfrica = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA';
+  const availableOptions = isSouthAfrica ? OPTIONS.filter((option) => option.value === DRIVER_KIND_STANDARD) : OPTIONS;
+  const [selected, setSelected] = useState(isSouthAfrica ? DRIVER_KIND_STANDARD : null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (isSouthAfrica) setSelected(DRIVER_KIND_STANDARD);
+  }, [isSouthAfrica]);
 
   const applyLocalKind = (kind, driverProfile = null) => {
     if (typeof patchDriverStatus !== 'function') return;
@@ -42,20 +48,21 @@ export default function DriverTypeSelectionScreen({ navigation }) {
   };
 
   const handleContinue = async () => {
-    if (!selected) {
+    const selectedDriverKind = isSouthAfrica ? DRIVER_KIND_STANDARD : selected;
+    if (!selectedDriverKind) {
       Alert.alert('Choose a driver type', 'Are you a truck driver or a normal driver?');
       return;
     }
     try {
       setSaving(true);
-      await writePendingDriverKind(userId, selected);
-      applyLocalKind(selected);
+      await writePendingDriverKind(userId, selectedDriverKind);
+      applyLocalKind(selectedDriverKind);
 
       const token = await getToken({ skipCache: true });
       if (token) {
         try {
-          const data = await updateDriverKind(token, { driverKind: selected });
-          applyLocalKind(selected, data?.driverProfile || null);
+          const data = await updateDriverKind(token, { driverKind: selectedDriverKind });
+          applyLocalKind(selectedDriverKind, data?.driverProfile || null);
           if (typeof refetchDriverStatus === 'function') {
             await refetchDriverStatus();
           }
@@ -82,7 +89,7 @@ export default function DriverTypeSelectionScreen({ navigation }) {
       </View>
 
       <View className="px-5">
-        {OPTIONS.map((option) => {
+        {availableOptions.map((option) => {
           const active = selected === option.value;
           return (
             <TouchableOpacity

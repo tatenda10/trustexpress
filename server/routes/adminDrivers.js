@@ -247,6 +247,11 @@ function mapDriverFromClerkAndMysql(user, identityRow, vehicleRow) {
     fullName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null,
     email: getPrimaryEmail(user),
     phoneNumber: privateMeta.phoneNumber || getPrimaryPhone(user) || null,
+    registrationCountryCode: identityRow?.registration_country_code
+      || user.registrationCountryCode
+      || privateMeta.registrationCountryCode
+      || publicMeta.registrationCountryCode
+      || null,
     createdAt: user.createdAt || null,
     phoneVerified: !!identityRow?.phone_verified_at,
     phoneVerifiedAt: identityRow?.phone_verified_at || null,
@@ -403,6 +408,7 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
     const verificationStatus = String(req.query.verificationStatus || 'all').toLowerCase();
     const verificationBucket = String(req.query.verificationBucket || 'all').toLowerCase();
     const verificationType = String(req.query.verificationType || 'all').toLowerCase();
+    const countryCode = String(req.query.countryCode || 'all').trim().toUpperCase();
     const page = Math.max(Number(req.query.page) || 1, 1);
     const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 100);
     const sortBy = String(req.query.sortBy || 'createdAt');
@@ -426,6 +432,12 @@ router.get('/', requireAdminAuth, requirePermission('drivers.read'), async (req,
     let drivers = users.map((user) =>
       mapDriverFromClerkAndMysql(user, identityByUser.get(user.id) || null, vehicleByUser.get(user.id) || null)
     );
+
+    if (countryCode === 'ZA') {
+      drivers = drivers.filter((item) => item.registrationCountryCode === 'ZA');
+    } else if (countryCode === 'ZW') {
+      drivers = drivers.filter((item) => item.registrationCountryCode !== 'ZA');
+    }
 
     if (search) {
       drivers = drivers.filter((item) => {
@@ -522,6 +534,7 @@ async function exportDriversWorkbook(req, res) {
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const verificationStatus = String(req.query.verificationStatus || 'all').toLowerCase();
+    const countryCode = String(req.query.countryCode || 'all').trim().toUpperCase();
 
     const clerkUsers = await loadAllClerkUsers('-created_at');
     const users = clerkUsers.filter((u) => normalizeRole(u.publicMetadata?.role) === 'driver');
@@ -541,6 +554,12 @@ async function exportDriversWorkbook(req, res) {
     let drivers = users.map((user) =>
       mapDriverFromClerkAndMysql(user, identityByUser.get(user.id) || null, vehicleByUser.get(user.id) || null)
     );
+
+    if (countryCode === 'ZA') {
+      drivers = drivers.filter((item) => item.registrationCountryCode === 'ZA');
+    } else if (countryCode === 'ZW') {
+      drivers = drivers.filter((item) => item.registrationCountryCode !== 'ZA');
+    }
 
     if (search) {
       drivers = drivers.filter((item) => {
@@ -593,6 +612,12 @@ router.get('/export.csv', requireAdminAuth, requirePermission('drivers.read'), e
 router.get('/online', requireAdminAuth, requirePermission('drivers.read'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
+    const countryCode = String(req.query.countryCode || 'all').trim().toUpperCase();
+    const countryClause = countryCode === 'ZA'
+      ? `AND u.registration_country_code = 'ZA'`
+      : countryCode === 'ZW'
+        ? `AND COALESCE(u.registration_country_code, 'ZW') <> 'ZA'`
+        : '';
     const rows = await query(
       `SELECT
          da.driver_user_id,
@@ -613,11 +638,13 @@ router.get('/online', requireAdminAuth, requirePermission('drivers.read'), async
          rr.dropoff_label,
          rr.status AS ride_status
        FROM driver_availability da
+       LEFT JOIN users u ON BINARY u.clerk_user_id = BINARY da.driver_user_id
        LEFT JOIN ride_requests rr
          ON rr.driver_user_id = da.driver_user_id
         AND rr.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
        WHERE da.is_online = 1
          AND da.last_seen_at >= (CURRENT_TIMESTAMP - INTERVAL ${DRIVER_ONLINE_STALE_DAYS} DAY)
+         ${countryClause}
        ORDER BY da.driver_name ASC, da.updated_at DESC`
     );
 

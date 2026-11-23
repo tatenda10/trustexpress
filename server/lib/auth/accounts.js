@@ -80,6 +80,25 @@ export async function findUserByEmail(email, role) {
   return row || null;
 }
 
+export async function findUserByEmailAnyRole(email, excludeUserId = null) {
+  const params = [email];
+  let excludeClause = '';
+  if (excludeUserId) {
+    excludeClause = 'AND clerk_user_id <> ?';
+    params.push(excludeUserId);
+  }
+  const [row] = await query(
+    `SELECT ${USER_COLUMNS}
+     FROM users
+     WHERE LOWER(email) = ?
+       ${excludeClause}
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    params
+  );
+  return row || null;
+}
+
 export async function findUserByPhone(e164Phone, role) {
   const variants = phoneVariants(e164Phone);
   const [row] = await query(
@@ -105,6 +124,17 @@ export async function createUser({
   passwordHash = null,
   registrationCountryCode = null,
 }) {
+  const normalizedEmail = email ? normalizeEmail(email) : null;
+  if (normalizedEmail) {
+    const existingEmailAccount = await findUserByEmailAnyRole(normalizedEmail);
+    if (existingEmailAccount) {
+      throw Object.assign(new Error(`That email is already registered as a ${existingEmailAccount.role}. Use a different email address.`), {
+        status: 409,
+        code: 'EMAIL_IN_USE_OTHER_ACCOUNT',
+        existingRole: existingEmailAccount.role,
+      });
+    }
+  }
   const userId = generateUserId();
   await query(
     `INSERT INTO users (
@@ -114,7 +144,7 @@ export async function createUser({
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       userId,
-      email,
+      normalizedEmail,
       firstName ? String(firstName).trim().slice(0, 120) : null,
       lastName ? String(lastName).trim().slice(0, 120) : null,
       normalizeRole(role),
