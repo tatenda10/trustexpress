@@ -3392,7 +3392,9 @@ router.post('/vehicle', requireAuth, async (req, res) => {
     const nextHasLargeLuggageSpace = hasLargeLuggageSpace === undefined ? !!existingVehicle?.has_large_luggage_space : hasLargeLuggageSpace === true;
     const nextHasSlidingDoors = hasSlidingDoors === undefined ? !!existingVehicle?.has_sliding_doors : hasSlidingDoors === true;
     const nextIsHighEnd = isHighEnd === undefined ? !!existingVehicle?.is_high_end : isHighEnd === true;
-    const nextFirstRegisteredAt = normalizeDateOfBirth(firstRegisteredAt || existingVehicle?.first_registered_at);
+    const nextFirstRegisteredAt = normalizeDateOfBirth(
+      firstRegisteredAt || existingVehicle?.first_registered_at
+    ) || null;
     const nextOperatingLicenceNumber = String(operatingLicenceNumber || existingVehicle?.operating_licence_number || '').trim().toUpperCase() || null;
     const nextOperatingLicenceUrl = String(operatingLicenceUrl || existingVehicle?.operating_licence_url || '').trim() || null;
     const nextOperatingLicenceExpiresAt = normalizeDateOfBirth(operatingLicenceExpiresAt || existingVehicle?.operating_licence_expires_at) || null;
