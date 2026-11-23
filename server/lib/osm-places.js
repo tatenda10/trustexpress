@@ -86,9 +86,10 @@ function setCached(cache, key, value) {
   pruneCache(cache);
 }
 
-function autocompleteCacheKey({ query, originCoordinate }) {
+function autocompleteCacheKey({ query, originCoordinate, countryCode }) {
   return [
     BULAWAYO_GEO_LOCK_ENABLED ? 'bulawayo' : 'unbounded',
+    String(countryCode || 'ZW').toUpperCase(),
     normalizeQuery(query).toLowerCase(),
     coordinateKey(originCoordinate),
   ].join('|');
@@ -206,16 +207,22 @@ export async function fetchCachedOsmPlaceAutocomplete({
   query,
   originCoordinate,
   cacheTtlSeconds,
+  countryCode = 'ZW',
 }) {
   const normalizedQuery = normalizeQuery(query);
   const normalizedOrigin = normalizeCoordinate(originCoordinate);
+  const normalizedCountryCode = String(countryCode || '').toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
 
   if (normalizedQuery.length < 3) {
     return { suggestions: [], cacheHit: false };
   }
 
   const ttlMs = clampCacheTtlMs(cacheTtlSeconds, DEFAULT_AUTOCOMPLETE_CACHE_TTL_MS);
-  const cacheKey = autocompleteCacheKey({ query: normalizedQuery, originCoordinate: normalizedOrigin });
+  const cacheKey = autocompleteCacheKey({
+    query: normalizedQuery,
+    originCoordinate: normalizedOrigin,
+    countryCode: normalizedCountryCode,
+  });
   const cached = getCached(autocompleteCache, cacheKey, ttlMs);
   if (cached) return { suggestions: cloneSuggestions(cached), cacheHit: true };
 
@@ -231,7 +238,7 @@ export async function fetchCachedOsmPlaceAutocomplete({
       format: 'jsonv2',
       addressdetails: '1',
       limit: '6',
-      countrycodes: 'zw',
+      countrycodes: normalizedCountryCode.toLowerCase(),
       namedetails: '1',
     });
     if (BULAWAYO_GEO_LOCK_ENABLED) {
@@ -243,7 +250,14 @@ export async function fetchCachedOsmPlaceAutocomplete({
       params.set('bounded', '0');
     }
 
-    const payload = await fetchJson(`${baseUrl}/search?${params.toString()}`);
+    let payload = await fetchJson(`${baseUrl}/search?${params.toString()}`);
+    if (
+      normalizedCountryCode === 'ZA' &&
+      baseUrl !== DEFAULT_NOMINATIM_BASE_URL &&
+      (!Array.isArray(payload) || payload.length === 0)
+    ) {
+      payload = await fetchJson(`${DEFAULT_NOMINATIM_BASE_URL}/search?${params.toString()}`);
+    }
     const rawSuggestions = (Array.isArray(payload) ? payload : [])
       .map((item, index) => mapSearchResult(item, index, normalizedQuery, normalizedOrigin))
       .slice(0, 6);

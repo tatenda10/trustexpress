@@ -31,6 +31,7 @@ export async function fetchCachedPlaceAutocomplete(options) {
   const cachedSuggestions = await findCachedPlaceSuggestions({
     query: normalizedQuery,
     originCoordinate: options?.originCoordinate,
+    countryCode: options?.countryCode,
   });
   if (cachedSuggestions.length > 0) {
     return { suggestions: cachedSuggestions, cacheHit: true };

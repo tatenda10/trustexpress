@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { query as dbQuery } from '../db/connection.js';
 import { fetchCachedDirections } from '../lib/maps-directions.js';
 import {
   fetchCachedPlaceAutocomplete,
@@ -86,12 +87,20 @@ router.post('/places/autocomplete', requireAuth, async (req, res) => {
       sessionToken,
       cacheTtlSeconds,
     } = req.body || {};
+    const [market] = await dbQuery(
+      'SELECT registration_country_code FROM users WHERE clerk_user_id = ? LIMIT 1',
+      [req.userId]
+    );
+    const countryCode = String(market?.registration_country_code || '').toUpperCase() === 'ZA'
+      ? 'ZA'
+      : 'ZW';
 
     const result = await fetchCachedPlaceAutocomplete({
       query,
       originCoordinate,
       sessionToken,
       cacheTtlSeconds,
+      countryCode,
     });
 
     if (result.cacheHit) {

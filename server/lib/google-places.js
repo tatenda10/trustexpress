@@ -70,9 +70,9 @@ async function fetchJson(url) {
   return payload;
 }
 
-function splitAddress(formattedAddress, name) {
+function splitAddress(formattedAddress, name, countryName = 'Zimbabwe') {
   const address = String(formattedAddress || '').trim();
-  if (!address) return { title: name || 'Selected place', subtitle: 'Zimbabwe' };
+  if (!address) return { title: name || 'Selected place', subtitle: countryName };
   const parts = address.split(',').map((part) => part.trim()).filter(Boolean);
   if (name && parts.length) {
     return { title: name, subtitle: parts.join(', ') };
@@ -80,16 +80,16 @@ function splitAddress(formattedAddress, name) {
   const [first, ...rest] = parts;
   return {
     title: name || first || address,
-    subtitle: rest.length ? rest.join(', ') : (parts.join(', ') || 'Zimbabwe'),
+    subtitle: rest.length ? rest.join(', ') : (parts.join(', ') || countryName),
   };
 }
 
-function mapTextSearchResult(item, index, query, originCoordinate) {
+function mapTextSearchResult(item, index, query, originCoordinate, countryName) {
   const coordinate = normalizeCoordinate({
     latitude: item?.geometry?.location?.lat,
     longitude: item?.geometry?.location?.lng,
   });
-  const { title, subtitle } = splitAddress(item?.formatted_address, item?.name);
+  const { title, subtitle } = splitAddress(item?.formatted_address, item?.name, countryName);
 
   return {
     providerPlaceId: String(item?.place_id || '').trim() || null,
@@ -101,7 +101,7 @@ function mapTextSearchResult(item, index, query, originCoordinate) {
       district: null,
       city: null,
       region: null,
-      country: 'Zimbabwe',
+      country: countryName,
     },
     rawPayload: item,
   };
@@ -111,9 +111,15 @@ export function hasGooglePlacesProvider() {
   return Boolean(getGoogleApiKey());
 }
 
-export async function fetchGooglePlaceAutocomplete({ query, originCoordinate }) {
+export async function fetchGooglePlaceAutocomplete({ query, originCoordinate, countryCode = 'ZW' }) {
   const normalizedQuery = normalizeQuery(query);
-  const normalizedOrigin = normalizeCoordinate(originCoordinate) || BULAWAYO_CENTER_COORDINATE;
+  const normalizedCountryCode = String(countryCode || '').toUpperCase() === 'ZA' ? 'ZA' : 'ZW';
+  const countryName = normalizedCountryCode === 'ZA' ? 'South Africa' : 'Zimbabwe';
+  const normalizedOrigin = normalizeCoordinate(originCoordinate) || (
+    normalizedCountryCode === 'ZA'
+      ? { latitude: -26.2041, longitude: 28.0473 }
+      : BULAWAYO_CENTER_COORDINATE
+  );
 
   if (normalizedQuery.length < 3) {
     return { suggestions: [], cacheHit: false };
@@ -122,7 +128,7 @@ export async function fetchGooglePlaceAutocomplete({ query, originCoordinate }) 
   const params = new URLSearchParams({
     query: normalizedQuery,
     key: getGoogleApiKey(),
-    region: 'zw',
+    region: normalizedCountryCode.toLowerCase(),
     language: 'en',
     location: `${normalizedOrigin.latitude},${normalizedOrigin.longitude}`,
     radius: String(SERVICE_AREA_BIAS_RADIUS_METERS),
@@ -130,7 +136,7 @@ export async function fetchGooglePlaceAutocomplete({ query, originCoordinate }) 
 
   const payload = await fetchJson(`${getGoogleBaseUrl()}/textsearch/json?${params.toString()}`);
   const rawSuggestions = (Array.isArray(payload?.results) ? payload.results : [])
-    .map((item, index) => mapTextSearchResult(item, index, normalizedQuery, normalizedOrigin))
+    .map((item, index) => mapTextSearchResult(item, index, normalizedQuery, normalizedOrigin, countryName))
     .slice(0, 6);
   const suggestions = await filterSuggestionsInServiceArea(rawSuggestions);
 

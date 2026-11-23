@@ -109,11 +109,18 @@ function mapRowToPlace(row) {
 export async function findCachedPlaceSuggestions({
   query: searchQuery,
   originCoordinate,
+  countryCode,
   limit = MAX_AUTOCOMPLETE_RESULTS,
 }) {
   const normalizedQuery = normalizePlaceSearchQuery(searchQuery)
   if (normalizedQuery.length < 3) return []
   const safeLimit = Math.max(1, Math.min(Number(limit) || MAX_AUTOCOMPLETE_RESULTS, 20))
+  const normalizedCountryCode = String(countryCode || '').trim().toUpperCase()
+  const countryFilter = normalizedCountryCode === 'ZA'
+    ? 'AND LOWER(country) IN (\'south africa\', \'za\')'
+    : normalizedCountryCode === 'ZW'
+      ? 'AND LOWER(country) IN (\'zimbabwe\', \'zw\')'
+      : ''
 
   const rows = await query(
     `SELECT
@@ -132,6 +139,7 @@ export async function findCachedPlaceSuggestions({
         updated_at
       FROM place_search_cache
       WHERE search_text LIKE ?
+        ${countryFilter}
       ORDER BY
         CASE
           WHEN normalized_query = ? THEN 0
