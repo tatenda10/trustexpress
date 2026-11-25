@@ -1,5 +1,6 @@
 const appJson = require('./app.json');
 const TRUST_OVERLAY_PLUGIN = './plugins/withTrustOverlay';
+const DATE_TIME_PICKER_PLUGIN = '@react-native-community/datetimepicker';
 
 function hasPlugin(plugins, pluginName) {
   return plugins.some((plugin) => {
@@ -12,12 +13,15 @@ module.exports = ({ config } = {}) => {
   const expo = config || appJson.expo || {};
   const projectId = expo.extra?.eas?.projectId || 'ea348ba3-a2a2-4924-882c-6fbc5eb8384c';
   const basePlugins = expo.plugins || [];
+  const requiredPlugins = [TRUST_OVERLAY_PLUGIN, DATE_TIME_PICKER_PLUGIN];
+  const plugins = requiredPlugins.reduce(
+    (current, pluginName) => hasPlugin(current, pluginName) ? current : [...current, pluginName],
+    basePlugins,
+  );
 
   return {
     ...expo,
-    plugins: hasPlugin(basePlugins, TRUST_OVERLAY_PLUGIN)
-      ? basePlugins
-      : [...basePlugins, TRUST_OVERLAY_PLUGIN],
+    plugins,
     updates: {
       ...(expo.updates || {}),
       url: `https://u.expo.dev/${projectId}`,

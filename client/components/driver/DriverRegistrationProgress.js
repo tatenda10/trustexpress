@@ -14,8 +14,10 @@ export default function DriverRegistrationProgress({
   topInset = 0,
   onBack = null,
   onHelp = null,
+  steps = STEPS,
 }) {
-  const activeStep = Math.min(Math.max(Number(currentStep) || 1, 1), STEPS.length);
+  const activeSteps = Array.isArray(steps) && steps.length ? steps : STEPS;
+  const activeStep = Math.min(Math.max(Number(currentStep) || 1, 1), activeSteps.length);
 
   return (
     <View className="bg-white" style={{ paddingTop: topInset }}>
@@ -39,14 +41,14 @@ export default function DriverRegistrationProgress({
       <View className="px-5 pb-4 pt-2">
         <View className="mb-3 flex-row items-center justify-between">
           <Text className="text-[12px] font-bold uppercase tracking-[1.5px] text-slate-500">
-            Step {activeStep} of {STEPS.length}
+            Step {activeStep} of {activeSteps.length}
           </Text>
           <Text className="text-[12px] font-semibold" style={{ color: PRIMARY_BLUE }}>
-            {STEPS[activeStep - 1].label}
+            {activeSteps[activeStep - 1].label}
           </Text>
         </View>
         <View className="flex-row gap-2">
-          {STEPS.map((step, index) => {
+          {activeSteps.map((step, index) => {
             const stepNumber = index + 1;
             const complete = stepNumber < activeStep;
             const active = stepNumber === activeStep;

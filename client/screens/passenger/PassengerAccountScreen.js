@@ -523,8 +523,8 @@ const PassengerAccountScreen = ({ navigation }) => {
 
           <SectionTitle>Account</SectionTitle>
           <Card>
-            {accountRows.map((row, index) => (
-              <Row key={row.key} {...row} last={index === accountRows.length - 1} />
+            {accountRows.map(({ key, ...row }, index) => (
+              <Row key={key} {...row} last={index === accountRows.length - 1} />
             ))}
           </Card>
 
@@ -550,15 +550,15 @@ const PassengerAccountScreen = ({ navigation }) => {
 
           <SectionTitle>Help & safety</SectionTitle>
           <Card>
-            {helpRows.map((row, index) => (
-              <Row key={row.key} {...row} last={index === helpRows.length - 1} />
+            {helpRows.map(({ key, ...row }, index) => (
+              <Row key={key} {...row} last={index === helpRows.length - 1} />
             ))}
           </Card>
 
           <SectionTitle>Legal</SectionTitle>
           <Card>
-            {legalRows.map((row, index) => (
-              <Row key={row.key} {...row} last={index === legalRows.length - 1} />
+            {legalRows.map(({ key, ...row }, index) => (
+              <Row key={key} {...row} last={index === legalRows.length - 1} />
             ))}
           </Card>
 

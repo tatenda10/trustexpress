@@ -33,11 +33,17 @@ const TAB_ICONS = {
   DriverAccount: ['person', 'person-outline'],
 };
 
-export default function DriverTabNavigator({ route }) {
+export default function DriverTabNavigator({ route, registrationCountryCode }) {
   const insets = useSafeAreaInsets();
   const { driverStatus: contextDriverStatus } = useDriverStatus() || {};
   const driverStatus = contextDriverStatus ?? route?.params?.driverStatus ?? null;
-  const isSouthAfrica = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA';
+  const resolvedCountryCode = String(
+    registrationCountryCode
+      || driverStatus?.registrationCountryCode
+      || driverStatus?.driverProfile?.registrationCountryCode
+      || ''
+  ).toUpperCase();
+  const isSouthAfrica = resolvedCountryCode === 'ZA';
   const canAcceptTrips = isDriverVerifiedForTrips(driverStatus);
   const [hiringBadgeCount, setHiringBadgeCount] = useState(0);
 
@@ -104,7 +110,6 @@ export default function DriverTabNavigator({ route }) {
       /> : null}
       <Tab.Screen
         name="DriverAccount"
-        component={DriverAccountStack}
         initialParams={{ driverStatus }}
         options={optionsFor('Account')}
         listeners={({ navigation }) => ({
@@ -113,7 +118,14 @@ export default function DriverTabNavigator({ route }) {
             navigation.navigate('DriverAccount', { screen: 'DriverAccountMain' });
           },
         })}
-      />
+      >
+        {(props) => (
+          <DriverAccountStack
+            {...props}
+            registrationCountryCode={resolvedCountryCode}
+          />
+        )}
+      </Tab.Screen>
     </Tab.Navigator>
   );
 }

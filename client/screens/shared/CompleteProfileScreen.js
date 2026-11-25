@@ -68,7 +68,7 @@ export default function CompleteProfileScreen({ route, role: roleProp, onComplet
       return;
     }
     if (registrationCountryCode === 'ZA' && !termsAccepted) {
-      Alert.alert('Consent required', 'Accept the Trust Express terms and privacy policy to create your South African account.');
+      Alert.alert('Consent required', 'Accept the Trust Express Terms and Privacy Policy to create your account.');
       return;
     }
 

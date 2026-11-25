@@ -39,7 +39,8 @@ const PassengerHireDetail = withPassengerBoundary(PassengerHireDetailScreen, 'Pa
 const PassengerHireLocationPicker = withPassengerBoundary(PassengerHireLocationPickerScreen, 'PassengerHireLocationPicker');
 const PassengerHireTracking = withPassengerBoundary(PassengerHireTrackingScreen, 'PassengerHireTracking');
 
-export default function PassengerHomeStack() {
+export default function PassengerHomeStack({ registrationCountryCode }) {
+  const isSouthAfrica = String(registrationCountryCode || '').toUpperCase() === 'ZA';
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="PassengerBookingHome" component={PassengerBookingHome} />
@@ -47,11 +48,11 @@ export default function PassengerHomeStack() {
       <Stack.Screen name="PassengerNearbyCars" component={PassengerNearbyCars} />
       <Stack.Screen name="PassengerRideTracking" component={PassengerRideTracking} />
       <Stack.Screen name="RideChat" component={PassengerRideChat} />
-      <Stack.Screen name="PassengerHireHome" component={PassengerHireHome} />
-      <Stack.Screen name="PassengerHireCreate" component={PassengerHireCreate} />
-      <Stack.Screen name="PassengerHireDetail" component={PassengerHireDetail} />
-      <Stack.Screen name="PassengerHireLocationPicker" component={PassengerHireLocationPicker} />
-      <Stack.Screen name="PassengerHireTracking" component={PassengerHireTracking} />
+      {!isSouthAfrica ? <Stack.Screen name="PassengerHireHome" component={PassengerHireHome} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="PassengerHireCreate" component={PassengerHireCreate} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="PassengerHireDetail" component={PassengerHireDetail} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="PassengerHireLocationPicker" component={PassengerHireLocationPicker} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="PassengerHireTracking" component={PassengerHireTracking} /> : null}
     </Stack.Navigator>
   );
 }

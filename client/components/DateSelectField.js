@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Modal, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { PRIMARY_BLUE } from '../constants/colors';
 
 const MONTHS = [
@@ -65,33 +66,13 @@ function defaultPickerDate(value, minYear, maxYear, fallbackYear) {
   return { year: clampYear(fallbackYear, minYear, maxYear), month: 1, day: 1 };
 }
 
-function PickerColumn({ items, selectedValue, onSelect }) {
-  return (
-    <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-      {items.map((item) => {
-        const selected = item.value === selectedValue;
-        return (
-          <TouchableOpacity
-            key={String(item.value)}
-            onPress={() => onSelect(item.value)}
-            activeOpacity={0.8}
-            className="mb-1 items-center rounded-xl py-2.5"
-            style={{ backgroundColor: selected ? '#eff6ff' : 'transparent' }}
-          >
-            <Text
-              className="text-sm"
-              style={{
-                color: selected ? PRIMARY_BLUE : '#374151',
-                fontWeight: selected ? '700' : '500',
-              }}
-            >
-              {item.label}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
-  );
+function pickerDate(value, minYear, maxYear, fallbackYear) {
+  const selected = defaultPickerDate(value, minYear, maxYear, fallbackYear);
+  return new Date(selected.year, selected.month - 1, selected.day, 12, 0, 0, 0);
+}
+
+function dateToValue(date) {
+  return toDateValue(date.getFullYear(), date.getMonth() + 1, date.getDate());
 }
 
 function DatePickerModal({
@@ -104,39 +85,15 @@ function DatePickerModal({
   onClose,
   onConfirm,
 }) {
-  const initial = defaultPickerDate(value, minYear, maxYear, fallbackYear);
-  const [year, setYear] = useState(initial.year);
-  const [month, setMonth] = useState(initial.month);
-  const [day, setDay] = useState(initial.day);
+  const [selectedDate, setSelectedDate] = useState(() => pickerDate(value, minYear, maxYear, fallbackYear));
 
   useEffect(() => {
     if (!visible) return;
-    const next = defaultPickerDate(value, minYear, maxYear, fallbackYear);
-    setYear(next.year);
-    setMonth(next.month);
-    setDay(next.day);
+    setSelectedDate(pickerDate(value, minYear, maxYear, fallbackYear));
   }, [fallbackYear, maxYear, minYear, value, visible]);
 
-  const years = useMemo(
-    () => Array.from({ length: maxYear - minYear + 1 }, (_, index) => {
-      const nextYear = maxYear - index;
-      return { value: nextYear, label: String(nextYear) };
-    }),
-    [maxYear, minYear],
-  );
-
-  const maxDay = daysInMonth(year, month);
-  const days = useMemo(
-    () => Array.from({ length: maxDay }, (_, index) => {
-      const nextDay = index + 1;
-      return { value: nextDay, label: String(nextDay) };
-    }),
-    [maxDay],
-  );
-
-  useEffect(() => {
-    if (day > maxDay) setDay(maxDay);
-  }, [day, maxDay]);
+  const minimumDate = new Date(minYear, 0, 1, 12, 0, 0, 0);
+  const maximumDate = new Date(maxYear, 11, 31, 12, 0, 0, 0);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -148,17 +105,23 @@ function DatePickerModal({
               <Ionicons name="close" size={20} color="#111827" />
             </TouchableOpacity>
           </View>
-          <View className="h-64 flex-row">
-            <PickerColumn items={days} selectedValue={Math.min(day, maxDay)} onSelect={setDay} />
-            <PickerColumn items={MONTHS} selectedValue={month} onSelect={setMonth} />
-            <PickerColumn items={years} selectedValue={year} onSelect={setYear} />
-          </View>
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            display="inline"
+            minimumDate={minimumDate}
+            maximumDate={maximumDate}
+            onChange={(_event, nextDate) => {
+              if (nextDate) setSelectedDate(nextDate);
+            }}
+            style={{ alignSelf: 'center' }}
+          />
           <TouchableOpacity
             onPress={() => {
-              onConfirm(toDateValue(year, month, Math.min(day, maxDay)));
+              onConfirm(dateToValue(selectedDate));
               onClose();
             }}
-            className="mt-4 h-12 items-center justify-center rounded-[18px]"
+            className="mt-4 h-12 items-center justify-center rounded-sm"
             style={{ backgroundColor: PRIMARY_BLUE }}
           >
             <Text className="text-sm font-bold uppercase text-white">Done</Text>
@@ -178,21 +141,38 @@ export default function DateSelectField({
   maxYear = new Date().getFullYear(),
   fallbackYear = maxYear,
   helpText = '',
+  compact = false,
   onChange,
 }) {
   const [visible, setVisible] = useState(false);
   const displayValue = formatDateValue(value);
+  const openPicker = () => {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: pickerDate(value, minYear, maxYear, fallbackYear),
+        mode: 'date',
+        display: 'calendar',
+        minimumDate: new Date(minYear, 0, 1, 12, 0, 0, 0),
+        maximumDate: new Date(maxYear, 11, 31, 12, 0, 0, 0),
+        onChange: (event, selectedDate) => {
+          if (event.type === 'set' && selectedDate) onChange(dateToValue(selectedDate));
+        },
+      });
+      return;
+    }
+    setVisible(true);
+  };
 
   return (
     <View>
-      <Text className="mb-2 text-sm font-medium text-gray-700">
+      <Text className={compact ? 'mb-1 text-xs font-medium text-gray-800' : 'mb-2 text-sm font-medium text-gray-700'}>
         {label} {required ? <Text className="text-red-500">*</Text> : null}
       </Text>
       <TouchableOpacity
-        onPress={() => setVisible(true)}
+        onPress={openPicker}
         activeOpacity={0.85}
-        className="mb-1 h-14 flex-row items-center justify-between rounded-2xl bg-white px-4"
-        style={{ borderWidth: 1, borderColor: '#E5E7EB' }}
+        className={`mb-1 h-14 flex-row items-center justify-between bg-white ${compact ? 'rounded-sm px-3' : 'rounded-2xl px-4'}`}
+        style={{ borderWidth: 1, borderColor: compact ? '#D7DDE5' : '#E5E7EB' }}
       >
         <Text className={`text-base ${displayValue ? 'text-gray-900' : 'text-gray-400'}`}>
           {displayValue || placeholder}
@@ -200,16 +180,18 @@ export default function DateSelectField({
         <Ionicons name="calendar-outline" size={20} color="#6b7280" />
       </TouchableOpacity>
       {helpText ? <Text className="mb-4 text-xs text-gray-500">{helpText}</Text> : <View className="mb-4" />}
-      <DatePickerModal
-        visible={visible}
-        title={label}
-        value={value}
-        minYear={minYear}
-        maxYear={maxYear}
-        fallbackYear={fallbackYear}
-        onClose={() => setVisible(false)}
-        onConfirm={onChange}
-      />
+      {Platform.OS === 'ios' ? (
+        <DatePickerModal
+          visible={visible}
+          title={label}
+          value={value}
+          minYear={minYear}
+          maxYear={maxYear}
+          fallbackYear={fallbackYear}
+          onClose={() => setVisible(false)}
+          onConfirm={onChange}
+        />
+      ) : null}
     </View>
   );
 }

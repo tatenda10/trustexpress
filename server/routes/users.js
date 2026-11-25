@@ -156,6 +156,59 @@ router.get('/me', requireAuth, async (req, res) => {
   }
 });
 
+router.put('/me/location', requireAuth, async (req, res) => {
+  try {
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+    const accuracy = req.body?.accuracy == null ? null : Number(req.body.accuracy);
+
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      return res.status(400).json({ error: 'Valid latitude is required' });
+    }
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ error: 'Valid longitude is required' });
+    }
+    if (accuracy !== null && (!Number.isFinite(accuracy) || accuracy < 0)) {
+      return res.status(400).json({ error: 'Location accuracy must be a positive number' });
+    }
+
+    const [user] = await query(
+      `SELECT role
+       FROM users
+       WHERE clerk_user_id = ?
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (!user || normalizeRole(user.role) !== 'passenger') {
+      return res.status(403).json({ error: 'Passenger account required' });
+    }
+
+    await query(
+      `UPDATE users
+       SET last_location_lat = ?,
+           last_location_lng = ?,
+           last_location_accuracy_meters = ?,
+           last_location_recorded_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE clerk_user_id = ?`,
+      [latitude, longitude, accuracy === null ? null : Math.min(accuracy, 999999.99), req.userId]
+    );
+
+    return res.json({
+      ok: true,
+      location: {
+        latitude,
+        longitude,
+        accuracyMeters: accuracy,
+        recordedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error('PUT /api/users/me/location', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.post('/register', requireAuth, async (req, res) => {
   try {
     const { role, inviteToken, referrerEmail } = req.body || {};

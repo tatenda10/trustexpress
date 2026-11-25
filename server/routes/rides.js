@@ -84,10 +84,80 @@ export function createPublicRideId() {
 
 const ACTIVE_RIDE_STATUSES = ['driver_assigned', 'driver_arrived', 'in_progress'];
 const STALE_ACTIVE_RIDE_TTL_MINUTES = 20;
+const DRIVER_TRACKING_STALE_AFTER_SECONDS = Math.max(
+  30,
+  Number(process.env.DRIVER_TRACKING_STALE_AFTER_SECONDS || 45) || 45
+);
+const DRIVER_TRACKING_ALERT_THROTTLE_MS = Math.max(
+  60 * 1000,
+  Number(process.env.DRIVER_TRACKING_ALERT_THROTTLE_MS || 3 * 60 * 1000) || 3 * 60 * 1000
+);
+const driverTrackingAlertedAt = new Map();
 const DRIVER_REQUEST_RADIUS_KM = Math.max(
   1,
   Number(process.env.DRIVER_REQUEST_RADIUS_KM || 20) || 20
 );
+
+async function notifyDriverTrackingStale({ driverUserId, rideRequestId, locationAgeSeconds }) {
+  const normalizedDriverUserId = String(driverUserId || '').trim();
+  if (!normalizedDriverUserId || !rideRequestId) return;
+
+  const alertKey = `${normalizedDriverUserId}:${rideRequestId}`;
+  const now = Date.now();
+  if (now - Number(driverTrackingAlertedAt.get(alertKey) || 0) < DRIVER_TRACKING_ALERT_THROTTLE_MS) return;
+  driverTrackingAlertedAt.set(alertKey, now);
+
+  emitRideStatusToDriver(normalizedDriverUserId, {
+    rideRequestId,
+    trackingLocationStale: true,
+    driverLocationAgeSeconds: locationAgeSeconds,
+  });
+
+  try {
+    const tokenCache = await getDriverPushTokensByUserIds([normalizedDriverUserId]);
+    let expoPushToken = tokenCache.get(normalizedDriverUserId)?.expoPushToken || null;
+    let fcmToken = tokenCache.get(normalizedDriverUserId)?.fcmToken || null;
+    if (!expoPushToken && !fcmToken) {
+      const driverUser = await getUserById(normalizedDriverUserId);
+      expoPushToken = String(driverUser?.privateMetadata?.pushToken || '').trim() || null;
+      fcmToken = String(driverUser?.privateMetadata?.fcmToken || '').trim() || null;
+    }
+
+    const pushPayload = {
+      title: 'Passenger cannot see your location',
+      body: 'Open Trust Express and keep location enabled so your passenger can track your arrival.',
+      data: {
+        type: 'driver_tracking_stale',
+        rideRequestId: String(rideRequestId),
+      },
+    };
+    if (fcmToken) {
+      await sendFcmNotifications({
+        to: fcmToken,
+        ...pushPayload,
+        android: {
+          collapseKey: `tracking-${rideRequestId}`,
+          channelId: 'default',
+          notification: { tag: `tracking-${rideRequestId}` },
+        },
+      });
+    } else if (expoPushToken) {
+      await sendExpoPushNotifications({ to: expoPushToken, ...pushPayload });
+    }
+    console.warn('[ride.tracking] stale driver location alert', {
+      rideRequestId,
+      driverUserId: normalizedDriverUserId,
+      locationAgeSeconds,
+      notificationSent: Boolean(fcmToken || expoPushToken),
+    });
+  } catch (error) {
+    console.error('[ride.tracking] stale driver alert failed', {
+      rideRequestId,
+      driverUserId: normalizedDriverUserId,
+      message: error?.message || String(error),
+    });
+  }
+}
 const MAX_DRIVER_OFFERS = 500;
 /** Drivers whose app polled or sent location within this window count as "app open". */
 const DRIVER_ACTIVE_SEEN_SECONDS = 180;
@@ -1732,6 +1802,21 @@ router.get('/passenger/:rideRequestId/status', requireAuth, async (req, res) => 
     const driverLocationUpdatedAt = assignedDriver?.locationUpdatedAt || null;
     const driverLocationAgeSeconds = getLocationAgeSeconds(driverLocationUpdatedAt);
     const driverLocationFresh = isFreshDriverLocation(driverLocationUpdatedAt);
+    if (ride.driver_user_id && ACTIVE_RIDE_STATUSES.includes(String(ride.status || '').toLowerCase())) {
+      const alertKey = `${ride.driver_user_id}:${ride.id}`;
+      if (driverLocationFresh) {
+        driverTrackingAlertedAt.delete(alertKey);
+      } else if (
+        driverLocationAgeSeconds === null
+        || driverLocationAgeSeconds >= DRIVER_TRACKING_STALE_AFTER_SECONDS
+      ) {
+        notifyDriverTrackingStale({
+          driverUserId: ride.driver_user_id,
+          rideRequestId: ride.id,
+          locationAgeSeconds: driverLocationAgeSeconds,
+        }).catch(() => {});
+      }
+    }
     const liveApproachEstimate = driverLocationFresh && driverCoordinate
       ? await getDriverApproachEstimate(driverCoordinate, pickupCoordinate)
       : null;

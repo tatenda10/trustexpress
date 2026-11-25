@@ -197,6 +197,27 @@ export default function PassengerDetailsPage() {
           <Field label="Registration Country" value={passenger.registrationCountryCode === 'ZA' ? 'South Africa' : passenger.registrationCountryCode === 'ZW' ? 'Zimbabwe' : 'Not set'} />
           <Field label="Registration City" value={passenger.registrationCity} />
           <Field label="Registration Source" value={passenger.registrationSource || passenger.source} />
+          <Field
+            label="Last Known Location"
+            value={passenger.lastLocation
+              ? `${passenger.lastLocation.latitude.toFixed(6)}, ${passenger.lastLocation.longitude.toFixed(6)}`
+              : 'Not recorded'}
+          />
+          <Field label="Location Accuracy" value={passenger.lastLocation?.accuracyMeters == null ? '-' : `${Math.round(passenger.lastLocation.accuracyMeters)} m`} />
+          <Field label="Location Recorded At" value={passenger.lastLocation?.recordedAt || '-'} />
+          {passenger.lastLocation ? (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Map</span>
+              <a
+                className="text-sm font-semibold text-blue-700 hover:text-blue-500"
+                href={`https://www.google.com/maps?q=${passenger.lastLocation.latitude},${passenger.lastLocation.longitude}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open last location
+              </a>
+            </div>
+          ) : null}
           <Field label="Terms Accepted" value={passenger.termsAndPrivacyAcceptedAt ? `Yes — ${passenger.termsAndPrivacyAcceptedAt}` : 'Not recorded'} />
           <Field label="Terms Version" value={passenger.termsAndPrivacyVersion} />
           <Field label="Joined" value={String(passenger.createdAt || '').slice(0, 19).replace('T', ' ')} />

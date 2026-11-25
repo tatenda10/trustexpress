@@ -749,8 +749,8 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
         <SectionTitle>Earnings & trips</SectionTitle>
         <Card>
-          {earningsRows.map((row, index) => (
-            <Row key={row.key} {...row} last={index === earningsRows.length - 1} />
+          {earningsRows.map(({ key, ...row }, index) => (
+            <Row key={key} {...row} last={index === earningsRows.length - 1} />
           ))}
         </Card>
 
@@ -761,15 +761,15 @@ const DriverAccountScreen = ({ navigation, route }) => {
 
         <SectionTitle>Help & safety</SectionTitle>
         <Card>
-          {helpRows.map((row, index) => (
-            <Row key={row.key} {...row} last={index === helpRows.length - 1} />
+          {helpRows.map(({ key, ...row }, index) => (
+            <Row key={key} {...row} last={index === helpRows.length - 1} />
           ))}
         </Card>
 
         <SectionTitle>Legal</SectionTitle>
         <Card>
-          {legalRows.map((row, index) => (
-            <Row key={row.key} {...row} last={index === legalRows.length - 1} />
+          {legalRows.map(({ key, ...row }, index) => (
+            <Row key={key} {...row} last={index === legalRows.length - 1} />
           ))}
         </Card>
 

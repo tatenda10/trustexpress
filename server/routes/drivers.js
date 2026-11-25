@@ -3030,7 +3030,7 @@ router.post('/documents', requireAuth, async (req, res) => {
       residentialAddress: String(residentialAddress || currentValues.residentialAddress || '').trim() || null,
       proofOfAddressUrl: proofOfAddressUrl || currentValues.proofOfAddressUrl,
       prdpNumber: String(prdpNumber || currentValues.prdpNumber || '').trim().toUpperCase() || null,
-      prdpUrl: prdpUrl || currentValues.prdpUrl,
+      prdpUrl: prdpUrl || driverLicenceUrl || currentValues.prdpUrl || currentValues.driverLicenceUrl,
       prdpExpiresAt: normalizeDateOfBirth(prdpExpiresAt || currentValues.prdpExpiresAt) || null,
       criminalRecordReportUrl: criminalRecordReportUrl || currentValues.criminalRecordReportUrl,
     };
@@ -3088,7 +3088,7 @@ router.post('/documents', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'PrDP number is required' });
     }
     if (isSouthAfrican && isFullIdentitySubmit && !nextValues.prdpUrl) {
-      return res.status(400).json({ error: 'PrDP document is required' });
+      return res.status(400).json({ error: "Driver's licence with PrDP is required" });
     }
     if (nextValues.dateOfBirth) {
       const dob = new Date(`${nextValues.dateOfBirth}T00:00:00Z`);

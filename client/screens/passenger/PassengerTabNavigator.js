@@ -36,10 +36,13 @@ function shouldHideTabBar(route) {
   return Boolean(focusedNested?.params?.bookingMap);
 }
 
-export default function PassengerTabNavigator() {
+export default function PassengerTabNavigator({ registrationCountryCode }) {
   const insets = useSafeAreaInsets();
   const { user } = useUser();
-  const isSouthAfrica = String(user?.registrationCountryCode || '').toUpperCase() === 'ZA';
+  const resolvedCountryCode = String(
+    registrationCountryCode || user?.registrationCountryCode || ''
+  ).toUpperCase();
+  const isSouthAfrica = resolvedCountryCode === 'ZA';
 
   const tabBarStyle = {
     height: 58 + insets.bottom,
@@ -72,7 +75,14 @@ export default function PassengerTabNavigator() {
         tabBarStyle,
       }}
     >
-      <Tab.Screen name="PassengerHome" component={PassengerHomeStack} options={optionsFor('Home')} />
+      <Tab.Screen name="PassengerHome" options={optionsFor('Home')}>
+        {(props) => (
+          <PassengerHomeStack
+            {...props}
+            registrationCountryCode={resolvedCountryCode}
+          />
+        )}
+      </Tab.Screen>
       {!isSouthAfrica ? <Tab.Screen name="PassengerHiring" component={PassengerHireStack} options={optionsFor('Hiring')} /> : null}
       <Tab.Screen name="PassengerActivity" component={PassengerActivityStack} options={optionsFor('Activity')} />
       <Tab.Screen

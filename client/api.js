@@ -201,6 +201,13 @@ export async function updateMe(token, payload) {
   return apiFetch('/api/users/me', { method: 'PATCH', body: JSON.stringify(payload) }, token);
 }
 
+export async function savePassengerLocation(token, location) {
+  return apiFetch('/api/users/me/location', {
+    method: 'PUT',
+    body: JSON.stringify(location || {}),
+  }, token);
+}
+
 export async function deleteMe(token) {
   return apiFetch('/api/users/me', { method: 'DELETE', body: JSON.stringify({}) }, token);
 }
@@ -838,10 +845,21 @@ export async function submitVehicle(token, payload) {
   return apiFetch('/api/drivers/vehicle', { method: 'POST', body: JSON.stringify(payload) }, token);
 }
 
-export async function confirmPhoneVerification(token, phoneNumber, countryCode) {
+export async function requestPhoneVerificationCode(token, phoneNumber, countryCode, channel = 'whatsapp') {
+  return apiFetch('/api/verify-phone/send-code', {
+    method: 'POST',
+    body: JSON.stringify({ phoneNumber, countryCode, channel }),
+  }, token);
+}
+
+export async function confirmPhoneVerification(token, phoneNumber, countryCode, code) {
   return apiFetch('/api/verify-phone/confirm', {
     method: 'POST',
-    body: JSON.stringify({ phoneNumber, countryCode }),
+    body: JSON.stringify({
+      phoneNumber,
+      countryCode,
+      ...(code !== undefined ? { code } : {}),
+    }),
   }, token);
 }
 

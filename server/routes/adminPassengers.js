@@ -413,6 +413,13 @@ router.get('/:passengerId', requireAdminAuth, requirePermission('passengers.read
       mapPassenger(user, shapePassengerIdentityFromRow(identities[0] || null)),
       passengerRideStats
     );
+    const [locationRow] = await query(
+      `SELECT last_location_lat, last_location_lng, last_location_accuracy_meters, last_location_recorded_at
+       FROM users
+       WHERE clerk_user_id = ?
+       LIMIT 1`,
+      [req.params.passengerId]
+    );
 
     if (mapped._role !== 'passenger') {
       return res.status(404).json({ error: 'Passenger not found' });
@@ -423,6 +430,16 @@ router.get('/:passengerId', requireAdminAuth, requirePermission('passengers.read
       passenger: {
         ...passenger,
         notes: user.privateMetadata?.adminNotes || '',
+        lastLocation: locationRow?.last_location_lat == null || locationRow?.last_location_lng == null
+          ? null
+          : {
+              latitude: Number(locationRow.last_location_lat),
+              longitude: Number(locationRow.last_location_lng),
+              accuracyMeters: locationRow.last_location_accuracy_meters == null
+                ? null
+                : Number(locationRow.last_location_accuracy_meters),
+              recordedAt: locationRow.last_location_recorded_at || null,
+            },
       },
     });
   } catch (err) {

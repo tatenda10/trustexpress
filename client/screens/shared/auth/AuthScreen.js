@@ -48,8 +48,8 @@ const CHANNEL_LABELS = { whatsapp: 'WhatsApp', sms: 'SMS', email: 'email' };
 function Field({ label, right, children }) {
   return (
     <View>
-      <View className="mb-2 flex-row items-center justify-between">
-        <Text className="text-sm font-medium text-gray-700">{label}</Text>
+      <View className="mb-1 flex-row items-center justify-between">
+        <Text className="text-xs font-medium text-gray-800">{label}</Text>
         {right}
       </View>
       {children}
@@ -60,7 +60,7 @@ function Field({ label, right, children }) {
 function Input(props) {
   return (
     <TextInput
-      className="rounded-xl border border-gray-200 bg-white p-4 text-base"
+      className="h-14 rounded-sm border border-gray-200 bg-white px-3 text-base"
       placeholderTextColor="#9ca3af"
       autoCapitalize="none"
       {...props}
@@ -71,9 +71,9 @@ function Input(props) {
 function PasswordInput({ value, onChangeText, placeholder, onSubmitEditing }) {
   const [visible, setVisible] = useState(false);
   return (
-    <View className="flex-row items-center rounded-xl border border-gray-200 bg-white px-4">
+    <View className="h-14 flex-row items-center rounded-sm border border-gray-200 bg-white px-3">
       <TextInput
-        className="flex-1 py-4 text-base"
+        className="flex-1 py-3 text-base"
         placeholder={placeholder}
         placeholderTextColor="#9ca3af"
         value={value}
@@ -315,7 +315,7 @@ export default function AuthScreen({ navigation, role, mode }) {
       return;
     }
     if (phoneCountryCode === 'ZA' && !termsAccepted) {
-      showInfo('Consent required', 'Accept the terms of use and privacy policy to create your South African account.');
+      showInfo('Consent required', 'Accept the Trust Express Terms and Privacy Policy to create your account.');
       return;
     }
     setLoading(true);
@@ -394,6 +394,11 @@ export default function AuthScreen({ navigation, role, mode }) {
   };
 
   const handleSendPhoneCode = async () => {
+    if (phoneCountryCode === 'ZA') {
+      setMethod('email');
+      showInfo('Use email', 'Phone login is temporarily unavailable for South African accounts. Please continue with email.');
+      return;
+    }
     if (await requestPhoneCode()) goToStep('phone_code');
   };
 
@@ -424,7 +429,7 @@ export default function AuthScreen({ navigation, role, mode }) {
       return;
     }
     if (phoneCountryCode === 'ZA' && !termsAccepted) {
-      showInfo('Consent required', 'Accept the terms of use and privacy policy to create your South African account.');
+      showInfo('Consent required', 'Accept the Trust Express Terms and Privacy Policy to create your account.');
       return;
     }
     setLoading(true);
@@ -542,9 +547,13 @@ export default function AuthScreen({ navigation, role, mode }) {
   const countryPicker = () => (
     <CountrySelectField
       value={phoneCountryCode}
+      compact
       onChange={(value) => {
         setPhoneCountryCode(value);
-        if (value === 'ZA') setChannel('whatsapp');
+        if (value === 'ZA') {
+          setChannel('whatsapp');
+          setMethod('email');
+        }
       }}
     />
   );
@@ -553,7 +562,7 @@ export default function AuthScreen({ navigation, role, mode }) {
     <TouchableOpacity onPress={() => setTermsAccepted((value) => !value)} className="mb-5 flex-row items-start rounded-2xl bg-blue-50 p-4">
       <Ionicons name={termsAccepted ? 'checkbox' : 'square-outline'} size={23} color={termsAccepted ? PRIMARY_BLUE : '#64748b'} />
       <Text className="ml-3 flex-1 text-sm leading-5 text-gray-700">
-        I accept the Trust Express terms of use and privacy policy for my South African account.
+        I accept the Trust Express Terms and Privacy Policy.
       </Text>
     </TouchableOpacity>
   ) : null;
@@ -650,17 +659,19 @@ export default function AuthScreen({ navigation, role, mode }) {
     onBack = null;
     title = isSignUp ? 'Create your account' : 'Welcome back';
     subtitle = isSignUp
-      ? `Sign up as a ${role} with your email or phone number.`
+      ? `Sign up as a ${role} with ${phoneCountryCode === 'ZA' ? 'your email address' : 'your email or phone number'}.`
       : `Log in to your ${role} account to continue.`;
     body = (
       <>
         <SegmentedControl
           value={method}
           onChange={setMethod}
-          options={[
-            { value: 'email', label: 'Email', icon: 'mail-outline' },
-            { value: 'phone', label: 'Phone', icon: 'call-outline' },
-          ]}
+          options={phoneCountryCode === 'ZA'
+            ? [{ value: 'email', label: 'Email', icon: 'mail-outline' }]
+            : [
+              { value: 'email', label: 'Email', icon: 'mail-outline' },
+              { value: 'phone', label: 'Phone', icon: 'call-outline' },
+            ]}
         />
         {method === 'phone' ? (
           <>

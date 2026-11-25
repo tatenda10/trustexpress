@@ -372,6 +372,8 @@ export function DriverTripMapPanel({
   stopTimeline,
   remainingIntermediateStopsCount,
   guidanceText,
+  trackingWarning,
+  onRetryTracking,
   showGuidance,
   showMarkArrived,
   showStartRide,
@@ -504,6 +506,22 @@ export function DriverTripMapPanel({
               {primaryMetric} · {secondaryMetric}
             </Text>
           </View>
+
+          {trackingWarning ? (
+            <View className="mt-3 flex-row items-center rounded-[10px] bg-amber-50 px-3 py-2.5">
+              <Ionicons name="warning-outline" size={18} color="#b45309" />
+              <Text className="ml-2 flex-1 text-xs font-semibold text-amber-900" numberOfLines={3}>
+                {trackingWarning}
+              </Text>
+              <TouchableOpacity
+                onPress={onRetryTracking}
+                className="ml-2 rounded-lg bg-amber-600 px-3 py-2"
+                activeOpacity={0.85}
+              >
+                <Text className="text-xs font-bold text-white">Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           {showGuidance ? (
             <View className="mt-3 flex-row items-center rounded-[10px] bg-[#eef4ff] px-3 py-2.5">

@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../auth/AuthProvider';
 import * as ImagePicker from 'expo-image-picker';
-import { getDriverVehicleOptions, submitVehicle, uploadFile } from '../../api';
+import { getDriverVehicleOptions, submitDriverDocuments, submitVehicle, uploadFile } from '../../api';
 import { useDriverStatus } from '../../context/DriverStatusContext';
 import { navigationRef } from '../../navigationRef';
 import { VEHICLE_MAKE_MODELS, VEHICLE_YEAR_OPTIONS } from '../../constants/vehicleCatalog';
@@ -26,6 +26,13 @@ import { persistLocalImageUri, prepareImageForUpload } from '../../services/loca
 import { isTruckDriver, TRUCK_VEHICLE_CATEGORIES } from '../../constants/driverKind';
 import DateSelectField from '../../components/DateSelectField';
 import DriverRegistrationProgress from '../../components/driver/DriverRegistrationProgress';
+
+const SA_REGISTRATION_STEPS = [
+  { label: 'Personal', icon: 'person-outline' },
+  { label: 'Identity & permit', icon: 'id-card-outline' },
+  { label: 'Documents', icon: 'document-text-outline' },
+  { label: 'Vehicle', icon: 'car-outline' },
+];
 
 function navigateToDriverAccountTab() {
   if (!navigationRef.isReady()) return;
@@ -287,6 +294,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
     || isTruckDriver(driverStatus);
   const vehicle = driverStatus?.vehicle;
   const isSouthAfrica = String(driverStatus?.registrationCountryCode || driverStatus?.driverProfile?.registrationCountryCode || '').toUpperCase() === 'ZA';
+  const registrationDocuments = route.params?.registrationDocuments || null;
   const isPending = vehicle?.status === 'pending';
   const isRejected = vehicle?.status === 'rejected';
   const isChangingApprovedVehicle = route.params?.changeVehicle === true || vehicle?.status === 'approved';
@@ -673,6 +681,14 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         } : {}),
       });
 
+      if (isSouthAfrica && registrationDocuments) {
+        await submitDriverDocuments(
+          token,
+          registrationDocuments,
+          { suppressAuthErrorHandler: true },
+        );
+      }
+
       pendingSubmitAlertRef.current = true;
       // Do not refetch before this alert: it remounts the driver stack (`key={initialRoute}`) and invalidates
       // `navigation.replace`, which then leaves `isPending && !pendingSubmitAlertRef` → blank white view.
@@ -742,11 +758,12 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
   }
 
   return (
-    <View className={isSouthAfrica ? 'flex-1 bg-[#f6f7fb]' : 'flex-1 bg-white'}>
+    <View className="flex-1 bg-white">
       {isSouthAfrica ? (
         <DriverRegistrationProgress
-          currentStep={3}
+          currentStep={4}
           topInset={insets.top}
+          steps={SA_REGISTRATION_STEPS}
           onBack={() => goBackOrDriverTabs(navigation)}
           onHelp={() => Alert.alert('Vehicle help', 'Add accurate vehicle details and clear photos. Optional documents are marked.')}
         />
@@ -1037,7 +1054,7 @@ const DriverRegisterCarScreen = ({ navigation, route }) => {
         ))) : null}
 
         <TouchableOpacity
-          className={`p-4 rounded-xl bg-primary items-center ${loading || (!isTruckMode && (tiersLoading || tiers.length === 0)) ? 'opacity-70' : ''}`}
+          className={`p-4 ${isSouthAfrica ? 'rounded-sm' : 'rounded-xl'} bg-primary items-center ${loading || (!isTruckMode && (tiersLoading || tiers.length === 0)) ? 'opacity-70' : ''}`}
           onPress={handleSubmit}
           disabled={loading || (!isTruckMode && (tiersLoading || tiers.length === 0))}
         >

@@ -29,7 +29,8 @@ import PassengerTabNavigator from './screens/passenger/PassengerTabNavigator';
 import AuthScreen from './screens/shared/auth/AuthScreen';
 import PassengerEnableLocationScreen from './screens/passenger/PassengerEnableLocationScreen';
 import PassengerIdentityVerificationScreen from './screens/passenger/PassengerIdentityVerificationScreen';
-import { passengerPhoneVerificationTabsParams, replaceWithPassengerPhoneVerification, replaceWithPassengerTabs } from './navigation/passengerNavigation';
+import PassengerVerifyPhoneScreen from './screens/passenger/PassengerVerifyPhoneScreen';
+import { replaceWithPassengerTabs } from './navigation/passengerNavigation';
 
 // Screens - Driver
 import DriverWelcomeScreen from './screens/driver/DriverWelcomeScreen';
@@ -116,7 +117,7 @@ function AuthStack() {
   );
 }
 
-import { attachAgentReferral, getMe, getDriverMe, loadServiceAreas, registerUser, saveDriverPushToken, saveDriverFcmToken, saveUserPushToken } from './api';
+import { attachAgentReferral, getMe, getDriverMe, loadServiceAreas, registerUser, saveDriverPushToken, saveDriverFcmToken, savePassengerLocation, saveUserPushToken } from './api';
 import {
   DRIVER_SKIP_ENHANCED_SELFIE_KEY,
   DRIVER_SKIP_ONBOARDING_KEY,
@@ -206,6 +207,14 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
   const [passengerLocationGranted, setPassengerLocationGranted] = useState(null);
   const [passengerChecksLoading, setPassengerChecksLoading] = useState(true);
   const [roleBootstrapped, setRoleBootstrapped] = useState(() => hasSessionRoleBootstrap);
+  const resolvedRegistrationCountryCode = String(
+    driverStatus?.registrationCountryCode
+      || driverStatus?.driverProfile?.registrationCountryCode
+      || userProfile?.registrationCountryCode
+      || user?.registrationCountryCode
+      || ''
+  ).toUpperCase();
+  const isSouthAfricaAccount = resolvedRegistrationCountryCode === 'ZA';
 
   useEffect(() => {
     if (hasSessionRoleBootstrap && user?.id) {
@@ -262,7 +271,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
   }, []);
 
   const openDriverHireRequests = useCallback(() => {
-    if (!navigationRef.isReady()) return;
+    if (isSouthAfricaAccount || !navigationRef.isReady()) return;
     navigationRef.navigate('DriverTabs', {
       screen: 'DriverHireJobs',
       params: {
@@ -272,7 +281,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         },
       },
     });
-  }, []);
+  }, [isSouthAfricaAccount]);
 
   const openDriverHireTrip = useCallback((hireRequestId = null) => {
     if (!navigationRef.isReady()) return;
@@ -291,7 +300,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
   }, [openDriverHireRequests]);
 
   const openPassengerHireDetail = useCallback((hireRequestId = null) => {
-    if (!navigationRef.isReady()) return;
+    if (isSouthAfricaAccount || !navigationRef.isReady()) return;
     const parsedHireRequestId = Number(hireRequestId);
     navigationRef.navigate('PassengerTabs', {
       screen: 'PassengerHiring',
@@ -305,7 +314,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         },
       },
     });
-  }, []);
+  }, [isSouthAfricaAccount]);
 
   const openPassengerHireTracking = useCallback((hireRequestId = null) => {
     if (!navigationRef.isReady()) return;
@@ -390,6 +399,62 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
   // user to passenger here, otherwise fresh driver signups can be mis-registered during bootstrap.
   const userRole = userProfile?.role || storedRole || null;
   const isDriver = userRole === 'driver';
+
+  useEffect(() => {
+    if (!user?.id || userRole !== 'passenger' || passengerLocationGranted !== true) return undefined;
+
+    let active = true;
+    let subscription = null;
+    let sending = false;
+
+    const persistLocation = async (position) => {
+      if (!active || sending || !position?.coords) return;
+      sending = true;
+      try {
+        const token = await getTokenRef.current?.();
+        if (!token || !active) return;
+        await savePassengerLocation(token, {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[passenger.location] update failed', error?.message || error);
+        }
+      } finally {
+        sending = false;
+      }
+    };
+
+    const startTracking = async () => {
+      try {
+        const permission = await Location.getForegroundPermissionsAsync();
+        if (!active || permission.status !== 'granted') return;
+        const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        await persistLocation(current);
+        if (!active) return;
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 60 * 1000,
+            distanceInterval: 100,
+          },
+          persistLocation,
+        );
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[passenger.location] tracker failed', error?.message || error);
+        }
+      }
+    };
+
+    startTracking();
+    return () => {
+      active = false;
+      subscription?.remove?.();
+    };
+  }, [passengerLocationGranted, user?.id, userRole]);
 
   const maybeShowBackgroundRideRequestAlert = useCallback(async (payload = {}) => {
     if (!isDriver || Platform.OS !== 'android') return;
@@ -526,10 +591,10 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         const data = response?.notification?.request?.content?.data || {};
         if (data?.type === 'driver_new_ride_request' && isDriver) {
           openDriverIncomingRequest(data?.rideRequestId);
-        } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && isDriver) {
+        } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && isDriver && !isSouthAfricaAccount) {
           DeviceEventEmitter.emit('TrustHiringNewRequest', data);
           openDriverHireRequests();
-        } else if (data?.type === 'driver_new_hire_quote' && !isDriver) {
+        } else if (data?.type === 'driver_new_hire_quote' && !isDriver && !isSouthAfricaAccount) {
           openPassengerHireDetail(data?.hireRequestId);
         } else if (data?.type === 'hire_booking_confirmed') {
           if (isDriver) openDriverHireTrip(data?.hireRequestId);
@@ -557,7 +622,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         if (AppState.currentState === 'active') {
           openDriverIncomingRequest(data?.rideRequestId);
         }
-      } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && isDriver) {
+      } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && isDriver && !isSouthAfricaAccount) {
         DeviceEventEmitter.emit('TrustHiringNewRequest', data);
         Alert.alert(
           data?.type === 'driver_hire_offer_updated' ? 'New passenger offer' : 'New transport request',
@@ -573,7 +638,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
             { text: 'View jobs', onPress: openDriverHireRequests },
           ]
         );
-      } else if (data?.type === 'driver_new_hire_quote' && !isDriver) {
+      } else if (data?.type === 'driver_new_hire_quote' && !isDriver && !isSouthAfricaAccount) {
         Alert.alert(
           'New hiring quote',
           notification?.request?.content?.body || 'A driver sent a pending quote for your hiring request.',
@@ -627,10 +692,10 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
       });
       if (data?.type === 'driver_new_ride_request') {
         openDriverIncomingRequest(data?.rideRequestId);
-      } else if (data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') {
+      } else if ((data?.type === 'driver_new_hire_request' || data?.type === 'driver_hire_offer_updated') && !isSouthAfricaAccount) {
         DeviceEventEmitter.emit('TrustHiringNewRequest', data);
         openDriverHireRequests();
-      } else if (data?.type === 'driver_new_hire_quote') {
+      } else if (data?.type === 'driver_new_hire_quote' && !isSouthAfricaAccount) {
         openPassengerHireDetail(data?.hireRequestId);
       } else if (data?.type === 'hire_booking_confirmed') {
         if (isDriver) openDriverHireTrip(data?.hireRequestId);
@@ -643,7 +708,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [isDriver, maybeShowBackgroundRideRequestAlert, openDriverHireRequests, openDriverHireTrip, openDriverIncomingRequest, openPassengerHireDetail, openPassengerHireTracking]);
+  }, [isDriver, isSouthAfricaAccount, maybeShowBackgroundRideRequestAlert, openDriverHireRequests, openDriverHireTrip, openDriverIncomingRequest, openPassengerHireDetail, openPassengerHireTracking]);
 
   useEffect(() => {
     if (!isDriver) return undefined;
@@ -1274,6 +1339,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
       first_name: user?.firstName || null,
       last_name: user?.lastName || null,
       role: userProfile?.role || storedRole || null,
+      registrationCountryCode: userProfile?.registrationCountryCode || user?.registrationCountryCode || null,
       // Preserve previously known verification state on transient refresh failures.
       phoneVerified: typeof userProfile?.phoneVerified === 'boolean' ? userProfile.phoneVerified : null,
     };
@@ -1301,7 +1367,7 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
       setUserProfile((prev) => ({ ...(prev || {}), ...fallbackProfile }));
       return fallbackProfile;
     }
-  }, [onBlockedAccount, user?.firstName, user?.lastName, userProfile?.role, userProfile?.phoneVerified, storedRole]);
+  }, [onBlockedAccount, user?.firstName, user?.lastName, user?.registrationCountryCode, userProfile?.registrationCountryCode, userProfile?.role, userProfile?.phoneVerified, storedRole]);
 
   const effectiveFirstName = String(userProfile?.first_name || user?.firstName || '').trim();
   const effectiveLastName = String(userProfile?.last_name || user?.lastName || '').trim();
@@ -1382,26 +1448,28 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
     const passengerIdentityBlocked = passengerIdentityStatus === 'rejected' && passengerIdentity?.canResubmit === false;
     const needPassengerProfile = needsProfileCompletion;
     const needPassengerLocation = passengerLocationGranted !== true;
-    // Only force verification when backend explicitly says "false".
-    const needPassengerPhoneVerify = passengerPhoneKnown && !passengerPhoneVerified;
+    // South African registrations must complete phone verification even while a
+    // newly-created profile is still refreshing from the backend.
+    const needPassengerPhoneVerify = !passengerPhoneVerified && (passengerPhoneKnown || isSouthAfricaAccount);
     const needPassengerIdentity = false;
-    const openPhoneVerificationOnLaunch = needPassengerPhoneVerify && !needPassengerProfile && !needPassengerLocation;
     const passengerInitialRoute = needPassengerProfile
       ? 'PassengerCompleteProfile'
+      : needPassengerPhoneVerify
+      ? 'PassengerVerifyPhone'
       : needPassengerLocation
       ? 'PassengerEnableLocation'
       : 'PassengerTabs';
-    const passengerTabsInitialParams = openPhoneVerificationOnLaunch
-      ? passengerPhoneVerificationTabsParams
-      : undefined;
 
     return (
       <Stack.Navigator key={`passenger-${user?.id || 'guest'}`} screenOptions={{ headerShown: false }} initialRouteName={passengerInitialRoute}>
-        <Stack.Screen
-          name="PassengerTabs"
-          component={PassengerTabNavigator}
-          initialParams={passengerTabsInitialParams}
-        />
+        <Stack.Screen name="PassengerTabs">
+          {(props) => (
+            <PassengerTabNavigator
+              {...props}
+              registrationCountryCode={userProfile?.registrationCountryCode || user?.registrationCountryCode}
+            />
+          )}
+        </Stack.Screen>
         <Stack.Screen name="PassengerCompleteProfile">
           {(props) => (
             <CompleteProfileScreen
@@ -1411,14 +1479,27 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
                 const profileData = await refetchUserProfile();
                 const profileStillMissing = !String(profileData?.first_name || '').trim() || !String(profileData?.last_name || '').trim();
                 if (profileStillMissing) return;
-                if (needPassengerLocation) {
+                const stillNeedsPhone = profileData?.phoneVerified !== true
+                  && (typeof profileData?.phoneVerified === 'boolean' || String(profileData?.registrationCountryCode || '').toUpperCase() === 'ZA');
+                if (stillNeedsPhone) {
+                  props.navigation.replace('PassengerVerifyPhone', {
+                    registrationCountryCode: profileData?.registrationCountryCode || userProfile?.registrationCountryCode,
+                  });
+                } else if (needPassengerLocation) {
                   props.navigation.replace('PassengerEnableLocation');
-                } else if (needPassengerPhoneVerify) {
-                  replaceWithPassengerPhoneVerification(props.navigation);
                 } else {
                   replaceWithPassengerTabs(props.navigation);
                 }
               }}
+            />
+          )}
+        </Stack.Screen>
+        <Stack.Screen name="PassengerVerifyPhone">
+          {(props) => (
+            <PassengerVerifyPhoneScreen
+              {...props}
+              nextRouteName={needPassengerLocation ? 'PassengerEnableLocation' : 'PassengerTabs'}
+              onVerified={refetchUserProfile}
             />
           )}
         </Stack.Screen>
@@ -1430,7 +1511,9 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
                 setPassengerLocationGranted(true);
                 // Move forward immediately instead of waiting for navigator key reset.
                 if (needPassengerPhoneVerify) {
-                  replaceWithPassengerPhoneVerification(props.navigation);
+                  props.navigation.replace('PassengerVerifyPhone', {
+                    registrationCountryCode: userProfile?.registrationCountryCode || user?.registrationCountryCode,
+                  });
                 } else {
                   replaceWithPassengerTabs(props.navigation);
                 }
@@ -1618,9 +1701,15 @@ function AppStack({ currentRouteName, onBlockedAccount }) {
         />
         <Stack.Screen
           name="DriverTabs"
-          component={DriverTabNavigator}
           initialParams={{ driverStatus }}
-        />
+        >
+          {(props) => (
+            <DriverTabNavigator
+              {...props}
+              registrationCountryCode={resolvedRegistrationCountryCode}
+            />
+          )}
+        </Stack.Screen>
       </Stack.Navigator>
     </DriverStatusProvider>
   );

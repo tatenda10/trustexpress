@@ -10,6 +10,7 @@ export default function CountrySelectField({
   label = 'Country',
   supportedCountryCodes = ['ZA', 'ZW'],
   helpText = '',
+  compact = false,
 }) {
   const [visible, setVisible] = useState(false);
   const [query, setQuery] = useState('');
@@ -34,11 +35,11 @@ export default function CountrySelectField({
 
   return (
     <View>
-      <Text className="mb-2 text-sm font-medium text-gray-700">{label}</Text>
+      <Text className={compact ? 'mb-1 text-xs font-medium text-gray-800' : 'mb-2 text-sm font-medium text-gray-700'}>{label}</Text>
       <TouchableOpacity
         onPress={() => setVisible(true)}
         activeOpacity={0.85}
-        className="h-14 flex-row items-center rounded-xl border border-gray-200 bg-white px-4"
+        className={`h-14 flex-row items-center border border-gray-200 bg-white ${compact ? 'rounded-sm px-3' : 'rounded-xl px-4'}`}
       >
         <Text className="mr-3 text-2xl">{selectedCountry.flag}</Text>
         <Text className="flex-1 text-base font-semibold text-gray-900">{selectedCountry.name}</Text>

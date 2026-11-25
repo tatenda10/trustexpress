@@ -20,8 +20,14 @@ import DriverCarRegistrationPage from './DriverCarRegistrationPage';
 
 const Stack = createNativeStackNavigator();
 
-export default function DriverAccountStack({ route }) {
+export default function DriverAccountStack({ route, registrationCountryCode }) {
   const driverStatus = route.params?.driverStatus ?? null;
+  const isSouthAfrica = String(
+    registrationCountryCode
+      || driverStatus?.registrationCountryCode
+      || driverStatus?.driverProfile?.registrationCountryCode
+      || ''
+  ).toUpperCase() === 'ZA';
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -50,10 +56,10 @@ export default function DriverAccountStack({ route }) {
         component={DriverSmileCashScreen}
         initialParams={{ driverStatus }}
       />
-      <Stack.Screen name="DriverHireVehicles" component={DriverHireVehiclesScreen} />
-      <Stack.Screen name="DriverHireVehicleForm" component={DriverHireVehicleFormScreen} />
-      <Stack.Screen name="DriverHireOpenRequests" component={DriverHireOpenRequestsScreen} />
-      <Stack.Screen name="DriverHireDetail" component={DriverHireDetailScreen} />
+      {!isSouthAfrica ? <Stack.Screen name="DriverHireVehicles" component={DriverHireVehiclesScreen} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="DriverHireVehicleForm" component={DriverHireVehicleFormScreen} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="DriverHireOpenRequests" component={DriverHireOpenRequestsScreen} /> : null}
+      {!isSouthAfrica ? <Stack.Screen name="DriverHireDetail" component={DriverHireDetailScreen} /> : null}
       <Stack.Screen name="DriverIncomeStack" component={DriverActivityStack} />
       <Stack.Screen name="DriverRideHistory" component={DriverActivityScreen} />
       {/* <Stack.Screen name="DriverDiscounts" component={DriverDiscountReimbursementsScreen} /> */}

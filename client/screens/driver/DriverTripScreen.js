@@ -374,6 +374,7 @@ export default function DriverTripScreen({ navigation, route }) {
   const autoArrivalTimerRef = useRef(null);
   const autoArrivalRideIdRef = useRef(null);
   const lastLocalLocationAtRef = useRef(0);
+  const lastServerLocationAtRef = useRef(0);
   const initialRide = route?.params?.initialRide || null;
   const [ride, setRide] = useState(() => initialRide);
   const { startFreeCall, freeCallSupported } = useRideCalls();
@@ -384,6 +385,8 @@ export default function DriverTripScreen({ navigation, route }) {
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [voiceGuidanceEnabled, setVoiceGuidanceEnabled] = useState(true);
   const [realtimeSignal, setRealtimeSignal] = useState(0);
+  const [trackingRecoverySignal, setTrackingRecoverySignal] = useState(0);
+  const [trackingWarning, setTrackingWarning] = useState('');
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [routeDistanceMeters, setRouteDistanceMeters] = useState(0);
   const [routeDurationSeconds, setRouteDurationSeconds] = useState(0);
@@ -580,6 +583,10 @@ export default function DriverTripScreen({ navigation, route }) {
         const handleRideUpdate = (payload = {}) => {
           if (!active) return;
           console.log(TRIP_DEBUG_PREFIX, 'realtime driver_ride:updated');
+          if (payload?.trackingLocationStale === true) {
+            setTrackingWarning('Your passenger cannot see your live location. Keep GPS on and restart tracking.');
+            setTrackingRecoverySignal((current) => current + 1);
+          }
           if (payload?.confirmedAt) {
             setRide((current) => (
               current && Number(current.id || 0) === Number(payload.rideRequestId || current.id || 0)
@@ -708,6 +715,7 @@ export default function DriverTripScreen({ navigation, route }) {
     let active = true;
     let locationStartInFlight = false;
     let watchdogInFlight = false;
+    let retryTimer = null;
 
     const flushAvailabilityCoordinate = async () => {
       if (!active || availabilitySyncInFlightRef.current) return;
@@ -730,6 +738,8 @@ export default function DriverTripScreen({ navigation, route }) {
         if (result?.isOnline === false) {
           throw new Error('Driver is no longer online');
         }
+        lastServerLocationAtRef.current = Date.now();
+        setTrackingWarning('');
       } catch (error) {
         console.log(TRIP_DEBUG_PREFIX, 'availability sync failed', {
           message: error?.message || 'unknown error',
@@ -738,10 +748,17 @@ export default function DriverTripScreen({ navigation, route }) {
         if (!pendingAvailabilityCoordinateRef.current) {
           pendingAvailabilityCoordinateRef.current = coordinate;
         }
+        const lastServerUpdateAt = Number(lastServerLocationAtRef.current || 0);
+        if (!lastServerUpdateAt || Date.now() - lastServerUpdateAt > LOCATION_WATCHDOG_STALE_MS) {
+          setTrackingWarning('Live location is not reaching the passenger. Check GPS and your internet connection.');
+        }
       } finally {
         availabilitySyncInFlightRef.current = false;
         if (active && pendingAvailabilityCoordinateRef.current) {
-          void flushAvailabilityCoordinate();
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            void flushAvailabilityCoordinate();
+          }, 1500);
         }
       }
     };
@@ -846,6 +863,7 @@ export default function DriverTripScreen({ navigation, route }) {
             ? Date.now() - lastLocalLocationAtRef.current
             : null,
         });
+        setTrackingWarning('Restarting live location so your passenger can track you.');
         await requestFreshPosition().catch(() => {});
         await startLocationTracking({ force: true });
       } finally {
@@ -869,6 +887,7 @@ export default function DriverTripScreen({ navigation, route }) {
       active = false;
       clearInterval(watchdogInterval);
       clearInterval(keepaliveInterval);
+      if (retryTimer) clearTimeout(retryTimer);
       appStateSubscription?.remove?.();
       if (locationSubscriptionRef.current) {
         locationSubscriptionRef.current.remove();
@@ -878,7 +897,12 @@ export default function DriverTripScreen({ navigation, route }) {
       availabilitySyncInFlightRef.current = false;
       pendingAvailabilityCoordinateRef.current = null;
     };
-  }, [ride?.id]);
+  }, [ride?.id, trackingRecoverySignal]);
+
+  const handleRetryTracking = useCallback(() => {
+    setTrackingWarning('Restarting live location…');
+    setTrackingRecoverySignal((current) => current + 1);
+  }, []);
 
   const pickupCoordinate = useMemo(
     () => normalizeCoordinate(ride?.pickupCoordinate),
@@ -1623,6 +1647,8 @@ export default function DriverTripScreen({ navigation, route }) {
       stopTimeline={stopTimeline}
       remainingIntermediateStopsCount={remainingIntermediateStopsCount}
       guidanceText={guidanceText}
+      trackingWarning={trackingWarning}
+      onRetryTracking={handleRetryTracking}
       showGuidance={Boolean(
         (ride.stage === 'on_trip' || ride.stage === 'to_pickup') && nextInstruction
       )}
