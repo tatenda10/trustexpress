@@ -20,6 +20,12 @@ const DURATIONS = [
   { value: 'permanent', label: 'Permanent' },
 ]
 
+const DEACTIVATION_REASONS = [
+  'Negative wallet balance for more than 10 days.',
+  'Inactive account for 90 days.',
+  'Submitted wrong documents or information.',
+]
+
 function formatDateTime(value) {
   if (!value) return 'Permanent'
   return new Date(value).toLocaleString()
@@ -49,6 +55,7 @@ export default function AccountRestrictionsPage() {
   const [statusFilter, setStatusFilter] = useState('active')
   const [searchInput, setSearchInput] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
+  const [selectedReason, setSelectedReason] = useState('')
   const [form, setForm] = useState({
     userId: '',
     userRole: 'any',
@@ -109,6 +116,7 @@ export default function AccountRestrictionsPage() {
       await axios.post(`${BASE_URL}/api/admin/account-restrictions`, form, { headers })
       setSuccess('Restriction created.')
       setForm((prev) => ({ ...prev, reason: '' }))
+      setSelectedReason('')
       await loadRestrictions()
       if (form.userId) await loadUserHistory(form.userId)
     } catch (err) {
@@ -231,10 +239,30 @@ export default function AccountRestrictionsPage() {
             ) : null}
           </div>
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Deactivation reason
+            <select
+              value={selectedReason}
+              onChange={(event) => {
+                const reason = event.target.value
+                setSelectedReason(reason)
+                if (reason) setForm((prev) => ({ ...prev, reason }))
+              }}
+              className="mt-1 h-9 w-full border border-slate-300 bg-white px-3 text-xs normal-case tracking-normal text-slate-800 outline-none focus:border-indigo-500"
+            >
+              <option value="">Select a reason or enter a custom reason below</option>
+              {DEACTIVATION_REASONS.map((reason) => (
+                <option key={reason} value={reason}>{reason}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
             Reason shown to user
             <textarea
               value={form.reason}
-              onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))}
+              onChange={(event) => {
+                setSelectedReason('')
+                setForm((prev) => ({ ...prev, reason: event.target.value }))
+              }}
               rows={4}
               placeholder="Explain the rule violation and what the user should do next."
               className="mt-1 w-full border border-slate-300 px-3 py-2 text-xs normal-case tracking-normal text-slate-800 outline-none focus:border-indigo-500"
