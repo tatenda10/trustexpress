@@ -94,14 +94,17 @@ async function ensureBackgroundPermission({ prompt }) {
 
 async function ensureLocationKey(getToken) {
   const existing = await readLocationKey();
-  if (existing) return existing;
-
   const token = await getToken();
   if (!token) return null;
-  const response = await issueDriverLocationKey(token);
+  // Validate the stored key against the currently signed-in driver. A plain global
+  // SecureStore key can otherwise keep uploading under an account previously used
+  // on this phone after an account switch or recreation.
+  const response = await issueDriverLocationKey(token, existing);
   const key = String(response?.key || '').trim();
   if (!key) return null;
-  await SecureStore.setItemAsync(LOCATION_KEY_STORAGE_KEY, key, SECURE_STORE_OPTIONS);
+  if (key !== existing) {
+    await SecureStore.setItemAsync(LOCATION_KEY_STORAGE_KEY, key, SECURE_STORE_OPTIONS);
+  }
   return key;
 }
 

@@ -973,8 +973,13 @@ router.post('/location-key', requireAuth, async (req, res) => {
   try {
     const user = await requireDriver(req, res);
     if (!user) return;
-    const key = await issueDriverLocationKey(req.userId);
-    return res.status(201).json({ key });
+    const existingKey = String(req.body?.existingKey || '').trim();
+    const existingKeyDriverId = existingKey
+      ? await findDriverByLocationKey(existingKey)
+      : null;
+    const reused = existingKeyDriverId === req.userId;
+    const key = reused ? existingKey : await issueDriverLocationKey(req.userId);
+    return res.status(reused ? 200 : 201).json({ key, driverUserId: req.userId, reused });
   } catch (err) {
     console.error('POST /api/drivers/location-key', err);
     return res.status(500).json({ error: 'Server error' });
@@ -1099,7 +1104,12 @@ router.post('/background-location', async (req, res) => {
       longitude,
     });
 
-    return res.json({ isOnline: trackingActive, trackingActive });
+    return res.json({
+      isOnline: trackingActive,
+      trackingActive,
+      driverUserId,
+      locationUpdatedAt: trackingActive ? new Date().toISOString() : null,
+    });
   } catch (err) {
     console.error('POST /api/drivers/background-location', err);
     return res.status(500).json({ error: 'Server error' });

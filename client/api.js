@@ -361,6 +361,13 @@ export async function acceptHireQuote(token, quoteId) {
   }, token);
 }
 
+export async function declineHireQuote(token, quoteId) {
+  return apiFetch(`/api/hire/quotes/${encodeURIComponent(quoteId)}/decline`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  }, token);
+}
+
 export async function listHireBookings(token) {
   return apiFetch('/api/hire/bookings', {}, token);
 }
@@ -804,8 +811,11 @@ export async function updateDriverLiveLocation(token, payload, timeoutMs = 8000)
   }
 }
 
-export async function issueDriverLocationKey(token) {
-  return apiFetch('/api/drivers/location-key', { method: 'POST', body: JSON.stringify({}) }, token);
+export async function issueDriverLocationKey(token, existingKey = null) {
+  return apiFetch('/api/drivers/location-key', {
+    method: 'POST',
+    body: JSON.stringify({ existingKey: String(existingKey || '').trim() || null }),
+  }, token);
 }
 
 /** Called from the background location task, which has no signed-in session; authenticates with the device key. */

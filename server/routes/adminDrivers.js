@@ -1247,10 +1247,13 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
     }
 
     if (target === 'profile') {
+      const usesPassport =
+        isSouthAfricanDriver(identityRow) &&
+        String(identityRow?.identity_document_type || '').trim().toLowerCase() === 'passport';
       if (
         !identityRow ||
         !identityRow.national_id_front_url ||
-        !identityRow.national_id_back_url ||
+        (!usesPassport && !identityRow.national_id_back_url) ||
         !identityRow.driver_licence_url ||
         !identityRow.selfie_url ||
         !identityRow.selfie_with_id_card_url
@@ -1299,17 +1302,28 @@ router.patch('/:driverId/review', requireAdminAuth, requirePermission('verificat
       const hasEnoughVehiclePhotos =
         vehiclePhotoCount >= 3 ||
         !!(vehicleRow?.car_photo_front_url && vehicleRow?.car_photo_rear_url);
+      const isSouthAfrican = isSouthAfricanDriver(identityRow);
+      const hasRequiredVehicleDetails = !!(
+        vehicleRow?.number_plate &&
+        vehicleRow?.make &&
+        vehicleRow?.model &&
+        vehicleRow?.year
+      );
+      const hasRequiredMarketDocuments = isSouthAfrican || !!(
+        (vehicleRow?.vehicle_registration_book_url || vehicleRow?.vehicle_registration_url) &&
+        vehicleRow?.insurance_url &&
+        vehicleRow?.zinara_url
+      );
 
       if (
         !vehicleRow ||
-        !(vehicleRow.vehicle_registration_book_url || vehicleRow.vehicle_registration_url) ||
-        !vehicleRow.insurance_url ||
-        !vehicleRow.zinara_url ||
+        !hasRequiredVehicleDetails ||
+        !hasRequiredMarketDocuments ||
         !hasEnoughVehiclePhotos
       ) {
         return res.status(400).json({ error: 'Driver has not submitted vehicle documents' });
       }
-      if (action === 'approve' && isSouthAfricanDriver(identityRow)) {
+      if (action === 'approve' && isSouthAfrican) {
         const compliance = getSaVehicleCompliance(vehicleRow);
         if (!compliance.complete || compliance.expired.length > 0) {
           return res.status(400).json({

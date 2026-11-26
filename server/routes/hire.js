@@ -1375,6 +1375,89 @@ router.patch('/quotes/:id/accept', requireAuth, async (req, res) => {
   }
 });
 
+router.patch('/quotes/:id/decline', requireAuth, async (req, res) => {
+  try {
+    const passenger = await requirePassenger(req, res);
+    if (!passenger) return;
+    const quoteId = Number(req.params.id);
+    if (!Number.isFinite(quoteId)) {
+      return res.status(400).json({ error: 'Invalid quote id' });
+    }
+
+    const result = await withTransaction(async (connection) => {
+      const [quoteRows] = await connection.execute(
+        `SELECT hq.*, hr.passenger_user_id, hr.status AS request_status
+         FROM hire_quotes hq
+         INNER JOIN hire_requests hr ON hr.id = hq.hire_request_id
+         WHERE hq.id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [quoteId]
+      );
+      const quote = quoteRows[0] || null;
+      if (!quote) {
+        const error = new Error('Quote not found');
+        error.status = 404;
+        throw error;
+      }
+      if (quote.passenger_user_id !== req.userId) {
+        const error = new Error('Not allowed');
+        error.status = 403;
+        throw error;
+      }
+      if (quote.status !== 'pending' || !['open', 'quoted'].includes(quote.request_status)) {
+        const error = new Error('Quote is no longer available');
+        error.status = 400;
+        throw error;
+      }
+
+      await connection.execute(
+        `UPDATE hire_quotes SET status = 'declined', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [quoteId]
+      );
+      const [pendingRows] = await connection.execute(
+        `SELECT COUNT(*) AS pending_count
+         FROM hire_quotes
+         WHERE hire_request_id = ? AND status = 'pending'`,
+        [quote.hire_request_id]
+      );
+      if (Number(pendingRows[0]?.pending_count || 0) === 0) {
+        await connection.execute(
+          `UPDATE hire_requests SET status = 'open' WHERE id = ? AND status = 'quoted'`,
+          [quote.hire_request_id]
+        );
+      }
+
+      const [updatedQuoteRows] = await connection.execute(
+        `SELECT * FROM hire_quotes WHERE id = ? LIMIT 1`,
+        [quoteId]
+      );
+      const [requestRows] = await connection.execute(
+        `SELECT * FROM hire_requests WHERE id = ? LIMIT 1`,
+        [quote.hire_request_id]
+      );
+      return {
+        quote: updatedQuoteRows[0] || null,
+        request: requestRows[0] || null,
+      };
+    });
+
+    emitToUser(result.quote?.driver_user_id, 'hire_quote:updated', {
+      hireRequestId: String(result.quote?.hire_request_id || ''),
+      hireQuoteId: String(result.quote?.id || quoteId),
+      status: 'declined',
+    });
+
+    return res.json({
+      quote: shapeHireQuote(result.quote),
+      request: shapeHireRequest(result.request),
+    });
+  } catch (err) {
+    console.error('PATCH /api/hire/quotes/:id/decline', err);
+    return res.status(err.status || 500).json({ error: err.message || 'Server error' });
+  }
+});
+
 router.get('/bookings', requireAuth, async (req, res) => {
   try {
     const rows = await query(

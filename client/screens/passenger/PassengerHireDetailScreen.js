@@ -22,6 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   acceptHireQuote,
   cancelHireRequest,
+  declineHireQuote,
   getHireRequest,
   updateHireRequestOffer,
 } from '../../api';
@@ -174,6 +175,31 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
     }
   };
 
+  const declineQuote = async (quoteId) => {
+    try {
+      setBusyId(`decline-${quoteId}`);
+      const token = await getTokenRef.current({ skipCache: true });
+      const data = await declineHireQuote(token, quoteId);
+      setQuotes((current) => current.filter((quote) => Number(quote.id) !== Number(quoteId)));
+      if (data?.request) setRequest(data.request);
+    } catch (err) {
+      Alert.alert('Could not decline offer', err?.message || 'Try again');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDecline = (quoteId) => {
+    Alert.alert(
+      'Decline this offer?',
+      'This driver offer will be removed. Other drivers can still send offers.',
+      [
+        { text: 'Keep offer', style: 'cancel' },
+        { text: 'Decline', style: 'destructive', onPress: () => declineQuote(quoteId) },
+      ]
+    );
+  };
+
   const handleCancel = async () => {
     try {
       setBusyId('cancel');
@@ -299,16 +325,28 @@ export default function PassengerHireDetailScreen({ navigation, route }) {
               </Text>
               {quote.message ? <Text className="mt-2 text-sm text-gray-500">{quote.message}</Text> : null}
               {quote.status === 'pending' && canEdit ? (
-                <TouchableOpacity
-                  onPress={() => handleAccept(quote.id)}
-                  disabled={!!busyId}
-                  className="mt-4 h-11 items-center justify-center rounded-2xl"
-                  style={{ backgroundColor: PRIMARY_BLUE, opacity: busyId ? 0.7 : 1 }}
-                >
-                  {busyId === quote.id ? <ActivityIndicator color="#fff" /> : (
-                    <Text className="font-bold text-white">Accept offer</Text>
-                  )}
-                </TouchableOpacity>
+                <View className="mt-4 flex-row gap-3">
+                  <TouchableOpacity
+                    onPress={() => handleDecline(quote.id)}
+                    disabled={!!busyId}
+                    className="h-11 flex-1 items-center justify-center rounded-2xl border border-rose-200 bg-rose-50"
+                    style={{ opacity: busyId ? 0.7 : 1 }}
+                  >
+                    {busyId === `decline-${quote.id}` ? <ActivityIndicator color="#dc2626" /> : (
+                      <Text className="font-bold text-rose-600">Decline</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleAccept(quote.id)}
+                    disabled={!!busyId}
+                    className="h-11 flex-1 items-center justify-center rounded-2xl"
+                    style={{ backgroundColor: PRIMARY_BLUE, opacity: busyId ? 0.7 : 1 }}
+                  >
+                    {busyId === quote.id ? <ActivityIndicator color="#fff" /> : (
+                      <Text className="font-bold text-white">Accept</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               ) : null}
             </View>
           ))
